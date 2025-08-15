@@ -57,6 +57,10 @@ def _run_agent_in_thread(
         - Work independently with your own approach
         - Use agent_finish when complete to report back to parent
         - You are a SPECIALIST for this specific task
+        - The previous browser, sessions, proxy history, and files in /workspace were for your
+          parent agent. Do not depend on them.
+        - You are starting with a fresh context. Fresh proxy, browser, and files.
+          Only stuff in /shared_workspace is passed to you from context.
     </instructions>
 </agent_delegation>"""
 
@@ -191,16 +195,6 @@ def create_agent(
         module_list = []
         if prompt_modules:
             module_list = [m.strip() for m in prompt_modules.split(",") if m.strip()]
-
-        if "root_agent" in module_list:
-            return {
-                "success": False,
-                "error": (
-                    "The 'root_agent' module is reserved for the main agent "
-                    "and cannot be used by sub-agents"
-                ),
-                "agent_id": None,
-            }
 
         if len(module_list) > 3:
             return {
