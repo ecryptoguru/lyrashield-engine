@@ -4,10 +4,11 @@
 
 ### Open-source AI hackers for your apps
 
+[![Strix](https://img.shields.io/badge/Strix-usestrix.com-1a1a1a.svg)](https://usestrix.com)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Vercel AI Accelerator 2025](https://img.shields.io/badge/Vercel%20AI-Accelerator%202025-000000?style=flat&logo=vercel)](https://vercel.com/ai-accelerator)
-[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/usestrix/strix)
-
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/yduEyduBsp)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/strix-agent?period=total&units=INTERNATIONAL_SYSTEM&left_color=GRAY&right_color=BLACK&left_text=Downloads)](https://pepy.tech/projects/strix-agent)
+[![GitHub stars](https://img.shields.io/github/stars/usestrix/strix.svg?style=social&label=Star)](https://github.com/usestrix/strix)
 </div>
 
 <div align="center">
@@ -20,7 +21,20 @@
 
 Strix are autonomous AI agents that act just like real hackers - they run your code dynamically, find vulnerabilities, and validate them through actual exploitation. Built for developers and security teams who need fast, accurate security testing without the overhead of manual pentesting or the false positives of static analysis tools.
 
+- **Full hacker toolkit** out of the box
+- **Teams of agents** that collaborate and scale
+- **Real validation** via exploitation and PoC, not false positives
+- **Developer‑first** CLI with actionable reports
+- **Auto‑fix & reporting** to accelerate remediation
+
+---
+
 ### 🚀 Quick Start
+
+Prerequisites:
+- Docker (running)
+- Python 3.12+
+- An LLM provider key (or a local LLM)
 
 ```bash
 # Install
@@ -34,12 +48,11 @@ export LLM_API_KEY="your-api-key"
 strix --target ./app-directory
 ```
 
-## Why Use Strix
+First run pulls the sandbox Docker image. Results are saved under `agent_runs/<run-name>`.
 
-- **Full Hacker Arsenal** - All the tools a professional hacker needs, built into the agents
-- **Real Validation** - Dynamic testing and actual exploitation, thus much fewer false positives
-- **Developer-First** - Seamlessly integrates into existing development workflows
-- **Auto-Fix & Reporting** - Automated patching with detailed remediation and security reports
+### ☁️ Cloud Hosted
+
+Want to skip the setup? Try our cloud-hosted version: **[usestrix.com](https://usestrix.com)**
 
 ## ✨ Features
 
@@ -110,15 +123,12 @@ Our managed platform provides:
 - **🔌 Third-Party Integrations**
 - **🎯 Enterprise Support**
 
-[**Get Enterprise Demo →**](https://form.typeform.com/to/ljtvl6X0)
+[**Get Enterprise Demo →**](https://usestrix.com)
 
 ## 🔒 Security Architecture
 
 - **Container Isolation** - All testing in sandboxed Docker environments
 - **Local Processing** - Testing runs locally, no data sent to external services
-
-> [!NOTE]
-> Strix is currently in Alpha. Expect rapid updates and improvements.
 
 > [!WARNING]
 > Only test systems you own or have permission to test. You are responsible for using Strix ethically and legally.
