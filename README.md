@@ -18,7 +18,7 @@ Strix
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 [![GitHub Stars](https://img.shields.io/github/stars/usestrix/strix)](https://github.com/usestrix/strix)
-[![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/J48Fzuh7)
+[![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/YjKFvEZSdZ)
 [![Website](https://img.shields.io/badge/Website-usestrix.com-2d3748.svg)](https://usestrix.com)
 
 </div>
@@ -228,6 +228,6 @@ Help expand our collection of specialized prompt modules for AI agents:
 
 ## 👥 Join Our Community
 
-Have questions? Found a bug? Want to contribute? **[Join our Discord!](https://discord.gg/J48Fzuh7)**
+Have questions? Found a bug? Want to contribute? **[Join our Discord!](https://discord.gg/YjKFvEZSdZ)**
 
 </div>
