@@ -195,7 +195,7 @@ export LLM_API_BASE="your-api-base-url"  # if using a local model, e.g. Ollama, 
 export PERPLEXITY_API_KEY="your-api-key"  # for search capabilities
 ```
 
-[📚 View supported AI models](https://docs.litellm.ai/docs/providers)
+[OpenAI's GPT-5](https://openai.com/api/) (`openai/gpt-5`) and [Anthropic's Claude Sonnet 4.5](https://claude.com/platform/api) (`anthropic/claude-sonnet-4-5`) work best with Strix, but we support many [other options](https://docs.litellm.ai/docs/providers).
 
 ## 🤝 Contributing
 
@@ -221,9 +221,5 @@ Have questions? Found a bug? Want to contribute? **[Join our Discord!](https://d
 ## 🌟 Support the Project
 
 **Love Strix?** Give us a ⭐ on GitHub!
-
-<div align="center">
-<img src="https://api.star-history.com/svg?repos=usestrix/strix&type=date&legend=top-left" alt="Star History Chart" width="800" style="border-radius: 16px;">
-</div>
 
 </div>
