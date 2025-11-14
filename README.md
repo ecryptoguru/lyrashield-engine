@@ -79,8 +79,8 @@ export LLM_API_KEY="your-api-key"
 strix --target ./app-directory
 ```
 
-> **Note:** First run automatically pulls the sandbox Docker image. Results are saved to `agent_runs/<run-name>/`
-
+> [!NOTE]
+> First run automatically pulls the sandbox Docker image. Results are saved to `agent_runs/<run-name>`
 
 ## 🏆 Enterprise Platform
 
