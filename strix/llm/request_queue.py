@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -26,7 +27,15 @@ def should_retry_exception(exception: Exception) -> bool:
 
 
 class LLMRequestQueue:
-    def __init__(self, max_concurrent: int = 6, delay_between_requests: float = 1.0):
+    def __init__(self, max_concurrent: int = 6, delay_between_requests: float = 5.0):
+        rate_limit_delay = os.getenv("LLM_RATE_LIMIT_DELAY")
+        if rate_limit_delay:
+            delay_between_requests = float(rate_limit_delay)
+
+        rate_limit_concurrent = os.getenv("LLM_RATE_LIMIT_CONCURRENT")
+        if rate_limit_concurrent:
+            max_concurrent = int(rate_limit_concurrent)
+
         self.max_concurrent = max_concurrent
         self.delay_between_requests = delay_between_requests
         self._semaphore = threading.BoundedSemaphore(max_concurrent)
@@ -52,8 +61,8 @@ class LLMRequestQueue:
             self._semaphore.release()
 
     @retry(  # type: ignore[misc]
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=1, max=30),
+        stop=stop_after_attempt(7),
+        wait=wait_exponential(multiplier=6, min=12, max=150),
         retry=retry_if_exception(should_retry_exception),
         reraise=True,
     )
