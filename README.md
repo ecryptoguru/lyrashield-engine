@@ -84,7 +84,7 @@ strix --target ./app-directory
 
 ## ☁️ Run Strix in Cloud
 
-Want to skip the local setup, API keys, and unpredictable LLM costs? Run the hosted cloud version of Strix at **[app.usestrix.com](https://app.usestrix.com)**.
+Want to skip the local setup, API keys, and unpredictable LLM costs? Run the hosted cloud version of Strix at **[app.usestrix.com](https://usestrix.com)**.
 
 Launch a scan in just a few minutes—no setup or configuration required—and you’ll get:
 
@@ -93,7 +93,7 @@ Launch a scan in just a few minutes—no setup or configuration required—and y
 - **CI/CD and GitHub integrations** to block risky changes before production
 - **Continuous monitoring** so new vulnerabilities are caught quickly
 
-[**Run your first pentest now →**](https://app.usestrix.com)
+[**Run your first pentest now →**](https://usestrix.com)
 
 ---
 
