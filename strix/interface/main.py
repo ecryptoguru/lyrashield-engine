@@ -98,7 +98,8 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
                     error_text.append("• ", style="white")
                     error_text.append("LLM_API_KEY", style="bold cyan")
                     error_text.append(
-                        " - API key for the LLM provider (not needed for local models, Vertex AI, AWS, etc.)\n",
+                        " - API key for the LLM provider "
+                        "(not needed for local models, Vertex AI, AWS, etc.)\n",
                         style="white",
                     )
                 elif var == "LLM_API_BASE":
@@ -123,7 +124,8 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
             for var in missing_optional_vars:
                 if var == "LLM_API_KEY":
                     error_text.append(
-                        "export LLM_API_KEY='your-api-key-here'  # not needed for local models, Vertex AI, AWS, etc.\n",
+                        "export LLM_API_KEY='your-api-key-here'  "
+                        "# not needed for local models, Vertex AI, AWS, etc.\n",
                         style="dim white",
                     )
                 elif var == "LLM_API_BASE":

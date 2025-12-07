@@ -203,7 +203,7 @@ class DockerRuntime(AbstractRuntime):
                 all=True, filters={"label": f"strix-scan-id={scan_id}"}
             )
             if containers:
-                container = cast("Container", containers[0])
+                container = containers[0]
                 if container.status != "running":
                     container.start()
                     time.sleep(2)

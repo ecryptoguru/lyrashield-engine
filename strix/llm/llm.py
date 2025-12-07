@@ -392,26 +392,27 @@ class LLM:
         if not self.config.model_name:
             return False
         try:
-            return supports_vision(model=self.config.model_name)
+            return bool(supports_vision(model=self.config.model_name))
         except Exception:  # noqa: BLE001
             return False
 
-    def _filter_images_from_messages(
-        self, messages: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _filter_images_from_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         filtered_messages = []
         for msg in messages:
             content = msg.get("content")
+            updated_msg = msg
             if isinstance(content, list):
                 filtered_content = []
                 for item in content:
                     if isinstance(item, dict):
                         if item.get("type") == "image_url":
-                            filtered_content.append({
-                                "type": "text",
-                                "text": "[Screenshot removed - model does not support vision. "
-                                "Use view_source or execute_js to interact with the page instead.]",
-                            })
+                            filtered_content.append(
+                                {
+                                    "type": "text",
+                                    "text": "[Screenshot removed - model does not support "
+                                    "vision. Use view_source or execute_js instead.]",
+                                }
+                            )
                         else:
                             filtered_content.append(item)
                     else:
@@ -421,13 +422,17 @@ class LLM:
                         item.get("text", "") if isinstance(item, dict) else str(item)
                         for item in filtered_content
                     ]
-                    if all(isinstance(item, dict) and item.get("type") == "text" for item in filtered_content):
-                        msg = {**msg, "content": "\n".join(text_parts)}
+                    all_text = all(
+                        isinstance(item, dict) and item.get("type") == "text"
+                        for item in filtered_content
+                    )
+                    if all_text:
+                        updated_msg = {**msg, "content": "\n".join(text_parts)}
                     else:
-                        msg = {**msg, "content": filtered_content}
+                        updated_msg = {**msg, "content": filtered_content}
                 else:
-                    msg = {**msg, "content": ""}
-            filtered_messages.append(msg)
+                    updated_msg = {**msg, "content": ""}
+            filtered_messages.append(updated_msg)
         return filtered_messages
 
     async def _make_request(
