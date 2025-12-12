@@ -15,7 +15,6 @@
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/strix-agent?period=total&units=INTERNATIONAL_SYSTEM&left_color=GREY&right_color=RED&left_text=Downloads)](https://pepy.tech/projects/strix-agent)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-
 [![GitHub Stars](https://img.shields.io/github/stars/usestrix/strix)](https://github.com/usestrix/strix)
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/YjKFvEZSdZ)
 [![Website](https://img.shields.io/badge/Website-usestrix.com-2d3748.svg)](https://usestrix.com)
@@ -25,12 +24,6 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/usestrix/strix)
 
-</div>
-
-<br>
-
-<div align="center">
-  <img src=".github/screenshot.png" alt="Strix Demo" width="800" style="border-radius: 16px;">
 </div>
 
 <br>
