@@ -65,13 +65,15 @@ Strix are autonomous AI agents that act just like real hackers - they run your c
 
 **Prerequisites:**
 - Docker (running)
-- Python 3.12+
 - An LLM provider key (e.g. [get OpenAI API key](https://platform.openai.com/api-keys) or use a local LLM)
 
 ### Installation & First Scan
 
 ```bash
 # Install Strix
+curl -sSL https://strix.ai/install | bash
+
+# Or via pipx
 pipx install strix-agent
 
 # Configure your AI provider
@@ -192,14 +194,14 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install Strix
-        run: pipx install strix-agent
+        run: curl -sSL https://strix.ai/install | bash
 
       - name: Run Strix
         env:
           STRIX_LLM: ${{ secrets.STRIX_LLM }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
-        run: strix -n -t ./
+        run: strix -n -t ./ --scan-mode quick
 ```
 
 ### ⚙️ Configuration
