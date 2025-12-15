@@ -1,6 +1,6 @@
 <tools>
   <important>
-  YOU MUST USE THE TODO TOOL EXTENSIVELY. This is critical for staying organized and focused.
+  YOU MUST USE THE TODO TOOL EXTENSIVELY — AND DO SO IN BATCHES. Minimize the number of tool calls by grouping creations and status changes together.
 
   IMPORTANT: Each subagent has their own separate todo list. Your todos are private to you and
   do not interfere with other agents' todos. Use this to your advantage.
@@ -8,12 +8,12 @@
   WORKFLOW - Follow this for EVERY task:
   1. Keep the list short-horizon: track only the next few concrete steps (3-6 max), not long-term goals.
   2. Create/update todos as you learn new info; drop or rewrite items when plans change.
-  3. BEFORE starting a task: Mark it as "in_progress" using update_todo.
-  4. AFTER completing a task: Mark it as "done" using mark_todo_done.
-  5. When you discover new tasks: Add them right away and re-prioritize; avoid giant upfront lists.
+  3. Batch operations: when setting statuses or priorities for multiple items, use ONE call with the bulk parameters (`updates` or `todo_ids`) instead of one call per todo.
+  4. BEFORE starting a task (or a small set of tasks): Mark them "in_progress" together using a single update_todo call with an `updates` array.
+  5. AFTER completing tasks: Mark them "done" together using one mark_todo_done call with `todo_ids`.
+  6. When you discover new tasks: Add them in one create_todo call (use the `todos` list) and re-prioritize; avoid giant upfront lists.
 
-  ALWAYS mark the current task as in_progress before working on it. This shows what you're
-  actively doing. Then mark it done when finished. Never skip these status updates.
+  ALWAYS mark the current task(s) as in_progress before working on them. This shows what you're actively doing. Then mark them done when finished. Do these status updates in batches to avoid excessive tool calls.
 
   A well-maintained todo list prevents you from going in circles, forgetting important tasks,
   or losing track of your progress. USE IT CONSTANTLY.
@@ -75,8 +75,7 @@
 
   <tool name="list_todos">
     <description>List all todos with optional filtering by status or priority. CHECK THIS OFTEN.</description>
-    <details>Use this frequently to review your task list, check progress, and decide what to work on next.
-  Check your todos regularly to stay focused and avoid missing important tasks.
+  <details>Use this when you need fresh IDs or to reprioritize. Avoid spamming list_todos; prefer to keep a local view of the list and only refresh when state may be stale or after bulk changes.
   The list is sorted: done first, then in_progress, then pending. Within each status, sorted by priority (critical > high > normal > low).
   Each subagent has their own independent todo list.</details>
     <parameters>
@@ -108,13 +107,13 @@
   </tool>
 
   <tool name="update_todo">
-    <description>Update one or multiple todo items. Supports bulk updates in a single call.</description>
+  <description>Update one or multiple todo items. ALWAYS prefer bulk updates in a single call.</description>
     <parameters>
       <parameter name="todo_id" type="string" required="false">
         <description>ID of a single todo to update (for simple updates)</description>
       </parameter>
       <parameter name="updates" type="string" required="false">
-        <description>Bulk update multiple todos at once. JSON array of objects with todo_id and fields to update: [{"todo_id": "abc", "status": "done"}, {"todo_id": "def", "priority": "high"}]</description>
+        <description>Bulk update multiple todos at once. JSON array of objects with todo_id and fields to update: [{"todo_id": "abc", "status": "done"}, {"todo_id": "def", "priority": "high"}]. USE THIS INSTEAD OF multiple single-item calls.</description>
       </parameter>
       <parameter name="title" type="string" required="false">
         <description>New title (used with todo_id)</description>
@@ -147,9 +146,8 @@
   </tool>
 
   <tool name="mark_todo_done">
-    <description>Mark one or multiple todos as completed in a single call. DO THIS IMMEDIATELY after finishing tasks.</description>
-    <details>Mark todos as done right after completing them - don't wait! Supports marking multiple todos at once
-  to save tool calls. This keeps your list accurate and gives you a clear picture of progress.</details>
+  <description>Mark one or multiple todos as completed in a single call. DO THIS IN BATCHES after finishing a small group of tasks.</description>
+  <details>Mark todos as done right after completing them - group multiple completions into one call using todo_ids. Avoid one-call-per-item to save tool calls. This keeps your list accurate and gives you a clear picture of progress.</details>
     <parameters>
       <parameter name="todo_id" type="string" required="false">
         <description>ID of a single todo to mark as done</description>
