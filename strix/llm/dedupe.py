@@ -180,7 +180,6 @@ def check_duplicate(
             "model": model_name,
             "messages": messages,
             "timeout": 120,
-            "temperature": 0,
         }
         if api_key:
             completion_kwargs["api_key"] = api_key
