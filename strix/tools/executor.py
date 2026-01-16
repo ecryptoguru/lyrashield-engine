@@ -89,7 +89,8 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
                 raise RuntimeError("Authentication failed: Invalid or missing sandbox token") from e
             raise RuntimeError(f"HTTP error calling tool server: {e.response.status_code}") from e
         except httpx.RequestError as e:
-            raise RuntimeError(f"Request error calling tool server: {e}") from e
+            error_type = type(e).__name__
+            raise RuntimeError(f"Request error calling tool server: {error_type}") from e
 
 
 async def _execute_tool_locally(tool_name: str, agent_state: Any | None, **kwargs: Any) -> Any:
