@@ -343,7 +343,7 @@ echo -e "  ${CYAN}2.${NC} Run a penetration test:"
 echo -e "     ${MUTED}strix --target https://example.com${NC}"
 echo ""
 echo -e "${MUTED}For more information visit ${NC}https://strix.ai"
-echo -e "${MUTED}Join our community ${NC}https://discord.gg/YjKFvEZSdZ"
+echo -e "${MUTED}Join our community ${NC}https://discord.gg/strix-ai"
 echo ""
 
 echo -e "${YELLOW}→${NC} Run ${MUTED}source ~/.$(basename $SHELL)rc${NC} or open a new terminal"

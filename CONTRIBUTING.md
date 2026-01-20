@@ -101,7 +101,7 @@ We welcome feature ideas! Please:
 
 ## 🤝 Community
 
-- **Discord**: [Join our community](https://discord.gg/YjKFvEZSdZ)
+- **Discord**: [Join our community](https://discord.gg/strix-ai)
 - **Issues**: [GitHub Issues](https://github.com/usestrix/strix/issues)
 
 ## ✨ Recognition
@@ -113,4 +113,4 @@ We value all contributions! Contributors will be:
 
 ---
 
-**Questions?** Reach out on [Discord](https://discord.gg/YjKFvEZSdZ) or create an issue. We're here to help!
+**Questions?** Reach out on [Discord](https://discord.gg/strix-ai) or create an issue. We're here to help!
