@@ -914,13 +914,13 @@ class StrixTUIApp(App):  # type: ignore[misc]
             status = agent_data.get("status", "running")
 
             status_indicators = {
-                "running": "●",
-                "waiting": "○",
-                "completed": "◆",
-                "failed": "◇",
+                "running": "⚪",
+                "waiting": "⏸",
+                "completed": "🟢",
+                "failed": "🔴",
                 "stopped": "■",
                 "stopping": "○",
-                "llm_failed": "◇",
+                "llm_failed": "🔴",
             }
 
             status_icon = status_indicators.get(status, "○")
@@ -1469,12 +1469,13 @@ class StrixTUIApp(App):  # type: ignore[misc]
         agent_name_raw = agent_data.get("name", "Agent")
 
         status_indicators = {
-            "running": "●",
-            "waiting": "○",
-            "completed": "◆",
-            "failed": "◇",
+            "running": "⚪",
+            "waiting": "⏸",
+            "completed": "🟢",
+            "failed": "🔴",
             "stopped": "■",
             "stopping": "○",
+            "llm_failed": "🔴",
         }
 
         status_icon = status_indicators.get(status, "○")
@@ -1543,12 +1544,13 @@ class StrixTUIApp(App):  # type: ignore[misc]
         status = agent_data.get("status", "running")
 
         status_indicators = {
-            "running": "●",
-            "waiting": "○",
-            "completed": "◆",
-            "failed": "◇",
+            "running": "⚪",
+            "waiting": "⏸",
+            "completed": "🟢",
+            "failed": "🔴",
             "stopped": "■",
             "stopping": "○",
+            "llm_failed": "🔴",
         }
 
         status_icon = status_indicators.get(status, "○")
