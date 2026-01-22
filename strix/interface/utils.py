@@ -247,7 +247,7 @@ def _build_llm_stats(stats_text: Text, total_stats: dict[str, Any]) -> None:
         if total_stats["cached_tokens"] > 0:
             stats_text.append("  ·  ", style="dim white")
             stats_text.append("Cached Tokens ", style="dim")
-            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="#22c55e")
+            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="white")
 
         stats_text.append("  ·  ", style="dim white")
         stats_text.append("Output Tokens ", style="dim")
@@ -350,7 +350,7 @@ def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = Non
 
     stats_text.append("  ·  ", style="dim white")
     stats_text.append("Cached Tokens ", style="dim")
-    stats_text.append(format_token_count(total_stats["cached_tokens"]), style="#22c55e")
+    stats_text.append(format_token_count(total_stats["cached_tokens"]), style="white")
 
     stats_text.append("\n")
 
