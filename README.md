@@ -31,7 +31,6 @@
 
 </div>
 
-<br/>
 
 > [!TIP]
 > **New!** Strix integrates seamlessly with GitHub Actions and CI/CD pipelines. Automatically scan for vulnerabilities on every pull request and block insecure code before it reaches production!
