@@ -100,7 +100,7 @@
     "primary": {
       "type": "button",
       "label": "Try Strix Cloud",
-      "href": "https://app.usestrix.com"
+      "href": "https://app.strix.ai"
     }
   },
   "footer": {
