@@ -241,10 +241,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Pre-existing lazy imports inside functions (avoid circular dependency
-# with strix.telemetry). Keep until the dependency graph is refactored.
-"strix/llm/llm.py" = ["PLC0415"]
-"strix/tools/notes/notes_actions.py" = ["PLC0415"]
+# Lazy imports inside functions to avoid circular dependency with
+# strix.telemetry / strix.llm.dedupe / cvss.
+"strix/tools/notes/tools.py" = ["PLC0415", "TC002"]
+"strix/tools/finish/tool.py" = ["PLC0415", "TC002"]
+"strix/tools/reporting/tool.py" = ["PLC0415", "TC002"]
 "tests/**/*.py" = [
     "S105",   # Possible hardcoded password (string literal)
     "S106",   # Possible hardcoded password (function call)
@@ -286,12 +287,9 @@ ignore = [
 # so RunContextWrapper / Tool / TResponseInputItem must be imported eagerly,
 # not under TYPE_CHECKING.
 "strix/tools/todo/tools.py" = ["TC002"]
-"strix/tools/notes/tools.py" = ["TC002"]
 "strix/tools/thinking/tool.py" = ["TC002"]
 "strix/tools/web_search/tool.py" = ["TC002"]
 "strix/tools/file_edit/tools.py" = ["TC002"]
-"strix/tools/reporting/tool.py" = ["TC002"]
-"strix/tools/finish/tool.py" = ["TC002"]
 "strix/tools/browser/tool.py" = ["TC002"]
 "strix/tools/terminal/tool.py" = ["TC002"]
 "strix/tools/python/tool.py" = ["TC002"]
