@@ -231,9 +231,7 @@ def _to_note_listing_entry(
         entry["content"] = content
     elif content:
         if len(content) > _DEFAULT_CONTENT_PREVIEW_CHARS:
-            entry["content_preview"] = (
-                f"{content[:_DEFAULT_CONTENT_PREVIEW_CHARS].rstrip()}..."
-            )
+            entry["content_preview"] = f"{content[:_DEFAULT_CONTENT_PREVIEW_CHARS].rstrip()}..."
         else:
             entry["content_preview"] = content
 
@@ -375,16 +373,17 @@ def append_note_content(note_id: str, delta: str) -> dict[str, Any]:
             if note_id not in _notes_storage:
                 return {"success": False, "error": f"Note with ID '{note_id}' not found"}
 
-            if not isinstance(delta, str):
-                return {"success": False, "error": "Delta must be a string"}
-
             note = _notes_storage[note_id]
             existing_content = str(note.get("content") or "")
             updated_content = f"{existing_content.rstrip()}{delta}"
-            return update_note(note_id=note_id, content=updated_content)
-
+            result: dict[str, Any] = update_note(
+                note_id=note_id,
+                content=updated_content,
+            )
         except (ValueError, TypeError) as e:
             return {"success": False, "error": f"Failed to append note content: {e}"}
+        else:
+            return result
 
 
 @register_tool(sandbox_execution=False)

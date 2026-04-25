@@ -243,6 +243,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Pre-existing lazy imports inside functions (avoid circular dependency
+# with strix.telemetry). Keep until the dependency graph is refactored.
+"strix/llm/llm.py" = ["PLC0415"]
+"strix/tools/notes/notes_actions.py" = ["PLC0415"]
 "tests/**/*.py" = [
     "S106",   # Possible hardcoded password
     "S108",   # Possible insecure usage of temporary file/directory

@@ -275,14 +275,17 @@ class LLM:
     def _extract_thinking(self, chunks: list[Any]) -> list[dict[str, Any]] | None:
         if not chunks or not self._supports_reasoning():
             return None
+        blocks: list[dict[str, Any]] | None = None
         try:
             resp = stream_chunk_builder(chunks)
-            if resp.choices and hasattr(resp.choices[0].message, "thinking_blocks"):
-                blocks: list[dict[str, Any]] = resp.choices[0].message.thinking_blocks
-                return blocks
+            choices: Any = getattr(resp, "choices", None)
+            if choices:
+                message: Any = getattr(choices[0], "message", None)
+                if message is not None and hasattr(message, "thinking_blocks"):
+                    blocks = message.thinking_blocks
         except Exception:  # noqa: BLE001, S110  # nosec B110
             pass
-        return None
+        return blocks
 
     def _update_usage_stats(self, response: Any) -> None:
         try:

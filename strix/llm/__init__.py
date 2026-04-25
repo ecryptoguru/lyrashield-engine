@@ -13,7 +13,7 @@ __all__ = [
     "LLMRequestFailedError",
 ]
 
-litellm._logging._disable_debugging()
+litellm._logging._disable_debugging()  # type: ignore[no-untyped-call]
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 logging.getLogger("asyncio").propagate = False
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="asyncio")
