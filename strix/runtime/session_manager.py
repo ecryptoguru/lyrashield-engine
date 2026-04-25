@@ -18,13 +18,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-import docker
 from agents.sandbox.entries import LocalDir
 from agents.sandbox.manifest import Environment, Manifest
-from agents.sandbox.sandboxes.docker import DockerSandboxClientOptions
 
+from strix.config.config import Config
+from strix.runtime.backends import get_backend
 from strix.runtime.caido_bootstrap import bootstrap_caido
-from strix.runtime.docker_client import StrixDockerSandboxClient
 
 
 if TYPE_CHECKING:
@@ -84,14 +83,20 @@ async def create_or_reuse(
         ),
     )
 
-    client = StrixDockerSandboxClient(docker.from_env())
-    options = DockerSandboxClientOptions(
+    backend_name = Config.get("strix_runtime_backend") or "docker"
+    backend = get_backend(backend_name)
+
+    logger.info(
+        "Creating sandbox session for scan %s (backend=%s, image=%s)",
+        scan_id,
+        backend_name,
+        image,
+    )
+    client, session = await backend(
         image=image,
+        manifest=manifest,
         exposed_ports=(_CONTAINER_CAIDO_PORT,),
     )
-
-    logger.info("Creating sandbox session for scan %s (image=%s)", scan_id, image)
-    session = await client.create(options=options, manifest=manifest)
 
     caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
     host_caido_url = f"http://{caido_endpoint.host}:{caido_endpoint.port}"
