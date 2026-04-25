@@ -55,7 +55,7 @@ DEFAULT_RETRY = ModelRetrySettings(
 def make_run_config(
     *,
     sandbox_session: BaseSandboxSession | None,
-    model: str = "anthropic/claude-sonnet-4-6",
+    model: str,
     reasoning_effort: Literal["low", "medium", "high"] | None = None,
     model_settings_override: ModelSettings | None = None,
     sandbox_client: Any | None = None,
@@ -71,8 +71,8 @@ def make_run_config(
             this scan (one container per scan; see
             :mod:`strix.runtime.session_manager`). ``None`` is allowed
             for unit tests and dry runs.
-        model: Model alias passed to ``MultiProvider``. Defaults to the
-            production Anthropic alias.
+        model: Litellm model alias passed to ``MultiProvider``. Caller
+            resolves from :attr:`Settings.llm.model`.
         reasoning_effort: ``"low" | "medium" | "high"``; routes to
             ``ModelSettings.reasoning``.
         model_settings_override: Optional per-run ``ModelSettings``
@@ -117,7 +117,7 @@ def make_agent_context(
     agent_id: str,
     parent_id: str | None,
     tracer: Any | None,
-    model: str = "anthropic/claude-sonnet-4-6",
+    model: str,
     model_settings: ModelSettings | None = None,
     max_turns: int = 300,
     is_whitebox: bool = False,

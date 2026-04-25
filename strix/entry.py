@@ -161,7 +161,7 @@ async def run_strix_scan(
     bus: AgentMessageBus | None = None,
     interactive: bool = False,
     max_turns: int = STRIX_DEFAULT_MAX_TURNS,
-    model: str = "anthropic/claude-sonnet-4-6",
+    model: str | None = None,
     cleanup_on_exit: bool = True,
 ) -> RunResult:
     """Run one Strix scan end-to-end against a freshly-prepared sandbox.
@@ -169,7 +169,7 @@ async def run_strix_scan(
     Args:
         scan_config: Per-scan configuration — ``targets``,
             ``user_instructions``, ``diff_scope``, ``scan_mode``,
-            ``is_whitebox``, ``skills``.
+            ``skills``. ``is_whitebox`` is derived from ``targets``.
         scan_id: Used to key the sandbox session cache. Auto-generated
             if omitted — callers that want resume-after-crash semantics
             should pass a stable id.
@@ -181,6 +181,9 @@ async def run_strix_scan(
         interactive: Renders the interactive-mode prompt block on the
             root agent.
         max_turns: Cap on root-agent LLM turns (default 300).
+        model: Litellm model alias. ``None`` (default) reads
+            :attr:`Settings.llm.model` — caller pre-validates via
+            :func:`validate_environment` that it's set.
         cleanup_on_exit: When True (default), tears down the sandbox
             session in a ``finally``. Set to False for resume scenarios
             where the caller wants to preserve the container.
@@ -191,6 +194,12 @@ async def run_strix_scan(
     if scan_id is None:
         scan_id = f"scan-{uuid.uuid4().hex[:8]}"
     logger.info("Starting Strix scan %s", scan_id)
+
+    resolved_model = model or load_settings().llm.model
+    if not resolved_model:
+        raise RuntimeError(
+            "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
+        )
 
     # Caller may pre-create the bus so it can hold a handle (e.g., the
     # TUI uses it to route stop / chat-input commands). Otherwise we
@@ -244,7 +253,7 @@ async def run_strix_scan(
             agent_id=root_id,
             parent_id=None,
             tracer=tracer,
-            model=model,
+            model=resolved_model,
             max_turns=max_turns,
             is_whitebox=is_whitebox,
             diff_scope=diff_scope,
@@ -258,7 +267,7 @@ async def run_strix_scan(
         run_config = make_run_config(
             sandbox_session=bundle["session"],
             sandbox_client=bundle["client"],
-            model=model,
+            model=resolved_model,
             reasoning_effort=reasoning_effort,
         )
 
