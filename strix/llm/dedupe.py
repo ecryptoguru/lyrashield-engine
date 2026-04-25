@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 from typing import Any
 
 import litellm
@@ -49,30 +48,30 @@ FIELDS TO ANALYZE:
 - poc_description: How it's exploited
 - impact: What damage it can cause
 
-YOU MUST RESPOND WITH EXACTLY THIS XML FORMAT AND NOTHING ELSE:
+Respond with a single JSON object and nothing else:
 
-<dedupe_result>
-<is_duplicate>true</is_duplicate>
-<duplicate_id>vuln-0001</duplicate_id>
-<confidence>0.95</confidence>
-<reason>Both reports describe SQL injection in /api/login via the username parameter</reason>
-</dedupe_result>
+{
+  "is_duplicate": true,
+  "duplicate_id": "vuln-0001",
+  "confidence": 0.95,
+  "reason": "Both reports describe SQL injection in /api/login via the username parameter"
+}
 
-OR if not a duplicate:
+Or, if not a duplicate:
 
-<dedupe_result>
-<is_duplicate>false</is_duplicate>
-<duplicate_id></duplicate_id>
-<confidence>0.90</confidence>
-<reason>Different endpoints: candidate is /api/search, existing is /api/login</reason>
-</dedupe_result>
+{
+  "is_duplicate": false,
+  "duplicate_id": "",
+  "confidence": 0.90,
+  "reason": "Different endpoints: candidate is /api/search, existing is /api/login"
+}
 
-RULES:
-- is_duplicate MUST be exactly "true" or "false" (lowercase)
-- duplicate_id MUST be the exact ID from existing reports or empty if not duplicate
-- confidence MUST be a decimal (your confidence level in the decision)
-- reason MUST be a specific explanation mentioning endpoint/parameter/root cause
-- DO NOT include any text outside the <dedupe_result> tags"""
+Rules:
+- ``is_duplicate`` is a boolean.
+- ``duplicate_id`` is the exact id from existing reports, or "" if not a duplicate.
+- ``confidence`` is a number between 0 and 1.
+- ``reason`` is a specific explanation mentioning endpoint/parameter/root cause.
+- Output ONLY the JSON object — no surrounding prose, no code fences."""
 
 
 def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
@@ -99,42 +98,31 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def _extract_xml_field(content: str, field: str) -> str:
-    pattern = rf"<{field}>(.*?)</{field}>"
-    match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    return ""
-
-
 def _parse_dedupe_response(content: str) -> dict[str, Any]:
-    result_match = re.search(
-        r"<dedupe_result>(.*?)</dedupe_result>", content, re.DOTALL | re.IGNORECASE
-    )
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError(f"No JSON object found in dedupe response: {content[:500]}")
+    parsed = json.loads(text[start : end + 1])
 
-    if not result_match:
-        logger.warning(f"No <dedupe_result> block found in response: {content[:500]}")
-        raise ValueError("No <dedupe_result> block found in response")
-
-    result_content = result_match.group(1)
-
-    is_duplicate_str = _extract_xml_field(result_content, "is_duplicate")
-    duplicate_id = _extract_xml_field(result_content, "duplicate_id")
-    confidence_str = _extract_xml_field(result_content, "confidence")
-    reason = _extract_xml_field(result_content, "reason")
-
-    is_duplicate = is_duplicate_str.lower() == "true"
-
+    duplicate_id = str(parsed.get("duplicate_id") or "")[:64]
+    reason = str(parsed.get("reason") or "")[:500]
     try:
-        confidence = float(confidence_str) if confidence_str else 0.0
-    except ValueError:
+        confidence = float(parsed.get("confidence", 0.0))
+    except (TypeError, ValueError):
         confidence = 0.0
 
     return {
-        "is_duplicate": is_duplicate,
-        "duplicate_id": duplicate_id[:64] if duplicate_id else "",
+        "is_duplicate": bool(parsed.get("is_duplicate", False)),
+        "duplicate_id": duplicate_id,
         "confidence": confidence,
-        "reason": reason[:500] if reason else "",
+        "reason": reason,
     }
 
 
@@ -165,7 +153,7 @@ def check_duplicate(
                 "content": (
                     f"Compare this candidate vulnerability against existing reports:\n\n"
                     f"{json.dumps(comparison_data, indent=2)}\n\n"
-                    f"Respond with ONLY the <dedupe_result> XML block."
+                    f"Respond with ONLY the JSON object described in the system prompt."
                 ),
             },
         ]

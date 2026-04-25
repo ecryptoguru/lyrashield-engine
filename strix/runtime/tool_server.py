@@ -69,7 +69,6 @@ class ToolExecutionResponse(BaseModel):
 
 
 async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> Any:
-    from strix.tools.argument_parser import convert_arguments
     from strix.tools.context import set_current_agent_id
     from strix.tools.registry import get_tool_by_name
 
@@ -79,8 +78,7 @@ async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> An
     if not tool_func:
         raise ValueError(f"Tool '{tool_name}' not found")
 
-    converted_kwargs = convert_arguments(tool_func, kwargs)
-    return await asyncio.to_thread(tool_func, **converted_kwargs)
+    return await asyncio.to_thread(tool_func, **kwargs)
 
 
 @app.post("/execute", response_model=ToolExecutionResponse)

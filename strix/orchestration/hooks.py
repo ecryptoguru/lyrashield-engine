@@ -26,9 +26,9 @@ class StrixOrchestrationHooks(RunHooks[Any]):
        the agent doesn't fire tools before Caido and the tool server
        are ready.
     4. Subagent crash detection: if ``on_agent_end`` fires without
-       ``agent_finish_called`` being set, posts a synthetic
-       ``<agent_crash>`` message to the parent's inbox so the parent
-       learns on its next turn instead of waiting forever.
+       ``agent_finish_called`` being set, posts a crash message to the
+       parent's inbox so the parent learns on its next turn instead of
+       waiting forever.
     """
 
     async def on_llm_start(
@@ -51,8 +51,8 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                     {
                         "role": "user",
                         "content": (
-                            "<system_warning>You are at 85% of your iteration "
-                            "budget. Begin consolidating findings.</system_warning>"
+                            "[System warning] You are at 85% of your iteration "
+                            "budget. Begin consolidating findings."
                         ),
                     }
                 )
@@ -61,9 +61,8 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                     {
                         "role": "user",
                         "content": (
-                            "<system_warning>You have 3 iterations left. Your "
+                            "[System warning] You have 3 iterations left. Your "
                             "next tool call MUST be the finish tool."
-                            "</system_warning>"
                         ),
                     }
                 )
@@ -148,11 +147,9 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                     {
                         "from": me,
                         "content": (
-                            f"<agent_crash agent_id='{me}' "
-                            f"name='{bus.names.get(me, me)}'>"
-                            "Agent terminated without calling agent_finish. "
-                            "Stop waiting on this child."
-                            "</agent_crash>"
+                            f"[Agent crash] {bus.names.get(me, me)} ({me}) "
+                            f"terminated without calling agent_finish. "
+                            f"Stop waiting on this child."
                         ),
                         "type": "crash",
                     },

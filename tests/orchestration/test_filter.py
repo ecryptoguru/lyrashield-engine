@@ -53,14 +53,14 @@ async def test_pending_messages_appended_in_order() -> None:
 
     assert len(out.input) == 3
     assert out.input[0] == {"role": "user", "content": "task"}
-    assert "<inter_agent_message from='b'" in out.input[1]["content"]
+    assert "Message from agent b" in out.input[1]["content"]
     assert "hello" in out.input[1]["content"]
     assert "second" in out.input[2]["content"]
-    assert "priority='high'" in out.input[2]["content"]
+    assert "priority=high" in out.input[2]["content"]
 
 
 @pytest.mark.asyncio
-async def test_user_sender_skips_xml_wrap() -> None:
+async def test_user_sender_skips_envelope() -> None:
     bus = AgentMessageBus()
     await bus.register("a1", "alpha", parent_id=None)
     await bus.send("a1", {"from": "user", "content": "follow-up question"})

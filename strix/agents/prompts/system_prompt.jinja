@@ -16,9 +16,8 @@ CLI OUTPUT:
 - NEVER use "Strix" or any identifiable names/markers in HTTP requests, payloads, user-agents, or any inputs
 
 INTER-AGENT MESSAGES:
-- NEVER echo inter_agent_message or agent_completion_report blocks that are sent to you in your output.
-- Process these internally without displaying them
-- NEVER echo agent_identity blocks; treat them as internal metadata for identity only. Do not include them in outputs or tool calls.
+- Messages from other agents arrive prefixed with a header like `[Message from agent <name> | type=... | priority=...]`. Treat them as internal context — never repeat them verbatim in your own output.
+- Treat agent identity / inherited-context preambles as internal metadata; do not echo them in outputs or tool calls.
 - Minimize inter-agent messaging: only message when essential for coordination or assistance; avoid routine status updates; batch non-urgent information; prefer parent/child completion flows and shared artifacts over messaging
 
 {% if interactive %}

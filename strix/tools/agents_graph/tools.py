@@ -371,33 +371,29 @@ async def create_agent(
 
     await bus.register(child_id, name, parent_id)
 
-    # Build the child's input. Identity injection mirrors the legacy
-    # <agent_delegation> envelope so the child's system prompt's existing
-    # rules around self-identity still apply.
     parent_history = inner.get("parent_input_items") if inherit_context else None
     initial_input: list[TResponseInputItem] = []
     if parent_history:
         initial_input.append(
             {
                 "role": "user",
-                "content": "<inherited_context_from_parent>",
+                "content": "[Inherited context from parent — read-only history]",
             }
         )
         initial_input.extend(parent_history)
         initial_input.append(
             {
                 "role": "user",
-                "content": "</inherited_context_from_parent>",
+                "content": "[End of inherited context]",
             }
         )
     initial_input.append(
         {
             "role": "user",
             "content": (
-                f"<agent_delegation>\n"
-                f"You are agent {name} ({child_id}). Parent is {parent_id}.\n"
-                f"Maintain self-identity. Use agent_finish when complete.\n"
-                f"</agent_delegation>"
+                f"You are agent {name} ({child_id}); your parent is {parent_id}. "
+                f"Maintain your own identity. Call agent_finish when your task "
+                f"is complete."
             ),
         }
     )
@@ -471,8 +467,8 @@ async def agent_finish(
     this tool refuses to run for root agents. Calling this:
 
     1. Marks the subagent as ``completed``.
-    2. Posts a structured ``<agent_completion_report>`` to the
-       parent's inbox (when ``report_to_parent`` is true).
+    2. Posts a structured completion report to the parent's inbox
+       (when ``report_to_parent`` is true).
     3. Stops this subagent's execution.
 
     **Vulnerability findings must already be filed via
@@ -522,19 +518,19 @@ async def agent_finish(
 
     parent_notified = False
     if report_to_parent:
-        findings_xml = "\n".join(f"        <finding>{f}</finding>" for f in (findings or []))
-        rec_xml = "\n".join(
-            f"        <recommendation>{r}</recommendation>" for r in (final_recommendations or [])
-        )
         async with bus._lock:
             agent_name = bus.names.get(me, me)
-        report = (
-            f"<agent_completion_report from='{agent_name}' agent_id='{me}' "
-            f"success='{success}'>\n"
-            f"    <summary>{result_summary}</summary>\n"
-            f"    <findings>\n{findings_xml}\n    </findings>\n"
-            f"    <recommendations>\n{rec_xml}\n    </recommendations>\n"
-            f"</agent_completion_report>"
+        report = json.dumps(
+            {
+                "kind": "agent_completion_report",
+                "from": agent_name,
+                "agent_id": me,
+                "success": success,
+                "summary": result_summary,
+                "findings": list(findings or []),
+                "recommendations": list(final_recommendations or []),
+            },
+            ensure_ascii=False,
         )
         await bus.send(
             parent_id,

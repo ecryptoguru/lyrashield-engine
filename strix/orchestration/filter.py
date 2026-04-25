@@ -23,11 +23,9 @@ logger = logging.getLogger(__name__)
 async def inject_messages_filter(data: CallModelData) -> ModelInputData:
     """Drain bus inbox and append messages as user-role items before the LLM call.
 
-    Each drained message is wrapped in an ``<inter_agent_message>`` XML envelope
-    so the system prompt's rules around inter-agent communication apply.
-
-    Messages from the literal sender ``"user"`` (a real human via TUI)
-    skip the XML wrap and are added as plain user messages.
+    Messages from peer agents are formatted with a labeled header so the
+    receiving model can attribute them. Messages from the literal sender
+    ``"user"`` (a real human via TUI) are added as plain user messages.
 
     Any exception inside the filter — malformed message dict, bug in
     ``bus.drain``, etc. — is caught and the original ``data.model_data``
@@ -51,16 +49,13 @@ async def inject_messages_filter(data: CallModelData) -> ModelInputData:
             if sender == "user":
                 new_input.append({"role": "user", "content": content})
             else:
+                msg_type = msg.get("type", "info")
+                priority = msg.get("priority", "normal")
+                header = f"[Message from agent {sender} | type={msg_type} | priority={priority}]"
                 new_input.append(
                     {
                         "role": "user",
-                        "content": (
-                            f"<inter_agent_message from='{sender}' "
-                            f"type='{msg.get('type', 'info')}' "
-                            f"priority='{msg.get('priority', 'normal')}'>"
-                            f"{content}"
-                            f"</inter_agent_message>"
-                        ),
+                        "content": f"{header}\n{content}",
                     }
                 )
         return ModelInputData(

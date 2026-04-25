@@ -176,7 +176,7 @@ async def test_search_files_routes_to_sandbox() -> None:
 
 @pytest.mark.asyncio
 async def test_create_vulnerability_report_validates_required_fields() -> None:
-    """Empty required fields should be rejected by the legacy validator."""
+    """Empty required fields should be rejected by the validator."""
     out = await _invoke(
         create_vulnerability_report,
         _ctx_for(),
@@ -188,7 +188,7 @@ async def test_create_vulnerability_report_validates_required_fields() -> None:
         poc_description="pd",
         poc_script_code="curl ...",
         remediation_steps="rs",
-        cvss_breakdown="<attack_vector>N</attack_vector>",
+        cvss_breakdown={"attack_vector": "N"},
     )
     assert out["success"] is False
     assert "errors" in out
@@ -220,7 +220,7 @@ async def test_create_vulnerability_report_delegates_to_impl() -> None:
             poc_description="pd",
             poc_script_code="pc",
             remediation_steps="rs",
-            cvss_breakdown="<x/>",
+            cvss_breakdown={"attack_vector": "N"},
             cve="CVE-2024-12345",
         )
 

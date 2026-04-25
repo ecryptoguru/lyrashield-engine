@@ -6,15 +6,20 @@ from pygments.styles import get_style_by_name
 from rich.text import Text
 from textual.widgets import Static
 
-from strix.tools.reporting.tool import (
-    _parse_code_locations_xml as parse_code_locations_xml,
-)
-from strix.tools.reporting.tool import (
-    _parse_cvss_xml as parse_cvss_xml,
-)
-
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
+
+
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _coerce_list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
 
 
 @cache
@@ -94,8 +99,8 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
         poc_script_code = args.get("poc_script_code", "")
         remediation_steps = args.get("remediation_steps", "")
 
-        cvss_breakdown_xml = args.get("cvss_breakdown", "")
-        code_locations_xml = args.get("code_locations", "")
+        cvss_breakdown = _coerce_dict(args.get("cvss_breakdown"))
+        code_locations = _coerce_list_of_dicts(args.get("code_locations"))
 
         endpoint = args.get("endpoint", "")
         method = args.get("method", "")
@@ -154,8 +159,7 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
             text.append("CWE: ", style=FIELD_STYLE)
             text.append(cwe)
 
-        parsed_cvss = parse_cvss_xml(cvss_breakdown_xml) if cvss_breakdown_xml else None
-        if parsed_cvss:
+        if cvss_breakdown:
             text.append("\n\n")
             cvss_parts = []
             for key, prefix in [
@@ -168,7 +172,7 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
                 ("integrity", "I"),
                 ("availability", "A"),
             ]:
-                val = parsed_cvss.get(key)
+                val = cvss_breakdown.get(key)
                 if val:
                     cvss_parts.append(f"{prefix}:{val}")
             text.append("CVSS Vector: ", style=FIELD_STYLE)
@@ -192,13 +196,10 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
             text.append("\n")
             text.append(technical_analysis)
 
-        parsed_locations = (
-            parse_code_locations_xml(code_locations_xml) if code_locations_xml else None
-        )
-        if parsed_locations:
+        if code_locations:
             text.append("\n\n")
             text.append("Code Locations", style=FIELD_STYLE)
-            for i, loc in enumerate(parsed_locations):
+            for i, loc in enumerate(code_locations):
                 text.append("\n\n")
                 text.append(f"  Location {i + 1}: ", style=DIM_STYLE)
                 text.append(loc.get("file", "unknown"), style=FILE_STYLE)

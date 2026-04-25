@@ -315,10 +315,10 @@ async def test_create_agent_spawns_and_registers_child() -> None:
     assert bus.names[new_id] == "recon-bot"
     assert new_id in bus.tasks
 
-    # Initial input shape: identity block + task message at the end.
+    # Initial input shape: identity preamble + task message at the end.
     initial_input = runner_calls[0]["kwargs"]["input"]
     assert any(
-        isinstance(item, dict) and "agent_delegation" in item.get("content", "")
+        isinstance(item, dict) and "You are agent recon-bot" in item.get("content", "")
         for item in initial_input
     )
     assert initial_input[-1]["content"] == "enumerate hosts"
@@ -375,8 +375,8 @@ async def test_create_agent_inherits_parent_history() -> None:
 
     initial_input = runner_calls[0]["input"]
     contents = [item.get("content", "") for item in initial_input]
-    assert "<inherited_context_from_parent>" in contents
-    assert "</inherited_context_from_parent>" in contents
+    assert any("Inherited context from parent" in c for c in contents)
+    assert any("End of inherited context" in c for c in contents)
     # Parent's exact items should be in between.
     assert any(c == "scope: example.com" for c in contents)
 
@@ -427,9 +427,11 @@ async def test_agent_finish_posts_report_to_parent_inbox() -> None:
     msg = parent_msgs[0]
     assert msg["type"] == "completion"
     assert msg["from"] == "child-A"
-    assert "found 3 issues" in msg["content"]
-    assert "<finding>xss in /search</finding>" in msg["content"]
-    assert "sanitize search input" in msg["content"]
+    payload = json.loads(msg["content"])
+    assert payload["kind"] == "agent_completion_report"
+    assert payload["summary"] == "found 3 issues"
+    assert "xss in /search" in payload["findings"]
+    assert "sanitize search input" in payload["recommendations"]
 
 
 @pytest.mark.asyncio

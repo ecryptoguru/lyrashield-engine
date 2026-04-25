@@ -1,3 +1,4 @@
+import re
 from functools import cache
 from typing import Any, ClassVar
 
@@ -9,6 +10,9 @@ from textual.widgets import Static
 
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
+
+
+_BLANK_LINE_RUNS = re.compile(r"\n\s*\n")
 
 
 _HEADER_STYLES = [
@@ -180,11 +184,7 @@ class AgentMessageRenderer(BaseToolRenderer):
     def render_simple(cls, content: str) -> Text:
         if not content:
             return Text()
-
-        from strix.llm.utils import clean_content
-
-        cleaned = clean_content(content)
+        cleaned = _BLANK_LINE_RUNS.sub("\n\n", content).strip()
         if not cleaned:
             return Text()
-
         return _apply_markdown_styles(cleaned)

@@ -93,7 +93,7 @@ async def test_on_llm_end_records_usage_and_increments_turn() -> None:
 
 @pytest.mark.asyncio
 async def test_on_agent_end_detects_crash() -> None:
-    """C8 (AUDIT_R2): on_agent_end without agent_finish_called posts crash to parent."""
+    """on_agent_end without agent_finish_called posts crash message to parent."""
     hooks = StrixOrchestrationHooks()
     bus = AgentMessageBus()
     await bus.register("root", "root", parent_id=None)
@@ -104,8 +104,9 @@ async def test_on_agent_end_detects_crash() -> None:
 
     drained = await bus.drain("root")
     assert len(drained) == 1
-    assert "<agent_crash" in drained[0]["content"]
-    assert "agent_id='child'" in drained[0]["content"]
+    assert "[Agent crash]" in drained[0]["content"]
+    assert "child" in drained[0]["content"]
+    assert drained[0]["type"] == "crash"
     assert bus.statuses["child"] == "crashed"
 
 

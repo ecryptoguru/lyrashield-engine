@@ -1,15 +1,8 @@
-"""``create_vulnerability_report`` — file a vuln finding with dedup + CVSS.
-
-Validates required fields, parses the CVSS-3.1 XML breakdown into a
-score, runs LLM-based dedup against existing reports through
-``strix.llm.dedupe.check_duplicate``, and persists via the global
-:class:`strix.telemetry.tracer.Tracer` instance.
-"""
+"""``create_vulnerability_report`` — file a vuln finding with dedup + CVSS."""
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import re
@@ -24,61 +17,27 @@ from strix.tools._decorator import strix_tool
 logger = logging.getLogger(__name__)
 
 
-_CVSS_FIELDS = (
-    "attack_vector",
-    "attack_complexity",
-    "privileges_required",
-    "user_interaction",
-    "scope",
-    "confidentiality",
-    "integrity",
-    "availability",
+_CVSS_VALID = {
+    "attack_vector": ["N", "A", "L", "P"],
+    "attack_complexity": ["L", "H"],
+    "privileges_required": ["N", "L", "H"],
+    "user_interaction": ["N", "R"],
+    "scope": ["U", "C"],
+    "confidentiality": ["N", "L", "H"],
+    "integrity": ["N", "L", "H"],
+    "availability": ["N", "L", "H"],
+}
+
+
+_CODE_LOCATION_FIELDS = (
+    "file",
+    "start_line",
+    "end_line",
+    "snippet",
+    "label",
+    "fix_before",
+    "fix_after",
 )
-
-
-def _parse_cvss_xml(xml_str: str) -> dict[str, str] | None:
-    if not xml_str or not xml_str.strip():
-        return None
-    result: dict[str, str] = {}
-    for field in _CVSS_FIELDS:
-        match = re.search(rf"<{field}>(.*?)</{field}>", xml_str, re.DOTALL)
-        if match:
-            result[field] = match.group(1).strip()
-    return result if result else None
-
-
-def _parse_code_locations_xml(xml_str: str) -> list[dict[str, Any]] | None:
-    if not xml_str or not xml_str.strip():
-        return None
-    locations: list[dict[str, Any]] = []
-    for loc_match in re.finditer(r"<location>(.*?)</location>", xml_str, re.DOTALL):
-        loc: dict[str, Any] = {}
-        loc_content = loc_match.group(1)
-        for field in (
-            "file",
-            "start_line",
-            "end_line",
-            "snippet",
-            "label",
-            "fix_before",
-            "fix_after",
-        ):
-            field_match = re.search(rf"<{field}>(.*?)</{field}>", loc_content, re.DOTALL)
-            if field_match:
-                raw = field_match.group(1)
-                value = (
-                    raw.strip("\n")
-                    if field in ("snippet", "fix_before", "fix_after")
-                    else raw.strip()
-                )
-                if field in ("start_line", "end_line"):
-                    with contextlib.suppress(ValueError, TypeError):
-                        loc[field] = int(value)
-                elif value:
-                    loc[field] = value
-        if loc.get("file") and loc.get("start_line") is not None:
-            locations.append(loc)
-    return locations if locations else None
 
 
 def _validate_file_path(path: str) -> str | None:
@@ -90,6 +49,36 @@ def _validate_file_path(path: str) -> str | None:
     if ".." in p.parts:
         return f"file path must not contain '..': '{path}'"
     return None
+
+
+def _normalize_code_locations(
+    raw: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    if not raw:
+        return None
+    cleaned: list[dict[str, Any]] = []
+    for loc in raw:
+        normalized: dict[str, Any] = {}
+        for field in _CODE_LOCATION_FIELDS:
+            if field not in loc or loc[field] is None:
+                continue
+            value = loc[field]
+            if field in ("start_line", "end_line"):
+                try:
+                    normalized[field] = int(value)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                text = (
+                    str(value).strip("\n")
+                    if field in ("snippet", "fix_before", "fix_after")
+                    else str(value).strip()
+                )
+                if text:
+                    normalized[field] = text
+        if normalized.get("file") and normalized.get("start_line") is not None:
+            cleaned.append(normalized)
+    return cleaned or None
 
 
 def _validate_code_locations(locations: list[dict[str, Any]]) -> list[str]:
@@ -133,15 +122,15 @@ def _validate_cwe(cwe: str) -> str | None:
     return None
 
 
-def _calculate_cvss(**kwargs: str) -> tuple[float, str, str]:
+def _calculate_cvss(breakdown: dict[str, str]) -> tuple[float, str, str]:
     try:
         from cvss import CVSS3
 
         vector = (
-            f"CVSS:3.1/AV:{kwargs['attack_vector']}/AC:{kwargs['attack_complexity']}/"
-            f"PR:{kwargs['privileges_required']}/UI:{kwargs['user_interaction']}/"
-            f"S:{kwargs['scope']}/C:{kwargs['confidentiality']}/"
-            f"I:{kwargs['integrity']}/A:{kwargs['availability']}"
+            f"CVSS:3.1/AV:{breakdown['attack_vector']}/AC:{breakdown['attack_complexity']}/"
+            f"PR:{breakdown['privileges_required']}/UI:{breakdown['user_interaction']}/"
+            f"S:{breakdown['scope']}/C:{breakdown['confidentiality']}/"
+            f"I:{breakdown['integrity']}/A:{breakdown['availability']}"
         )
         c = CVSS3(vector)
         score = c.scores()[0]
@@ -165,18 +154,6 @@ _REQUIRED_FIELDS = {
 }
 
 
-_CVSS_VALID = {
-    "attack_vector": ["N", "A", "L", "P"],
-    "attack_complexity": ["L", "H"],
-    "privileges_required": ["N", "L", "H"],
-    "user_interaction": ["N", "R"],
-    "scope": ["U", "C"],
-    "confidentiality": ["N", "L", "H"],
-    "integrity": ["N", "L", "H"],
-    "availability": ["N", "L", "H"],
-}
-
-
 def _do_create(  # noqa: PLR0912
     *,
     title: str,
@@ -187,12 +164,12 @@ def _do_create(  # noqa: PLR0912
     poc_description: str,
     poc_script_code: str,
     remediation_steps: str,
-    cvss_breakdown: str,
+    cvss_breakdown: dict[str, str],
     endpoint: str | None,
     method: str | None,
     cve: str | None,
     cwe: str | None,
-    code_locations: str | None,
+    code_locations: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     fields = {
@@ -209,16 +186,16 @@ def _do_create(  # noqa: PLR0912
         if not str(fields.get(name) or "").strip():
             errors.append(msg)
 
-    parsed_cvss = _parse_cvss_xml(cvss_breakdown)
-    if not parsed_cvss:
-        errors.append("cvss: could not parse CVSS breakdown XML")
+    if not isinstance(cvss_breakdown, dict) or not cvss_breakdown:
+        errors.append("cvss_breakdown: must be an object with the 8 CVSS metrics")
+        cvss_breakdown = {}
     else:
         for name, valid in _CVSS_VALID.items():
-            value = parsed_cvss.get(name)
+            value = cvss_breakdown.get(name)
             if value not in valid:
                 errors.append(f"Invalid {name}: {value}. Must be one of: {valid}")
 
-    parsed_locations = _parse_code_locations_xml(code_locations) if code_locations else None
+    parsed_locations = _normalize_code_locations(code_locations)
     if parsed_locations:
         errors.extend(_validate_code_locations(parsed_locations))
     if cve:
@@ -235,8 +212,7 @@ def _do_create(  # noqa: PLR0912
     if errors:
         return {"success": False, "message": "Validation failed", "errors": errors}
 
-    assert parsed_cvss is not None
-    cvss_score, severity, _vector = _calculate_cvss(**parsed_cvss)
+    cvss_score, severity, _vector = _calculate_cvss(cvss_breakdown)
 
     try:
         from strix.telemetry.tracer import get_global_tracer
@@ -294,7 +270,7 @@ def _do_create(  # noqa: PLR0912
             poc_script_code=poc_script_code,
             remediation_steps=remediation_steps,
             cvss=cvss_score,
-            cvss_breakdown=parsed_cvss,
+            cvss_breakdown=cvss_breakdown,
             endpoint=endpoint,
             method=method,
             cve=cve,
@@ -315,7 +291,9 @@ def _do_create(  # noqa: PLR0912
 
 # Generous timeout: the dedup check makes a separate LLM call, and
 # large scans can have many existing reports to compare against.
-@strix_tool(timeout=180)
+# strict_mode=False because cvss_breakdown is a dict[str, str] and
+# code_locations is list[dict] — both free-form for the strict schema.
+@strix_tool(timeout=180, strict_mode=False)
 async def create_vulnerability_report(
     ctx: RunContextWrapper,
     title: str,
@@ -326,12 +304,12 @@ async def create_vulnerability_report(
     poc_description: str,
     poc_script_code: str,
     remediation_steps: str,
-    cvss_breakdown: str,
+    cvss_breakdown: dict[str, str],
     endpoint: str | None = None,
     method: str | None = None,
     cve: str | None = None,
     cwe: str | None = None,
-    code_locations: str | None = None,
+    code_locations: list[dict[str, Any]] | None = None,
 ) -> str:
     """File a vulnerability report — one report per fully-verified finding.
 
@@ -364,13 +342,13 @@ async def create_vulnerability_report(
     - Avoid hedging language; be precise and non-vague.
 
     **White-box requirement**: when source is available, you MUST
-    populate ``code_locations`` with nested XML including
-    ``fix_before`` / ``fix_after`` for proposed fixes. The fix_before
-    must be a verbatim copy of source at the specified line range — it's
-    used as a literal GitHub/GitLab PR suggestion block.
+    populate ``code_locations`` with one entry per affected line range.
+    The ``fix_before`` field must be a verbatim copy of the source at
+    the specified line range — it's used as a literal GitHub/GitLab
+    PR suggestion block.
 
-    **CVSS breakdown** is required as nested XML with all 8 metrics
-    (each a single uppercase letter):
+    **CVSS breakdown** is an object with all 8 metrics (each a single
+    uppercase letter):
 
     - ``attack_vector``: ``N`` (Network), ``A`` (Adjacent), ``L``
       (Local), ``P`` (Physical)
@@ -380,6 +358,19 @@ async def create_vulnerability_report(
     - ``scope``: ``U`` (Unchanged) / ``C`` (Changed)
     - ``confidentiality`` / ``integrity`` / ``availability``: ``N`` /
       ``L`` / ``H``
+
+    Example::
+
+        {
+            "attack_vector": "N",
+            "attack_complexity": "L",
+            "privileges_required": "N",
+            "user_interaction": "N",
+            "scope": "U",
+            "confidentiality": "H",
+            "integrity": "H",
+            "availability": "H"
+        }
 
     **CVE / CWE rules**: pass the bare ID only (``CVE-2024-1234``,
     ``CWE-89``) — no name, no parenthetical. Be 100% certain; if
@@ -397,14 +388,16 @@ async def create_vulnerability_report(
         poc_description: Step-by-step reproduction.
         poc_script_code: Working PoC (Python preferred).
         remediation_steps: Specific, actionable fix.
-        cvss_breakdown: 8-metric XML block per the format above.
+        cvss_breakdown: 8-metric object per the format above.
         endpoint: API path / Git path (e.g. ``/api/login``).
         method: HTTP method when relevant.
         cve: ``CVE-YYYY-NNNNN`` if certain, else omit.
         cwe: ``CWE-NNN`` (most specific child) if certain, else omit.
-        code_locations: Required for white-box findings; nested XML
-            list with ``file``, ``start_line``, ``end_line``,
-            ``snippet``, ``fix_before``, ``fix_after``.
+        code_locations: Required for white-box findings. List of
+            objects, each with ``file`` (relative path), ``start_line``,
+            ``end_line``, optional ``snippet``, ``label``,
+            ``fix_before`` (verbatim source), ``fix_after`` (suggested
+            replacement).
     """
     del ctx
     result = await asyncio.to_thread(

@@ -1,7 +1,7 @@
-"""Phase 2.5 smoke tests for the sandbox-bound SDK tool wrappers.
+"""Smoke tests for the sandbox-bound SDK tool wrappers.
 
-Covers: browser_action, terminal_execute, python_action, and the seven
-Caido proxy tools.
+Covers: browser_action, terminal_execute, python_action, file_edit
+helpers, and the seven Caido proxy tools.
 
 These wrappers are pure pass-throughs to ``post_to_sandbox`` — there's
 no per-tool logic to assert, so the tests focus on:
@@ -9,9 +9,9 @@ no per-tool logic to assert, so the tests focus on:
 - ``FunctionTool`` registration succeeds (which proves the SDK could
   derive a JSON schema from the type hints — a non-trivial check given
   Literal types, ``dict[str, str]``, and strict-mode opt-outs).
-- The dispatch payload to ``post_to_sandbox`` mirrors the legacy XML
-  schema verbatim, so the in-container tool server gets the same
-  ``kwargs`` shape it always has.
+- The dispatch payload to ``post_to_sandbox`` carries the right
+  ``kwargs`` shape so the in-container tool server can dispatch to the
+  matching action.
 - The ``send_request`` / ``repeat_request`` tools opt out of strict
   schema mode (their ``headers`` / ``modifications`` dicts are
   free-form and would otherwise fail registration).
