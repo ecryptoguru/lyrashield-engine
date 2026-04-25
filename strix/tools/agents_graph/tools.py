@@ -557,7 +557,8 @@ async def agent_finish(
             default=str,
         )
 
-    inner["agent_finish_called"] = True
+    # ``agent_finish_called`` is set by ``StrixOrchestrationHooks.on_tool_end``;
+    # no need to set it here.
 
     parent_notified = False
     if report_to_parent:
