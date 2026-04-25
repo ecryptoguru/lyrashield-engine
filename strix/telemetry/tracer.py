@@ -42,6 +42,7 @@ class Tracer:
         self.agents: dict[str, dict[str, Any]] = {}
         self.tool_executions: dict[int, dict[str, Any]] = {}
         self.chat_messages: list[dict[str, Any]] = []
+        self._next_exec_id = 1
 
         self.vulnerability_reports: list[dict[str, Any]] = []
         self.final_scan_result: str | None = None
@@ -379,6 +380,42 @@ class Tracer:
 
         except (OSError, RuntimeError):
             logger.exception("Failed to save scan data")
+
+    def log_tool_start(self, agent_id: str, tool_name: str) -> int:
+        """Record a tool invocation in flight. Returns an exec_id."""
+        exec_id = self._next_exec_id
+        self._next_exec_id += 1
+        self.tool_executions[exec_id] = {
+            "agent_id": agent_id,
+            "tool_name": tool_name,
+            "status": "running",
+            "result": None,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        return exec_id
+
+    def log_tool_end(self, agent_id: str, tool_name: str, result: Any) -> None:
+        """Mark the most recent matching exec as completed."""
+        for exec_id in reversed(self.tool_executions):
+            entry = self.tool_executions[exec_id]
+            if (
+                entry.get("agent_id") == agent_id
+                and entry.get("tool_name") == tool_name
+                and entry.get("status") == "running"
+            ):
+                entry["status"] = "completed"
+                entry["result"] = result
+                return
+        # No matching start (e.g. hooks added later in life) — record as completed.
+        exec_id = self._next_exec_id
+        self._next_exec_id += 1
+        self.tool_executions[exec_id] = {
+            "agent_id": agent_id,
+            "tool_name": tool_name,
+            "status": "completed",
+            "result": result,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
 
     def get_real_tool_count(self) -> int:
         return sum(

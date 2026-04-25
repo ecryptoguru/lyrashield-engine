@@ -176,12 +176,13 @@ class StrixOrchestrationHooks(RunHooks[Any]):
         agent: Any,
         tool: Any,
     ) -> None:
+        del agent
         try:
             ctx = context.context
             if not isinstance(ctx, dict):
                 return
             tracer = ctx.get("tracer")
-            if tracer is not None and hasattr(tracer, "log_tool_start"):
+            if tracer is not None:
                 tracer.log_tool_start(ctx.get("agent_id", "?"), tool.name)
         except Exception:
             logger.exception("on_tool_start failed")
@@ -193,6 +194,7 @@ class StrixOrchestrationHooks(RunHooks[Any]):
         tool: Any,
         result: str,
     ) -> None:
+        del agent
         try:
             ctx = context.context
             if not isinstance(ctx, dict):
@@ -200,7 +202,7 @@ class StrixOrchestrationHooks(RunHooks[Any]):
             if tool.name in ("agent_finish", "finish_scan"):
                 ctx["agent_finish_called"] = True
             tracer = ctx.get("tracer")
-            if tracer is not None and hasattr(tracer, "log_tool_end"):
+            if tracer is not None:
                 tracer.log_tool_end(ctx.get("agent_id", "?"), tool.name, result)
         except Exception:
             logger.exception("on_tool_end failed")
