@@ -25,27 +25,6 @@ class PythonInstance:
         self.shell.init_history()
         self.shell.init_logger()
 
-        self._setup_proxy_functions()
-
-    def _setup_proxy_functions(self) -> None:
-        try:
-            from strix.tools.proxy import proxy_actions
-
-            proxy_functions = [
-                "list_requests",
-                "list_sitemap",
-                "repeat_request",
-                "scope_rules",
-                "send_request",
-                "view_request",
-                "view_sitemap_entry",
-            ]
-
-            proxy_dict = {name: getattr(proxy_actions, name) for name in proxy_functions}
-            self.shell.user_ns.update(proxy_dict)
-        except ImportError:
-            pass
-
     def _validate_session(self) -> dict[str, Any] | None:
         if not self.is_running:
             return {

@@ -293,6 +293,32 @@ wheels = [
 ]
 
 [[package]]
+name = "caido-sdk-client"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "caido-server-auth" },
+    { name = "gql", extra = ["aiohttp", "websockets"] },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/62/d7/5381d8d94fec799bec7004decbf33a4c5581a8374941fe784e730e01cf80/caido_sdk_client-0.2.0.tar.gz", hash = "sha256:39988fe07b3fa9c69adbd49662db660d7707d60d9245109b1623def97b39bac8", size = 57436, upload-time = "2026-04-12T22:25:12.084Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/ae/3530caa6a79bafb8049374ca09515686d98532aca73c4fdbd0f6e06de5c9/caido_sdk_client-0.2.0-py3-none-any.whl", hash = "sha256:bc573651681c093ee9663c7924d38d522a89cea60e2ce00d34ba9b02942b1da1", size = 96207, upload-time = "2026-04-12T22:25:11.168Z" },
+]
+
+[[package]]
+name = "caido-server-auth"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "gql", extra = ["aiohttp", "websockets"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/69/be/58cc2eaf97f729124b8939a9ea1c1a664b2d96dce0448788df073fca3ac9/caido_server_auth-0.1.2.tar.gz", hash = "sha256:eb2c25e9de15062760b68112f5d8e9ad63eeb1322518b90c1a0119a69a7524a4", size = 6559, upload-time = "2026-03-14T20:41:55.119Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/7b/14d192151bcc3c1624cfb488c59ec03e96c1009d015089d729c1aecd26e9/caido_server_auth-0.1.2-py3-none-any.whl", hash = "sha256:40c6cd3728e24cdff402c4efa5d8f55bf6e6cc73ac0169bdea1ad1e34faff8ff", size = 10197, upload-time = "2026-03-14T20:41:54.091Z" },
+]
+
+[[package]]
 name = "catalogue"
 version = "2.0.10"
 source = { registry = "https://pypi.org/simple" }
@@ -969,9 +995,11 @@ wheels = [
 ]
 
 [package.optional-dependencies]
-requests = [
-    { name = "requests" },
-    { name = "requests-toolbelt" },
+aiohttp = [
+    { name = "aiohttp" },
+]
+websockets = [
+    { name = "websockets" },
 ]
 
 [[package]]
@@ -3129,18 +3157,6 @@ wheels = [
 ]
 
 [[package]]
-name = "requests-toolbelt"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/61/d7545dafb7ac2230c70d38d31cbfe4cc64f7144dc41f6e4e4b78ecd9f5bb/requests-toolbelt-1.0.0.tar.gz", hash = "sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6", size = 206888, upload-time = "2023-05-01T04:11:33.229Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl", hash = "sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06", size = 54481, upload-time = "2023-05-01T04:11:28.427Z" },
-]
-
-[[package]]
 name = "rich"
 version = "13.9.4"
 source = { registry = "https://pypi.org/simple" }
@@ -3527,6 +3543,8 @@ name = "strix-agent"
 version = "0.8.3"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
+    { name = "caido-sdk-client" },
     { name = "cvss" },
     { name = "docker" },
     { name = "openai-agents", extra = ["litellm"] },
@@ -3540,7 +3558,6 @@ dependencies = [
 [package.optional-dependencies]
 sandbox = [
     { name = "fastapi" },
-    { name = "gql", extra = ["requests"] },
     { name = "ipython" },
     { name = "libtmux" },
     { name = "openhands-aci" },
@@ -3560,10 +3577,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10.0" },
+    { name = "caido-sdk-client", specifier = ">=0.2.0" },
     { name = "cvss", specifier = ">=3.2" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "fastapi", marker = "extra == 'sandbox'" },
-    { name = "gql", extras = ["requests"], marker = "extra == 'sandbox'", specifier = ">=3.5.3" },
     { name = "ipython", marker = "extra == 'sandbox'", specifier = ">=9.3.0" },
     { name = "libtmux", marker = "extra == 'sandbox'", specifier = ">=0.46.2" },
     { name = "openai-agents", extras = ["litellm"], specifier = "==0.14.6" },

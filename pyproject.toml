@@ -41,6 +41,8 @@ dependencies = [
   "requests>=2.32.0",
   "cvss>=3.2",
   "scrubadub>=2.0.1",
+  "caido-sdk-client>=0.2.0",
+  "aiohttp>=3.10.0",
 ]
 
 [project.scripts]
@@ -53,7 +55,6 @@ sandbox = [
   "ipython>=9.3.0",
   "openhands-aci>=0.3.0",
   "playwright>=1.48.0",
-  "gql[requests]>=3.5.3",
   "libtmux>=0.46.2",
 ]
 
@@ -120,8 +121,11 @@ module = [
     "cvss.*",
     "scrubadub.*",
     "docker.*",
+    "caido_sdk_client.*",
+    "aiohttp.*",
 ]
 ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
 
 # ============================================================================
 # Ruff Configuration (Fast Python Linter & Formatter)
@@ -246,7 +250,7 @@ ignore = [
 "strix/tools/browser/tool.py" = ["TC002"]
 "strix/tools/terminal/tool.py" = ["TC002"]
 "strix/tools/python/tool.py" = ["TC002"]
-"strix/tools/proxy/tools.py" = ["TC002"]
+"strix/tools/proxy/tools.py" = ["TC002", "PLR0911"]
 "strix/tools/agents_graph/tools.py" = ["TC002"]
 "strix/agents/factory.py" = ["TC002"]
 # Entry point: ``Path`` is used at runtime by the typing of the

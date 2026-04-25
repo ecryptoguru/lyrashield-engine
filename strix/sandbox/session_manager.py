@@ -105,7 +105,6 @@ async def create_or_reuse(
             value={
                 "TOOL_SERVER_TOKEN": bearer,
                 "TOOL_SERVER_PORT": str(_CONTAINER_TOOL_SERVER_PORT),
-                "CAIDO_PORT": str(_CONTAINER_CAIDO_PORT),
                 "STRIX_SANDBOX_EXECUTION_TIMEOUT": str(execution_timeout),
                 "PYTHONUNBUFFERED": "1",
                 "HOST_GATEWAY": "host.docker.internal",
@@ -161,6 +160,13 @@ async def cleanup(scan_id: str) -> None:
     if bundle is None:
         logger.debug("cleanup(%s): no cached session", scan_id)
         return
+
+    caido_client = bundle.get("caido_client")
+    if caido_client is not None:
+        try:
+            await caido_client.aclose()
+        except Exception:  # noqa: BLE001
+            logger.debug("cleanup(%s): caido_client.aclose() raised", scan_id, exc_info=True)
 
     try:
         await bundle["client"].delete(bundle["session"])

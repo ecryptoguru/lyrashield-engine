@@ -47,68 +47,7 @@ fi
 
 sleep 2
 
-echo "Fetching API token..."
-TOKEN=""
-for attempt in 1 2 3 4 5; do
-  RESPONSE=$(curl -sL -X POST \
-    -H "Content-Type: application/json" \
-    -d '{"query":"mutation LoginAsGuest { loginAsGuest { token { accessToken } } }"}' \
-    http://localhost:${CAIDO_PORT}/graphql)
-
-  TOKEN=$(echo "$RESPONSE" | jq -r '.data.loginAsGuest.token.accessToken // empty')
-
-  if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
-    echo "Successfully obtained API token (attempt $attempt)."
-    break
-  fi
-
-  echo "Token fetch attempt $attempt failed: $RESPONSE"
-  sleep $((attempt * 2))
-done
-
-if [ -z "$TOKEN" ] || [ "$TOKEN" == "null" ]; then
-  echo "ERROR: Failed to get API token from Caido after 5 attempts."
-  echo "=== Caido log ==="
-  cat "$CAIDO_LOG" 2>/dev/null || echo "(no log available)"
-  exit 1
-fi
-
-export CAIDO_API_TOKEN=$TOKEN
-echo "Caido API token has been set."
-
-echo "Creating a new Caido project..."
-CREATE_PROJECT_RESPONSE=$(curl -sL -X POST \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"query":"mutation CreateProject { createProject(input: {name: \"sandbox\", temporary: true}) { project { id } } }"}' \
-  http://localhost:${CAIDO_PORT}/graphql)
-
-PROJECT_ID=$(echo $CREATE_PROJECT_RESPONSE | jq -r '.data.createProject.project.id')
-
-if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" == "null" ]; then
-  echo "Failed to create Caido project."
-  echo "Response: $CREATE_PROJECT_RESPONSE"
-  exit 1
-fi
-
-echo "Caido project created with ID: $PROJECT_ID"
-
-echo "Selecting Caido project..."
-SELECT_RESPONSE=$(curl -sL -X POST \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"query":"mutation SelectProject { selectProject(id: \"'$PROJECT_ID'\") { currentProject { project { id } } } }"}' \
-  http://localhost:${CAIDO_PORT}/graphql)
-
-SELECTED_ID=$(echo $SELECT_RESPONSE | jq -r '.data.selectProject.currentProject.project.id')
-
-if [ "$SELECTED_ID" != "$PROJECT_ID" ]; then
-    echo "Failed to select Caido project."
-    echo "Response: $SELECT_RESPONSE"
-    exit 1
-fi
-
-echo "✅ Caido project selected successfully."
+echo "Caido is up — host bootstraps the guest token + project via the Python SDK."
 
 echo "Configuring system-wide proxy settings..."
 
@@ -120,7 +59,6 @@ export HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
 export ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-export CAIDO_API_TOKEN=${TOKEN}
 EOF
 
 cat << EOF | sudo tee /etc/environment
@@ -129,7 +67,6 @@ https_proxy=http://127.0.0.1:${CAIDO_PORT}
 HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
 HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
 ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
-CAIDO_API_TOKEN=${TOKEN}
 EOF
 
 cat << EOF | sudo tee /etc/wgetrc

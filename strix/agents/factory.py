@@ -50,12 +50,10 @@ from strix.tools.notes.tools import (
 )
 from strix.tools.proxy.tools import (
     list_requests,
-    list_sitemap,
     repeat_request,
     scope_rules,
     send_request,
     view_request,
-    view_sitemap_entry,
 )
 from strix.tools.python.tool import python_action
 from strix.tools.reporting.tool import create_vulnerability_report
@@ -112,8 +110,6 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     send_request,
     repeat_request,
     scope_rules,
-    list_sitemap,
-    view_sitemap_entry,
     # Multi-agent graph tools (the bus is in ctx.context)
     view_agent_graph,
     agent_status,

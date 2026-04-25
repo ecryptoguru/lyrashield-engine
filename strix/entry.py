@@ -34,6 +34,7 @@ from strix.run_config_factory import (
     make_run_config,
 )
 from strix.sandbox import session_manager
+from strix.sandbox.caido_bootstrap import bootstrap_caido_client
 from strix.sandbox.healthcheck import wait_for_http_ready, wait_for_tcp_ready
 
 
@@ -221,6 +222,9 @@ async def run_strix_scan(
         ),
     )
 
+    caido_client = await bootstrap_caido_client(int(bundle["caido_host_port"]))
+    bundle["caido_client"] = caido_client
+
     try:
         scan_mode = str(scan_config.get("scan_mode") or "deep")
         is_whitebox = bool(scan_config.get("is_whitebox", False))
@@ -256,6 +260,7 @@ async def run_strix_scan(
             sandbox_token=bundle["bearer"],
             tool_server_host_port=bundle["tool_server_host_port"],
             caido_host_port=bundle["caido_host_port"],
+            caido_client=caido_client,
             agent_id=root_id,
             parent_id=None,
             tracer=tracer,
