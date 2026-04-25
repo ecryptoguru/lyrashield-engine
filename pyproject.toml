@@ -71,10 +71,6 @@ dev = [
   "pyright>=1.1.401",
   "pylint>=3.3.7",
   "bandit>=1.8.3",
-  "pytest>=8.4.0",
-  "pytest-asyncio>=1.0.0",
-  "pytest-cov>=6.1.1",
-  "pytest-mock>=3.14.1",
   "pre-commit>=4.2.0",
   "black>=25.1.0",
   "isort>=6.0.1",
@@ -131,7 +127,6 @@ module = [
     "textual.*",
     "pyte.*",
     "libtmux.*",
-    "pytest.*",
     "cvss.*",
     "opentelemetry.*",
     "scrubadub.*",
@@ -139,23 +134,6 @@ module = [
     "docker.*",
 ]
 ignore_missing_imports = true
-
-# Relax strict rules for test files (pytest decorators are not fully typed)
-[[tool.mypy.overrides]]
-module = ["tests.*"]
-disallow_untyped_decorators = false
-disallow_untyped_defs = false
-# Test fixtures often build raw dicts that match SDK TypedDict unions
-# structurally; type:ignore-per-line would be very noisy.
-disable_error_code = [
-    "typeddict-item",     # TypedDict key access on union variants
-    "typeddict-unknown-key",
-    "type-arg",           # generic params on dict/MagicMock in test helpers
-    "no-untyped-call",    # SDK has untyped __init__ in some places
-    "no-any-return",      # test helpers often return Any from typed call_args
-    "arg-type",           # fakes pass mocks where SDK wants strict types
-    "attr-defined",       # fake objects monkey-patch attrs
-]
 
 # ============================================================================
 # Ruff Configuration (Fast Python Linter & Formatter)
@@ -167,7 +145,6 @@ line-length = 100
 extend-exclude = [
     ".git",
     ".mypy_cache",
-    ".pytest_cache",
     ".ruff_cache",
     "__pycache__",
     "build",
@@ -203,7 +180,6 @@ select = [
     "PIE", # flake8-pie
     "T20", # flake8-print
     "PYI", # flake8-pyi
-    "PT",  # flake8-pytest-style
     "Q",   # flake8-quotes
     "RSE", # flake8-raise
     "RET", # flake8-return
@@ -246,17 +222,6 @@ ignore = [
 "strix/tools/notes/tools.py" = ["PLC0415", "TC002"]
 "strix/tools/finish/tool.py" = ["PLC0415", "TC002"]
 "strix/tools/reporting/tool.py" = ["PLC0415", "TC002"]
-"tests/**/*.py" = [
-    "S105",   # Possible hardcoded password (string literal)
-    "S106",   # Possible hardcoded password (function call)
-    "S108",   # Possible insecure usage of temporary file/directory
-    "ARG001", # Unused function argument
-    "ARG002", # Unused method argument (test helpers / fakes mirror SDK signatures)
-    "PLR2004", # Magic value used in comparison
-    "PT018",  # Multi-part assertions are a pytest style preference
-    "TC002",  # Type-only third-party import (tests import for runtime instantiation)
-    "TC003",  # Type-only stdlib import
-]
 "strix/tools/**/*.py" = [
     "ARG001", # Unused function argument (tools may have unused args for interface consistency)
 ]
@@ -410,52 +375,10 @@ known_first_party = ["strix"]
 known_third_party = ["fastapi", "pydantic", "litellm"]
 
 # ============================================================================
-# Pytest Configuration
-# ============================================================================
-
-[tool.pytest.ini_options]
-minversion = "6.0"
-addopts = [
-    "--strict-markers",
-    "--strict-config",
-    "--cov=strix",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
-]
-testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
-python_functions = ["test_*"]
-python_classes = ["Test*"]
-asyncio_mode = "auto"
-
-[tool.coverage.run]
-source = ["strix"]
-omit = [
-    "*/tests/*",
-    "*/migrations/*",
-    "*/__pycache__/*"
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "if self.debug:",
-    "if settings.DEBUG",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if 0:",
-    "if __name__ == .__main__.:",
-    "class .*\\bProtocol\\):",
-    "@(abc\\.)?abstractmethod",
-]
-
-# ============================================================================
 # Bandit Configuration (Security Linting)
 # ============================================================================
 
 [tool.bandit]
-exclude_dirs = ["tests", "docs", "build", "dist"]
+exclude_dirs = ["docs", "build", "dist"]
 skips = ["B101", "B601", "B404", "B603", "B607"]  # Skip assert, shell injection, subprocess import and partial path checks
 severity = "medium"
