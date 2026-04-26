@@ -28,6 +28,7 @@ from strix.core.execution import (
 from strix.core.execution import (
     spawn_child_agent as start_child_agent,
 )
+from strix.core.hooks import ReportUsageHooks
 from strix.core.inputs import (
     DEFAULT_MAX_TURNS,
     build_root_task,
@@ -36,7 +37,6 @@ from strix.core.inputs import (
 )
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
-from strix.report.state import get_global_report_state
 from strix.runtime import session_manager
 from strix.telemetry.logging import set_scan_id, setup_scan_logging
 
@@ -167,17 +167,7 @@ async def run_strix_scan(
             sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
             trace_include_sensitive_data=False,
         )
-
-        def usage_sink(agent_id: str, agent_name: str | None, usage: Any) -> None:
-            report_state = get_global_report_state()
-            if report_state is None:
-                return
-            report_state.record_sdk_usage(
-                agent_id=agent_id,
-                agent_name=agent_name,
-                model=resolved_model,
-                usage=usage,
-            )
+        hooks = ReportUsageHooks(model=resolved_model)
 
         scope_context = build_scope_context(scan_config)
 
@@ -217,7 +207,7 @@ async def run_strix_scan(
                 max_turns=max_turns,
                 interactive=interactive,
                 event_sink=event_sink,
-                usage_sink=usage_sink,
+                hooks=hooks,
                 **kwargs,
             )
 
@@ -249,7 +239,7 @@ async def run_strix_scan(
                 parent_ctx=context,
                 root_id=root_id,
                 event_sink=event_sink,
-                usage_sink=usage_sink,
+                hooks=hooks,
             )
 
         initial_input: Any = [] if is_resume else root_task
@@ -290,7 +280,7 @@ async def run_strix_scan(
             session=root_session,
             start_parked=bool(interactive and is_resume and root_status != "running"),
             event_sink=event_sink,
-            usage_sink=usage_sink,
+            hooks=hooks,
         )
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)

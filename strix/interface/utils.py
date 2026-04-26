@@ -56,15 +56,6 @@ def format_token_count(count: float | None) -> str:
     return str(value)
 
 
-def format_cost(cost: float | None) -> str:
-    value = float(cost or 0.0)
-    if value < 0.0001:
-        return f"${value:.6f}"
-    if value < 1:
-        return f"${value:.4f}"
-    return f"${value:.2f}"
-
-
 def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR0915
     """Format a vulnerability report for CLI display with all rich fields."""
     field_style = "bold #4ade80"
@@ -289,33 +280,41 @@ def _build_llm_usage_stats(
     stats_text: Text,
     report_state: Any,
     *,
-    include_requests: bool = False,
+    live: bool = False,
 ) -> None:
     usage = _llm_usage(report_state)
-    if not usage or _int_stat(usage, "total_tokens") <= 0:
+    if not usage or _int_stat(usage, "requests") <= 0:
+        stats_text.append("\n")
+        stats_text.append("Cost ", style="dim")
+        stats_text.append("$0.0000 ", style="#fbbf24")
+        stats_text.append("· ", style="dim white")
+        stats_text.append("Tokens ", style="dim")
+        stats_text.append("0", style="white")
         return
 
     input_tokens = _int_stat(usage, "input_tokens")
     output_tokens = _int_stat(usage, "output_tokens")
     cached_tokens = _detail_value(usage, "input_tokens_details", "cached_tokens")
-    reasoning_tokens = _detail_value(usage, "output_tokens_details", "reasoning_tokens")
     cost = _float_stat(usage, "cost")
 
-    stats_text.append("LLM Usage  ", style="bold cyan")
-    if include_requests:
-        stats_text.append(f"{_int_stat(usage, 'requests')} req", style="white")
-        stats_text.append(" | ", style="dim white")
-    stats_text.append(f"In: {format_token_count(input_tokens)}", style="white")
-    if cached_tokens > 0:
-        stats_text.append(f" ({format_token_count(cached_tokens)} cached)", style="dim white")
-    stats_text.append(" | ", style="dim white")
-    stats_text.append(f"Out: {format_token_count(output_tokens)}", style="white")
-    if reasoning_tokens > 0:
-        stats_text.append(f" ({format_token_count(reasoning_tokens)} reasoning)", style="dim white")
-    if cost > 0:
-        stats_text.append(" | ", style="dim white")
-        stats_text.append(f"Cost: {format_cost(cost)}", style="white")
     stats_text.append("\n")
+    stats_text.append("Input Tokens ", style="dim")
+    stats_text.append(format_token_count(input_tokens), style="white")
+
+    if live or cached_tokens > 0:
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("Cached Tokens ", style="dim")
+        stats_text.append(format_token_count(cached_tokens), style="white")
+
+    separator = "\n" if live else "  ·  "
+    stats_text.append(separator, style="dim white")
+    stats_text.append("Output Tokens ", style="dim")
+    stats_text.append(format_token_count(output_tokens), style="white")
+
+    if live or cost > 0:
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("Cost ", style="dim")
+        stats_text.append(f"${cost:.4f}", style="#fbbf24")
 
 
 def build_final_stats_text(report_state: Any) -> Text:
@@ -325,7 +324,7 @@ def build_final_stats_text(report_state: Any) -> Text:
         return stats_text
 
     _build_vulnerability_stats(stats_text, report_state)
-    _build_llm_usage_stats(stats_text, report_state, include_requests=True)
+    _build_llm_usage_stats(stats_text, report_state)
 
     return stats_text
 
@@ -368,7 +367,7 @@ def build_live_stats_text(report_state: Any) -> Text:
 
         stats_text.append("\n")
 
-    _build_llm_usage_stats(stats_text, report_state)
+    _build_llm_usage_stats(stats_text, report_state, live=True)
 
     return stats_text
 
@@ -384,12 +383,14 @@ def build_tui_stats_text(report_state: Any) -> Text:
     usage = _llm_usage(report_state)
     if usage and _int_stat(usage, "total_tokens") > 0:
         stats_text.append("\n")
-        stats_text.append("Tokens: ", style="bold white")
-        stats_text.append(format_token_count(_int_stat(usage, "total_tokens")), style="white")
+        stats_text.append(
+            f"{format_token_count(_int_stat(usage, 'total_tokens'))} tokens",
+            style="white",
+        )
         cost = _float_stat(usage, "cost")
         if cost > 0:
-            stats_text.append("  Cost: ", style="bold white")
-            stats_text.append(format_cost(cost), style="white")
+            stats_text.append(" · ", style="white")
+            stats_text.append(f"${cost:.2f}", style="white")
 
     caido_url = getattr(report_state, "caido_url", None)
     if caido_url:
