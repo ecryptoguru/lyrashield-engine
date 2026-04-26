@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,6 +21,9 @@ from strix.config.settings import Settings
 
 if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
+
+
+logger = logging.getLogger(__name__)
 
 
 _DEFAULT_PATH: Path = Path.home() / ".strix" / "cli-config.json"
@@ -34,8 +38,15 @@ def load_settings() -> Settings:
     """
     global _cached  # noqa: PLW0603
     if _cached is None:
-        init_kwargs: dict[str, Any] = _read_json_overrides(_override or _DEFAULT_PATH)
+        source_path = _override or _DEFAULT_PATH
+        init_kwargs: dict[str, Any] = _read_json_overrides(source_path)
         _cached = Settings(**init_kwargs)
+        logger.debug(
+            "load_settings: resolved (override=%s, file_used=%s, json_keys=%d)",
+            _override is not None,
+            source_path.exists(),
+            sum(len(v) for v in init_kwargs.values()),
+        )
     return _cached
 
 
@@ -44,6 +55,7 @@ def apply_config_override(path: Path) -> None:
     global _override, _cached  # noqa: PLW0603
     _override = path
     _cached = None
+    logger.info("config override applied: %s", path)
 
 
 def persist_current() -> None:

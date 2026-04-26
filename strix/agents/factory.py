@@ -166,6 +166,16 @@ def build_strix_agent(
         tools = [*_BASE_TOOLS, agent_finish]
         stop_at = ("agent_finish",)
 
+    logger.info(
+        "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s)",
+        "root" if is_root else "child",
+        name,
+        len(skills or []),
+        len(tools),
+        scan_mode,
+        is_whitebox,
+    )
+
     return SandboxAgent(
         name=name,
         instructions=instructions,

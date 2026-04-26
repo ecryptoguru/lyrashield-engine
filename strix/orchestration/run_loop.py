@@ -90,8 +90,14 @@ async def run_with_continuation(
     if not interactive:
         return result
 
+    logger.debug(
+        "run_with_continuation: entering interactive outer loop for %s (timeout=%s)",
+        agent_id,
+        waiting_timeout,
+    )
     while True:
         if agent_id in bus.stopping:
+            logger.info("run_with_continuation: %s in stopping set, returning", agent_id)
             return result
 
         try:
@@ -103,8 +109,13 @@ async def run_with_continuation(
                     timeout=waiting_timeout,
                 )
         except asyncio.CancelledError:
+            logger.info("run_with_continuation: %s cancelled while waiting", agent_id)
             return result
         except TimeoutError:
+            logger.info(
+                "run_with_continuation: %s waiting timeout, auto-resuming",
+                agent_id,
+            )
             kwargs["input"] = _TIMEOUT_RESUME_MESSAGE
             result = await _run_streamed(agent, bus, agent_id, **kwargs)
             continue
@@ -118,6 +129,12 @@ async def run_with_continuation(
         if not next_input:
             continue
 
+        logger.debug(
+            "run_with_continuation: %s resuming with %d message(s) (input_len=%d)",
+            agent_id,
+            len(pending),
+            len(next_input),
+        )
         kwargs["input"] = next_input
         result = await _run_streamed(agent, bus, agent_id, **kwargs)
 

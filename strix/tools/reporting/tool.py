@@ -275,8 +275,16 @@ async def _do_create(  # noqa: PLR0912
             code_locations=parsed_locations,
         )
     except (ImportError, AttributeError) as e:
+        logger.exception("create_vulnerability_report persistence failed")
         return {"success": False, "message": f"Failed to create vulnerability report: {e!s}"}
     else:
+        logger.info(
+            "Vulnerability report created: id=%s severity=%s cvss=%.1f title=%s",
+            report_id,
+            severity,
+            cvss_score,
+            title,
+        )
         return {
             "success": True,
             "message": f"Vulnerability report '{title}' created successfully",

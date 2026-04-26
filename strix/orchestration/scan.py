@@ -35,6 +35,7 @@ from strix.orchestration.filter import inject_messages_filter
 from strix.orchestration.hooks import StrixOrchestrationHooks
 from strix.orchestration.run_loop import run_with_continuation
 from strix.runtime import session_manager
+from strix.telemetry.logging import set_scan_id, setup_scan_logging
 
 
 #: Default ``max_turns`` budget passed to ``Runner.run``.
@@ -199,13 +200,32 @@ async def run_strix_scan(
     """
     if scan_id is None:
         scan_id = f"scan-{uuid.uuid4().hex[:8]}"
-    logger.info("Starting Strix scan %s", scan_id)
+
+    # Resolve run_dir before any heavy bring-up so the log file captures
+    # everything from sandbox start onwards. Tracer (if present) owns the
+    # canonical path; otherwise fall back to ``./strix_runs/<scan_id>``.
+    run_dir = (
+        tracer.get_run_dir()
+        if tracer is not None and hasattr(tracer, "get_run_dir")
+        else Path.cwd() / "strix_runs" / scan_id
+    )
+    teardown_logging = setup_scan_logging(run_dir)
+    set_scan_id(scan_id)
+    logger.info(
+        "Starting Strix scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
+        scan_id,
+        image,
+        max_turns,
+        interactive,
+        run_dir,
+    )
 
     resolved_model = model or load_settings().llm.model
     if not resolved_model:
         raise RuntimeError(
             "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
         )
+    logger.info("LLM model resolved: %s", resolved_model)
 
     # Caller may pre-create the bus so it can hold a handle (e.g., the
     # TUI uses it to route stop / chat-input commands). Otherwise we
@@ -213,12 +233,14 @@ async def run_strix_scan(
     if bus is None:
         bus = AgentMessageBus()
     root_id = uuid.uuid4().hex[:8]
+    logger.info("Bringing up sandbox session for scan %s", scan_id)
 
     bundle = await session_manager.create_or_reuse(
         scan_id,
         image=image,
         sources_path=sources_path,
     )
+    logger.info("Sandbox ready for scan %s", scan_id)
 
     try:
         # Lazy: ``strix.interface`` pulls cli→tui→scan which would cycle.
@@ -316,10 +338,14 @@ async def run_strix_scan(
             session=session,
         )
     except BaseException:
+        logger.exception("Strix scan %s failed", scan_id)
         # Cancel any descendant tasks the root spawned before unwinding.
         # cancel_descendants is idempotent and handles the empty-tree case.
         await bus.cancel_descendants(root_id)
         raise
     finally:
         if cleanup_on_exit:
+            logger.info("Tearing down sandbox session for scan %s", scan_id)
             await session_manager.cleanup(scan_id)
+        logger.info("Strix scan %s done", scan_id)
+        teardown_logging()

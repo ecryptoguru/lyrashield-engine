@@ -959,9 +959,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 return True
 
         except (KeyError, AttributeError, ValueError) as e:
-            import logging
-
-            logging.warning(f"Failed to update agent node label: {e}")
+            logger.warning(f"Failed to update agent node label: {e}")
 
         return False
 
@@ -1422,7 +1420,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                         )
 
                 except (KeyboardInterrupt, asyncio.CancelledError):
-                    logging.info("Scan interrupted by user")
+                    logger.info("Scan interrupted by user")
                 except (ConnectionError, TimeoutError):
                     logging.exception("Network error during scan")
                 except RuntimeError:
@@ -1503,9 +1501,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
             self._reorganize_orphaned_agents(agent_id)
         except (AttributeError, ValueError, RuntimeError) as e:
-            import logging
-
-            logging.warning(f"Failed to add agent node {agent_id}: {e}")
+            logger.warning(f"Failed to add agent node {agent_id}: {e}")
 
     def _expand_new_agent_nodes(self) -> None:
         if len(self.screen_stack) > 1 or self.show_splash:
@@ -1525,7 +1521,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             agents_tree = self.query_one("#agents_tree", Tree)
             self._expand_node_recursively(agents_tree.root)
         except (ValueError, Exception):
-            logging.debug("Tree not ready for expanding nodes")
+            logger.debug("Tree not ready for expanding nodes")
 
     def _expand_node_recursively(self, node: TreeNode) -> None:
         if not node.is_expanded:
@@ -1717,6 +1713,11 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if not self.selected_agent_id:
             return
 
+        logger.info(
+            "TUI: user message -> %s (len=%d)",
+            self.selected_agent_id,
+            len(message),
+        )
         if self.tracer:
             self.tracer.log_chat_message(
                 content=message,
@@ -1758,7 +1759,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 if isinstance(agent_name, str):
                     return agent_name
         except (KeyError, AttributeError) as e:
-            logging.warning(f"Could not retrieve agent name for {agent_id}: {e}")
+            logger.warning(f"Could not retrieve agent name for {agent_id}: {e}")
         return "Unknown Agent"
 
     def action_toggle_help(self) -> None:
@@ -1836,9 +1837,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 return agent_name, True
 
         except (KeyError, AttributeError, ValueError) as e:
-            import logging
-
-            logging.warning(f"Failed to gather agent events: {e}")
+            logger.warning(f"Failed to gather agent events: {e}")
 
         return agent_name, False
 
@@ -1849,8 +1848,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
         # The hard ``cancel_descendants`` path remains for KeyboardInterrupt
         # in entry.py where graceful isn't possible.
         if self._scan_loop is None or self._scan_loop.is_closed():
-            logging.warning("No active scan loop; cannot stop agent %s", agent_id)
+            logger.warning("No active scan loop; cannot stop agent %s", agent_id)
             return
+        logger.info("TUI: graceful stop requested for %s (cascade)", agent_id)
         asyncio.run_coroutine_threadsafe(
             self.bus.cancel_descendants_graceful(agent_id),
             self._scan_loop,

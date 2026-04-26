@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from agents.result import RunResultStreaming
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -78,6 +82,7 @@ class AgentMessageBus:
                 "warned_85": False,
                 "warned_final": False,
             }
+        logger.info("bus.register %s (%s) parent=%s", agent_id, name, parent_id or "-")
 
     async def send(self, target: str, msg: dict[str, Any]) -> None:
         """Append a message to ``target``'s inbox.
@@ -87,13 +92,30 @@ class AgentMessageBus:
         """
         async with self._lock:
             if target not in self.statuses:
+                logger.debug("bus.send dropped (unknown target=%s)", target)
                 return
             if self.statuses[target] in ("completed", "crashed", "stopped"):
+                logger.debug(
+                    "bus.send dropped (target=%s status=%s)",
+                    target,
+                    self.statuses[target],
+                )
                 return
             self.inboxes.setdefault(target, []).append(msg)
             event = self._events.get(target)
             if event is not None:
                 event.set()
+        sender = msg.get("from", "?")
+        msg_type = msg.get("type", "message")
+        content = str(msg.get("content", ""))
+        logger.debug(
+            "bus.send %s -> %s (type=%s len=%d): %s",
+            sender,
+            target,
+            msg_type,
+            len(content),
+            content[:200],
+        )
 
     async def wait_for_message(self, agent_id: str) -> None:
         """Block until ``agent_id``'s inbox has at least one pending message.
@@ -137,7 +159,9 @@ class AgentMessageBus:
         async with self._lock:
             msgs = self.inboxes.get(agent_id, [])
             self.inboxes[agent_id] = []
-            return msgs
+        if msgs:
+            logger.debug("bus.drain %s -> %d message(s)", agent_id, len(msgs))
+        return msgs
 
     async def record_usage(self, agent_id: str, usage: Any) -> None:
         """Accumulate per-call usage from RunHooks.on_llm_end.
@@ -183,6 +207,7 @@ class AgentMessageBus:
             self.streams.pop(agent_id, None)
             self.stopping.discard(agent_id)
             self._events.pop(agent_id, None)
+        logger.info("bus.finalize %s status=%s", agent_id, status)
 
     async def park(self, agent_id: str) -> None:
         """Mark an agent as ``waiting`` without finalizing.
@@ -196,6 +221,7 @@ class AgentMessageBus:
         async with self._lock:
             if agent_id in self.statuses:
                 self.statuses[agent_id] = "waiting"
+        logger.debug("bus.park %s", agent_id)
 
     async def mark_llm_failed(self, agent_id: str) -> None:
         """Mark an agent as ``llm_failed`` after retries exhausted.
@@ -209,6 +235,7 @@ class AgentMessageBus:
         async with self._lock:
             if agent_id in self.statuses:
                 self.statuses[agent_id] = "llm_failed"
+        logger.warning("bus.mark_llm_failed %s — awaiting user resume", agent_id)
 
     @contextlib.asynccontextmanager
     async def attach_stream(
@@ -242,8 +269,10 @@ class AgentMessageBus:
         async with self._lock:
             streamed = self.streams.get(agent_id)
         if streamed is None:
+            logger.debug("bus.request_interrupt %s — no active stream", agent_id)
             return False
         streamed.cancel(mode=mode)  # type: ignore[arg-type]  # mode is a Literal
+        logger.info("bus.request_interrupt %s mode=%s", agent_id, mode)
         return True
 
     async def total_stats(self) -> dict[str, Any]:
@@ -274,6 +303,11 @@ class AgentMessageBus:
                 order.append(aid)
                 queue.extend(child for child, parent in self.parent_of.items() if parent == aid)
             tasks_to_cancel = [self.tasks[a] for a in reversed(order) if a in self.tasks]
+        logger.info(
+            "bus.cancel_descendants %s (hard, %d task(s))",
+            root_agent_id,
+            len(tasks_to_cancel),
+        )
         for task in tasks_to_cancel:
             if not task.done():
                 task.cancel()
@@ -303,5 +337,11 @@ class AgentMessageBus:
             streams_to_cancel = [
                 (aid, self.streams[aid]) for aid in reversed(order) if aid in self.streams
             ]
+        logger.info(
+            "bus.cancel_descendants_graceful %s (%d active stream(s), %d total)",
+            root_agent_id,
+            len(streams_to_cancel),
+            len(order),
+        )
         for _aid, streamed in streams_to_cancel:
             streamed.cancel(mode="after_turn")

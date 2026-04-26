@@ -10,11 +10,16 @@ through to the SDK's built-in litellm routing.
 
 from __future__ import annotations
 
+import logging
+
 from agents.exceptions import UserError
 from agents.models.interface import Model, ModelProvider
 from agents.models.multi_provider import MultiProvider, MultiProviderMap
 
 from strix.llm.anthropic_cache_wrapper import AnthropicCachingLitellmModel
+
+
+logger = logging.getLogger(__name__)
 
 
 class _AnthropicCachingProvider(ModelProvider):
@@ -33,6 +38,7 @@ class _AnthropicCachingProvider(ModelProvider):
                 "Anthropic provider requires a non-empty model name (e.g. 'claude-sonnet-4-6').",
             )
         full = model_name if model_name.startswith("anthropic/") else f"anthropic/{model_name}"
+        logger.debug("Anthropic provider: building cached model for %s", full)
         return AnthropicCachingLitellmModel(model=full)
 
 
@@ -45,4 +51,5 @@ def build_multi_provider() -> MultiProvider:
     """
     pmap = MultiProviderMap()  # type: ignore[no-untyped-call]
     pmap.add_provider("anthropic", _AnthropicCachingProvider())
+    logger.debug("MultiProvider built with anthropic/ caching route")
     return MultiProvider(provider_map=pmap)

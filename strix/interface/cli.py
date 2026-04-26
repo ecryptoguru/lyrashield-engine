@@ -1,5 +1,6 @@
 import atexit
 import contextlib
+import logging
 import os
 import signal
 import sys
@@ -22,6 +23,9 @@ from .utils import (
     build_live_stats_text,
     format_vulnerability_report,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_sandbox_image() -> str:
@@ -182,6 +186,12 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             update_thread.start()
 
             try:
+                logger.info(
+                    "CLI launching scan: run_name=%s targets=%d interactive=%s",
+                    args.run_name,
+                    len(scan_config.get("targets") or []),
+                    bool(getattr(args, "interactive", False)),
+                )
                 await run_strix_scan(
                     scan_config=scan_config,
                     scan_id=args.run_name,

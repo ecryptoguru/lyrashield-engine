@@ -12,6 +12,8 @@ from agents.lifecycle import RunHooks
 from agents.run_context import AgentHookContext, RunContextWrapper
 from agents.tool_context import ToolContext
 
+from strix.telemetry.logging import set_agent_id
+
 
 logger = logging.getLogger(__name__)
 
@@ -107,16 +109,27 @@ class StrixOrchestrationHooks(RunHooks[Any]):
             if bus is not None and agent_id is not None:
                 await bus.record_usage(agent_id, usage)
             tracer = ctx.get("tracer")
-            if tracer is not None and usage is not None and hasattr(tracer, "record_llm_usage"):
-                cached = 0
+            cached_total = 0
+            input_total = 0
+            output_total = 0
+            if usage is not None:
                 details = getattr(usage, "input_tokens_details", None)
                 if details is not None:
-                    cached = int(getattr(details, "cached_tokens", 0) or 0)
-                tracer.record_llm_usage(
-                    input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-                    output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-                    cached_tokens=cached,
-                )
+                    cached_total = int(getattr(details, "cached_tokens", 0) or 0)
+                input_total = int(getattr(usage, "input_tokens", 0) or 0)
+                output_total = int(getattr(usage, "output_tokens", 0) or 0)
+                if tracer is not None and hasattr(tracer, "record_llm_usage"):
+                    tracer.record_llm_usage(
+                        input_tokens=input_total,
+                        output_tokens=output_total,
+                        cached_tokens=cached_total,
+                    )
+            logger.debug(
+                "LLM call done: input=%d output=%d cached=%d",
+                input_total,
+                output_total,
+                cached_total,
+            )
         except Exception:
             logger.exception("on_llm_end failed")
 
@@ -133,18 +146,25 @@ class StrixOrchestrationHooks(RunHooks[Any]):
             ctx = context.context
             if not isinstance(ctx, dict):
                 return
+            me = ctx.get("agent_id")
+            if isinstance(me, str):
+                # Tag every log record emitted under this agent's task
+                # with the agent_id, automatically. Cleared on agent end.
+                set_agent_id(me)
             tracer = ctx.get("tracer")
             bus = ctx.get("bus")
-            me = ctx.get("agent_id")
             if tracer is None or bus is None or me is None:
                 return
+            name = bus.names.get(me, me)
+            parent = bus.parent_of.get(me)
+            logger.info("Agent %s (%s) started, parent=%s", me, name, parent or "-")
             now = datetime.now(UTC).isoformat()
             tracer.agents.setdefault(
                 me,
                 {
                     "id": me,
-                    "name": bus.names.get(me, me),
-                    "parent_id": bus.parent_of.get(me),
+                    "name": name,
+                    "parent_id": parent,
                     "status": bus.statuses.get(me, "running"),
                     "created_at": now,
                     "updated_at": now,
@@ -198,6 +218,17 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                     },
                 )
 
+            calls = (
+                int(bus.stats_live.get(me, {}).get("calls", 0)) if hasattr(bus, "stats_live") else 0
+            )
+            logger.info(
+                "Agent %s (%s) ended status=%s calls=%d",
+                me,
+                bus.names.get(me, me),
+                final_status,
+                calls,
+            )
+
             if stays_alive:
                 await bus.park(me)
                 # Reset the finish flag so the next cycle can detect its own
@@ -206,6 +237,9 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                 ctx["agent_finish_called"] = False
             else:
                 await bus.finalize(me, final_status)
+                # Clear the agent_id from the log context so any post-finalize
+                # work (cleanup in scan.py finally) doesn't keep the stale tag.
+                set_agent_id(None)
         except Exception:
             logger.exception("on_agent_end failed")
 
@@ -242,6 +276,13 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                         if isinstance(parsed, dict):
                             args = parsed
             tracer.log_tool_start(ctx.get("agent_id", "?"), tool.name, args)
+            args_repr = json.dumps(args, ensure_ascii=False, default=str) if args else ""
+            logger.debug(
+                "Tool %s start (args_len=%d): %s",
+                tool.name,
+                len(args_repr),
+                args_repr[:500],
+            )
         except Exception:
             logger.exception("on_tool_start failed")
 
@@ -262,5 +303,7 @@ class StrixOrchestrationHooks(RunHooks[Any]):
             tracer = ctx.get("tracer")
             if tracer is not None:
                 tracer.log_tool_end(ctx.get("agent_id", "?"), tool.name, result)
+            result_str = result if isinstance(result, str) else str(result)
+            logger.debug("Tool %s done (result_len=%d)", tool.name, len(result_str))
         except Exception:
             logger.exception("on_tool_end failed")

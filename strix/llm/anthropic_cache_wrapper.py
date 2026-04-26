@@ -8,6 +8,7 @@ delegating to the parent.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -18,6 +19,9 @@ from agents.items import ModelResponse, TResponseInputItem, TResponseStreamEvent
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from agents.tool import Tool
+
+
+logger = logging.getLogger(__name__)
 
 
 class AnthropicCachingLitellmModel(LitellmModel):
@@ -45,6 +49,7 @@ class AnthropicCachingLitellmModel(LitellmModel):
         if not self._is_anthropic():
             return items
         out: list[TResponseInputItem] = []
+        patched_count = 0
         for item in items:
             if isinstance(item, dict) and item.get("role") == "system":
                 content = item.get("content")
@@ -60,8 +65,15 @@ class AnthropicCachingLitellmModel(LitellmModel):
                         ],
                     }
                     out.append(new_item)  # type: ignore[arg-type]
+                    patched_count += 1
                     continue
             out.append(item)
+        if patched_count:
+            logger.debug(
+                "Anthropic cache_control injected on %d system message(s) for %s",
+                patched_count,
+                self.model,
+            )
         return out
 
     async def get_response(

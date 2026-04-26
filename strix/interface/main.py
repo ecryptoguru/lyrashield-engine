@@ -5,7 +5,6 @@ Strix Agent Interface
 
 import argparse
 import asyncio
-import logging
 import shutil
 import sys
 from pathlib import Path
@@ -43,7 +42,11 @@ from strix.telemetry.tracer import get_global_tracer
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 
 
-logging.getLogger().setLevel(logging.ERROR)
+# Per-scan logging is set up by ``setup_scan_logging`` from inside
+# ``orchestration.scan.run_strix_scan`` once the scan ``run_dir`` is
+# known — that's where ``strix.*`` levels and handlers are owned. Pre-scan
+# work (``main()``, env validation, image pull) emits at WARNING+ to
+# stderr via the SDK / stdlib defaults.
 
 
 def validate_environment() -> None:

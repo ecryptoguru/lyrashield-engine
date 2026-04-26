@@ -16,12 +16,16 @@ back, so typos fail loudly.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 
 if TYPE_CHECKING:
     from agents.sandbox.manifest import Manifest
+
+
+logger = logging.getLogger(__name__)
 
 
 # A backend brings up a fresh session and returns the (client, session)
@@ -75,6 +79,7 @@ def get_backend(name: str) -> SandboxBackend:
         raise ValueError(
             f"Unknown STRIX_RUNTIME_BACKEND: {name!r} (supported: {supported})",
         )
+    logger.debug("Selected sandbox backend: %s", name)
     return backend
 
 
@@ -86,6 +91,7 @@ def register_backend(name: str, backend: SandboxBackend) -> None:
     an existing name overwrites the prior entry.
     """
     _BACKENDS[name] = backend
+    logger.info("Registered sandbox backend: %s", name)
 
 
 def supported_backends() -> list[str]:

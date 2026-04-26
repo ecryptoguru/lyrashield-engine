@@ -247,6 +247,7 @@ async def python_action(
     sentinel = "__STRIX_PY_RESULT_" + uuid.uuid4().hex + "__"
     user_code_b64 = base64.b64encode(code.encode("utf-8")).decode("ascii")
     driver = _DRIVER_TEMPLATE.format(sentinel=sentinel, user_code_b64=user_code_b64)
+    logger.info("python_action: invoking driver (code_len=%d, timeout=%ds)", len(code), timeout)
     # /tmp inside the sandbox container is single-user (pentester) and
     # disposable per scan; the multi-user race B108/S108 warns about
     # doesn't apply.

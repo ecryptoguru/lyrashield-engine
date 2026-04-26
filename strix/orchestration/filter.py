@@ -56,6 +56,11 @@ async def inject_messages_filter(data: CallModelData) -> ModelInputData:
                         "content": _format_inter_agent_message(bus, msg),
                     },
                 )
+        logger.debug(
+            "inject_messages_filter: appended %d message(s) to input for %s",
+            len(pending),
+            agent_id,
+        )
         return ModelInputData(
             input=new_input,
             instructions=data.model_data.instructions,

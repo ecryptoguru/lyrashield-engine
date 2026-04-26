@@ -122,4 +122,12 @@ def render_system_prompt(
         logger.exception("render_system_prompt failed; returning empty prompt")
         return ""
     else:
+        logger.debug(
+            "render_system_prompt: scan_mode=%s root=%s whitebox=%s skills=%d prompt_len=%d",
+            scan_mode,
+            is_root,
+            is_whitebox,
+            len(skill_content),
+            len(rendered),
+        )
         return str(rendered)

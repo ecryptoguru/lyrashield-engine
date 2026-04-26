@@ -51,6 +51,7 @@ def load_skills(skill_names: list[str]) -> dict[str, str]:
 
         var_name = skill_name.split("/")[-1]
         skill_content[var_name] = _FRONTMATTER_PATTERN.sub("", content).lstrip()
-        logger.info("Loaded skill: %s -> %s", skill_name, var_name)
+        logger.debug("Loaded skill: %s -> %s", skill_name, var_name)
 
+    logger.debug("load_skills: %d skill(s) resolved", len(skill_content))
     return skill_content

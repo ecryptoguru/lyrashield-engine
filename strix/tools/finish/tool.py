@@ -59,14 +59,21 @@ def _do_finish(
             technical_analysis=technical_analysis.strip(),
             recommendations=recommendations.strip(),
         )
+        vuln_count = len(tracer.vulnerability_reports)
+    except (ImportError, AttributeError) as e:
+        logger.exception("finish_scan persistence failed")
+        return {"success": False, "message": f"Failed to complete scan: {e!s}"}
+    else:
+        logger.info(
+            "finish_scan: completed scan with %d vulnerability report(s)",
+            vuln_count,
+        )
         return {
             "success": True,
             "scan_completed": True,
             "message": "Scan completed successfully",
-            "vulnerabilities_found": len(tracer.vulnerability_reports),
+            "vulnerabilities_found": vuln_count,
         }
-    except (ImportError, AttributeError) as e:
-        return {"success": False, "message": f"Failed to complete scan: {e!s}"}
 
 
 @function_tool(timeout=60)

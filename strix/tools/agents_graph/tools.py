@@ -550,6 +550,15 @@ async def create_agent(
     async with bus._lock:
         bus.tasks[child_id] = task_handle
 
+    logger.info(
+        "create_agent: spawned %s (%s) parent=%s skills=%d task_len=%d",
+        child_id,
+        name,
+        parent_id or "-",
+        len(skills or []),
+        len(task or ""),
+    )
+
     return json.dumps(
         {
             "success": True,
@@ -658,6 +667,14 @@ async def agent_finish(
             },
         )
         parent_notified = True
+
+    logger.info(
+        "agent_finish: %s success=%s findings=%d parent_notified=%s",
+        me,
+        success,
+        len(findings or []),
+        parent_notified,
+    )
 
     return json.dumps(
         {

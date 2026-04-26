@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 import requests
 from agents import RunContextWrapper, function_tool
 
 from strix.config import load_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 _SYSTEM_PROMPT = """You are assisting a cybersecurity agent specialized in vulnerability scanning
@@ -40,11 +44,13 @@ security implications and details."""
 def _do_search(query: str) -> dict[str, Any]:
     api_key = load_settings().integrations.perplexity_api_key
     if not api_key:
+        logger.warning("web_search invoked without PERPLEXITY_API_KEY configured")
         return {
             "success": False,
             "message": "PERPLEXITY_API_KEY environment variable not set",
             "results": [],
         }
+    logger.info("web_search query (len=%d): %s", len(query), query[:120])
 
     url = "https://api.perplexity.ai/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -61,16 +67,20 @@ def _do_search(query: str) -> dict[str, Any]:
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
     except requests.exceptions.Timeout:
+        logger.warning("web_search timed out")
         return {"success": False, "message": "Request timed out", "results": []}
     except requests.exceptions.RequestException as e:
+        logger.exception("web_search API request failed")
         return {"success": False, "message": f"API request failed: {e!s}", "results": []}
     except KeyError as e:
+        logger.exception("web_search response shape unexpected")
         return {
             "success": False,
             "message": f"Unexpected API response format: missing {e!s}",
             "results": [],
         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
+        logger.exception("web_search failed")
         return {"success": False, "message": f"Web search failed: {e!s}", "results": []}
     else:
         return {
