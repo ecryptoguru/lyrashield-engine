@@ -150,7 +150,6 @@ def make_agent_context(
         "model": model,
         "model_settings": model_settings,
         "max_turns": max_turns,
-        "turn_count": 0,
         "agent_finish_called": False,
         "is_whitebox": is_whitebox,
         "interactive": interactive,

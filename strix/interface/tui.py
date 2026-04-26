@@ -1727,13 +1727,22 @@ class StrixTUIApp(App):  # type: ignore[misc]
         # Route to the agent's bus inbox. The scan loop runs on a
         # worker thread; ``run_coroutine_threadsafe`` submits the
         # coroutine onto that loop and returns immediately so the TUI
-        # stays responsive.
+        # stays responsive. After enqueuing the message, request a
+        # graceful interrupt of the agent's current turn so the user
+        # input is processed without waiting for the active LLM/tool
+        # call to finish — the SDK saves the in-flight turn cleanly
+        # before honoring ``cancel(mode="after_turn")``.
         if self._scan_loop is not None and not self._scan_loop.is_closed():
+            target_agent_id = self.selected_agent_id
             asyncio.run_coroutine_threadsafe(
                 self.bus.send(
-                    self.selected_agent_id,
+                    target_agent_id,
                     {"from": "user", "content": message, "type": "instruction"},
                 ),
+                self._scan_loop,
+            )
+            asyncio.run_coroutine_threadsafe(
+                self.bus.request_interrupt(target_agent_id, mode="after_turn"),
                 self._scan_loop,
             )
 

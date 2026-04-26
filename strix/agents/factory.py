@@ -32,6 +32,7 @@ from strix.tools.agents_graph.tools import (
     agent_status,
     create_agent,
     send_message_to_agent,
+    stop_agent,
     view_agent_graph,
     wait_for_message,
 )
@@ -104,6 +105,7 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     send_message_to_agent,
     wait_for_message,
     create_agent,
+    stop_agent,
 )
 
 

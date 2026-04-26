@@ -42,6 +42,38 @@ def _ctx(ctx: RunContextWrapper) -> dict[str, Any]:
     return ctx.context if isinstance(ctx.context, dict) else {}
 
 
+def _render_completion_report(
+    *,
+    agent_name: str,
+    agent_id: str,
+    task: str,
+    success: bool,
+    result_summary: str,
+    findings: list[str],
+    recommendations: list[str],
+) -> str:
+    """Render an ``<agent_completion_report>`` XML payload (legacy parity)."""
+    from datetime import UTC, datetime
+    from html import escape
+
+    status = "SUCCESS" if success else "FAILED"
+    completion_time = datetime.now(UTC).isoformat()
+    findings_xml = "".join(f"<finding>{escape(f)}</finding>" for f in findings)
+    recs_xml = "".join(f"<recommendation>{escape(r)}</recommendation>" for r in recommendations)
+    return (
+        "<agent_completion_report>\n"
+        f"  <agent_info><agent_name>{escape(agent_name)}</agent_name>"
+        f"<agent_id>{escape(agent_id)}</agent_id>"
+        f"<task>{escape(task)}</task>"
+        f"<status>{status}</status>"
+        f"<completion_time>{completion_time}</completion_time></agent_info>\n"
+        f"  <results><summary>{escape(result_summary)}</summary>"
+        f"<findings>{findings_xml}</findings>"
+        f"<recommendations>{recs_xml}</recommendations></results>\n"
+        "</agent_completion_report>"
+    )
+
+
 @function_tool(timeout=30)
 async def view_agent_graph(ctx: RunContextWrapper) -> str:
     """Print the multi-agent tree — every agent, its parent, its status.
@@ -411,21 +443,26 @@ async def create_agent(
 
     await bus.register(child_id, name, parent_id)
 
-    parent_history = inner.get("parent_input_items") if inherit_context else None
+    # ``ctx.turn_input`` carries the parent's full conversation up to and
+    # including the call that's currently invoking ``create_agent``
+    # (populated by SDK at ``run_internal/turn_resolution.py:806``).
+    # Wrap as a single read-only block so the child sees the parent's
+    # reasoning as background but doesn't try to continue parent's turns.
+    parent_history = list(ctx.turn_input) if inherit_context and ctx.turn_input else []
     initial_input: list[TResponseInputItem] = []
     if parent_history:
+        rendered = json.dumps(parent_history, ensure_ascii=False, default=str)
         initial_input.append(
             {
                 "role": "user",
-                "content": "[Inherited context from parent — read-only history]",
-            }
-        )
-        initial_input.extend(parent_history)
-        initial_input.append(
-            {
-                "role": "user",
-                "content": "[End of inherited context]",
-            }
+                "content": (
+                    "<inherited_context_from_parent>\n"
+                    f"{rendered}\n"
+                    "</inherited_context_from_parent>\n"
+                    "Use the above as background only; do not continue the "
+                    "parent's work. Your task follows."
+                ),
+            },
         )
     initial_input.append(
         {
@@ -456,6 +493,9 @@ async def create_agent(
         run_id=inner.get("run_id"),
         agent_factory=factory,
     )
+    # Stash the task string for ``agent_finish`` to echo back in its
+    # XML completion report.
+    child_ctx["task"] = task
 
     child_run_config = make_run_config(
         sandbox_session=inner.get("sandbox_session"),
@@ -569,17 +609,14 @@ async def agent_finish(
     if report_to_parent:
         async with bus._lock:
             agent_name = bus.names.get(me, me)
-        report = json.dumps(
-            {
-                "kind": "agent_completion_report",
-                "from": agent_name,
-                "agent_id": me,
-                "success": success,
-                "summary": result_summary,
-                "findings": list(findings or []),
-                "recommendations": list(final_recommendations or []),
-            },
-            ensure_ascii=False,
+        report = _render_completion_report(
+            agent_name=agent_name,
+            agent_id=me,
+            task=str(inner.get("task", "")),
+            success=success,
+            result_summary=result_summary,
+            findings=list(findings or []),
+            recommendations=list(final_recommendations or []),
         )
         await bus.send(
             parent_id,
@@ -602,6 +639,97 @@ async def agent_finish(
             "summary": result_summary,
             "findings_count": len(findings or []),
             "has_recommendations": bool(final_recommendations),
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+@function_tool(timeout=30)
+async def stop_agent(
+    ctx: RunContextWrapper,
+    target_agent_id: str,
+    cascade: bool = True,
+    reason: str = "",
+) -> str:
+    """Gracefully stop a running agent (and optionally its descendants).
+
+    Uses the SDK's ``RunResultStreaming.cancel(mode="after_turn")`` so the
+    target's current turn finishes — including saving items to its
+    session — before the run loop honors the cancel. The agent's
+    interactive outer loop sees ``stopping`` and exits without awaiting
+    more messages, so ``on_agent_end`` finalizes with status="stopped".
+
+    Use sparingly. Prefer ``send_message_to_agent`` (asking the agent
+    to wrap up) for soft-stop scenarios. Reach for ``stop_agent`` when
+    a child has gone off-track and won't self-correct.
+
+    Args:
+        target_agent_id: The 8-char id from ``view_agent_graph`` /
+            ``create_agent``. Cannot stop yourself.
+        cascade: If ``True`` (default), also stop every descendant of
+            ``target_agent_id`` leaves-first. ``False`` stops only the
+            target.
+        reason: Optional human-readable reason for the stop, surfaced
+            in logs and telemetry.
+    """
+    inner = _ctx(ctx)
+    bus = inner.get("bus")
+    me = inner.get("agent_id")
+    if bus is None or me is None:
+        return json.dumps(
+            {"success": False, "error": "Bus or agent_id missing in context."},
+            ensure_ascii=False,
+            default=str,
+        )
+    if target_agent_id == me:
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Cannot stop yourself; call agent_finish or finish_scan instead.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    async with bus._lock:
+        if target_agent_id not in bus.statuses:
+            return json.dumps(
+                {"success": False, "error": f"Unknown agent_id: {target_agent_id}"},
+                ensure_ascii=False,
+                default=str,
+            )
+        target_status = bus.statuses.get(target_agent_id)
+
+    if target_status in ("completed", "crashed", "stopped"):
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Target agent '{target_agent_id}' is already {target_status}.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    if cascade:
+        await bus.cancel_descendants_graceful(target_agent_id)
+    else:
+        async with bus._lock:
+            bus.stopping.add(target_agent_id)
+        await bus.request_interrupt(target_agent_id, mode="after_turn")
+
+    logger.info(
+        "stop_agent: target=%s cascade=%s reason=%r",
+        target_agent_id,
+        cascade,
+        reason,
+    )
+    return json.dumps(
+        {
+            "success": True,
+            "target_agent_id": target_agent_id,
+            "cascade": cascade,
+            "reason": reason,
+            "note": "Cancellation is graceful — current turn completes first.",
         },
         ensure_ascii=False,
         default=str,

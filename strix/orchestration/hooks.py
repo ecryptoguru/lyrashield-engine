@@ -36,15 +36,28 @@ class StrixOrchestrationHooks(RunHooks[Any]):
         system_prompt: str | None,
         input_items: list[Any],
     ) -> None:
+        del agent, system_prompt
         try:
-            # Type contract guarantees ``input_items`` is list[TResponseInputItem];
-            # we trust SDK here. The try/except below catches any surprise.
             ctx = context.context
             if not isinstance(ctx, dict):
                 return
+            bus = ctx.get("bus")
+            agent_id = ctx.get("agent_id")
+            if bus is None or agent_id is None:
+                return
+            stats = bus.stats_live.get(agent_id)
+            if stats is None:
+                return
             max_turns = int(ctx.get("max_turns", 300))
-            cur = int(ctx.get("turn_count", 0))
-            if max_turns >= 4 and cur == int(max_turns * 0.85):
+            cur = int(stats.get("calls", 0))
+            if max_turns < 4:
+                return
+            # Once-flags live alongside ``calls`` on ``bus.stats_live`` so the
+            # warnings fire exactly once per agent lifetime — surviving
+            # ``run_with_continuation`` cycles, mirroring legacy
+            # ``state.max_iterations_warning_sent``.
+            if cur >= int(max_turns * 0.85) and not stats.get("warned_85"):
+                stats["warned_85"] = True
                 input_items.append(
                     {
                         "role": "user",
@@ -52,9 +65,10 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                             "[System warning] You are at 85% of your iteration "
                             "budget. Begin consolidating findings."
                         ),
-                    }
+                    },
                 )
-            elif max_turns >= 4 and cur == max_turns - 3:
+            if cur >= max_turns - 3 and not stats.get("warned_final"):
+                stats["warned_final"] = True
                 input_items.append(
                     {
                         "role": "user",
@@ -62,7 +76,7 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                             "[System warning] You have 3 iterations left. Your "
                             "next tool call MUST be the finish tool."
                         ),
-                    }
+                    },
                 )
         except Exception:
             logger.exception("on_llm_start failed")
@@ -94,7 +108,6 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                     output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
                     cached_tokens=cached,
                 )
-            ctx["turn_count"] = int(ctx.get("turn_count", 0)) + 1
         except Exception:
             logger.exception("on_llm_end failed")
 
@@ -178,11 +191,10 @@ class StrixOrchestrationHooks(RunHooks[Any]):
 
             if stays_alive:
                 await bus.park(me)
-                # Reset per-cycle flags so the next ``Runner.run`` invocation
-                # can detect a fresh finish-tool call and re-trigger budget
-                # warnings against its own iteration count.
+                # Reset the finish flag so the next cycle can detect its own
+                # finish-tool call. The lifetime turn counter and warning
+                # flags live on ``bus.stats_live`` and persist across cycles.
                 ctx["agent_finish_called"] = False
-                ctx["turn_count"] = 0
             else:
                 await bus.finalize(me, final_status)
         except Exception:

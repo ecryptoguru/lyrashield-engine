@@ -36,7 +36,7 @@ from strix.runtime import session_manager
 
 
 if TYPE_CHECKING:
-    from agents.result import RunResult
+    from agents.result import RunResultBase
 
 
 logger = logging.getLogger(__name__)
@@ -163,7 +163,7 @@ async def run_strix_scan(
     max_turns: int = STRIX_DEFAULT_MAX_TURNS,
     model: str | None = None,
     cleanup_on_exit: bool = True,
-) -> RunResult:
+) -> RunResultBase:
     """Run one Strix scan end-to-end against a freshly-prepared sandbox.
 
     Args:
