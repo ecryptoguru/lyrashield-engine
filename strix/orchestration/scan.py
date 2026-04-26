@@ -191,7 +191,7 @@ async def run_strix_scan(
             if omitted — callers that want resume-after-crash semantics
             should pass a stable id.
         image: Docker image tag for the sandbox (e.g.
-            ``"strix-sandbox:0.1.13"``).
+            ``"strix-sandbox:0.2.0"``).
         sources_path: Host directory mounted into ``/workspace/sources``.
         tracer: Optional Strix tracer. Stored in context for the
             telemetry hook chain. Pass ``None`` for unit tests.

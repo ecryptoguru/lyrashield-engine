@@ -132,7 +132,7 @@ All 13 Strix tools port. Multi-agent-graph tools are now in §4.
 
 | Strix capability | SDK equivalent | Match |
 |---|---|---|
-| Custom Kali image | `DockerSandboxClientOptions(image="ghcr.io/.../strix-sandbox:0.1.13")` | 1:1 |
+| Custom Kali image | `DockerSandboxClientOptions(image="ghcr.io/.../strix-sandbox:0.2.0")` | 1:1 |
 | `cap_add=NET_ADMIN,NET_RAW` + `extra_hosts=host.docker.internal` | **Subclass `DockerSandboxClient`, inject into `containers.create()` kwargs** | Bridgeable | ~80 LOC |
 | Caido HTTPS proxy + CA cert + system-wide proxy env | Image-baked (Dockerfile + entrypoint stay as-is); `Manifest.environment` for runtime overrides; custom `CaidoCapability` for the 7 Caido tools + system-prompt instruction block | Bridgeable | ~200 LOC capability |
 | FastAPI tool server + Bearer auth | **Stays in the image.** Function tools wrap HTTP calls to it. Network isolation + Bearer auth preserved at transport layer. SDK's "in-process tools" model becomes "function tool that POSTs to localhost:48081 inside our shared session." | 1:1 in effect |

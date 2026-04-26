@@ -147,7 +147,7 @@ End-to-end trace of `strix --target ./app`:
 1. **CLI parse** (`interface/main.py:267-426`): parse args, validate, infer target types via `infer_target_type()` (`interface/utils.py`). Resolve diff scope if `--scope-mode=diff`.
 2. **Config layering** (`config/config.py`): apply `~/.strix/cli-config.json` (or `--config <path>` override) into `os.environ`; resolve `STRIX_LLM`, `LLM_API_KEY` via `resolve_llm_config()` at `config/config.py:199-224`.
 3. **LLM warm**: validate model reachable.
-4. **Docker pull** if needed; image pin `ghcr.io/usestrix/strix-sandbox:0.1.13` (`config/config.py:43`).
+4. **Docker pull** if needed; image pin `ghcr.io/usestrix/strix-sandbox:0.2.0` (`strix/config/settings.py:64`).
 5. **Run name + run dir**: `strix_runs/<run-name>/`. Tracer init (`telemetry/tracer.py:50+`).
 6. **Mode dispatch**: TUI (`tui.py`) or CLI (`cli.py`). Both end up calling `StrixAgent.execute_scan(scan_config)`.
 7. **Sandbox launch** (`runtime/docker_runtime.py:111-173`): container created with name `strix-scan-{scan_id}`, two random host ports mapped to container ports `48080` (Caido) and `48081` (tool server), 32-byte bearer token generated, `local_sources` tar-copied into `/workspace`.
@@ -442,7 +442,7 @@ Three layers of defense before tool output reaches the model or telemetry:
 - Self-signed CA chain at `/app/certs/{ca.key,ca.crt,ca.p12}`, 3650-day validity (lines 52-71).
 - Workspace `/workspace` owned by pentester (line 194).
 - Ports `48080` (Caido), `48081` (tool server) exposed.
-- Image pin: `ghcr.io/usestrix/strix-sandbox:0.1.13` (`strix/config/config.py:43`, bumped in `640bd67`).
+- Image pin: `ghcr.io/usestrix/strix-sandbox:0.2.0` (`strix/config/settings.py:64`).
 
 ### 8.2 Boot Sequence (`containers/docker-entrypoint.sh`)
 
@@ -637,7 +637,7 @@ There **is no separate persona file**. All agents are `StrixAgent` instances usi
 | `llm_timeout` | `"300"` | Outer LLM timeout. |
 | `perplexity_api_key` | `None` | Web search. |
 | `strix_disable_browser` | `"false"` | Skip browser tool registration. |
-| `strix_image` | `"ghcr.io/usestrix/strix-sandbox:0.1.13"` | Sandbox image pin. |
+| `strix_image` | `"ghcr.io/usestrix/strix-sandbox:0.2.0"` | Sandbox image pin. |
 | `strix_runtime_backend` | `"docker"` | Only `docker` supported. |
 | `strix_sandbox_execution_timeout` | `"120"` | Tool exec timeout (s). |
 | `strix_sandbox_connect_timeout` | `"10"` | Tool server connect timeout. |

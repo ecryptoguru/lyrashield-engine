@@ -54,7 +54,7 @@ async def create_or_reuse(
 
     Args:
         scan_id: Caller-provided scan identifier (used as cache key).
-        image: Docker image tag (e.g. ``"strix-sandbox:0.1.13"``).
+        image: Docker image tag (e.g. ``"strix-sandbox:0.2.0"``).
         sources_path: Host directory mounted into the container's
             ``/workspace/sources`` so the agent can read user code.
 
