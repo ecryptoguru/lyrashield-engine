@@ -1,15 +1,20 @@
-"""StrixDockerSandboxClient — adds NET_ADMIN/NET_RAW capabilities + host-gateway.
+"""StrixDockerSandboxClient — preserves the image's ENTRYPOINT and adds
+NET_ADMIN/NET_RAW capabilities + host-gateway.
 
 The SDK's ``DockerSandboxClient._create_container`` does not expose a hook for
 extending ``create_kwargs`` before ``containers.create`` is called. We subclass
-and reimplement the method body verbatim from the SDK source, with two
-additions before the final create call:
+and reimplement the method body verbatim from the SDK source, with three
+deltas:
 
-    create_kwargs.setdefault("cap_add", []).extend(["NET_ADMIN", "NET_RAW"])
-    create_kwargs.setdefault("extra_hosts", {})["host.docker.internal"] = "host-gateway"
-
-These are required for raw-socket pentest tools (nmap -sS) and for letting
-the agent reach host-served apps via ``host.docker.internal``.
+1. Drop the SDK's ``entrypoint=["tail"]`` override; supply ``["tail", "-f",
+   "/dev/null"]`` as ``command`` instead. This lets our image's
+   ``docker-entrypoint.sh`` actually run — without it, ``caido-cli`` never
+   starts inside the container and ``bootstrap_caido`` retries against a
+   dead port.
+2. Append NET_ADMIN/NET_RAW to ``cap_add`` (required by ``nmap -sS`` and
+   other raw-socket tools).
+3. Add ``host.docker.internal`` → host-gateway to ``extra_hosts`` so the
+   agent can reach host-served apps.
 
 Pinned to ``openai-agents==0.14.6``. Bumping the SDK requires
 re-merging the parent body. Track upstream for an injection hook.
@@ -61,11 +66,16 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         environment: dict[str, str] | None = None
         if manifest:
             environment = await manifest.environment.resolve()
+        # Strix delta from the SDK body: drop ``entrypoint`` override and
+        # supply ``tail -f /dev/null`` as ``command`` so the image's
+        # ENTRYPOINT (``docker-entrypoint.sh``) runs setup, then ``exec
+        # "$@"`` becomes ``exec tail -f /dev/null`` for the keep-alive.
+        # Without this, caido-cli + the in-container CA trust never get
+        # initialized.
         create_kwargs: dict[str, Any] = {
-            "entrypoint": ["tail"],
             "image": image,
             "detach": True,
-            "command": ["-f", "/dev/null"],
+            "command": ["tail", "-f", "/dev/null"],
             "environment": environment,
         }
         if manifest is not None:
