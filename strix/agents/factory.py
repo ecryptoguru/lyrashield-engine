@@ -17,7 +17,6 @@ runtime skill-loading tool.
 
 from __future__ import annotations
 
-import copy
 import inspect
 import json
 import logging
@@ -120,8 +119,7 @@ def _format_tool_error(exc: Exception) -> str:
 
 
 def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
-    safe_tool = copy.copy(tool)
-    invoke_tool = safe_tool.on_invoke_tool
+    invoke_tool = tool.on_invoke_tool
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
         try:
@@ -130,8 +128,8 @@ def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
             logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
             return _format_tool_error(exc)
 
-    safe_tool.on_invoke_tool = invoke
-    return safe_tool
+    tool.on_invoke_tool = invoke
+    return tool
 
 
 def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
