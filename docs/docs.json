@@ -38,6 +38,7 @@
               "llm-providers/vertex",
               "llm-providers/bedrock",
               "llm-providers/azure",
+              "llm-providers/novita",
               "llm-providers/local"
             ]
           },
