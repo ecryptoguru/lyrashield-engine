@@ -1,8 +1,9 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 def _generate_agent_id() -> str:
@@ -40,6 +41,8 @@ class AgentState(BaseModel):
 
     errors: list[str] = Field(default_factory=list)
 
+    _wake_event: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
+
     def increment_iteration(self) -> None:
         self.iteration += 1
         self.last_updated = datetime.now(UTC).isoformat()
@@ -52,6 +55,8 @@ class AgentState(BaseModel):
             message["thinking_blocks"] = thinking_blocks
         self.messages.append(message)
         self.last_updated = datetime.now(UTC).isoformat()
+        if self.waiting_for_input:
+            self._wake_event.set()
 
     def add_action(self, action: dict[str, Any]) -> None:
         self.actions_taken.append(
@@ -109,6 +114,14 @@ class AgentState(BaseModel):
         if new_task:
             self.task = new_task
         self.last_updated = datetime.now(UTC).isoformat()
+        self._wake_event.set()
+
+    async def wait_for_wake(self, timeout: float = 0.5) -> None:
+        try:
+            await asyncio.wait_for(self._wake_event.wait(), timeout=timeout)
+            self._wake_event.clear()
+        except TimeoutError:
+            pass
 
     def has_reached_max_iterations(self) -> bool:
         return self.iteration >= self.max_iterations
