@@ -46,9 +46,11 @@ from strix.tools.notes.tools import (
 )
 from strix.tools.proxy.tools import (
     list_requests,
+    list_sitemap,
     repeat_request,
     scope_rules,
     view_request,
+    view_sitemap_entry,
 )
 from strix.tools.reporting.tool import create_vulnerability_report
 from strix.tools.thinking.tool import think
@@ -268,6 +270,8 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     list_requests,
     view_request,
     repeat_request,
+    list_sitemap,
+    view_sitemap_entry,
     scope_rules,
     # Multi-agent graph tools (the coordinator is in ctx.context)
     view_agent_graph,

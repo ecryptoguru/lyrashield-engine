@@ -33,7 +33,12 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from caido_sdk_client import Client
 
-    from strix.tools.proxy.caido_api import RequestPart, SortBy, SortOrder
+    from strix.tools.proxy.caido_api import (
+        RequestPart,
+        SitemapDepth,
+        SortBy,
+        SortOrder,
+    )
 else:
     # Runtime import: ``function_tool`` resolves the annotations via
     # ``typing.get_type_hints`` so the Literal aliases must be reachable
@@ -41,6 +46,7 @@ else:
     # used in annotations.
     from strix.tools.proxy.caido_api import (  # noqa: TC001
         RequestPart,
+        SitemapDepth,
         SortBy,
         SortOrder,
     )
@@ -400,22 +406,97 @@ async def repeat_request(
 
 
 def _format_replay_tool_result(replay: dict[str, Any]) -> str:
-    response_raw = replay.get("response_raw")
-    response: dict[str, Any] | None = None
-    if response_raw is not None:
-        response = {"raw": response_raw.decode("utf-8", errors="replace")}
-    return json.dumps(
-        {
-            "success": replay["status"] == "DONE",
-            "status": replay["status"],
-            "error": replay["error"],
-            "session_id": replay["session_id"],
-            "elapsed_ms": replay["elapsed_ms"],
-            "response": response,
-        },
-        ensure_ascii=False,
-        default=str,
-    )
+    response = caido_api.parse_raw_response(replay.get("response_raw"))
+    payload: dict[str, Any] = {
+        "success": replay["status"] == "DONE",
+        "status": replay["status"],
+        "session_id": replay["session_id"],
+        "elapsed_ms": replay["elapsed_ms"],
+        "response": response,
+    }
+    if replay.get("error"):
+        payload["error"] = replay["error"]
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+# ----------------------------------------------------------------------
+# list_sitemap
+# ----------------------------------------------------------------------
+@function_tool(timeout=60)
+async def list_sitemap(
+    ctx: RunContextWrapper,
+    scope_id: str | None = None,
+    parent_id: str | None = None,
+    depth: SitemapDepth = "DIRECT",
+    page: int = 1,
+) -> str:
+    """Browse Caido's hierarchical sitemap of proxied traffic.
+
+    Caido aggregates every captured request into a tree:
+    ``DOMAIN`` → ``DIRECTORY`` (path segments) → ``REQUEST`` →
+    ``REQUEST_BODY`` / ``REQUEST_QUERY`` (variant per body/query shape).
+    Use this to understand the discovered attack surface, locate
+    promising directories, and pick endpoints worth deeper testing.
+
+    Workflow:
+    - Start with no ``parent_id`` to list root domains (scoped by
+      ``scope_id`` if you only care about in-scope hosts).
+    - Pick an entry where ``hasDescendants=true`` and pass its ``id``
+      as ``parent_id`` to drill in. ``depth="DIRECT"`` returns only
+      immediate children; ``"ALL"`` flattens the full subtree.
+    - Hand any ``id`` to ``view_sitemap_entry`` for the full record
+      and recent matching requests.
+
+    Args:
+        scope_id: Limit roots to a Caido scope (only used when
+            ``parent_id`` is omitted). Manage scopes via ``scope_rules``.
+        parent_id: Entry ID to expand; omit for root domains.
+        depth: ``"DIRECT"`` (immediate children) or ``"ALL"``
+            (recursive subtree). Only meaningful with ``parent_id``.
+        page: 1-indexed page (30 entries per page).
+    """
+    client = _ctx_client(ctx)
+    if client is None:
+        return _no_client()
+    try:
+        payload = await caido_api.list_sitemap_with_client(
+            client,
+            scope_id=scope_id,
+            parent_id=parent_id,
+            depth=depth,
+            page=page,
+        )
+        return json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception as exc:  # noqa: BLE001
+        return _err("list_sitemap", exc)
+
+
+# ----------------------------------------------------------------------
+# view_sitemap_entry
+# ----------------------------------------------------------------------
+@function_tool(timeout=60)
+async def view_sitemap_entry(
+    ctx: RunContextWrapper,
+    entry_id: str,
+) -> str:
+    """Get full detail for a sitemap entry plus its recent requests.
+
+    Returns the entry's metadata, the primary request shape
+    (method/path/response if any), and the most recent 30 related
+    requests that fall under this entry. Pair with ``list_sitemap`` to
+    pick the ``entry_id``.
+
+    Args:
+        entry_id: ID from ``list_sitemap`` (or any nested entry).
+    """
+    client = _ctx_client(ctx)
+    if client is None:
+        return _no_client()
+    try:
+        payload = await caido_api.view_sitemap_entry_with_client(client, entry_id)
+        return json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception as exc:  # noqa: BLE001
+        return _err("view_sitemap_entry", exc)
 
 
 # ----------------------------------------------------------------------

@@ -37,6 +37,8 @@ SortBy = Literal[
 ]
 SortOrder = Literal["asc", "desc"]
 ScopeAction = Literal["get", "list", "create", "update", "delete"]
+SitemapDepth = Literal["DIRECT", "ALL"]
+_SITEMAP_PAGE_SIZE = 30
 
 _DEFAULT_CAIDO_URL = "http://127.0.0.1:48080"
 _CLIENT_CACHE: dict[str, Client] = {}
@@ -165,6 +167,53 @@ def build_raw_request(
     lines.extend(f"{k}: {v}" for k, v in final_headers.items())
     raw = ("\r\n".join(lines) + "\r\n\r\n" + body).encode("utf-8")
     return ConnectionInfoInput(host=host, port=port, is_tls=is_tls), raw
+
+
+# Cap inline response bodies returned through tool results so a single
+# large response (HTML pages, JSON dumps) can't blow out the model's
+# context. The model can re-fetch the full body via ``view_request``
+# using the captured request id from ``list_requests`` if it needs more.
+_RESPONSE_BODY_MAX_CHARS = 8192
+
+
+def parse_raw_response(raw_bytes: bytes | None) -> dict[str, Any] | None:
+    """Parse a raw HTTP response into the same shape ``list_requests`` emits.
+
+    Returns ``None`` when ``raw_bytes`` is missing or unparseable. On
+    success returns ``{status_code, length, headers, body, body_truncated}``
+    where ``body`` is decoded as UTF-8 (replacement chars on invalid
+    bytes) and clipped at :data:`_RESPONSE_BODY_MAX_CHARS`.
+    """
+    if not raw_bytes:
+        return None
+    try:
+        head, _, body_bytes = raw_bytes.partition(b"\r\n\r\n")
+        lines = head.decode("iso-8859-1", errors="replace").split("\r\n")
+        if not lines:
+            return None
+        status_parts = lines[0].split(" ", 2)
+        if len(status_parts) < 2 or not status_parts[1].isdigit():
+            return None
+        status_code = int(status_parts[1])
+        headers: dict[str, str] = {}
+        for line in lines[1:]:
+            if ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            headers[k.strip()] = v.strip()
+        body_text = body_bytes.decode("utf-8", errors="replace")
+        body_truncated = len(body_text) > _RESPONSE_BODY_MAX_CHARS
+        if body_truncated:
+            body_text = body_text[:_RESPONSE_BODY_MAX_CHARS]
+        return {
+            "status_code": status_code,
+            "length": len(body_bytes),
+            "headers": headers,
+            "body": body_text,
+            "body_truncated": body_truncated,
+        }
+    except Exception:  # noqa: BLE001 - tolerate any malformed raw bytes; None signals "unparseable" to the caller.
+        return None
 
 
 def parse_raw_request(raw_content: str) -> dict[str, Any]:
@@ -440,15 +489,223 @@ async def scope_rules(
     return result
 
 
+_SITEMAP_ROOTS_QUERY = """
+query GetSitemapRoots($scopeId: ID) {
+    sitemapRootEntries(scopeId: $scopeId) {
+        edges { node {
+            id kind label hasDescendants
+            metadata { ... on SitemapEntryMetadataDomain { isTls port } }
+            request { method path response { statusCode } }
+        } }
+        count { value }
+    }
+}
+"""
+
+_SITEMAP_DESCENDANTS_QUERY = """
+query GetSitemapDescendants($parentId: ID!, $depth: SitemapDescendantsDepth!) {
+    sitemapDescendantEntries(parentId: $parentId, depth: $depth) {
+        edges { node {
+            id kind label hasDescendants
+            request { method path response { statusCode } }
+        } }
+        count { value }
+    }
+}
+"""
+
+_SITEMAP_ENTRY_QUERY = """
+query GetSitemapEntry($id: ID!) {
+    sitemapEntry(id: $id) {
+        id kind label hasDescendants
+        metadata { ... on SitemapEntryMetadataDomain { isTls port } }
+        request { method path response { statusCode length roundtripTime } }
+        requests(first: 30, order: {by: CREATED_AT, ordering: DESC}) {
+            edges { node { method path response { statusCode length } } }
+            count { value }
+        }
+    }
+}
+"""
+
+
+def _clean_sitemap_metadata(node: dict[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {
+        "id": node["id"],
+        "kind": node["kind"],
+        "label": node["label"],
+        "has_descendants": node["hasDescendants"],
+    }
+    meta = node.get("metadata")
+    if isinstance(meta, dict) and (meta.get("isTls") is not None or meta.get("port")):
+        meta_out: dict[str, Any] = {}
+        if meta.get("isTls") is not None:
+            meta_out["is_tls"] = meta["isTls"]
+        if meta.get("port"):
+            meta_out["port"] = meta["port"]
+        cleaned["metadata"] = meta_out
+    return cleaned
+
+
+def _clean_sitemap_request_summary(req: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Same field names as ``list_requests`` emits for a request_summary."""
+    if not req:
+        return None
+    out: dict[str, Any] = {}
+    if req.get("method"):
+        out["method"] = req["method"]
+    if req.get("path"):
+        out["path"] = req["path"]
+    resp = req.get("response") or {}
+    if resp.get("statusCode"):
+        out["status_code"] = resp["statusCode"]
+    return out or None
+
+
+def _clean_sitemap_response(resp: dict[str, Any]) -> dict[str, Any]:
+    """Same field names as ``list_requests`` emits for a response_summary."""
+    out: dict[str, Any] = {}
+    if resp.get("statusCode"):
+        out["status_code"] = resp["statusCode"]
+    if resp.get("length"):
+        out["length"] = resp["length"]
+    # Suppress 0 the same way list_requests does — Caido leaves it unset
+    # on a lot of proxy-captured traffic and a misleading "0ms" is worse
+    # than the field simply being absent.
+    if resp.get("roundtripTime"):
+        out["roundtrip_ms"] = resp["roundtripTime"]
+    return out
+
+
+async def list_sitemap_with_client(
+    client: CaidoClient,
+    *,
+    scope_id: str | None = None,
+    parent_id: str | None = None,
+    depth: SitemapDepth = "DIRECT",
+    page: int = 1,
+    page_size: int = _SITEMAP_PAGE_SIZE,
+) -> dict[str, Any]:
+    """Browse Caido's discovered sitemap. Mirrors main-branch shape.
+
+    The Caido GraphQL ``sitemap*Entries`` operations don't support native
+    pagination, so we fetch all edges for the requested level and slice
+    client-side. That's fine for typical surface sizes; for very large
+    sitemaps the caller can drill into ``parent_id`` instead of paging
+    the root list.
+    """
+    if parent_id:
+        raw = await client.graphql.query(
+            _SITEMAP_DESCENDANTS_QUERY,
+            variables={"parentId": parent_id, "depth": depth},
+        )
+        data = raw.get("sitemapDescendantEntries") or {}
+    else:
+        raw = await client.graphql.query(
+            _SITEMAP_ROOTS_QUERY,
+            variables={"scopeId": scope_id},
+        )
+        data = raw.get("sitemapRootEntries") or {}
+
+    edges = data.get("edges") or []
+    total = (data.get("count") or {}).get("value", 0)
+    skip = max(0, (page - 1) * page_size)
+    sliced = [edge["node"] for edge in edges[skip : skip + page_size]]
+
+    cleaned: list[dict[str, Any]] = []
+    for node in sliced:
+        entry = _clean_sitemap_metadata(node)
+        summary = _clean_sitemap_request_summary(node.get("request"))
+        if summary:
+            entry["request"] = summary
+        cleaned.append(entry)
+
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    return {
+        "success": True,
+        "entries": cleaned,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "total_count": total,
+        "has_more": page < total_pages,
+    }
+
+
+async def view_sitemap_entry_with_client(
+    client: CaidoClient,
+    entry_id: str,
+) -> dict[str, Any]:
+    """Fetch one sitemap entry plus its recent related requests."""
+    raw = await client.graphql.query(_SITEMAP_ENTRY_QUERY, variables={"id": entry_id})
+    entry = raw.get("sitemapEntry")
+    if not entry:
+        return {"success": False, "error": f"Sitemap entry {entry_id} not found"}
+
+    cleaned = _clean_sitemap_metadata(entry)
+    primary = entry.get("request") or {}
+    if primary:
+        primary_clean: dict[str, Any] = {}
+        if primary.get("method"):
+            primary_clean["method"] = primary["method"]
+        if primary.get("path"):
+            primary_clean["path"] = primary["path"]
+        if primary.get("response"):
+            primary_clean["response"] = _clean_sitemap_response(primary["response"])
+        if primary_clean:
+            cleaned["request"] = primary_clean
+
+    related = entry.get("requests") or {}
+    related_edges = related.get("edges") or []
+    related_nodes = [edge["node"] for edge in related_edges]
+    related_clean = [
+        summary
+        for summary in (_clean_sitemap_request_summary(n) for n in related_nodes)
+        if summary is not None
+    ]
+    cleaned["related_requests"] = {
+        "requests": related_clean,
+        "total_count": (related.get("count") or {}).get("value", 0),
+    }
+    return {"success": True, "entry": cleaned}
+
+
+async def list_sitemap(
+    *,
+    scope_id: str | None = None,
+    parent_id: str | None = None,
+    depth: SitemapDepth = "DIRECT",
+    page: int = 1,
+    page_size: int = _SITEMAP_PAGE_SIZE,
+) -> dict[str, Any]:
+    """Sandbox-Python entry point for sitemap browsing."""
+    return await list_sitemap_with_client(
+        await get_client(),
+        scope_id=scope_id,
+        parent_id=parent_id,
+        depth=depth,
+        page=page,
+        page_size=page_size,
+    )
+
+
+async def view_sitemap_entry(entry_id: str) -> dict[str, Any]:
+    """Sandbox-Python entry point for sitemap entry detail."""
+    return await view_sitemap_entry_with_client(await get_client(), entry_id)
+
+
 __all__ = [
     "RequestPart",
     "ScopeAction",
+    "SitemapDepth",
     "SortBy",
     "SortOrder",
     "close_client",
     "get_client",
     "list_requests",
+    "list_sitemap",
     "repeat_request",
     "scope_rules",
     "view_request",
+    "view_sitemap_entry",
 ]

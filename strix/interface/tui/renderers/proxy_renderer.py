@@ -258,30 +258,26 @@ class RepeatRequestRenderer(BaseToolRenderer):
             text.append(f"\n  {_truncate(modifications, 200)}", style="dim italic")
 
         if status == "completed" and isinstance(result, dict):
-            if "error" in result:
+            if not result.get("success", True) and result.get("error"):
                 text.append(f"\n  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
             else:
-                req = result.get("request", {})
-                method = req.get("method", "")
-                url = req.get("url", "")
-                code = result.get("status_code")
-                time_ms = result.get("response_time_ms")
-
-                text.append("\n")
-                text.append("  >> ", style="#3b82f6")
-                if method:
-                    text.append(f"{method} ", style="#a78bfa")
-                if url:
-                    text.append(_truncate(url, 180), style="dim")
+                elapsed_ms = result.get("elapsed_ms")
+                response = result.get("response") or {}
+                code = response.get("status_code") if isinstance(response, dict) else None
+                body = response.get("body", "") if isinstance(response, dict) else ""
+                body_truncated = (
+                    bool(response.get("body_truncated")) if isinstance(response, dict) else False
+                )
 
                 text.append("\n")
                 text.append("  << ", style="#22c55e")
                 if code:
                     text.append(f"{code}", style=_status_style(code))
-                if time_ms:
-                    text.append(f" ({time_ms}ms)", style="dim")
+                else:
+                    text.append("(no response)", style="dim")
+                if elapsed_ms:
+                    text.append(f" ({elapsed_ms}ms)", style="dim")
 
-                body = result.get("body", "")
                 if body and isinstance(body, str):
                     lines = body.split("\n")[:5]
                     for line in lines:
@@ -289,7 +285,7 @@ class RepeatRequestRenderer(BaseToolRenderer):
                         text.append("  << ", style="#22c55e")
                         text.append(_truncate(line, MAX_LINE_LENGTH - 5), style="dim")
 
-                    if len(body.split("\n")) > 5:
+                    if body_truncated or len(body.split("\n")) > 5:
                         text.append("\n")
                         text.append("  ...", style="dim italic")
 

@@ -171,7 +171,7 @@ EFFICIENCY TACTICS:
   `python3 -c` or a here-document is acceptable.
 - For Caido proxy automation inside Python, explicitly import from
   `caido_api`:
-  `from caido_api import list_requests, view_request, repeat_request, scope_rules`
+  `from caido_api import list_requests, view_request, repeat_request, list_sitemap, view_sitemap_entry, scope_rules`
 - Prefer established fuzzers/scanners where applicable: ffuf, sqlmap, zaproxy, nuclei, wapiti, arjun, httpx, katana, semgrep, bandit, trufflehog, nmap. Use scripts mainly to coordinate or validate around them, not to replace them without reason
 - For trial-heavy vectors (SQLi, XSS, XXE, SSRF, RCE, auth/JWT, deserialization), DO NOT iterate payloads manually in the browser. Always spray payloads via Python scripts through `exec_command` or terminal tools.
 - When using established fuzzers/scanners, use the proxy for inspection where helpful

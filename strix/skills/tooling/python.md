@@ -19,9 +19,11 @@ explicitly when Python code needs Caido traffic or replay access:
 ```python
 from caido_api import (
     list_requests,
+    list_sitemap,
     repeat_request,
     scope_rules,
     view_request,
+    view_sitemap_entry,
 )
 ```
 
@@ -59,6 +61,8 @@ Available helpers:
 - `list_requests(httpql_filter=, first=50, after=, sort_by=, sort_order=, scope_id=)` returns a cursor-paginated Caido SDK `Connection`.
 - `view_request(request_id, part="request")` returns a Caido SDK request object with raw request/response bytes.
 - `repeat_request(request_id, modifications={...})` replays a captured request after modifying `url`, `params`, `headers`, `body`, or `cookies`.
+- `list_sitemap(scope_id=, parent_id=, depth="DIRECT", page=1)` walks Caido's request-tree view of the discovered surface. Omit `parent_id` for root domains; pass an entry id with `depth="DIRECT"` or `"ALL"` to drill in.
+- `view_sitemap_entry(entry_id)` returns one entry plus its 30 most recent related requests.
 - `scope_rules(action, allowlist=, denylist=, scope_id=, scope_name=)` manages Caido scopes.
 
 For one-off arbitrary requests (e.g. probing a fresh endpoint, hitting an
