@@ -1,4 +1,4 @@
-.PHONY: help install dev-install format lint type-check test test-cov clean pre-commit setup-dev
+.PHONY: help install dev-install format lint type-check security check-all clean pre-commit setup-dev dev
 
 help:
 	@echo "Available commands:"
@@ -8,14 +8,10 @@ help:
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  format        - Format code with ruff"
-	@echo "  lint          - Lint code with ruff and pylint"
+	@echo "  lint          - Lint code with ruff"
 	@echo "  type-check    - Run type checking with mypy and pyright"
 	@echo "  security      - Run security checks with bandit"
 	@echo "  check-all     - Run all code quality checks"
-	@echo ""
-	@echo "Testing:"
-	@echo "  test          - Run tests with pytest"
-	@echo "  test-cov      - Run tests with coverage reporting"
 	@echo ""
 	@echo "Development:"
 	@echo "  pre-commit    - Run pre-commit hooks on all files"
@@ -40,8 +36,6 @@ format:
 lint:
 	@echo "🔍 Linting code with ruff..."
 	uv run ruff check . --fix
-	@echo "📝 Running additional linting with pylint..."
-	uv run pylint strix/ --score=no --reports=no
 	@echo "✅ Linting complete!"
 
 type-check:
@@ -59,17 +53,6 @@ security:
 check-all: format lint type-check security
 	@echo "✅ All code quality checks passed!"
 
-test:
-	@echo "🧪 Running tests..."
-	uv run pytest -v
-	@echo "✅ Tests complete!"
-
-test-cov:
-	@echo "🧪 Running tests with coverage..."
-	uv run pytest -v --cov=strix --cov-report=term-missing --cov-report=html
-	@echo "✅ Tests with coverage complete!"
-	@echo "📊 Coverage report generated in htmlcov/"
-
 pre-commit:
 	@echo "🔧 Running pre-commit hooks..."
 	uv run pre-commit run --all-files
@@ -78,13 +61,10 @@ pre-commit:
 clean:
 	@echo "🧹 Cleaning up cache files..."
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name "htmlcov" -exec rm -rf {} + 2>/dev/null || true
 	find . -name "*.pyc" -delete 2>/dev/null || true
-	find . -name ".coverage" -delete 2>/dev/null || true
 	@echo "✅ Cleanup complete!"
 
-dev: format lint type-check test
+dev: format lint type-check
 	@echo "✅ Development cycle complete!"

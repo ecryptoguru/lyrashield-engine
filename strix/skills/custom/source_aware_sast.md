@@ -15,17 +15,6 @@ Run tools from repo root and store outputs in a dedicated artifact directory:
 mkdir -p /workspace/.strix-source-aware
 ```
 
-Before scanning, check shared wiki memory:
-
-```text
-1) list_notes(category="wiki")
-2) get_note(note_id=...) for the selected repo wiki before analysis
-3) Reuse matching repo wiki note if present
-4) create_note(category="wiki") only if missing
-```
-
-After every major source-analysis batch, update the same repo wiki note with `update_note` so other agents can reuse your latest map.
-
 ## Baseline Coverage Bundle (Recommended)
 
 Run this baseline once per repository before deep narrowing:
@@ -73,8 +62,6 @@ trufflehog filesystem --no-update --json --no-verification . > "$ART/trufflehog.
 trivy fs --scanners vuln,misconfig --timeout 30m --offline-scan \
   --format json --output "$ART/trivy-fs.json" . || true
 ```
-
-If one tool is skipped or fails, record that in the shared wiki note along with the reason.
 
 ## Semgrep First Pass
 
@@ -134,6 +121,23 @@ trivy fs --scanners vuln,misconfig --timeout 30m --offline-scan \
   --format json --output /workspace/.strix-source-aware/trivy-fs.json . || true
 ```
 
+## JavaScript-Side Coverage
+
+For frontends and Node services, layer these on top of the language-agnostic
+passes above:
+
+```bash
+retire --path . --outputformat json --outputpath /workspace/.strix-source-aware/retire.json || true
+eslint --no-config-lookup --rule '{"no-eval":2,"no-implied-eval":2}' \
+  -f json -o /workspace/.strix-source-aware/eslint.json . || true
+```
+
+When you hit a minified bundle, run `js-beautify <file>` for a readable
+view before greppping — and use `jshint --reporter=unix <file>` as a
+lighter syntax/anti-pattern check when ESLint is over-eager. The
+`JS-Snooper` / `jsniper.sh` tools (in `katana.md`) are the right next
+step to mine those bundles for endpoint candidates.
+
 ## Converting Static Signals Into Exploits
 
 1. Rank candidates by impact and exploitability.
@@ -141,27 +145,8 @@ trivy fs --scanners vuln,misconfig --timeout 30m --offline-scan \
 3. Build dynamic PoCs that reproduce the suspected issue.
 4. Report only after dynamic validation succeeds.
 
-## Wiki Update Template
-
-Keep one wiki note per repository and update these sections:
-
-```text
-## Architecture
-## Entrypoints
-## AuthN/AuthZ
-## High-Risk Sinks
-## Static Findings Summary
-## Dynamic Validation Follow-Ups
-```
-
-Before `agent_finish`, make one final `update_note` call to capture:
-- scanner artifacts and paths
-- top validated/invalidated hypotheses
-- concrete dynamic follow-up tasks
-
 ## Anti-Patterns
 
 - Do not treat scanner output as final truth.
 - Do not spend full cycles on low-signal pattern matches.
 - Do not report source-only findings without validation evidence.
-- Do not create multiple wiki notes for the same repository when one already exists.

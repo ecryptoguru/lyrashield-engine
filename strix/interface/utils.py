@@ -20,18 +20,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-
-# Token formatting utilities
-def format_token_count(count: float) -> str:
-    count = int(count)
-    if count >= 1_000_000:
-        return f"{count / 1_000_000:.1f}M"
-    if count >= 1_000:
-        return f"{count / 1_000:.1f}K"
-    return str(count)
+from strix.config import load_settings
 
 
-# Display utilities
 def get_severity_color(severity: str) -> str:
     severity_colors = {
         "critical": "#dc2626",
@@ -55,8 +46,16 @@ def get_cvss_color(cvss_score: float) -> str:
     return "#6b7280"
 
 
-def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR0912, PLR0915
-    """Format a vulnerability report for CLI display with all rich fields."""
+def format_token_count(count: float | None) -> str:
+    value = int(count or 0)
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}K"
+    return str(value)
+
+
+def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR0915
     field_style = "bold #4ade80"
 
     text = Text()
@@ -204,13 +203,12 @@ def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR091
     return text
 
 
-def _build_vulnerability_stats(stats_text: Text, tracer: Any) -> None:
-    """Build vulnerability section of stats text."""
-    vuln_count = len(tracer.vulnerability_reports)
+def _build_vulnerability_stats(stats_text: Text, report_state: Any) -> None:
+    vuln_count = len(report_state.vulnerability_reports)
 
     if vuln_count > 0:
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for report in tracer.vulnerability_reports:
+        for report in report_state.vulnerability_reports:
             severity = report.get("severity", "").lower()
             if severity in severity_counts:
                 severity_counts[severity] += 1
@@ -243,82 +241,107 @@ def _build_vulnerability_stats(stats_text: Text, tracer: Any) -> None:
         stats_text.append("\n")
 
 
-def _build_llm_stats(stats_text: Text, total_stats: dict[str, Any]) -> None:
-    """Build LLM usage section of stats text."""
-    if total_stats["requests"] > 0:
-        stats_text.append("\n")
-        stats_text.append("Input Tokens ", style="dim")
-        stats_text.append(format_token_count(total_stats["input_tokens"]), style="white")
+def _llm_usage(report_state: Any) -> dict[str, Any]:
+    if hasattr(report_state, "get_total_llm_usage"):
+        usage = report_state.get_total_llm_usage()
+        return usage if isinstance(usage, dict) else {}
+    usage = getattr(report_state, "run_record", {}).get("llm_usage")
+    return usage if isinstance(usage, dict) else {}
 
-        if total_stats["cached_tokens"] > 0:
-            stats_text.append("  ·  ", style="dim white")
-            stats_text.append("Cached Tokens ", style="dim")
-            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="white")
 
-        stats_text.append("  ·  ", style="dim white")
-        stats_text.append("Output Tokens ", style="dim")
-        stats_text.append(format_token_count(total_stats["output_tokens"]), style="white")
+def _int_stat(usage: dict[str, Any], key: str) -> int:
+    try:
+        return max(0, int(usage.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
 
-        if total_stats["cost"] > 0:
-            stats_text.append(" · ", style="dim white")
-            stats_text.append("Cost ", style="dim")
-            stats_text.append(f"${total_stats['cost']:.4f}", style="bold #fbbf24")
-    else:
+
+def _float_stat(usage: dict[str, Any], key: str) -> float:
+    try:
+        value = float(usage.get(key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if value > 0 else 0.0
+
+
+def _detail_value(usage: dict[str, Any], detail_key: str, value_key: str) -> int:
+    details = usage.get(detail_key)
+    if isinstance(details, list):
+        details = details[0] if details and isinstance(details[0], dict) else {}
+    if not isinstance(details, dict):
+        return 0
+    return _int_stat(details, value_key)
+
+
+def _build_llm_usage_stats(
+    stats_text: Text,
+    report_state: Any,
+    *,
+    live: bool = False,
+) -> None:
+    usage = _llm_usage(report_state)
+    if not usage or _int_stat(usage, "requests") <= 0:
         stats_text.append("\n")
         stats_text.append("Cost ", style="dim")
         stats_text.append("$0.0000 ", style="#fbbf24")
         stats_text.append("· ", style="dim white")
         stats_text.append("Tokens ", style="dim")
         stats_text.append("0", style="white")
+        return
+
+    input_tokens = _int_stat(usage, "input_tokens")
+    output_tokens = _int_stat(usage, "output_tokens")
+    cached_tokens = _detail_value(usage, "input_tokens_details", "cached_tokens")
+    cost = _float_stat(usage, "cost")
+
+    stats_text.append("\n")
+    stats_text.append("Input Tokens ", style="dim")
+    stats_text.append(format_token_count(input_tokens), style="white")
+
+    if live or cached_tokens > 0:
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("Cached Tokens ", style="dim")
+        stats_text.append(format_token_count(cached_tokens), style="white")
+
+    separator = "\n" if live else "  ·  "
+    stats_text.append(separator, style="dim white")
+    stats_text.append("Output Tokens ", style="dim")
+    stats_text.append(format_token_count(output_tokens), style="white")
+
+    if live or cost > 0:
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("Cost ", style="dim")
+        stats_text.append(f"${cost:.4f}", style="#fbbf24")
 
 
-def build_final_stats_text(tracer: Any) -> Text:
-    """Build stats text for final output with detailed messages and LLM usage."""
+def build_final_stats_text(report_state: Any) -> Text:
     stats_text = Text()
-    if not tracer:
+    if not report_state:
         return stats_text
 
-    _build_vulnerability_stats(stats_text, tracer)
-
-    tool_count = tracer.get_real_tool_count()
-    agent_count = len(tracer.agents)
-
-    stats_text.append("Agents", style="dim")
-    stats_text.append("  ")
-    stats_text.append(str(agent_count), style="bold white")
-    stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Tools", style="dim")
-    stats_text.append("  ")
-    stats_text.append(str(tool_count), style="bold white")
-
-    llm_stats = tracer.get_total_llm_stats()
-    _build_llm_stats(stats_text, llm_stats["total"])
+    _build_vulnerability_stats(stats_text, report_state)
+    _build_llm_usage_stats(stats_text, report_state)
 
     return stats_text
 
 
-def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None) -> Text:
+def build_live_stats_text(report_state: Any) -> Text:
     stats_text = Text()
-    if not tracer:
+    if not report_state:
         return stats_text
 
-    if agent_config:
-        llm_config = agent_config["llm_config"]
-        model = getattr(llm_config, "model_name", "Unknown")
-        stats_text.append("Model ", style="dim")
-        stats_text.append(model, style="white")
-        stats_text.append("\n")
+    model = load_settings().llm.model or "unknown"
+    stats_text.append("Model ", style="dim")
+    stats_text.append(str(model), style="white")
+    stats_text.append("\n")
 
-    vuln_count = len(tracer.vulnerability_reports)
-    tool_count = tracer.get_real_tool_count()
-    agent_count = len(tracer.agents)
-
+    vuln_count = len(report_state.vulnerability_reports)
     stats_text.append("Vulnerabilities ", style="dim")
     stats_text.append(f"{vuln_count}", style="white")
     stats_text.append("\n")
     if vuln_count > 0:
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for report in tracer.vulnerability_reports:
+        for report in report_state.vulnerability_reports:
             severity = report.get("severity", "").lower()
             if severity in severity_counts:
                 severity_counts[severity] += 1
@@ -340,68 +363,38 @@ def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = Non
 
         stats_text.append("\n")
 
-    stats_text.append("Agents ", style="dim")
-    stats_text.append(str(agent_count), style="white")
-    stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Tools ", style="dim")
-    stats_text.append(str(tool_count), style="white")
-
-    llm_stats = tracer.get_total_llm_stats()
-    total_stats = llm_stats["total"]
-
-    stats_text.append("\n")
-
-    stats_text.append("Input Tokens ", style="dim")
-    stats_text.append(format_token_count(total_stats["input_tokens"]), style="white")
-
-    stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Cached Tokens ", style="dim")
-    stats_text.append(format_token_count(total_stats["cached_tokens"]), style="white")
-
-    stats_text.append("\n")
-
-    stats_text.append("Output Tokens ", style="dim")
-    stats_text.append(format_token_count(total_stats["output_tokens"]), style="white")
-
-    stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Cost ", style="dim")
-    stats_text.append(f"${total_stats['cost']:.4f}", style="#fbbf24")
+    _build_llm_usage_stats(stats_text, report_state, live=True)
 
     return stats_text
 
 
-def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None) -> Text:
+def build_tui_stats_text(report_state: Any) -> Text:
     stats_text = Text()
-    if not tracer:
+    if not report_state:
         return stats_text
 
-    if agent_config:
-        llm_config = agent_config["llm_config"]
-        model = getattr(llm_config, "model_name", "Unknown")
-        stats_text.append(model, style="white")
+    model = load_settings().llm.model or "unknown"
+    stats_text.append(str(model), style="white")
 
-    llm_stats = tracer.get_total_llm_stats()
-    total_stats = llm_stats["total"]
-
-    total_tokens = total_stats["input_tokens"] + total_stats["output_tokens"]
-    if total_tokens > 0:
+    usage = _llm_usage(report_state)
+    if usage and _int_stat(usage, "total_tokens") > 0:
         stats_text.append("\n")
-        stats_text.append(f"{format_token_count(total_tokens)} tokens", style="white")
+        stats_text.append(
+            f"{format_token_count(_int_stat(usage, 'total_tokens'))} tokens",
+            style="white",
+        )
+        cost = _float_stat(usage, "cost")
+        if cost > 0:
+            stats_text.append(" · ", style="white")
+            stats_text.append(f"${cost:.2f}", style="white")
 
-    if total_stats["cost"] > 0:
-        stats_text.append(" · ", style="white")
-        stats_text.append(f"${total_stats['cost']:.2f}", style="white")
-
-    caido_url = getattr(tracer, "caido_url", None)
+    caido_url = getattr(report_state, "caido_url", None)
     if caido_url:
         stats_text.append("\n")
         stats_text.append("Caido: ", style="bold white")
         stats_text.append(caido_url, style="white")
 
     return stats_text
-
-
-# Name generation utilities
 
 
 def _slugify_for_run_name(text: str, max_length: int = 32) -> str:
@@ -427,7 +420,7 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
         try:
             parsed = urlparse(url)
             return str(parsed.netloc or parsed.path or url)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return str(url)
 
     if target_type == "repository":
@@ -443,7 +436,7 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
         path_str = details.get("target_path", original)
         try:
             return str(Path(path_str).name or path_str)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return str(path_str)
 
     if target_type == "ip_address":
@@ -460,8 +453,6 @@ def generate_run_name(targets_info: list[dict[str, Any]] | None = None) -> str:
 
     return f"{slug}_{random_suffix}"
 
-
-# Target processing utilities
 
 _SUPPORTED_SCOPE_MODES = {"auto", "diff", "full"}
 _MAX_FILES_PER_SECTION = 120
@@ -712,9 +703,6 @@ def _parse_name_status_z(raw_output: bytes) -> list[DiffEntry]:
         if len(status_raw) > 1 and status_raw[1:].isdigit():
             similarity = int(status_raw[1:])
 
-        # Git's -z output for --name-status is:
-        # - non-rename/copy: <status>\0<path>\0
-        # - rename/copy: <statusN>\0<old_path>\0<new_path>\0
         if status_code in {"R", "C"} and index + 2 < len(tokens):
             old_path = tokens[index + 1]
             new_path = tokens[index + 2]
@@ -735,18 +723,7 @@ def _parse_name_status_z(raw_output: bytes) -> list[DiffEntry]:
             index += 2
             continue
 
-        # Backward-compat fallback if output is tab-delimited unexpectedly.
-        status_fallback, has_tab, first_path = token.partition("\t")
-        if not has_tab:
-            break
-        fallback_code = status_fallback[:1]
-        fallback_similarity: int | None = None
-        if len(status_fallback) > 1 and status_fallback[1:].isdigit():
-            fallback_similarity = int(status_fallback[1:])
-        entries.append(
-            DiffEntry(status=fallback_code, path=first_path, similarity=fallback_similarity)
-        )
-        index += 1
+        break
 
     return entries
 
@@ -823,7 +800,7 @@ def _truncate_file_list(
     return files[:max_files], True
 
 
-def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:  # noqa: PLR0912
+def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:
     lines = [
         "The user is requesting a review of a Pull Request.",
         "Instruction: Direct your analysis primarily at the changes in the listed files. "
@@ -1049,7 +1026,7 @@ def resolve_diff_scope_context(
         )
 
     instruction_block = build_diff_scope_instruction(repo_scopes)
-    metadata: dict[str, Any] = {
+    metadata = {
         "active": True,
         "mode": scope_mode,
         "repos": [scope.to_metadata() for scope in repo_scopes],
@@ -1082,7 +1059,7 @@ def _is_http_git_repo(url: str) -> bool:
         return False
 
 
-def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911, PLR0912
+def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911
     if not target or not isinstance(target, str):
         raise ValueError("Target must be a non-empty string")
 
@@ -1203,6 +1180,11 @@ def assign_workspace_subdirs(targets_info: list[dict[str, Any]]) -> None:
         details["workspace_subdir"] = workspace_subdir
 
 
+def is_whitebox_scan(targets_info: list[dict[str, Any]]) -> bool:
+    """True iff any target is a local source tree (whitebox / source-aware)."""
+    return any(t.get("type") == "local_code" for t in targets_info or [])
+
+
 def collect_local_sources(targets_info: list[dict[str, Any]]) -> list[dict[str, str]]:
     local_sources: list[dict[str, str]] = []
 
@@ -1248,7 +1230,7 @@ def _is_localhost_host(host: str) -> bool:
 
 
 def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: str) -> None:
-    from yarl import URL  # type: ignore[import-not-found]
+    from yarl import URL
 
     for target_info in targets_info:
         target_type = target_info.get("type")
@@ -1270,7 +1252,6 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
                 details["target_ip"] = host_gateway
 
 
-# Repository utilities
 def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None) -> str:
     console = Console()
 
@@ -1347,7 +1328,6 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
         sys.exit(1)
 
 
-# Docker utilities
 def check_docker_connection() -> Any:
     try:
         return docker.from_env()
@@ -1421,12 +1401,6 @@ def process_pull_line(
             status.update("[bold cyan]Finalizing...")
 
     return last_update
-
-
-# LLM utilities
-def validate_llm_response(response: Any) -> None:
-    if not response or not response.choices or not response.choices[0].message.content:
-        raise RuntimeError("Invalid response from LLM")
 
 
 def validate_config_file(config_path: str) -> Path:

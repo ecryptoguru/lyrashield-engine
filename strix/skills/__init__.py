@@ -1,167 +1,106 @@
+import logging
 import re
+from collections.abc import Iterator
 
 from strix.utils.resource_paths import get_strix_resource_path
 
 
-_EXCLUDED_CATEGORIES = {"scan_modes", "coordination"}
+logger = logging.getLogger(__name__)
+
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 
+_INTERNAL_SKILL_CATEGORIES: frozenset[str] = frozenset({"scan_modes", "coordination"})
 
-def get_available_skills() -> dict[str, list[str]]:
+
+def _iter_user_skill_files() -> Iterator[tuple[str, str]]:
+    """Yield ``(category_name, skill_name)`` for every user-selectable skill."""
     skills_dir = get_strix_resource_path("skills")
-    available_skills: dict[str, list[str]] = {}
-
     if not skills_dir.exists():
-        return available_skills
-
-    for category_dir in skills_dir.iterdir():
-        if category_dir.is_dir() and not category_dir.name.startswith("__"):
-            category_name = category_dir.name
-
-            if category_name in _EXCLUDED_CATEGORIES:
-                continue
-
-            skills = []
-
-            for file_path in category_dir.glob("*.md"):
-                skill_name = file_path.stem
-                skills.append(skill_name)
-
-            if skills:
-                available_skills[category_name] = sorted(skills)
-
-    return available_skills
+        return
+    for category_dir in sorted(skills_dir.iterdir()):
+        if not category_dir.is_dir() or category_dir.name.startswith("__"):
+            continue
+        if category_dir.name in _INTERNAL_SKILL_CATEGORIES:
+            continue
+        for file_path in sorted(category_dir.glob("*.md")):
+            yield category_dir.name, file_path.stem
 
 
 def get_all_skill_names() -> set[str]:
-    all_skills = set()
-    for category_skills in get_available_skills().values():
-        all_skills.update(category_skills)
-    return all_skills
+    """Return every user-selectable skill name (bare, no category prefix)."""
+    return {name for _, name in _iter_user_skill_files()}
 
 
-def validate_skill_names(skill_names: list[str]) -> dict[str, list[str]]:
-    available_skills = get_all_skill_names()
-    valid_skills = []
-    invalid_skills = []
-
-    for skill_name in skill_names:
-        if skill_name in available_skills:
-            valid_skills.append(skill_name)
-        else:
-            invalid_skills.append(skill_name)
-
-    return {"valid": valid_skills, "invalid": invalid_skills}
-
-
-def parse_skill_list(skills: str | None) -> list[str]:
-    if not skills:
-        return []
-    return [s.strip() for s in skills.split(",") if s.strip()]
+def get_available_skills() -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for category, name in _iter_user_skill_files():
+        grouped.setdefault(category, []).append(name)
+    return grouped
 
 
 def validate_requested_skills(skill_list: list[str], max_skills: int = 5) -> str | None:
-    if len(skill_list) > max_skills:
-        return "Cannot specify more than 5 skills for an agent (use comma-separated format)"
+    """Validate a list of user-passed skill names.
 
+    Returns ``None`` on success, or a model-readable error message
+    describing what was wrong (count exceeded, unknown names).
+    """
+    if len(skill_list) > max_skills:
+        return (
+            f"Cannot specify more than {max_skills} skills per agent; "
+            f"got {len(skill_list)}. Aim for 1-3 related skills per specialist."
+        )
     if not skill_list:
         return None
-
-    validation = validate_skill_names(skill_list)
-    if validation["invalid"]:
-        available_skills = list(get_all_skill_names())
-        return (
-            f"Invalid skills: {validation['invalid']}. "
-            f"Available skills: {', '.join(available_skills)}"
-        )
-
+    available = get_all_skill_names()
+    invalid = sorted({s for s in skill_list if s not in available})
+    if invalid:
+        return f"Invalid skill name(s): {invalid}. Available skills: {sorted(available)}"
     return None
 
 
-def generate_skills_description() -> str:
-    available_skills = get_available_skills()
-
-    if not available_skills:
-        return "No skills available"
-
-    all_skill_names = get_all_skill_names()
-
-    if not all_skill_names:
-        return "No skills available"
-
-    sorted_skills = sorted(all_skill_names)
-    skills_str = ", ".join(sorted_skills)
-
-    description = f"List of skills to load for this agent (max 5). Available skills: {skills_str}. "
-
-    example_skills = sorted_skills[:2]
-    if example_skills:
-        example = f"Example: {', '.join(example_skills)} for specialized agent"
-        description += example
-
-    return description
-
-
-def _get_all_categories() -> dict[str, list[str]]:
-    """Get all skill categories including internal ones (scan_modes, coordination)."""
-    skills_dir = get_strix_resource_path("skills")
-    all_categories: dict[str, list[str]] = {}
-
-    if not skills_dir.exists():
-        return all_categories
-
-    for category_dir in skills_dir.iterdir():
-        if category_dir.is_dir() and not category_dir.name.startswith("__"):
-            category_name = category_dir.name
-            skills = []
-
-            for file_path in category_dir.glob("*.md"):
-                skill_name = file_path.stem
-                skills.append(skill_name)
-
-            if skills:
-                all_categories[category_name] = sorted(skills)
-
-    return all_categories
-
-
 def load_skills(skill_names: list[str]) -> dict[str, str]:
-    import logging
+    """Load skill markdown bodies (frontmatter stripped) by name.
 
-    logger = logging.getLogger(__name__)
-    skill_content = {}
+    Skill files live at ``strix/skills/<category>/<name>.md``. Names
+    can be ``"name"`` (any category), ``"category/name"``, or a bare
+    file at the skills root. Missing skills are logged and skipped.
+    """
     skills_dir = get_strix_resource_path("skills")
+    if not skills_dir.exists():
+        return {}
 
-    all_categories = _get_all_categories()
+    by_category: dict[str, str] = {}
+    for category_dir in skills_dir.iterdir():
+        if not category_dir.is_dir() or category_dir.name.startswith("__"):
+            continue
+        for file_path in category_dir.glob("*.md"):
+            by_category[file_path.stem] = f"{category_dir.name}/{file_path.stem}.md"
 
+    skill_content: dict[str, str] = {}
     for skill_name in skill_names:
+        rel_path: str | None
+        if "/" in skill_name:
+            rel_path = f"{skill_name}.md"
+        elif skill_name in by_category:
+            rel_path = by_category[skill_name]
+        elif (skills_dir / f"{skill_name}.md").exists():
+            rel_path = f"{skill_name}.md"
+        else:
+            rel_path = None
+
+        if rel_path is None or not (skills_dir / rel_path).exists():
+            logger.warning("Skill not found: %s", skill_name)
+            continue
+
         try:
-            skill_path = None
+            content = (skills_dir / rel_path).read_text(encoding="utf-8")
+        except (OSError, ValueError) as e:
+            logger.warning("Failed to load skill %s: %s", skill_name, e)
+            continue
 
-            if "/" in skill_name:
-                skill_path = f"{skill_name}.md"
-            else:
-                for category, skills in all_categories.items():
-                    if skill_name in skills:
-                        skill_path = f"{category}/{skill_name}.md"
-                        break
+        var_name = skill_name.split("/")[-1]
+        skill_content[var_name] = _FRONTMATTER_PATTERN.sub("", content).lstrip()
+        logger.debug("Loaded skill: %s -> %s", skill_name, var_name)
 
-                if not skill_path:
-                    root_candidate = f"{skill_name}.md"
-                    if (skills_dir / root_candidate).exists():
-                        skill_path = root_candidate
-
-            if skill_path and (skills_dir / skill_path).exists():
-                full_path = skills_dir / skill_path
-                var_name = skill_name.split("/")[-1]
-                content = full_path.read_text(encoding="utf-8")
-                content = _FRONTMATTER_PATTERN.sub("", content).lstrip()
-                skill_content[var_name] = content
-                logger.info(f"Loaded skill: {skill_name} -> {var_name}")
-            else:
-                logger.warning(f"Skill not found: {skill_name}")
-
-        except (FileNotFoundError, OSError, ValueError) as e:
-            logger.warning(f"Failed to load skill {skill_name}: {e}")
-
+    logger.debug("load_skills: %d skill(s) resolved", len(skill_content))
     return skill_content

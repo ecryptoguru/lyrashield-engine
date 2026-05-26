@@ -12,14 +12,7 @@ RUN useradd -m -s /bin/bash pentester && \
     echo "pentester ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     touch /home/pentester/.hushlogin
 
-RUN mkdir -p /home/pentester/configs \
-             /home/pentester/wordlists \
-             /home/pentester/output \
-             /home/pentester/scripts \
-             /home/pentester/tools \
-             /app/runtime \
-             /app/tools \
-             /app/certs && \
+RUN mkdir -p /home/pentester/tools /app/certs && \
     chown -R pentester:pentester /app/certs /home/pentester/tools
 
 RUN apt-get update && \
@@ -39,11 +32,8 @@ RUN apt-get update && \
     nodejs npm pipx \
     libcap2-bin \
     gdb \
-    tmux \
-    libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libatspi2.0-0 \
-    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2t64 \
-    fonts-unifont fonts-noto-color-emoji fonts-freefont-ttf fonts-dejavu-core ttf-bitstream-vera \
-    libnss3-tools
+    libnss3-tools \
+    chromium fonts-liberation
 
 
 RUN setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip $(which nmap)
@@ -85,7 +75,7 @@ RUN nuclei -update-templates
 
 RUN pipx install arjun && \
     pipx install dirsearch && \
-    pipx inject dirsearch setuptools && \
+    pipx inject dirsearch 'setuptools<81' && \
     pipx install wafw00f
 
 ENV NPM_CONFIG_PREFIX=/home/pentester/.npm-global
@@ -95,7 +85,14 @@ RUN npm install -g retire@latest && \
     npm install -g eslint@latest && \
     npm install -g js-beautify@latest && \
     npm install -g @ast-grep/cli@latest && \
-    npm install -g tree-sitter-cli@latest
+    npm install -g tree-sitter-cli@latest && \
+    npm install -g agent-browser@0.26.0
+
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV AGENT_BROWSER_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+ENV AGENT_BROWSER_ARGS="--disable-blink-features=AutomationControlled,--no-first-run,--no-default-browser-check,--lang=en-US"
+ENV AGENT_BROWSER_SCREENSHOT_DIR=/workspace/.agent-browser-screenshots
+RUN /home/pentester/.npm-global/bin/agent-browser doctor --offline --quick
 
 RUN set -eux; \
     TS_PARSER_DIR="/home/pentester/.tree-sitter/parsers"; \
@@ -172,6 +169,7 @@ ENV VIRTUAL_ENV="/app/.venv"
 
 WORKDIR /app
 
+ARG CAIDO_VERSION=0.56.0
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         CAIDO_ARCH="x86_64"; \
@@ -180,35 +178,29 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    wget -O caido-cli.tar.gz https://caido.download/releases/v0.48.0/caido-cli-v0.48.0-linux-${CAIDO_ARCH}.tar.gz && \
+    wget -O caido-cli.tar.gz "https://caido.download/releases/v${CAIDO_VERSION}/caido-cli-v${CAIDO_VERSION}-linux-${CAIDO_ARCH}.tar.gz" && \
     tar -xzf caido-cli.tar.gz && \
     chmod +x caido-cli && \
     rm caido-cli.tar.gz && \
     mv caido-cli /usr/local/bin/
 
-ENV STRIX_SANDBOX_MODE=true
-ENV PYTHONPATH=/app
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 
-COPY pyproject.toml uv.lock ./
-RUN echo "# Sandbox Environment" > README.md && mkdir -p strix && touch strix/__init__.py
-
 USER pentester
-RUN uv sync --frozen --no-dev --extra sandbox
-RUN /app/.venv/bin/python -m playwright install chromium
+RUN python3 -m venv /app/.venv && \
+    /app/.venv/bin/pip install --no-cache-dir caido-sdk-client && \
+    /app/.venv/bin/pip install --no-cache-dir -r /home/pentester/tools/jwt_tool/requirements.txt && \
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'exec /app/.venv/bin/python /home/pentester/tools/jwt_tool/jwt_tool.py "$@"' \
+        > /home/pentester/.local/bin/jwt_tool && \
+    chmod +x /home/pentester/.local/bin/jwt_tool
 
-RUN uv pip install -r /home/pentester/tools/jwt_tool/requirements.txt && \
-    ln -s /home/pentester/tools/jwt_tool/jwt_tool.py /home/pentester/.local/bin/jwt_tool
-
-COPY strix/__init__.py strix/
-COPY strix/config/ /app/strix/config/
-COPY strix/utils/ /app/strix/utils/
-COPY strix/telemetry/ /app/strix/telemetry/
-COPY strix/runtime/tool_server.py strix/runtime/__init__.py strix/runtime/runtime.py /app/strix/runtime/
-COPY strix/tools/ /app/strix/tools/
+COPY --chown=pentester:pentester strix/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
+ENV PYTHONPATH=/opt/strix-python
 
 RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:$PATH"' >> /home/pentester/.bashrc && \
     echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:$PATH"' >> /home/pentester/.profile

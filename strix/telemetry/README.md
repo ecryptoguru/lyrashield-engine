@@ -16,13 +16,11 @@ We collect only very **basic** usage data including:
 **System Context:** OS type, architecture, Strix version\
 **Scan Context:** Scan mode (quick/standard/deep), scan type (whitebox/blackbox)\
 **Model Usage:** Which LLM model is being used (not prompts or responses)\
-**Aggregate Metrics:** Vulnerability counts by severity, agent/tool counts, token usage and cost estimates
-
-For complete transparency, you can inspect our [telemetry implementation](https://github.com/usestrix/strix/blob/main/strix/telemetry/posthog.py) to see the exact events we track.
+**Aggregate Metrics:** Vulnerability counts by severity
 
 ### What We **Never** Collect
 
-- IP addresses, usernames, or any identifying information
+- Usernames, or any identifying information
 - Scan targets, file paths, target URLs, or domains
 - Vulnerability details, descriptions, or code
 - LLM requests and responses
