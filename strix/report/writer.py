@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import logging
 import tempfile
@@ -58,9 +59,9 @@ def write_vulnerabilities(
     new_reports = [r for r in vulnerability_reports if r["id"] not in saved_vuln_ids]
 
     for report in new_reports:
-        (vuln_dir / f"{report['id']}.md").write_text(
+        _atomic_write_text(
+            vuln_dir / f"{report['id']}.md",
             render_vulnerability_md(report),
-            encoding="utf-8",
         )
         saved_vuln_ids.add(report["id"])
 
@@ -68,21 +69,22 @@ def write_vulnerabilities(
         vulnerability_reports,
         key=lambda r: (_SEVERITY_ORDER.get(r["severity"], 5), r["timestamp"]),
     )
-    csv_path = run_dir / "vulnerabilities.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as f:
-        fieldnames = ["id", "title", "severity", "timestamp", "file"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for report in sorted_reports:
-            writer.writerow(
-                {
-                    "id": report["id"],
-                    "title": report["title"],
-                    "severity": report["severity"].upper(),
-                    "timestamp": report["timestamp"],
-                    "file": f"vulnerabilities/{report['id']}.md",
-                },
-            )
+      csv_path = run_dir / "vulnerabilities.csv"
+    csv_buf = io.StringIO()
+    fieldnames = ["id", "title", "severity", "timestamp", "file"]
+    csv_writer = csv.DictWriter(csv_buf, fieldnames=fieldnames, lineterminator="\r\n")
+    csv_writer.writeheader()
+    for report in sorted_reports:
+        csv_writer.writerow(
+            {
+                "id": report["id"],
+                "title": report["title"],
+                "severity": report["severity"].upper(),
+                "timestamp": report["timestamp"],
+                "file": f"vulnerabilities/{report['id']}.md",
+            },
+        )
+    _atomic_write_text(csv_path, csv_buf.getvalue())
 
     _atomic_write_text(
         run_dir / "vulnerabilities.json",
