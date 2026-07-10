@@ -1428,11 +1428,13 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
 
     try:
         with console.status(f"[bold cyan]Cloning repository {repo_url}...", spinner="dots"):
-            # Controlled subprocess boundary: Git path is resolved and shell is disabled.
+            # Controlled subprocess boundary: Git path is resolved, shell=False,
+            # and -- terminates option parsing before the user-controlled repository URL.
             subprocess.run(  # noqa: S603  # nosec B603
                 [
                     git_executable,
                     "clone",
+                    "--",
                     repo_url,
                     str(clone_path),
                 ],
