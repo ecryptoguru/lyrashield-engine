@@ -51,6 +51,10 @@ class StrixDockerSandboxClient(DockerSandboxClient):
     # backend before ``create()``. Each item is ``{source, target, read_only}``.
     strix_bind_mounts: list[dict[str, Any]]
 
+    def _ensure_image_available(self, image: str) -> None:
+        if not self.image_exists(image):
+            raise docker_errors.DockerException(f"Docker image unavailable after pull: {image}")
+
     async def _create_container(
         self,
         image: str,
@@ -65,7 +69,7 @@ class StrixDockerSandboxClient(DockerSandboxClient):
             repo, tag = parse_repository_tag(image)
             self.docker_client.images.pull(repo, tag=tag or None, all_tags=False)
 
-        assert self.image_exists(image)
+        self._ensure_image_available(image)
         environment: dict[str, str] | None = None
         if manifest:
             environment = await manifest.environment.resolve()

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from importlib import import_module
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from docker import errors as docker_errors
 
 from strix.runtime.docker_client import StrixDockerSandboxClient
 
@@ -31,6 +32,18 @@ def test_main_validates_configuration_before_docker_setup() -> None:
 
 def test_docker_client_has_no_shared_bind_mount_default() -> None:
     assert "strix_bind_mounts" not in StrixDockerSandboxClient.__dict__
+
+
+@pytest.mark.asyncio
+async def test_docker_client_rejects_an_image_unavailable_after_pull() -> None:
+    client = StrixDockerSandboxClient.__new__(StrixDockerSandboxClient)
+    client.docker_client = MagicMock()
+    client.image_exists = MagicMock(side_effect=[False, False])
+
+    with pytest.raises(docker_errors.DockerException, match="unavailable after pull"):
+        await client._create_container("missing:latest")
+
+    client.docker_client.images.pull.assert_called_once()
 
 
 def test_strix_version_reports_installed_lyrashield_distribution(
