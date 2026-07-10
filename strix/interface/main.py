@@ -823,10 +823,10 @@ def main() -> None:
     if args.config:
         apply_config_override(validate_config_file(args.config))
 
+    validate_environment()
     check_docker_installed()
     pull_docker_image()
 
-    validate_environment()
     asyncio.run(warm_up_llm())
 
     persist_current()
