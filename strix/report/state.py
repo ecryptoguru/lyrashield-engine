@@ -1,6 +1,8 @@
+# Controlled subprocess boundary: provenance lookup resolves Git and uses shell=False.
 import json
 import logging
-import subprocess
+import shutil
+import subprocess  # nosec B404
 from collections.abc import Callable
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -64,10 +66,15 @@ def _git_head(repo_path: str) -> tuple[str | None, str | None]:
     if not path.is_dir():
         return None, None
 
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        return None, None
+
     def _run(args: list[str]) -> str | None:
         try:
-            result = subprocess.run(  # noqa: S603
-                ["git", "-C", str(path), *args],  # noqa: S607
+            # Controlled subprocess boundary: Git path is resolved and shell is disabled.
+            result = subprocess.run(  # noqa: S603  # nosec B603
+                [git_executable, "-C", str(path), *args],
                 capture_output=True,
                 text=True,
                 check=False,
