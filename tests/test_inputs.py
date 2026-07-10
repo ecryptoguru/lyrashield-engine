@@ -135,3 +135,23 @@ def test_make_model_settings_skips_required_tool_choice_for_non_openai_models() 
     )
 
     assert settings.tool_choice is None
+
+
+def test_make_model_settings_forces_required_for_routed_openai_model() -> None:
+    settings = make_model_settings(
+        None,
+        model_name="litellm/openai/gpt-4o",
+        force_required_tool_choice=True,
+    )
+
+    assert settings.tool_choice == "required"
+
+
+def test_make_model_settings_forces_required_for_anyllm_routed_openai_model() -> None:
+    settings = make_model_settings(
+        None,
+        model_name="any-llm/openai/gpt-4o",
+        force_required_tool_choice=True,
+    )
+
+    assert settings.tool_choice == "required"

@@ -24,6 +24,10 @@ DEFAULT_MAX_TURNS = 500
 
 def _accepts_required_tool_choice(model_name: str | None) -> bool:
     name = (model_name or "").strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
     return name.startswith("openai/") or is_known_openai_bare_model(name)
 
 
