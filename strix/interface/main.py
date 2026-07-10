@@ -354,7 +354,7 @@ def get_version() -> str:
     try:
         from importlib.metadata import version
 
-        return version("strix-agent")
+        return version("lyrashield-engine")
     except Exception:
         return "unknown"
 
