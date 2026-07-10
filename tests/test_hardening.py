@@ -31,3 +31,15 @@ def test_main_validates_configuration_before_docker_setup() -> None:
 
 def test_docker_client_has_no_shared_bind_mount_default() -> None:
     assert "strix_bind_mounts" not in StrixDockerSandboxClient.__dict__
+
+
+def test_strix_version_reports_installed_lyrashield_distribution(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(main_module.sys, "argv", ["strix", "--version"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.main()
+
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out == "strix 1.0.4.post1\n"
