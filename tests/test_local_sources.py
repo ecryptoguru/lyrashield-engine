@@ -6,21 +6,24 @@ import logging
 import os
 import sys
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import pytest
 
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
+import strix.interface.utils as interface_utils
 from strix.interface.utils import (
     build_mount_targets_info,
+    clone_repository,
     collect_local_sources,
     dedupe_local_targets,
     directory_size_bytes,
     find_oversized_local_targets,
     read_target_list_file,
 )
+
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_file(path: Path, size: int) -> None:
@@ -126,6 +129,20 @@ def test_collect_local_sources_repository_is_never_mounted() -> None:
     }
     sources = collect_local_sources([repo])
     assert sources == [{"source_path": "/clone", "workspace_subdir": "clone", "mount": False}]
+
+
+def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path) -> None:
+    repo_url = "-upload-pack=malicious-command"
+    with (
+        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(interface_utils.subprocess, "run") as run,
+    ):
+        clone_repository(repo_url, "option-delimiter")
+
+    argv = run.call_args.args[0]
+    assert argv[0:3] == ["/usr/bin/git", "clone", "--"]
+    assert argv[3] == repo_url
 
 
 def test_build_mount_targets_info_for_valid_dir(tmp_path: Path) -> None:
