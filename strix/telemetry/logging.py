@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import logging
 import os
 import warnings
@@ -79,10 +80,10 @@ class _StdoutQuietFilter(logging.Filter):
 def configure_dependency_logging() -> None:
     """Quiet dependency logging/warnings that obscure Strix scan logs."""
     with contextlib.suppress(Exception):
-        import litellm
+        litellm = importlib.import_module("litellm")
 
         litellm_logging = litellm._logging
-        litellm_logging._disable_debugging()  # type: ignore[no-untyped-call]
+        litellm_logging._disable_debugging()
 
     logging.getLogger("asyncio").setLevel(logging.CRITICAL)
     logging.getLogger("asyncio").propagate = False

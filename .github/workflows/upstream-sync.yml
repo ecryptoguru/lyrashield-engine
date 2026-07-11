@@ -1,0 +1,56 @@
+name: Upstream Engine Sync
+
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-engine-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Configure upstream
+        run: |
+          git remote add upstream https://github.com/usestrix/strix.git 2>/dev/null || true
+          git remote set-url upstream https://github.com/usestrix/strix.git
+      - id: upstream
+        name: Check ancestry
+        run: scripts/check-upstream.sh
+      - name: Rebase, verify, and open PR
+        if: steps.upstream.outputs.needs_sync == 'true'
+        env:
+          BASE_SHA: ${{ steps.upstream.outputs.base_sha }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="automation/upstream-${UPSTREAM_SHA:0:12}"
+          git switch -c "$branch"
+          git rebase --onto "$UPSTREAM_SHA" "$BASE_SHA"
+          printf '%s\n' "$UPSTREAM_SHA" > .lyrashield-upstream-base
+          uv lock
+          scripts/verify-thin-fork.sh
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "sync: rebase engine on upstream ${UPSTREAM_SHA:0:12}"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --title "sync: upstream Strix ${UPSTREAM_SHA:0:12}" \
+            --body "Automated compatibility rebase. Review engine gates and LyraSec integration before merging." \
+            --base "$GITHUB_REF_NAME" \
+            --head "$branch"

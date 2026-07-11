@@ -6,21 +6,24 @@ import logging
 import os
 import sys
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import pytest
 
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
+import strix.interface.utils as interface_utils
 from strix.interface.utils import (
     build_mount_targets_info,
+    clone_repository,
     collect_local_sources,
     dedupe_local_targets,
     directory_size_bytes,
     find_oversized_local_targets,
     read_target_list_file,
 )
+
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_file(path: Path, size: int) -> None:
@@ -128,6 +131,20 @@ def test_collect_local_sources_repository_is_never_mounted() -> None:
     assert sources == [{"source_path": "/clone", "workspace_subdir": "clone", "mount": False}]
 
 
+def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path) -> None:
+    repo_url = "-upload-pack=malicious-command"
+    with (
+        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(interface_utils.subprocess, "run") as run,
+    ):
+        clone_repository(repo_url, "option-delimiter")
+
+    argv = run.call_args.args[0]
+    assert argv[0:3] == ["/usr/bin/git", "clone", "--"]
+    assert argv[3] == repo_url
+
+
 def test_build_mount_targets_info_for_valid_dir(tmp_path: Path) -> None:
     result = build_mount_targets_info([str(tmp_path)])
     assert len(result) == 1
@@ -161,11 +178,7 @@ def test_build_mount_targets_info_rejects_empty_path(empty: str) -> None:
 def test_read_target_list_file_strips_blank_lines(tmp_path: Path) -> None:
     target_list = tmp_path / "targets.txt"
     target_list.write_text(
-        "\n"
-        " https://test1.com/ \n"
-        "\n"
-        "http://test2.com:5789/\n"
-        "  \n",
+        "\n https://test1.com/ \n\nhttp://test2.com:5789/\n  \n",
         encoding="utf-8",
     )
 
@@ -178,10 +191,7 @@ def test_read_target_list_file_strips_blank_lines(tmp_path: Path) -> None:
 def test_read_target_list_file_ignores_comment_lines(tmp_path: Path) -> None:
     target_list = tmp_path / "targets.txt"
     target_list.write_text(
-        "# production targets\n"
-        "https://test1.com/\n"
-        "  # staging targets\n"
-        "http://test2.com:5789/\n",
+        "# production targets\nhttps://test1.com/\n  # staging targets\nhttp://test2.com:5789/\n",
         encoding="utf-8",
     )
 

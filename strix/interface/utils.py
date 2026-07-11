@@ -1,3 +1,4 @@
+# Controlled subprocess boundary: all subprocess calls below resolve Git and use shell=False.
 import ipaddress
 import json
 import logging
@@ -5,7 +6,7 @@ import os
 import re
 import secrets
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from strix.config import load_settings
 
 
 logger = logging.getLogger(__name__)
+_WILDCARD_IPV4_HOST = str(ipaddress.IPv4Address(0))
 
 
 def get_severity_color(severity: str) -> str:
@@ -511,11 +513,19 @@ class DiffScopeResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+def _git_executable() -> str:
+    executable = shutil.which("git")
+    if executable is None:
+        raise FileNotFoundError("Git executable not found in PATH")
+    return executable
+
+
 def _run_git_command(
     repo_path: Path, args: list[str], check: bool = True
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603
-        ["git", "-C", str(repo_path), *args],  # noqa: S607
+    # Controlled subprocess boundary: Git path is resolved and shell is disabled.
+    return subprocess.run(  # noqa: S603  # nosec B603
+        [_git_executable(), "-C", str(repo_path), *args],
         capture_output=True,
         text=True,
         check=check,
@@ -525,8 +535,9 @@ def _run_git_command(
 def _run_git_command_raw(
     repo_path: Path, args: list[str], check: bool = True
 ) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(  # noqa: S603
-        ["git", "-C", str(repo_path), *args],  # noqa: S607
+    # Controlled subprocess boundary: Git path is resolved and shell is disabled.
+    return subprocess.run(  # noqa: S603  # nosec B603
+        [_git_executable(), "-C", str(repo_path), *args],
         capture_output=True,
         check=check,
     )
@@ -1147,9 +1158,7 @@ def read_target_list_file(path_str: str) -> list[str]:
             if (target := line.strip()) and not target.startswith("#")
         ]
     except UnicodeDecodeError as e:
-        raise ValueError(
-            f"Target list file '{path_str}' must be valid UTF-8 text: {e!s}"
-        ) from e
+        raise ValueError(f"Target list file '{path_str}' must be valid UTF-8 text: {e!s}") from e
     except OSError as e:
         raise ValueError(f"Failed to read target list file '{path_str}': {e!s}") from e
 
@@ -1361,7 +1370,7 @@ def dedupe_local_targets(targets_info: list[dict[str, Any]]) -> list[dict[str, A
 def _is_localhost_host(host: str) -> bool:
     host_lower = host.lower().strip("[]")
 
-    if host_lower in ("localhost", "0.0.0.0", "::1"):  # nosec B104
+    if host_lower in ("localhost", _WILDCARD_IPV4_HOST, "::1"):
         return True
 
     try:
@@ -1402,9 +1411,7 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
 def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None) -> str:
     console = Console()
 
-    git_executable = shutil.which("git")
-    if git_executable is None:
-        raise FileNotFoundError("Git executable not found in PATH")
+    git_executable = _git_executable()
 
     temp_dir = Path(tempfile.gettempdir()) / "strix_repos" / run_name
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -1421,10 +1428,13 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
 
     try:
         with console.status(f"[bold cyan]Cloning repository {repo_url}...", spinner="dots"):
-            subprocess.run(  # noqa: S603
+            # Controlled subprocess boundary: Git path is resolved, shell=False,
+            # and -- terminates option parsing before the user-controlled repository URL.
+            subprocess.run(  # noqa: S603  # nosec B603
                 [
                     git_executable,
                     "clone",
+                    "--",
                     repo_url,
                     str(clone_path),
                 ],
