@@ -70,11 +70,29 @@ def configure_sdk_model_defaults(settings: Settings) -> None:
         _configure_litellm_default("api_key", llm.api_key)
         _mirror_api_key_to_provider_env(llm.model, llm.api_key)
     if llm.api_base:
-        os.environ["OPENAI_BASE_URL"] = llm.api_base
         _configure_litellm_default("api_base", llm.api_base)
-        set_default_openai_api("chat_completions")
+        if not _is_azure_model(llm.model):
+            os.environ["OPENAI_BASE_URL"] = llm.api_base
+            set_default_openai_api("chat_completions")
+        else:
+            set_default_openai_api("responses")
     else:
         set_default_openai_api("responses")
+    if llm.api_version:
+        _configure_litellm_default("api_version", llm.api_version)
+    _mirror_azure_env(llm.model, llm.api_base, llm.api_version)
+
+
+def _is_azure_model(model_name: str | None) -> bool:
+    """Return True if the model is routed through Azure or Azure AI."""
+    if not model_name:
+        return False
+    name = model_name.strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return name.startswith(("azure/", "azure_ai/"))
 
 
 def _mirror_api_key_to_provider_env(model_name: str | None, api_key: str) -> None:
@@ -94,6 +112,31 @@ def _mirror_api_key_to_provider_env(model_name: str | None, api_key: str) -> Non
     for env_key in report.get("missing_keys") or []:
         if env_key.endswith("_API_KEY"):
             os.environ.setdefault(env_key, api_key)
+
+
+def _mirror_azure_env(
+    model_name: str | None,
+    api_base: str | None,
+    api_version: str | None,
+) -> None:
+    """Mirror Azure OpenAI / Azure AI config into LiteLLM's expected env vars."""
+    if not model_name:
+        return
+
+    name = model_name.strip()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.lower().startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    if not name.lower().startswith(("azure/", "azure_ai/")):
+        return
+
+    if api_base:
+        os.environ.setdefault("AZURE_API_BASE", api_base)
+        os.environ.setdefault("AZURE_AI_API_BASE", api_base)
+    if api_version:
+        os.environ.setdefault("AZURE_API_VERSION", api_version)
+        os.environ.setdefault("AZURE_AI_API_VERSION", api_version)
 
 
 def _configure_litellm_compatibility() -> None:

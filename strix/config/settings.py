@@ -23,7 +23,12 @@ class LlmSettings(BaseSettings):
     model: str | None = Field(default=None, alias="STRIX_LLM")
     api_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("LLM_API_KEY", "OPENAI_API_KEY"),
+        validation_alias=AliasChoices(
+            "LLM_API_KEY",
+            "OPENAI_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+            "AZURE_AI_API_KEY",
+        ),
     )
     api_base: str | None = Field(
         default=None,
@@ -33,6 +38,17 @@ class LlmSettings(BaseSettings):
             "OPENAI_BASE_URL",
             "LITELLM_BASE_URL",
             "OLLAMA_API_BASE",
+            "AZURE_OPENAI_ENDPOINT",
+            "AZURE_OPENAI_API_BASE",
+            "AZURE_AI_API_BASE",
+        ),
+    )
+    api_version: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LLM_API_VERSION",
+            "AZURE_API_VERSION",
+            "AZURE_OPENAI_API_VERSION",
         ),
     )
     reasoning_effort: ReasoningEffort = Field(default="high", alias="STRIX_REASONING_EFFORT")
