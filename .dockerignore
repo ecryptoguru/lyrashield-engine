@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.superpowers
+build
+dist
+*.egg-info
+*.log
+strix_runs
+agent_runs
