@@ -1,12 +1,15 @@
 [project]
 name = "lyrashield-engine"
 version = "1.0.4.post1"
-description = "Open-source AI Hackers for your apps"
+description = "LyraShield AI scan engine, based on Strix"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [
   { name = "Strix", email = "hi@usestrix.com" },
+]
+maintainers = [
+  { name = "LyraShield" },
 ]
 keywords = [
   "cybersecurity",
@@ -52,7 +55,6 @@ bedrock = ["boto3>=1.28.0"]
 
 [project.scripts]
 lyrashield = "lyrashield_adapter.cli:main"
-strix = "strix.interface.main:main"
 
 [dependency-groups]
 dev = [

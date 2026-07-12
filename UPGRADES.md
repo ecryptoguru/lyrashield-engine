@@ -9,6 +9,8 @@ syncing upstream:
 - Pre-Docker validation: validate inputs before container setup.
 - Per-instance binds: avoid shared mutable configuration between scans.
 - Worker output compatibility: preserve the worker's expected result format.
+- Apache attribution banners: retain the one-line LyraShield modification notice
+  in every fork-modified `strix/` source file.
 
 ## Current upstream base
 

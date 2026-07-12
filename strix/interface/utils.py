@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 # Controlled subprocess boundary: all subprocess calls below resolve Git and use shell=False.
 import ipaddress
 import json

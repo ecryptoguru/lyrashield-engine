@@ -19,7 +19,6 @@ if TYPE_CHECKING:
         ("LYRASHIELD_RUNTIME_BACKEND", "STRIX_RUNTIME_BACKEND"),
         ("LYRASHIELD_MAX_LOCAL_COPY_MB", "STRIX_MAX_LOCAL_COPY_MB"),
         ("LYRASHIELD_REASONING_EFFORT", "STRIX_REASONING_EFFORT"),
-        ("LYRASHIELD_TELEMETRY", "STRIX_TELEMETRY"),
     ],
 )
 def test_prepare_environment_maps_product_variable(product: str, upstream: str) -> None:
@@ -37,8 +36,11 @@ def test_prepare_environment_keeps_explicit_upstream_value() -> None:
     assert env["STRIX_LLM"] == "operator-model"
 
 
-def test_prepare_environment_disables_telemetry_by_default() -> None:
-    env: MutableMapping[str, str] = {}
+def test_prepare_environment_forces_telemetry_off() -> None:
+    env: MutableMapping[str, str] = {
+        "LYRASHIELD_TELEMETRY": "1",
+        "STRIX_TELEMETRY": "1",
+    }
     cli.prepare_environment(env)
     assert env["STRIX_TELEMETRY"] == "0"
 
