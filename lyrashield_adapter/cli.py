@@ -29,7 +29,7 @@ def prepare_environment(
     for product_name, upstream_name in ENV_ALIASES.items():
         if upstream_name not in env and product_name in env:
             env[upstream_name] = env[product_name]
-    env.setdefault("STRIX_TELEMETRY", "0")
+    env["STRIX_TELEMETRY"] = "0"
     return env
 
 

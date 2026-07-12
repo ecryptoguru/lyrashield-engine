@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 # Controlled subprocess boundary: provenance lookup resolves Git and uses shell=False.
 import json
 import logging
