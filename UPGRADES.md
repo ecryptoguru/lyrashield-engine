@@ -11,10 +11,16 @@ syncing upstream:
 - Worker output compatibility: preserve the worker's expected result format.
 - Apache attribution banners: retain the one-line LyraShield modification notice
   in every fork-modified `strix/` source file.
+- Upstream formatter compatibility: retain Ruff's mechanical formatting in
+  `strix/tools/reporting/tool.py` and `tests/test_runner_root_prompt.py` until
+  upstream contains the same formatting.
+- Upstream strict-typing compatibility: retain the local-variable narrowing in
+  `strix/skills/__init__.py` and dependency ecosystem normalization in
+  `strix/tools/reporting/tool.py` until upstream contains equivalent fixes.
 
 ## Current upstream base
 
-`7b639505fecf20a2d9e356f96bd91470aa828182`
+`ef4bcfc6608b01cc7bb3858172886d598d21ecf1`
 
 Run `scripts/check-upstream.sh` before updating this ledger. It reports whether
 upstream has advanced and rejects rewritten upstream history for manual review.

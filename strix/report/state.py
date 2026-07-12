@@ -220,6 +220,9 @@ class ReportState:
         poc_description: str | None = None,
         poc_script_code: str | None = None,
         remediation_steps: str | None = None,
+        evidence: str | None = None,
+        assumptions: str | None = None,
+        fix_effort: str | None = None,
         cvss: float | None = None,
         cvss_breakdown: dict[str, str] | None = None,
         endpoint: str | None = None,
@@ -227,6 +230,9 @@ class ReportState:
         cve: str | None = None,
         cwe: str | None = None,
         code_locations: list[dict[str, Any]] | None = None,
+        fix_pr_body: str | None = None,
+        finding_class: str | None = None,
+        dependency_metadata: dict[str, str] | None = None,
         agent_id: str | None = None,
         agent_name: str | None = None,
     ) -> str:
@@ -253,6 +259,12 @@ class ReportState:
             report["poc_script_code"] = poc_script_code.strip()
         if remediation_steps:
             report["remediation_steps"] = remediation_steps.strip()
+        if evidence:
+            report["evidence"] = evidence.strip()
+        if assumptions:
+            report["assumptions"] = assumptions.strip()
+        if fix_effort:
+            report["fix_effort"] = fix_effort.strip().lower()
         if cvss is not None:
             report["cvss"] = cvss
         if cvss_breakdown:
@@ -267,6 +279,11 @@ class ReportState:
             report["cwe"] = cwe.strip()
         if code_locations:
             report["code_locations"] = code_locations
+        if fix_pr_body:
+            report["fix_pr_body"] = fix_pr_body.strip()
+        report["finding_class"] = (finding_class or "dynamic").strip().lower()
+        if dependency_metadata:
+            report["dependency_metadata"] = dependency_metadata
         if agent_id:
             report["agent_id"] = agent_id
         if agent_name:
