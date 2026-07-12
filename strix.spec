@@ -173,7 +173,6 @@ hiddenimports = [
     'strix.skills',
 ]
 
-hiddenimports += collect_submodules('litellm')
 hiddenimports += collect_submodules('textual')
 hiddenimports += collect_submodules('rich')
 hiddenimports += collect_submodules('pydantic')
@@ -230,7 +229,7 @@ excludes = [
 ]
 
 a = Analysis(
-    ['strix/interface/main.py'],
+    ['lyrashield_adapter/cli.py'],
     pathex=[str(project_root)],
     binaries=[],
     datas=datas,

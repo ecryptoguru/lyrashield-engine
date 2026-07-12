@@ -52,3 +52,7 @@ def main() -> None:
         print(f"lyrashield {get_version()}")  # noqa: T201
         return
     _run_upstream()
+
+
+if __name__ == "__main__":
+    main()

@@ -93,6 +93,10 @@ SIZE=$(ls -lh "$RELEASE_DIR/$BINARY_NAME" | awk '{print $5}')
 echo -e "${YELLOW}Size:${NC} $SIZE"
 
 echo -e "\n${BLUE}Testing binary...${NC}"
-"$RELEASE_DIR/$BINARY_NAME" --help > /dev/null 2>&1 && echo -e "${GREEN}Binary test passed!${NC}" || echo -e "${RED}Binary test failed${NC}"
+if "$RELEASE_DIR/$BINARY_NAME" --help > /dev/null 2>&1; then
+    echo -e "${GREEN}Binary test passed!${NC}"
+else
+    echo -e "${RED}Binary test failed${NC}"; exit 1
+fi
 
 echo -e "\n${GREEN}Done!${NC}"
