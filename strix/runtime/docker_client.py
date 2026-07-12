@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """StrixDockerSandboxClient — preserves the image's ENTRYPOINT and adds
 NET_ADMIN/NET_RAW capabilities + host-gateway.
 

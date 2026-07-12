@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """
 Strix Agent Interface
 """
