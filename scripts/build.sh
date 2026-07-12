@@ -93,7 +93,7 @@ SIZE=$(ls -lh "$RELEASE_DIR/$BINARY_NAME" | awk '{print $5}')
 echo -e "${YELLOW}Size:${NC} $SIZE"
 
 echo -e "\n${BLUE}Testing binary...${NC}"
-if "$RELEASE_DIR/$BINARY_NAME" --help > /dev/null 2>&1; then
+if uv run python scripts/smoke_release.py "$RELEASE_DIR/$BINARY_NAME" "$VERSION"; then
     echo -e "${GREEN}Binary test passed!${NC}"
 else
     echo -e "${RED}Binary test failed${NC}"; exit 1

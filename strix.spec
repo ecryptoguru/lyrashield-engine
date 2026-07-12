@@ -90,11 +90,6 @@ hiddenimports = [
     'jinja2.ext',
     'markupsafe',
 
-    # XML parsing
-    'xmltodict',
-    'defusedxml',
-    'defusedxml.ElementTree',
-
     # Syntax highlighting
     'pygments',
     'pygments.lexers',
@@ -163,9 +158,7 @@ hiddenimports = [
     'strix.tools.agents_graph.tools',
     'strix.tools.finish.tool',
     'strix.tools.notes.tools',
-    'strix.tools.proxy._calls',
     'strix.tools.proxy.tools',
-    'strix.tools.python.tool',
     'strix.tools.reporting.tool',
     'strix.tools.thinking.tool',
     'strix.tools.todo.tools',
