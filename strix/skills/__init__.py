@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 import logging
 import re
 from collections import Counter
@@ -136,10 +137,10 @@ def _bare_skill_files(skill_name: str) -> list[Path]:
         key = (_ROOT_SKILL_CATEGORY, skill_name)
         if key in seen:
             continue
-        candidate = _qualified_skill_file(skills_dir, _ROOT_SKILL_CATEGORY, skill_name)
-        if candidate is not None:
+        root_candidate = _qualified_skill_file(skills_dir, _ROOT_SKILL_CATEGORY, skill_name)
+        if root_candidate is not None:
             seen.add(key)
-            candidates.append(candidate)
+            candidates.append(root_candidate)
     return candidates
 
 

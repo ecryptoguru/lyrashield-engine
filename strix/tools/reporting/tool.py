@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """``create_vulnerability_report`` — file a vuln finding with dedup + CVSS."""
 
 from __future__ import annotations
@@ -198,8 +199,7 @@ async def _do_create(  # noqa: PLR0912
     fix_effort = (fix_effort or "").strip().lower()
     if fix_effort not in _VALID_FIX_EFFORT:
         errors.append(
-            f"Invalid fix_effort: {fix_effort!r}. "
-            f"Must be one of: {sorted(_VALID_FIX_EFFORT)}"
+            f"Invalid fix_effort: {fix_effort!r}. Must be one of: {sorted(_VALID_FIX_EFFORT)}"
         )
 
     if not isinstance(cvss_breakdown, dict) or not cvss_breakdown:
@@ -715,7 +715,7 @@ async def _do_create_dependency(
     dependency_metadata = _build_dependency_metadata(
         package_name=package_name,
         installed_version=installed_version,
-        package_ecosystem=package_ecosystem,
+        package_ecosystem=package_ecosystem or "",
         fixed_version=fixed_version,
     )
     evidence = _build_dependency_evidence(
