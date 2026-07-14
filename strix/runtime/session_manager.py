@@ -27,6 +27,38 @@ _SESSION_CACHE: dict[str, dict[str, Any]] = {}
 _WORKSPACE_ROOT = "/workspace"
 
 
+def resolve_sandbox_endpoint(
+    host: str,
+    port: int,
+    *,
+    in_container: bool | None = None,
+    container_ip: str | None = None,
+) -> tuple[str, int]:
+    """Return a sandbox endpoint reachable from this process."""
+    if in_container is None:
+        in_container = Path("/.dockerenv").exists()
+    if in_container and container_ip and host in {"127.0.0.1", "::1", "localhost"}:
+        return container_ip, _CONTAINER_CAIDO_PORT
+    return host, port
+
+
+def get_sandbox_container_ip(client: Any, session: Any) -> str | None:
+    """Read the sandbox bridge address when the Docker backend exposes one."""
+    docker_client = getattr(client, "docker_client", None)
+    container_id = getattr(getattr(session, "_inner", session), "container_id", None)
+    if docker_client is None or not container_id:
+        return None
+    try:
+        container = docker_client.containers.get(container_id)
+        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+        for network in networks.values():
+            if isinstance(network, dict) and isinstance(network.get("IPAddress"), str):
+                return network["IPAddress"] or None
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not resolve sandbox container IP", exc_info=True)
+    return None
+
+
 def build_session_entries(
     local_sources: list[dict[str, Any]],
 ) -> tuple[dict[str | Path, BaseEntry], list[dict[str, Any]]]:
@@ -115,7 +147,12 @@ async def create_or_reuse(
 
     caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
     scheme = "https" if caido_endpoint.tls else "http"
-    host_caido_url = f"{scheme}://{caido_endpoint.host}:{caido_endpoint.port}"
+    sandbox_host, sandbox_port = resolve_sandbox_endpoint(
+        caido_endpoint.host,
+        caido_endpoint.port,
+        container_ip=get_sandbox_container_ip(client, session),
+    )
+    host_caido_url = f"{scheme}://{sandbox_host}:{sandbox_port}"
     logger.debug("Caido host endpoint resolved: %s", host_caido_url)
 
     caido_client = await bootstrap_caido(
