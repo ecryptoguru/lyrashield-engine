@@ -1,123 +1,70 @@
 ---
 title: "Configuration"
-description: "Environment variables for Strix"
+description: "Supported LyraShield Engine environment variables"
 ---
 
-Configure Strix using environment variables or a config file.
+Production configuration is owned by the LyraShield worker. The `lyrashield` adapter maps supported `LYRASHIELD_*` names to inherited internal settings and forces telemetry off.
 
-## LLM Configuration
+## Model and endpoint
 
-<ParamField path="STRIX_LLM" type="string" required>
-  Model name in LiteLLM format (e.g., `openai/gpt-5.4`, `anthropic/claude-sonnet-4-6`).
+<ParamField path="LYRASHIELD_LLM" type="string" required>
+  GPT-5.6 Sol, Terra, or Luna deployment name. Maps to internal `STRIX_LLM`. Other model families are rejected before sandbox setup.
 </ParamField>
 
 <ParamField path="LLM_API_KEY" type="string">
-  API key for your LLM provider. Not required for local models or cloud provider auth (Vertex AI, AWS Bedrock).
+  Credential for the approved OpenAI-compatible endpoint. Azure aliases are listed below.
 </ParamField>
 
 <ParamField path="LLM_API_BASE" type="string">
-  Custom API base URL. Also accepts `OPENAI_API_BASE`, `LITELLM_BASE_URL`, or `OLLAMA_API_BASE`.
+  Base URL for the approved endpoint.
+</ParamField>
+
+<ParamField path="LLM_API_VERSION" type="string">
+  API version for endpoints that require it.
+</ParamField>
+
+<ParamField path="LYRASHIELD_REASONING_EFFORT" default="high" type="string">
+  Maps to internal reasoning effort. The application resolves medium for Safe/Quick/Standard and high for Deep/Custom.
 </ParamField>
 
 <ParamField path="LLM_TIMEOUT" default="300" type="integer">
-  Request timeout in seconds for LLM calls.
+  Model request timeout in seconds.
 </ParamField>
 
-<ParamField path="STRIX_LLM_MAX_RETRIES" default="5" type="integer">
-  Maximum number of retries for LLM API calls on transient failures.
+Azure compatibility aliases:
+
+- credentials: `AZURE_AI_API_KEY`, `AZURE_OPENAI_API_KEY`;
+- endpoint: `AZURE_AI_API_BASE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_BASE`;
+- API version: `AZURE_API_VERSION`, `AZURE_OPENAI_API_VERSION`.
+
+## Sandbox
+
+<ParamField path="LYRASHIELD_IMAGE" type="string">
+  Reviewed sandbox image reference. Production should use an inspected digest, not a floating tag.
 </ParamField>
 
-<ParamField path="STRIX_REASONING_EFFORT" default="high" type="string">
-  Control thinking effort for reasoning models. Valid values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`. Defaults to `medium` for quick scan mode.
+<ParamField path="LYRASHIELD_RUNTIME_BACKEND" default="docker" type="string">
+  Sandbox runtime backend. The current worker contract uses Docker.
 </ParamField>
 
-<ParamField path="STRIX_MEMORY_COMPRESSOR_TIMEOUT" default="30" type="integer">
-  Timeout in seconds for memory compression operations (context summarization).
+<ParamField path="LYRASHIELD_MAX_LOCAL_COPY_MB" default="1024" type="integer">
+  Maximum local directory size copied into the sandbox. Use a read-only `--mount` for larger operator-owned repositories.
 </ParamField>
 
-## Optional Features
-
-<ParamField path="STRIX_TELEMETRY" default="1" type="string">
-  Telemetry toggle. Set to `0`, `false`, `no`, or `off` to disable telemetry (PostHog, Scarf, OTEL).
+<ParamField path="STRIX_SANDBOX_ALLOW_HOST_GATEWAY" default="0" type="boolean">
+  Opt-in host-gateway access. Keep disabled unless an explicitly authorized local workflow requires it. This is not a substitute for deployment egress policy.
 </ParamField>
 
-<ParamField path="TRACELOOP_BASE_URL" type="string">
-  OTLP/Traceloop base URL for remote OpenTelemetry export. If unset, Strix keeps traces local only.
-</ParamField>
+## Telemetry and artifacts
 
-<ParamField path="TRACELOOP_API_KEY" type="string">
-  API key used for remote trace export. Remote export is enabled only when both `TRACELOOP_BASE_URL` and `TRACELOOP_API_KEY` are set.
-</ParamField>
+`LYRASHIELD_TELEMETRY` is accepted only as a compatibility alias; the adapter unconditionally sets inherited `STRIX_TELEMETRY=0`. Do not configure remote Traceloop/PostHog/Scarf export for production scans.
 
-<ParamField path="TRACELOOP_HEADERS" type="string">
-  Optional custom OTEL headers (JSON object or `key=value,key2=value2`). Useful for Langfuse or custom/self-hosted OTLP gateways.
-</ParamField>
+Bounded local artifacts are written to `strix_runs/<run-name>/`. The application worker consumes `run.json` and `vulnerabilities.json`, does not persist raw stdout/stderr, and owns evidence storage outside the engine work directory.
 
-When remote OTEL vars are not set, Strix still writes complete run telemetry locally to:
+## Config file
 
-```bash
-strix_runs/<run_name>/events.jsonl
-```
+The inherited CLI supports `--config <path>` for a JSON environment override. Production should prefer explicit worker-owned environment variables so model, credential, sandbox, and limit provenance remains auditable.
 
-When remote vars are set, Strix dual-writes telemetry to both local JSONL and the remote OTEL endpoint.
-
-## Docker Configuration
-
-<ParamField path="STRIX_IMAGE" default="ghcr.io/usestrix/strix-sandbox:1.0.0" type="string">
-  Docker image to use for the sandbox container.
-</ParamField>
-
-<ParamField path="DOCKER_HOST" type="string">
-  Docker daemon socket path. Use for remote Docker hosts or custom configurations.
-</ParamField>
-
-<ParamField path="STRIX_RUNTIME_BACKEND" default="docker" type="string">
-  Runtime backend for the sandbox environment.
-</ParamField>
-
-<ParamField path="STRIX_MAX_LOCAL_COPY_MB" default="1024" type="integer">
-  Maximum size (in MB) of a local directory target that Strix will copy into the sandbox file-by-file. Larger targets exit early with a suggestion to use `--mount` instead. Set to `0` to disable the check.
-</ParamField>
-
-## Sandbox Configuration
-
-<ParamField path="STRIX_SANDBOX_EXECUTION_TIMEOUT" default="120" type="integer">
-  Maximum execution time in seconds for sandbox operations.
-</ParamField>
-
-<ParamField path="STRIX_SANDBOX_CONNECT_TIMEOUT" default="10" type="integer">
-  Timeout in seconds for connecting to the sandbox container.
-</ParamField>
-
-## Config File
-
-Strix stores configuration in `~/.strix/cli-config.json`. You can also specify a custom config file:
-
-```bash
-strix --target ./app --config /path/to/config.json
-```
-
-**Config file format:**
-
-```json
-{
-  "env": {
-    "STRIX_LLM": "openai/gpt-5.4",
-    "LLM_API_KEY": "sk-...",
-    "STRIX_REASONING_EFFORT": "high"
-  }
-}
-```
-
-## Example Setup
-
-```bash
-# Required
-export STRIX_LLM="openai/gpt-5.6-luna"
-export LLM_API_KEY="sk-..."
-
-# Optional: Custom timeouts
-export LLM_TIMEOUT="600"
-export STRIX_SANDBOX_EXECUTION_TIMEOUT="300"
-
-```
+<Warning>
+Do not place credentials, repository secrets, raw provider payloads, or user-controlled endpoints in committed config files. Configuration compatibility does not authorize a target or a paid scan.
+</Warning>

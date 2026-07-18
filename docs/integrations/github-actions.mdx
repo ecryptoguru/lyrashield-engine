@@ -1,66 +1,12 @@
 ---
-title: "GitHub Actions"
-description: "Run Strix security scans on every pull request"
+title: "GitHub Actions (application-owned)"
+description: "LyraShield Engine is not installed directly in customer workflows"
 ---
 
-Integrate Strix into your GitHub workflow to catch vulnerabilities before they reach production.
+<Warning>
+The former upstream installer workflow is unsupported. Do not curl an upstream installer, invoke a nonexistent `strix` executable, or place model credentials in customer repositories.
+</Warning>
 
-## Basic Workflow
+The LyraShield application owns GitHub integration, diff scoping, approvals, queue admission, worker credentials, artifact parsing, evidence state, and SARIF/report behavior. Engine CI in this repository verifies the package and public worker contract; it does not provide a customer-facing scan action.
 
-```yaml .github/workflows/security.yml
-name: Security Scan
-
-on:
-  pull_request:
-
-jobs:
-  strix-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Strix
-        run: curl -sSL https://strix.ai/install | bash
-
-      - name: Run Security Scan
-        env:
-          STRIX_LLM: ${{ secrets.STRIX_LLM }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-        run: strix -n -t ./ --scan-mode quick
-```
-
-## Required Secrets
-
-Add these secrets to your repository:
-
-| Secret | Description |
-|--------|-------------|
-| `STRIX_LLM` | Model name (e.g., `openai/gpt-5.4`) |
-| `LLM_API_KEY` | API key for your LLM provider |
-
-## Exit Codes
-
-The workflow fails when vulnerabilities are found:
-
-| Code | Result |
-|------|--------|
-| 0 | Pass — No vulnerabilities |
-| 2 | Fail — Vulnerabilities found |
-
-## Scan Modes for CI
-
-| Mode | Duration | Use Case |
-|------|----------|----------|
-| `quick` | Minutes | Every PR |
-| `standard` | ~30 min | Nightly builds |
-| `deep` | 1-4 hours | Release candidates |
-
-<Tip>
-Use `quick` mode for PRs to keep feedback fast. Schedule `deep` scans nightly.
-</Tip>
-
-<Note>
-For pull_request workflows, Strix automatically uses changed-files diff-scope in CI/headless runs. If diff resolution fails, ensure full history is fetched (`fetch-depth: 0`) or set `--diff-base`.
-</Note>
+Any future direct engine action must be a separate reviewed product decision with pinned artifacts, least-privilege credentials, protected budgets, cancellation, output schema validation, and truthful evidence semantics.

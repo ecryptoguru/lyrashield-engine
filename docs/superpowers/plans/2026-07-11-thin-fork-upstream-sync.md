@@ -1,5 +1,7 @@
 # LyraShield Engine Thin-Fork and Upstream-Sync Implementation Plan
 
+> **Historical record:** This plan documents the July 11 baseline and is not current operating guidance. Later GPT-5.6, lifecycle, budget, identity, evidence, and worker-contract changes made the repository a controlled derivative rather than an unchanged thin wrapper. See the root `README.md` and `UPGRADES.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** Rebuild LyraShield Engine on current Strix upstream while preserving LyraShield's stable process contract and adding review-gated upstream update automation.

@@ -3,7 +3,11 @@ title: "HTTP Proxy"
 description: "Caido-powered proxy for request interception and replay"
 ---
 
-Strix includes [Caido](https://caido.io), a modern HTTP proxy built for security testing. All browser traffic flows through Caido, giving the agent full control over requests and responses.
+The upstream-derived sandbox includes [Caido](https://caido.io) for authorized request inspection and replay. Sandbox browser traffic flows through the proxy.
+
+<Warning>
+Proxy access does not authorize a target or guarantee coverage. Production URL targets do not enter this engine, and deployment-level egress controls remain required.
+</Warning>
 
 ## Capabilities
 
@@ -106,7 +110,7 @@ asyncio.run(main())
 
 ## Human-in-the-Loop
 
-Strix exposes the Caido proxy to your host machine, so you can interact with it alongside the automated scan. When the sandbox starts, the Caido URL is displayed in the TUI sidebar — click it to copy, then open it in Caido Desktop.
+Interactive upstream mode can expose the Caido proxy to the host for an authorized operator. The production worker uses non-interactive execution and must not rely on this TUI workflow.
 
 ### Accessing Caido
 
@@ -123,7 +127,7 @@ Strix exposes the Caido proxy to your host machine, so you can interact with it 
 - **Explore the sitemap** — See the full attack surface the agent has discovered
 - **Manual testing** — Use Caido's tools to test findings the agent reports, or explore areas it hasn't reached
 
-This turns Strix from a fully automated scanner into a collaborative tool — the agent handles the heavy lifting while you focus on the interesting parts.
+This upstream interactive feature is diagnostic operator tooling, not part of the LyraShield application UX or worker contract.
 
 ## Scope
 

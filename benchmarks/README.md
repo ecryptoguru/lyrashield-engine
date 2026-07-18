@@ -1,43 +1,25 @@
-# Benchmarks
+# Result-quality evaluation
 
-We use security benchmarks to track Strix's capabilities and improvements over time. We plan to add more benchmarks, both existing ones and our own, to help the community evaluate and compare security agents.
+LyraShield Engine currently makes no benchmark, accuracy, recall, exploit-success, or comparative result claim.
 
+The repository's deterministic gate—329 tests plus lint, formatting, typing, Bandit, packaging, binary, sandbox, and worker-contract checks—proves implementation and compatibility properties. It does not prove that scans find every issue, avoid every false positive, or outperform another system.
 
-## Full Details
+## Inherited upstream reference
 
-For the complete benchmark results, evaluation scripts, and run data, see the [usestrix/benchmarks](https://github.com/usestrix/benchmarks) repository.
+Strix reported a 96% result (100/104 challenges) on XBEN for Strix v0.4.0. That result belongs to the upstream project, an older release, its model/runtime configuration, and its benchmark methodology. It has not been reproduced for the current LyraShield derivative and must not be quoted as LyraShield product evidence.
 
-> [!NOTE]
-> We are actively adding more benchmarks to our evaluation suite.
+Upstream details remain available in the [usestrix/benchmarks repository](https://github.com/usestrix/benchmarks/tree/main/XBEN). This link is attribution and research context, not validation of the current engine.
 
+## Required LyraShield evaluation corpus
 
-## Results
+Before changing orchestration for claimed quality gains—or publishing any result claim—build a private, versioned corpus that records:
 
-| Benchmark | Challenges | Success Rate |
-|-----------|------------|--------------|
-| [XBEN](https://github.com/usestrix/benchmarks/tree/main/XBEN) | 104 | **96%** |
+- approved repository snapshots and scan modes;
+- expected findings and expected non-findings;
+- code-location, package/CVE, evidence, and control-ID correctness;
+- duplicate stability across detectors and repeated runs;
+- validated, independently verified, and inconclusive outcome semantics;
+- runtime, request/token buckets, cancellation, and limit behavior for Luna and Terra;
+- regression thresholds and a documented adjudication process.
 
-### XBEN
-
-The [XBOW benchmark](https://github.com/usestrix/benchmarks/tree/main/XBEN) is a set of 104 web security challenges designed to evaluate autonomous penetration testing agents. Each challenge follows a CTF format where the agent must discover and exploit vulnerabilities to extract a hidden flag.
-
-Strix `v0.4.0` achieved a **96% success rate** (100/104 challenges) in black-box mode.
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'pie1': '#3b82f6', 'pie2': '#1e3a5f', 'pieTitleTextColor': '#ffffff', 'pieSectionTextColor': '#ffffff', 'pieLegendTextColor': '#ffffff'}}}%%
-pie title Challenge Outcomes (104 Total)
-    "Solved" : 100
-    "Unsolved" : 4
-```
-
-**Performance by Difficulty:**
-
-| Difficulty | Solved | Success Rate |
-|------------|--------|--------------|
-| Level 1 (Easy) | 45/45 | 100% |
-| Level 2 (Medium) | 49/51 | 96% |
-| Level 3 (Hard) | 6/8 | 75% |
-
-**Resource Usage:**
-- Average solve time: ~19 minutes
-- Total cost: ~$337 for 100 challenges
+Keep model-based discovery separate from deterministic verification. Never promote confidence, a generated proof-of-concept, or absence in one run into independent verification. Store only privacy-bounded evaluation artifacts and never commit credentials, target secrets, raw provider payloads, or unapproved proprietary repositories.

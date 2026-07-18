@@ -1,62 +1,18 @@
 ---
 title: "Scan Modes"
-description: "Choose the right scan depth for your use case"
+description: "Engine modes and application routing"
 ---
 
-Strix offers three scan modes to balance speed and thoroughness.
+The engine exposes `quick`, `standard`, and `deep`. The LyraShield application owns the user-facing preset, model, reasoning effort, and protected budget.
 
-## Quick
+| Application workflow | Engine mode | Model route | Reasoning | Intended scope |
+| --- | --- | --- | --- | --- |
+| Release Check / Safe | `quick`-class bounded execution | GPT-5.6 Luna | medium | Fast release-oriented repository review |
+| Code Review / Standard | `standard` | GPT-5.6 Luna | medium | Broader routine repository review |
+| Deep Security Review / Deep | `deep` | GPT-5.6 Terra | high | Authorized deeper repository analysis |
 
-```bash
-strix --target ./app --scan-mode quick
-```
+`CUSTOM` is an application-level approval-gated mode; it does not add a fourth engine CLI value. Mode routing selects one deployment for the run. It is not a Luna-to-Terra cascade.
 
-Fast checks for obvious vulnerabilities. Best for:
-- CI/CD pipelines
-- Pull request validation
-- Rapid smoke tests
+Duration is target-, environment-, model-, and limit-dependent. Do not promise fixed minutes or completeness. Every run can end completed, failed, cancelled, timed out, or stopped by a protected limit, and the application preserves those distinctions.
 
-**Duration**: Minutes
-
-## Standard
-
-```bash
-strix --target ./app --scan-mode standard
-```
-
-Balanced testing for routine security reviews. Best for:
-- Regular security assessments
-- Pre-release validation
-- Development milestones
-
-**Duration**: 30 minutes to 1 hour
-
-**White-box behavior**: Uses source-aware mapping and static triage to prioritize dynamic exploit validation paths.
-
-## Deep
-
-```bash
-strix --target ./app --scan-mode deep
-```
-
-Thorough penetration testing. Best for:
-- Comprehensive security audits
-- Pre-production reviews
-- Critical application assessments
-
-**Duration**: 1-4 hours depending on target complexity
-
-**White-box behavior**: Runs broad source-aware triage (`semgrep`, AST structural search, secrets, supply-chain checks) and then systematically validates top candidates dynamically.
-
-<Note>
-Deep mode is the default. It explores edge cases, chained vulnerabilities, and complex attack paths.
-</Note>
-
-## Choosing a Mode
-
-| Scenario | Recommended Mode |
-|----------|------------------|
-| Every PR | Quick |
-| Weekly scans | Standard |
-| Before major release | Deep |
-| Bug bounty hunting | Deep |
+Diff scope narrows repository context for suitable CI/headless work. It is a scope statement, not proof that unchanged code or deployed behavior is safe.

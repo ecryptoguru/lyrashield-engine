@@ -1,5 +1,7 @@
 # Upstream Strix Release Automation Design
 
+> **Historical design record:** Current upstream-import behavior is documented in the root `UPGRADES.md`. This document does not override the current controlled-derivative ownership boundary or supported execution contract.
+
 ## Goal
 
 Automatically detect and reconcile immutable Strix releases into the LyraShield

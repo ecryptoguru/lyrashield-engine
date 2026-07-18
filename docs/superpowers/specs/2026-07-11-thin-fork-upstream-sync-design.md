@@ -1,5 +1,7 @@
 # LyraShield Engine Thin-Fork and Upstream-Sync Design
 
+> **Historical record:** This design captures the July 11 decision point and is superseded by the controlled-derivative boundary in the root `README.md` and `UPGRADES.md`. Keep it for implementation provenance, not current provider, executable, or ownership guidance.
+
 **Date:** 2026-07-11
 
 **Status:** Approved for implementation planning

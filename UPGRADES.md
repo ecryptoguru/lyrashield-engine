@@ -1,14 +1,31 @@
-# LyraShield patch ledger
+# LyraShield ownership and upstream-import ledger
 
-This fork stays deliberately thin. Keep these compatibility patches while
-syncing upstream:
+LyraShield Engine is a controlled derivative over a pinned Strix substrate. It
+is not a thin wrapper: the adapter is the public entry point, while significant
+model, lifecycle, budget, result, and worker-contract behavior is intentionally
+owned within modified upstream modules. Preserve this reviewed boundary while
+syncing releases.
+
+## LyraShield-owned contract
+
+- GPT-5.6 Sol, Terra, and Luna acceptance; OpenAI/Azure-compatible credential
+  routing; no Perplexity, Parallel, or non-OpenAI model path.
+- Context compaction, bounded output and agent count, and concurrent
+  pre-request spend reservations.
+- Non-interactive lifecycle, cancellation, cleanup, target-safe errors, and
+  forced telemetry-off production behavior.
+- Deterministic finding identities, structured control/evidence metadata, and
+  the bounded `run.json` / `vulnerabilities.json` worker protocol.
+
+## Compatibility patches retained across imports
 
 - `lyrashield_adapter`: compatibility adapter for LyraShield invocation.
 - Telemetry defaults: LyraShield-safe telemetry behavior by default.
 - Pydantic compatibility: fixes required by the supported runtime.
 - Pre-Docker validation: validate inputs before container setup.
 - Per-instance binds: avoid shared mutable configuration between scans.
-- Worker output compatibility: preserve the worker's expected result format.
+- Worker output compatibility: preserve the worker's expected result format and
+  coordinate schema evolution with the application repository.
 - Apache attribution banners: retain the one-line LyraShield modification notice
   in every fork-modified `strix/` source file.
 - Upstream formatter compatibility: retain Ruff's mechanical formatting in
@@ -55,3 +72,12 @@ If tree reconciliation conflicts, no branch is pushed. The workflow uploads
 the generated patch and conflicting paths, then creates or updates one issue
 labelled `upstream-sync`. Resolve that release through a reviewed PR; never add
 automatic conflict resolution to the scheduled job.
+
+## Independence decision
+
+Continue maintaining the controlled derivative while the reviewed upstream
+substrate remains useful. Reconsider a fully independent engine only if
+upstream repeatedly blocks required behavior, release imports become more
+expensive than ownership, or a LyraShield evaluation corpus demonstrates a
+substrate-imposed quality ceiling. Test-count and packaging gates are not that
+evaluation evidence.

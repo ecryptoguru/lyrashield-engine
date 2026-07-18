@@ -1,24 +1,10 @@
 ---
-title: "Anthropic"
-description: "Configure Strix with Claude models"
+title: "Anthropic (unsupported upstream reference)"
+description: "Not supported by LyraShield Engine"
 ---
 
-## Setup
+<Warning>
+Anthropic models are not supported by LyraShield Engine. This unlinked page is retained only to make the inherited upstream documentation history explicit. Production accepts only approved GPT-5.6 Sol, Terra, or Luna deployments through the documented OpenAI/Azure-compatible boundary.
+</Warning>
 
-```bash
-export STRIX_LLM="anthropic/claude-sonnet-4-6"
-export LLM_API_KEY="sk-ant-..."
-```
-
-## Available Models
-
-| Model | Description |
-|-------|-------------|
-| `anthropic/claude-sonnet-4-6` | Best balance of intelligence and speed |
-| `anthropic/claude-opus-4-6` | Maximum capability for deep analysis |
-
-## Get API Key
-
-1. Go to [console.anthropic.com](https://console.anthropic.com)
-2. Navigate to API Keys
-3. Create a new key
+Do not add Anthropic credentials to the worker or use upstream Strix configuration examples with this derivative.

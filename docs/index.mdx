@@ -1,101 +1,47 @@
 ---
 title: "Introduction"
-description: "Open-source AI hackers to secure your apps"
+description: "Operator reference for LyraShield Engine"
 ---
 
-Strix are autonomous AI agents that act like real hackers—they run your code dynamically, find vulnerabilities, and validate them with proof-of-concepts. Built for developers and security teams who need fast, accurate security testing without the overhead of manual pentesting or the false positives of static analysis tools.
+LyraShield Engine is the sandboxed repository-analysis process behind the LyraShield AI worker. It combines model-guided discovery with security tooling and emits bounded structured candidates for the application to normalize, correlate, and verify.
 
-<Frame>
-  <img src="/images/screenshot.png" alt="Strix Demo" />
-</Frame>
+<Warning>
+The engine is not an independent source of verification. Model confidence and generated proof-of-concept text never make a finding independently verified. The application owns evidence state, deterministic scanners, retests, and assurance reports.
+</Warning>
+
+## Supported boundary
+
+- Production invokes the `lyrashield` executable in non-interactive mode.
+- Only approved GPT-5.6 Sol, Terra, or Luna deployments are accepted.
+- OpenAI- and Azure-compatible endpoints are supported; other inherited provider paths are rejected.
+- The application sends repository targets to the engine. URL targets use the application's pinned deterministic URL scanner.
+- Inherited telemetry is forced off by the adapter.
+
+## Execution flow
+
+1. The worker resolves model, reasoning effort, budget, run identity, sandbox image, and target workspace.
+2. The engine validates configuration before sandbox setup.
+3. The sandbox and agents inspect the authorized repository within bounded context, output, agent, and spend limits.
+4. The engine writes `run.json` and `vulnerabilities.json` under `strix_runs/<run-name>/`.
+5. The worker schema-validates bounded artifacts, stores private usage checkpoints, and passes candidates through deterministic identity and evidence-state rules.
 
 <CardGroup cols={2}>
   <Card title="Quick Start" icon="rocket" href="/quickstart">
-    Install and run your first scan in minutes.
+    Prepare the local engine without an unbounded scan.
   </Card>
   <Card title="CLI Reference" icon="terminal" href="/usage/cli">
-    Learn all command-line options.
+    Review supported command-line options.
   </Card>
-  <Card title="Tools" icon="wrench" href="/tools/overview">
-    Explore the security testing toolkit.
+  <Card title="Configuration" icon="gear" href="/advanced/configuration">
+    Configure GPT-5.6 and the sandbox boundary.
   </Card>
-  <Card title="GitHub Actions" icon="github" href="/integrations/github-actions">
-    Integrate into your CI/CD pipeline.
-  </Card>
-</CardGroup>
-
-## Use Cases
-
-- **Application Security Testing** — Detect and validate critical vulnerabilities in your applications
-- **Rapid Penetration Testing** — Get penetration tests done in hours, not weeks
-- **Bug Bounty Automation** — Automate research and generate PoCs for faster reporting
-- **CI/CD Integration** — Block vulnerabilities before they reach production
-
-## Key Capabilities
-
-- **Full hacker toolkit** — Browser automation, HTTP proxy, terminal, Python runtime
-- **Real validation** — PoCs, not false positives
-- **Multi-agent orchestration** — Specialized agents collaborate on complex targets
-- **Developer-first CLI** — Interactive TUI or headless mode for automation
-
-## Security Tools
-
-Strix agents come equipped with a comprehensive toolkit:
-
-| Tool | Purpose |
-|------|---------|
-| HTTP Proxy | Full request/response manipulation and analysis |
-| Browser Automation | Multi-tab browser for XSS, CSRF, auth flow testing |
-| Terminal | Interactive shells for command execution |
-| Python Runtime | Custom exploit development and validation |
-| Reconnaissance | Automated OSINT and attack surface mapping |
-| Code Analysis | Static and dynamic analysis capabilities |
-
-## Vulnerability Coverage
-
-| Category | Examples |
-|----------|----------|
-| Access Control | IDOR, privilege escalation, auth bypass |
-| Injection | SQL, NoSQL, command injection |
-| Server-Side | SSRF, XXE, deserialization |
-| Client-Side | XSS, prototype pollution, DOM vulnerabilities |
-| Business Logic | Race conditions, workflow manipulation |
-| Authentication | JWT vulnerabilities, session management |
-| Infrastructure | Misconfigurations, exposed services |
-
-## Multi-Agent Architecture
-
-Strix uses a graph of specialized agents for comprehensive security testing:
-
-- **Distributed Workflows** — Specialized agents for different attacks and assets
-- **Scalable Testing** — Parallel execution for fast comprehensive coverage
-- **Dynamic Coordination** — Agents collaborate and share discoveries
-
-## Quick Example
-
-```bash
-# Install
-curl -sSL https://strix.ai/install | bash
-
-# Configure
-export STRIX_LLM="openai/gpt-5.4"
-export LLM_API_KEY="your-api-key"
-
-# Scan
-strix --target ./your-app
-```
-
-## Community
-
-<CardGroup cols={2}>
-  <Card title="Discord" icon="discord" href="https://discord.gg/strix-ai">
-    Join the community for help and discussion.
-  </Card>
-  <Card title="GitHub" icon="github" href="https://github.com/usestrix/strix">
-    Star the repo and contribute.
+  <Card title="Model Endpoints" icon="microchip" href="/llm-providers/overview">
+    Use the supported OpenAI/Azure-compatible routes.
   </Card>
 </CardGroup>
 
-<Warning>
-Only test applications you own or have explicit permission to test.
-</Warning>
+## Result-quality boundary
+
+Repository tests, type checks, packaging, sandbox smoke, and worker compatibility prove implementation properties. They do not establish accuracy or coverage. The inherited upstream XBEN result is not LyraShield evidence; see the repository's `benchmarks/README.md` for the required evaluation corpus.
+
+Run only against targets you own or are explicitly authorized to test.

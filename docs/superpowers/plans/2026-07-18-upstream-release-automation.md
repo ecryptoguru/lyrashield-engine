@@ -1,5 +1,7 @@
 # Upstream Release Automation Implementation Plan
 
+> **Historical implementation record:** Current upstream-import behavior is documented in the root `UPGRADES.md`. This plan remains useful provenance but does not supersede the current controlled-derivative, GPT-5.6-only, or worker-contract boundaries.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reliably import stable Strix releases into LyraShield Engine through a tested review PR that auto-merges only after one owner approval and all required checks pass.
