@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import types
 from typing import Any
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -72,6 +73,8 @@ async def test_persistent_rate_limit_stops_gracefully(
     monkeypatch.setattr(runner, "run_agent_loop", _raise_rate_limit)
 
     coordinator = AgentCoordinator()
+    report_state = MagicMock()
+    monkeypatch.setattr(runner, "get_global_report_state", lambda: report_state)
 
     with caplog.at_level(logging.WARNING):
         result = await runner.run_strix_scan(
@@ -85,6 +88,7 @@ async def test_persistent_rate_limit_stops_gracefully(
     root_ids = [aid for aid, parent in coordinator.parent_of.items() if parent is None]
     assert len(root_ids) == 1
     assert coordinator.statuses[root_ids[0]] == "stopped"
+    report_state.set_terminal_reason.assert_called_once_with("rate_limited")
     # the resume hint must carry the real scan id, not a literal placeholder
     assert "strix --resume scan-test" in caplog.text
     assert "<run_name>" not in caplog.text
