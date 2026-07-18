@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 from agents.tool import FunctionTool
 
@@ -92,7 +94,7 @@ def test_builtin_prompt_failure_stops_agent_creation(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(
         prompt,
         "get_strix_resource_path",
-        lambda *_args: (_ for _ in ()).throw(FileNotFoundError("prompt missing")),
+        Mock(side_effect=FileNotFoundError("prompt missing")),
     )
 
     with pytest.raises(RuntimeError, match="required scan system prompt"):

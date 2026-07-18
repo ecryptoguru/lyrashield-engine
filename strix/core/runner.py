@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 StreamEventSink = Callable[[str, Any], None]
+_MODE_AGENT_LIMITS = {"quick": 2, "standard": 4, "deep": 6}
 
 
 def _engine_version() -> str:
@@ -60,6 +61,22 @@ def _engine_version() -> str:
         return version("lyrashield-engine")
     except PackageNotFoundError:
         return "development"
+
+
+def _coordinator_for_scan_mode(
+    coordinator: AgentCoordinator | None,
+    scan_mode: str,
+) -> AgentCoordinator:
+    mode_agent_limit = _MODE_AGENT_LIMITS.get(scan_mode, 4)
+    if coordinator is None:
+        return AgentCoordinator(max_agents=mode_agent_limit)
+    if len(coordinator.statuses) > mode_agent_limit:
+        raise RuntimeError(
+            f"Existing coordinator has {len(coordinator.statuses)} agents, "
+            f"above the {scan_mode} mode limit ({mode_agent_limit})",
+        )
+    coordinator.max_agents = min(coordinator.max_agents, mode_agent_limit)
+    return coordinator
 
 
 def _merge_root_prompt_context(
@@ -166,9 +183,7 @@ async def run_strix_scan(
     chat_completions_tools = uses_chat_completions_tool_schema(resolved_model, settings)
 
     scan_mode = str(scan_config.get("scan_mode") or "deep")
-    mode_agent_limits = {"quick": 2, "standard": 4, "deep": 6}
-    if coordinator is None:
-        coordinator = AgentCoordinator(max_agents=mode_agent_limits.get(scan_mode, 4))
+    coordinator = _coordinator_for_scan_mode(coordinator, scan_mode)
     coordinator.set_snapshot_path(agents_path)
 
     from strix.tools.notes.tools import hydrate_notes_from_disk

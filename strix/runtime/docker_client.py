@@ -1,6 +1,6 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """StrixDockerSandboxClient — preserves the image's ENTRYPOINT and adds
-NET_ADMIN/NET_RAW capabilities + host-gateway.
+NET_ADMIN/NET_RAW capabilities + an opt-in host gateway.
 
 The SDK's ``DockerSandboxClient._create_container`` does not expose a hook for
 extending ``create_kwargs`` before ``containers.create`` is called. We subclass
@@ -14,8 +14,8 @@ deltas:
    dead port.
 2. Append NET_ADMIN/NET_RAW to ``cap_add`` (required by ``nmap -sS`` and
    other raw-socket tools).
-3. Add ``host.docker.internal`` → host-gateway to ``extra_hosts`` so the
-   agent can reach host-served apps.
+3. Optionally add ``host.docker.internal`` → host-gateway to ``extra_hosts``
+   when ``STRIX_SANDBOX_ALLOW_HOST_GATEWAY`` is explicitly enabled.
 
 Pinned to ``openai-agents==0.14.6``. Bumping the SDK requires
 re-merging the parent body. Track upstream for an injection hook.
@@ -56,7 +56,7 @@ _SANDBOX_NETWORK_ENV = "STRIX_DOCKER_SANDBOX_NETWORK"
 _SANDBOX_HOST_GATEWAY_ENV = "STRIX_SANDBOX_ALLOW_HOST_GATEWAY"
 
 
-def _host_gateway_enabled() -> bool:
+def host_gateway_enabled() -> bool:
     return os.environ.get(_SANDBOX_HOST_GATEWAY_ENV, "").strip().lower() in {
         "1",
         "true",
@@ -230,7 +230,7 @@ class StrixDockerSandboxClient(DockerSandboxClient):
             if cap not in cap_add:
                 cap_add.append(cap)
 
-        if _host_gateway_enabled():
+        if host_gateway_enabled():
             extra_hosts = create_kwargs.setdefault("extra_hosts", {})
             extra_hosts["host.docker.internal"] = "host-gateway"
 
