@@ -22,15 +22,18 @@ def _source(subdir: str, path: str, *, mount: bool = False) -> dict[str, Any]:
 
 
 def test_copied_source_becomes_localdir_entry(tmp_path: Path) -> None:
-    entries, bind_mounts = build_session_entries([_source("repo", str(tmp_path))])
+    entries, bind_mounts, staged_dirs = build_session_entries([_source("repo", str(tmp_path))])
 
     assert bind_mounts == []
+    assert staged_dirs == []
     assert isinstance(entries["repo"], LocalDir)
     assert entries["repo"].src == tmp_path.resolve()
 
 
 def test_mounted_source_becomes_bind_mount(tmp_path: Path) -> None:
-    entries, bind_mounts = build_session_entries([_source("repo", str(tmp_path), mount=True)])
+    entries, bind_mounts, _staged = build_session_entries(
+        [_source("repo", str(tmp_path), mount=True)]
+    )
 
     assert entries == {}
     assert bind_mounts == [
@@ -48,7 +51,7 @@ def test_mixed_sources_split_correctly(tmp_path: Path) -> None:
     copied.mkdir()
     mounted.mkdir()
 
-    entries, bind_mounts = build_session_entries(
+    entries, bind_mounts, _staged = build_session_entries(
         [
             _source("copied", str(copied)),
             _source("mounted", str(mounted), mount=True),
@@ -61,7 +64,7 @@ def test_mixed_sources_split_correctly(tmp_path: Path) -> None:
 
 
 def test_incomplete_sources_are_skipped() -> None:
-    entries, bind_mounts = build_session_entries(
+    entries, bind_mounts, staged_dirs = build_session_entries(
         [
             {"source_path": "", "workspace_subdir": "x"},
             {"source_path": "/p", "workspace_subdir": ""},
@@ -69,6 +72,7 @@ def test_incomplete_sources_are_skipped() -> None:
     )
     assert entries == {}
     assert bind_mounts == []
+    assert staged_dirs == []
 
 
 def test_containerized_worker_uses_sandbox_bridge_address() -> None:
@@ -104,3 +108,19 @@ def test_container_ip_uses_wrapped_docker_session() -> None:
         _inner = Inner()
 
     assert get_sandbox_container_ip(Client(), Session()) == "172.17.0.3"
+
+
+def test_symlink_tree_is_staged(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "real.txt").write_text("content")
+    (repo / "link.txt").symlink_to(repo / "real.txt")
+
+    entries, _mounts, staged_dirs = build_session_entries([_source("repo", str(repo))])
+
+    assert len(staged_dirs) == 1
+    entry = entries["repo"]
+    assert isinstance(entry, LocalDir)
+    assert entry.src == staged_dirs[0]
+    assert not (staged_dirs[0] / "link.txt").is_symlink()
+    assert (staged_dirs[0] / "link.txt").read_text() == "content"

@@ -215,6 +215,7 @@ async def run_strix_scan(
             settings.llm.reasoning_effort,
             model_name=resolved_model,
             force_required_tool_choice=settings.llm.force_required_tool_choice,
+            request_timeout=settings.llm.timeout,
         )
         run_config = RunConfig(
             model=resolved_model,
@@ -287,6 +288,7 @@ async def run_strix_scan(
             "parent_id": None,
             "interactive": interactive,
             "spawn_child_agent": spawn_child_agent,
+            "max_context_images": settings.runtime.max_context_images,
         }
 
         root_session = open_agent_session(root_id, agents_db)

@@ -91,10 +91,13 @@ http_proxy=http://127.0.0.1:${CAIDO_PORT}
 https_proxy=http://127.0.0.1:${CAIDO_PORT}
 EOF
 
-echo "source /etc/profile.d/proxy.sh" >> ~/.bashrc
-echo "source /etc/profile.d/proxy.sh" >> ~/.zshrc
+# Use POSIX `.` (not the bashism `source`) so these lines are safe when the rc
+# files are read by a POSIX shell (e.g. `sh -lc`), which otherwise fails with
+# "source: not found". `.` is understood by bash, zsh, and dash alike.
+echo ". /etc/profile.d/proxy.sh" >> ~/.bashrc
+echo ". /etc/profile.d/proxy.sh" >> ~/.zshrc
 
-source /etc/profile.d/proxy.sh
+. /etc/profile.d/proxy.sh
 
 echo "✅ System-wide proxy configuration complete"
 

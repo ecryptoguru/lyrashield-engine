@@ -20,7 +20,7 @@ syncing upstream:
 
 ## Current upstream base
 
-`ef4bcfc6608b01cc7bb3858172886d598d21ecf1`
+`7d5a67d234bd3faef34d22be8c6f5a9607de41a3`
 
 Run `scripts/check-upstream.sh` before updating this ledger. It reports whether
 upstream has advanced and rejects rewritten upstream history for manual review.

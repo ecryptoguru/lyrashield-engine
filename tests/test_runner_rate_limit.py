@@ -37,7 +37,9 @@ async def test_persistent_rate_limit_stops_gracefully(
             model="openai/gpt-4o",
             reasoning_effort="high",
             force_required_tool_choice=False,
-        )
+            timeout=300,
+        ),
+        runtime=types.SimpleNamespace(max_context_images=3),
     )
     monkeypatch.setattr(runner, "load_settings", lambda: settings)
     monkeypatch.setattr(runner, "configure_sdk_model_defaults", lambda _settings: None)
@@ -54,8 +56,8 @@ async def test_persistent_rate_limit_stops_gracefully(
     async def _cleanup(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(runner.session_manager, "create_or_reuse", _create_or_reuse)
-    monkeypatch.setattr(runner.session_manager, "cleanup", _cleanup)
+    monkeypatch.setattr(runner.session_manager, "create_or_reuse", _create_or_reuse)  # type: ignore[attr-defined]
+    monkeypatch.setattr(runner.session_manager, "cleanup", _cleanup)  # type: ignore[attr-defined]
 
     monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
     monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: "")

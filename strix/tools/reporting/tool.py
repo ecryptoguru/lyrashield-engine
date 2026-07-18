@@ -352,6 +352,10 @@ async def create_vulnerability_report(
     - Suspicions you haven't confirmed with a PoC.
     - Tracking multiple vulnerabilities at once — one report per vuln.
     - Re-reporting something you (or another agent) already filed.
+    - Known-CVE dependency / supply-chain findings that can't be
+      dynamically PoC'd — a vulnerable dependency version pinned in a
+      lockfile/manifest that matches a published advisory. File those
+      with ``create_dependency_report`` instead, never with this tool.
 
     Automatic LLM-based **deduplication** rejects reports that describe
     the same root cause on the same asset as an existing report. If you
@@ -367,6 +371,9 @@ async def create_vulnerability_report(
       Never leak internal identifiers (proxy request IDs, internal
       report IDs) into any field.
     - Tone: formal, objective, third-person, vendor-neutral, concise.
+      Avoid internal-guidance headings like "QUICK", "Approach", or
+      "Techniques" that read like an engineering runbook rather than a
+      client deliverable.
     - **Use markdown in every text field**: ``**bold**`` for emphasis,
       ``inline code`` for identifiers/values/parameters, and fenced
       code blocks (```` ```language ````) for any code/payload/HTTP
@@ -378,6 +385,13 @@ async def create_vulnerability_report(
       only — NO code/diffs (code fixes go in ``code_locations``).
     - Numbered steps allowed only in PoC and Remediation sections.
     - Avoid hedging language; be precise and non-vague.
+    - Follow a standard pentest report structure across the fields:
+      (1) overview (``description``), (2) severity & CVSS vector
+      (``cvss_breakdown``), (3) affected asset(s) (``target`` /
+      ``endpoint``), (4) technical details (``technical_analysis``),
+      (5) proof of concept (``poc_description`` + ``poc_script_code``),
+      (6) impact (``impact``), (7) evidence (``evidence``), and
+      (8) remediation (``remediation_steps``).
 
     **White-box requirement**: when source is available, you MUST
     populate ``code_locations``. See the ``code_locations`` arg below
@@ -440,7 +454,10 @@ async def create_vulnerability_report(
         title: Specific finding title (e.g.
             ``"SQL Injection in /api/users login parameter"``). Don't
             include the CVE number in the title.
-        description: How the vuln was discovered + what it is.
+        description: Concise, non-technical TL;DR of the vulnerability
+            (1-3 sentences) — it appears first in the report. Deep
+            technical detail and root-cause analysis belong in
+            ``technical_analysis``, not here.
         impact: What an attacker achieves; business risk; data at risk.
         target: Affected URL / domain / repository.
         technical_analysis: The mechanism and root cause.
@@ -610,7 +627,7 @@ _DEP_SEVERITY_FROM_CVSS = {
 
 def _dependency_severity(advisory_cvss: float | None) -> tuple[float, str]:
     if advisory_cvss is None:
-        return 0.0, "medium"
+        return 0.0, "info"
     score = max(0.0, min(10.0, advisory_cvss))
     for (lo, hi), label in _DEP_SEVERITY_FROM_CVSS.items():
         if lo <= score < hi or (hi == 10.0 and score == 10.0):
@@ -622,7 +639,7 @@ def _build_dependency_metadata(
     *,
     package_name: str,
     installed_version: str,
-    package_ecosystem: str,
+    package_ecosystem: str | None,
     fixed_version: str | None,
 ) -> dict[str, str]:
     metadata = {
@@ -652,7 +669,7 @@ def _build_dependency_evidence(
     return evidence
 
 
-async def _do_create_dependency(
+async def _do_create_dependency(  # noqa: PLR0912
     *,
     title: str,
     description: str,
@@ -705,7 +722,13 @@ async def _do_create_dependency(
             f"Invalid fix_effort: {fix_effort!r}. Must be one of: {sorted(_VALID_FIX_EFFORT)}"
         )
 
-    if advisory_cvss is not None and not 0.0 <= advisory_cvss <= 10.0:
+    if advisory_cvss is None:
+        errors.append(
+            "advisory_cvss is required: read the published advisory base score "
+            "(0.0-10.0) off the advisory (trivy CVSS / NVD / GHSA). Severity is "
+            "derived solely from it — do not omit it or the finding cannot be rated."
+        )
+    elif not 0.0 <= advisory_cvss <= 10.0:
         errors.append(f"advisory_cvss must be between 0.0 and 10.0, got {advisory_cvss}")
 
     if errors:
@@ -810,13 +833,13 @@ async def create_dependency_report(
     cve: str,
     package_name: str,
     installed_version: str,
+    advisory_cvss: float,
     impact: str,
     remediation_steps: str,
     assumptions: str,
     package_ecosystem: str,
     fixed_version: str | None = None,
     cwe: str | None = None,
-    advisory_cvss: float | None = None,
     technical_analysis: str | None = None,
     fix_effort: str = "low",
 ) -> str:
@@ -864,8 +887,10 @@ async def create_dependency_report(
         package_ecosystem: e.g. ``npm`` / ``pypi`` / ``maven`` / ``go``.
         fixed_version: First non-vulnerable version, if known.
         cwe: ``CWE-NNN`` (most specific) if certain, else omit.
-        advisory_cvss: Published advisory base score (0.0-10.0) if known;
-            drives severity. Omit if unknown (defaults to medium).
+        advisory_cvss: **Required.** Published advisory base score
+            (0.0-10.0) — read it off the advisory (trivy CVSS / NVD / GHSA).
+            Severity is derived solely from this score, so it must be the
+            real published value; do not guess or omit it.
         technical_analysis: Optional deeper mechanism/root-cause detail.
         fix_effort: One of ``trivial`` / ``low`` / ``medium`` / ``high``
             (dependency upgrades are usually ``trivial``/``low``).

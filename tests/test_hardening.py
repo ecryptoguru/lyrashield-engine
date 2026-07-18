@@ -55,4 +55,4 @@ def test_strix_version_reports_installed_lyrashield_distribution(
         main_module.main()
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out == "strix 1.0.4.post1\n"
+    assert capsys.readouterr().out == "strix 1.1.0.post1\n"

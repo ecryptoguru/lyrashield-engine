@@ -45,7 +45,9 @@ def _patch_engine_scaffold(
             model="openai/gpt-4o",
             reasoning_effort="high",
             force_required_tool_choice=False,
-        )
+            timeout=300,
+        ),
+        runtime=types.SimpleNamespace(max_context_images=3),
     )
     monkeypatch.setattr(runner, "load_settings", lambda: settings)
     monkeypatch.setattr(runner, "configure_sdk_model_defaults", lambda _settings: None)
