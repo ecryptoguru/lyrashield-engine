@@ -37,3 +37,12 @@ def test_usage_ledger_does_not_invent_missing_cache_write_tokens() -> None:
 
     details = ledger.to_record()["request_usage_entries"][0]["input_tokens_details"]
     assert details == {"cached_tokens": 0}
+
+
+def test_usage_ledger_does_not_treat_multi_request_aggregate_as_a_receipt() -> None:
+    usage = Usage(requests=2, input_tokens=200, output_tokens=20, total_tokens=220)
+    ledger = LLMUsageLedger()
+
+    assert ledger.record(agent_id="agent-1", usage=usage, model="azure/gpt-5.6-luna")
+
+    assert "request_usage_entries" not in ledger.to_record()

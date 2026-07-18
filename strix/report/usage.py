@@ -67,6 +67,11 @@ class LLMUsageLedger:
         # billable dimension.
         if self._request_usage_entries:
             record["request_usage_entries"] = list(self._request_usage_entries)
+        elif self._total_usage.requests != 1:
+            # The SDK may synthesize one request entry from a multi-request
+            # aggregate. It has no per-call cache buckets, so it cannot be
+            # used for exact pricing.
+            record.pop("request_usage_entries", None)
         record["cost"] = _round_cost(self._total_cost)
         record["agents"] = []
 
@@ -258,7 +263,10 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
 
 def _serialize_request_usage_entries(usage: Usage) -> list[dict[str, Any]]:
     entries: list[Any] = list(usage.request_usage_entries)
-    if not entries and _usage_has_activity(usage):
+    # An aggregate covering more than one request is not a billable receipt:
+    # its cache buckets may differ per call. Keep it out of the exact-pricing
+    # path until the provider supplies the individual records.
+    if not entries and usage.requests == 1 and _usage_has_activity(usage):
         entries = [usage]
     return [_serialize_request_usage_entry(entry) for entry in entries]
 
