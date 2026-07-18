@@ -11,6 +11,7 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
@@ -961,9 +962,24 @@ def main() -> None:
         display_completion_message(args, results_path)
 
     if args.non_interactive:
-        report_state = get_global_report_state()
-        if report_state and report_state.vulnerability_reports:
-            sys.exit(2)
+        exit_code = _non_interactive_exit_code(get_global_report_state())
+        if exit_code:
+            sys.exit(exit_code)
+
+
+def _non_interactive_exit_code(report_state: Any | None) -> int:
+    """Map an engine receipt to the worker's stable terminal contract."""
+    if report_state is None:
+        return 5
+    if report_state.run_record.get("status") == "completed":
+        return 2 if report_state.vulnerability_reports else 0
+    match report_state.run_record.get("terminal_reason"):
+        case "budget_exceeded":
+            return 3
+        case "rate_limited":
+            return 4
+        case _:
+            return 5
 
 
 if __name__ == "__main__":

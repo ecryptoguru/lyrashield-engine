@@ -18,6 +18,7 @@ class LLMUsageLedger:
         self._total_usage = Usage()
         self._agent_usage: dict[str, Usage] = {}
         self._agent_metadata: dict[str, dict[str, str]] = {}
+        self._request_usage_entries: list[dict[str, Any]] = []
         self._total_cost = 0.0
 
     def record(
@@ -34,6 +35,7 @@ class LLMUsageLedger:
         normalized_agent_id = str(agent_id or "unknown")
         self._total_usage.add(usage)
         self._agent_usage.setdefault(normalized_agent_id, Usage()).add(usage)
+        self._request_usage_entries.extend(_serialize_request_usage_entries(usage))
 
         metadata = self._agent_metadata.setdefault(normalized_agent_id, {})
         if agent_name:
@@ -58,6 +60,13 @@ class LLMUsageLedger:
 
     def to_record(self) -> dict[str, Any]:
         record = serialize_usage(self._total_usage)
+        # ``Usage.add`` reconstructs SDK request entries from aggregate detail
+        # models, which can drop provider extension fields such as
+        # ``cache_write_tokens``. Preserve each original response receipt so
+        # the worker can price it exactly when the provider exposed every
+        # billable dimension.
+        if self._request_usage_entries:
+            record["request_usage_entries"] = list(self._request_usage_entries)
         record["cost"] = _round_cost(self._total_cost)
         record["agents"] = []
 
@@ -87,6 +96,7 @@ class LLMUsageLedger:
         self._total_usage = Usage()
         self._agent_usage.clear()
         self._agent_metadata.clear()
+        self._request_usage_entries.clear()
         self._total_cost = 0.0
 
         if not isinstance(raw_usage, dict):
@@ -99,6 +109,9 @@ class LLMUsageLedger:
             self._total_usage = Usage()
 
         self._total_cost = _float_or_zero(raw_usage.get("cost"))
+        self._request_usage_entries = _hydrate_request_usage_entries(
+            raw_usage.get("request_usage_entries")
+        )
 
         for raw_agent in raw_usage.get("agents") or []:
             if not isinstance(raw_agent, dict):
@@ -241,6 +254,53 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
     if not isinstance(details, dict):
         return {}
     return {str(k): v for k, v in details.items() if v is not None}
+
+
+def _serialize_request_usage_entries(usage: Usage) -> list[dict[str, Any]]:
+    entries: list[Any] = list(usage.request_usage_entries)
+    if not entries and _usage_has_activity(usage):
+        entries = [usage]
+    return [_serialize_request_usage_entry(entry) for entry in entries]
+
+
+def _serialize_request_usage_entry(entry: Any) -> dict[str, Any]:
+    input_tokens = _int_or_zero(getattr(entry, "input_tokens", 0))
+    output_tokens = _int_or_zero(getattr(entry, "output_tokens", 0))
+    total_tokens = _int_or_zero(getattr(entry, "total_tokens", 0))
+    input_details = _details_to_dict(getattr(entry, "input_tokens_details", None))
+    details: dict[str, int] = {
+        "cached_tokens": _int_or_zero(input_details.get("cached_tokens")),
+    }
+    cache_write_tokens = input_details.get("cache_write_tokens")
+    if isinstance(cache_write_tokens, int) and cache_write_tokens >= 0:
+        details["cache_write_tokens"] = cache_write_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens or input_tokens + output_tokens,
+        "input_tokens_details": details,
+    }
+
+
+def _hydrate_request_usage_entries(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        entries.append(_serialize_request_usage_entry(_UsageEntryAdapter(entry)))
+    return entries
+
+
+class _UsageEntryAdapter:
+    """Adapter for preserving bounded serialized receipts during resume."""
+
+    def __init__(self, entry: dict[str, Any]) -> None:
+        self.input_tokens = entry.get("input_tokens")
+        self.output_tokens = entry.get("output_tokens")
+        self.total_tokens = entry.get("total_tokens")
+        self.input_tokens_details = entry.get("input_tokens_details")
 
 
 def _int_or_zero(value: Any) -> int:

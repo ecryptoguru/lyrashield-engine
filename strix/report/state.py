@@ -355,6 +355,7 @@ class ReportState:
 
         self.final_scan_result = self._format_final_scan_result(self.scan_results)
         self.run_record["scan_results"] = self.scan_results
+        self.run_record.pop("terminal_reason", None)
 
         logger.info("Updated scan final fields")
         self.save_run_data(mark_complete=True)
@@ -366,6 +367,7 @@ class ReportState:
         self.run_record["status"] = "running"
         self.run_record["end_time"] = None
         self.run_record.pop("scan_results", None)
+        self.run_record.pop("terminal_reason", None)
         self.end_time = None
         self.scan_results = None
         self.final_scan_result = None
@@ -399,6 +401,11 @@ class ReportState:
         self._sync_llm_usage_record()
         self._save_artifacts()
 
+    def set_terminal_reason(self, reason: str) -> None:
+        """Record a machine-readable non-completion reason for worker callers."""
+        if self.run_record.get("status") != "completed":
+            self.run_record["terminal_reason"] = reason
+
     def cleanup(self, status: str = "stopped") -> None:
         self.save_run_data(status=status)
 
@@ -423,36 +430,29 @@ class ReportState:
     def _save_artifacts(self) -> None:
         """Write scan artifacts under ``run_dir``."""
         run_dir = self.get_run_dir()
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.final_scan_result:
+            write_executive_report(run_dir, self.final_scan_result)
+
+        # The worker must distinguish a clean scan from missing output. Always
+        # write this artifact, including for a valid zero-finding result.
+        write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
+
+        # SARIF is an integration artifact; it must not hide a successful core
+        # receipt when an optional formatter has a problem.
         try:
-            run_dir.mkdir(parents=True, exist_ok=True)
+            write_sarif(
+                run_dir,
+                self.vulnerability_reports,
+                tool_version=_strix_version(),
+                repository_context=self._sarif_repository_context(),
+            )
+        except Exception:
+            logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
 
-            if self.final_scan_result:
-                write_executive_report(run_dir, self.final_scan_result)
-
-            if self.vulnerability_reports:
-                write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
-
-            # SARIF 2.1.0 emitter for CI / ASPM integration. Always emit (even
-            # empty) so a clean run overwrites a prior findings.sarif rather than
-            # leaving a stale one — codeql-action's "absent from new submission →
-            # fixed" needs the fresh empty doc to auto-resolve alerts. Isolated
-            # in its own try: a SARIF-build error must NEVER break the CSV/MD/
-            # run-record path (the emitter's own contract).
-            try:
-                write_sarif(
-                    run_dir,
-                    self.vulnerability_reports,
-                    tool_version=_strix_version(),
-                    repository_context=self._sarif_repository_context(),
-                )
-            except Exception:
-                logger.exception("SARIF emit failed (non-fatal; CSV/MD unaffected)")
-
-            write_run_record(run_dir, self.run_record)
-
-            logger.info("Essential scan data saved to: %s", run_dir)
-        except (OSError, RuntimeError):
-            logger.exception("Failed to save scan data")
+        write_run_record(run_dir, self.run_record)
+        logger.info("Essential scan data saved to: %s", run_dir)
 
     def _sarif_repository_context(self) -> dict[str, Any] | None:
         """Repo/commit/branch context for SARIF provenance (repo scans only).

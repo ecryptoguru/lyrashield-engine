@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from strix.interface import cli
+
+
+main_module = import_module("strix.interface.main")
 
 
 @pytest.mark.asyncio
@@ -43,3 +47,20 @@ async def test_non_interactive_scan_bypasses_live_display() -> None:
 
     run_scan.assert_awaited_once()
     cleanup.assert_awaited_once_with("scan-test")
+
+
+@pytest.mark.parametrize(
+    ("record", "findings", "expected"),
+    [
+        ({"status": "completed"}, [], 0),
+        ({"status": "completed"}, [{"id": "finding-1"}], 2),
+        ({"status": "stopped", "terminal_reason": "budget_exceeded"}, [], 3),
+        ({"status": "stopped", "terminal_reason": "rate_limited"}, [], 4),
+        ({"status": "stopped", "terminal_reason": "incomplete"}, [], 5),
+    ],
+)
+def test_non_interactive_exit_code_requires_a_completed_receipt(
+    record: dict[str, str], findings: list[dict[str, str]], expected: int
+) -> None:
+    report_state = SimpleNamespace(run_record=record, vulnerability_reports=findings)
+    assert main_module._non_interactive_exit_code(report_state) == expected

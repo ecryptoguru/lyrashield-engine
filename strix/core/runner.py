@@ -411,6 +411,9 @@ async def run_strix_scan(
             elif isinstance(final, dict):
                 scan_completed = bool(final.get("scan_completed"))
             if not scan_completed:
+                report_state = get_global_report_state()
+                if report_state is not None:
+                    report_state.set_terminal_reason("incomplete")
                 logger.error(
                     "Scan %s ended without calling finish_scan. The agent "
                     "emitted a text-only turn instead of a lifecycle tool call, "
@@ -426,6 +429,9 @@ async def run_strix_scan(
             await coordinator.cancel_descendants(root_id)
             with contextlib.suppress(Exception):
                 await coordinator.set_status(root_id, "stopped")
+        report_state = get_global_report_state()
+        if report_state is not None:
+            report_state.set_terminal_reason("budget_exceeded")
         return None
     except RateLimitError as exc:
         logger.warning(
@@ -439,6 +445,9 @@ async def run_strix_scan(
             await coordinator.cancel_descendants(root_id)
             with contextlib.suppress(Exception):
                 await coordinator.set_status(root_id, "stopped")
+        report_state = get_global_report_state()
+        if report_state is not None:
+            report_state.set_terminal_reason("rate_limited")
         return None
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)
