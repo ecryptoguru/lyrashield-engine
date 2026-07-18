@@ -52,11 +52,13 @@ jobs:
             test "$(pwd)" = "/workspace" &&
             test -f /app/certs/ca.p12 &&
             test ! -S /var/run/docker.sock &&
+            test "$VIRTUAL_ENV" = "/app/.venv" &&
             test "$HTTP_PROXY" = "http://127.0.0.1:48080" &&
             caido-cli --version &&
-            nmap --version >/dev/null &&
-            python3 -c "import caido_api" &&
-            curl -fsS http://127.0.0.1:48080/graphql/ >/dev/null
+            command -v nmap >/dev/null &&
+            /app/.venv/bin/python -c "import caido_api" &&
+            status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
+            case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
           '
 
       - name: Check out public LyraShield app contract
