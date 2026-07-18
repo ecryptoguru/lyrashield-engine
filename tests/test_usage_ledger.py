@@ -25,6 +25,7 @@ def test_usage_ledger_preserves_provider_cache_write_receipts() -> None:
             "output_tokens": 10,
             "total_tokens": 110,
             "input_tokens_details": {"cached_tokens": 20, "cache_write_tokens": 5},
+            "model": "azure/gpt-5.6-luna",
         }
     ]
 
@@ -37,6 +38,7 @@ def test_usage_ledger_does_not_invent_missing_cache_write_tokens() -> None:
 
     details = ledger.to_record()["request_usage_entries"][0]["input_tokens_details"]
     assert details == {"cached_tokens": 0}
+    assert ledger.to_record()["request_usage_entries"][0]["model"] == "azure/gpt-5.6-luna"
 
 
 def test_usage_ledger_does_not_treat_multi_request_aggregate_as_a_receipt() -> None:
@@ -55,3 +57,22 @@ def test_usage_ledger_handles_missing_provider_request_entries() -> None:
 
     assert ledger.record(agent_id="agent-1", usage=usage, model="azure/gpt-5.6-luna")
     assert len(ledger.to_record()["request_usage_entries"]) == 1
+
+
+def test_usage_ledger_preserves_request_model_during_hydration() -> None:
+    ledger = LLMUsageLedger()
+    ledger.hydrate(
+        {
+            "request_usage_entries": [
+                {
+                    "input_tokens": 100,
+                    "output_tokens": 10,
+                    "total_tokens": 110,
+                    "input_tokens_details": {"cached_tokens": 20},
+                    "model": "azure/gpt-5.6-luna",
+                }
+            ]
+        }
+    )
+
+    assert ledger.to_record()["request_usage_entries"][0]["model"] == "azure/gpt-5.6-luna"

@@ -35,7 +35,7 @@ class LLMUsageLedger:
         normalized_agent_id = str(agent_id or "unknown")
         self._total_usage.add(usage)
         self._agent_usage.setdefault(normalized_agent_id, Usage()).add(usage)
-        self._request_usage_entries.extend(_serialize_request_usage_entries(usage))
+        self._request_usage_entries.extend(_serialize_request_usage_entries(usage, model=model))
 
         metadata = self._agent_metadata.setdefault(normalized_agent_id, {})
         if agent_name:
@@ -261,14 +261,22 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
     return {str(k): v for k, v in details.items() if v is not None}
 
 
-def _serialize_request_usage_entries(usage: Usage) -> list[dict[str, Any]]:
+def _serialize_request_usage_entries(
+    usage: Usage,
+    *,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
     entries: list[Any] = list(usage.request_usage_entries or [])
     # An aggregate covering more than one request is not a billable receipt:
     # its cache buckets may differ per call. Keep it out of the exact-pricing
     # path until the provider supplies the individual records.
     if not entries and usage.requests == 1 and _usage_has_activity(usage):
         entries = [usage]
-    return [_serialize_request_usage_entry(entry) for entry in entries]
+    serialized = [_serialize_request_usage_entry(entry) for entry in entries]
+    if model:
+        for entry in serialized:
+            entry["model"] = model
+    return serialized
 
 
 def _serialize_request_usage_entry(entry: Any) -> dict[str, Any]:
@@ -297,7 +305,11 @@ def _hydrate_request_usage_entries(value: Any) -> list[dict[str, Any]]:
     for entry in value:
         if not isinstance(entry, dict):
             continue
-        entries.append(_serialize_request_usage_entry(_UsageEntryAdapter(entry)))
+        serialized = _serialize_request_usage_entry(_UsageEntryAdapter(entry))
+        model = entry.get("model")
+        if isinstance(model, str) and model:
+            serialized["model"] = model
+        entries.append(serialized)
     return entries
 
 

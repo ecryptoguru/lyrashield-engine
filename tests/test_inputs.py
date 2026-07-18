@@ -174,6 +174,20 @@ def test_make_model_settings_omits_timeout_when_unset() -> None:
     assert settings.extra_args is None
 
 
+def test_make_model_settings_adds_stable_prompt_cache_key() -> None:
+    settings = make_model_settings(
+        "medium",
+        model_name="azure_ai/gpt-5.6-terra",
+        request_timeout=300.0,
+        prompt_cache_key="lyrashield:scan-1:coordinator",
+    )
+
+    assert settings.extra_args == {
+        "timeout": 300.0,
+        "prompt_cache_key": "lyrashield:scan-1:coordinator",
+    }
+
+
 def test_make_model_settings_timeout_survives_reasoning_resolve() -> None:
     # Reasoning is resolved via ModelSettings.resolve(); the timeout in extra_args
     # must not be dropped when a reasoning override is merged in.

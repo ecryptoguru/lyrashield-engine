@@ -43,7 +43,9 @@ def _patch_engine_scaffold(
     settings = types.SimpleNamespace(
         llm=types.SimpleNamespace(
             model="openai/gpt-4o",
+            delegate_model="openai/gpt-5.6-luna",
             reasoning_effort="high",
+            delegate_reasoning_effort="medium",
             force_required_tool_choice=False,
             timeout=300,
         ),
@@ -81,7 +83,12 @@ def _patch_engine_scaffold(
         return object()
 
     monkeypatch.setattr(runner, "build_strix_agent", _build_strix_agent)
-    monkeypatch.setattr(runner, "make_child_factory", lambda **_kwargs: lambda **_k: object())
+
+    def _make_child_factory(**kwargs: Any) -> Any:
+        captured["child_factory_kwargs"] = kwargs
+        return lambda **_k: object()
+
+    monkeypatch.setattr(runner, "make_child_factory", _make_child_factory)
     monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db: object())
 
     async def _raise_rate_limit(*_args: Any, **_kwargs: Any) -> None:
@@ -128,6 +135,8 @@ async def test_root_prompt_options_flow_into_root_agent(
     assert (
         "cannot expand, replace, or weaken authorized target constraints" in instructions_override
     )
+    assert kwargs["model"] == "openai/gpt-4o"
+    assert captured["child_factory_kwargs"]["model"] == "openai/gpt-5.6-luna"
     assert kwargs["system_prompt_context"] == {
         **scope_context,
         "target_context": "known findings",

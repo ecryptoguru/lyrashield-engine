@@ -22,6 +22,7 @@ class LlmSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
     model: str | None = Field(default=None, alias="STRIX_LLM")
+    delegate_model: str | None = Field(default=None, alias="STRIX_DELEGATE_LLM")
     api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -52,7 +53,11 @@ class LlmSettings(BaseSettings):
             "AZURE_OPENAI_API_VERSION",
         ),
     )
-    reasoning_effort: ReasoningEffort = Field(default="high", alias="STRIX_REASONING_EFFORT")
+    reasoning_effort: ReasoningEffort = Field(default="medium", alias="STRIX_REASONING_EFFORT")
+    delegate_reasoning_effort: ReasoningEffort = Field(
+        default="medium",
+        alias="STRIX_DELEGATE_REASONING_EFFORT",
+    )
     force_required_tool_choice: bool = Field(
         default=False,
         alias="STRIX_FORCE_REQUIRED_TOOL_CHOICE",

@@ -104,3 +104,22 @@ def test_builtin_prompt_failure_stops_agent_creation(monkeypatch: pytest.MonkeyP
 def test_default_agent_has_no_external_web_search_tool() -> None:
     agent = factory.build_strix_agent(is_root=True)
     assert "web_search" not in {tool.name for tool in agent.tools}
+
+
+def test_child_agents_default_to_focused_context() -> None:
+    agent = factory.build_strix_agent(is_root=True)
+    create_agent_tool = next(tool for tool in agent.tools if tool.name == "create_agent")
+
+    assert create_agent_tool.params_json_schema["properties"]["inherit_context"]["default"] is False
+
+
+def test_only_root_agent_owns_orchestration_tools() -> None:
+    root = factory.build_strix_agent(is_root=True)
+    child = factory.build_strix_agent(is_root=False)
+
+    root_names = {tool.name for tool in root.tools}
+    child_names = {tool.name for tool in child.tools}
+
+    assert {"view_agent_graph", "create_agent", "stop_agent"} <= root_names
+    assert {"view_agent_graph", "create_agent", "stop_agent"}.isdisjoint(child_names)
+    assert {"send_message_to_agent", "wait_for_message", "agent_finish"} <= child_names

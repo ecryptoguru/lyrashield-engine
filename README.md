@@ -33,6 +33,8 @@ uv run lyrashield --version
 uv run lyrashield --help
 
 export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+# Optional for Deep scans: Terra coordinates while Luna runs focused specialists.
+export LYRASHIELD_DELEGATE_LLM="openai/gpt-5.6-luna"
 export LLM_API_KEY="<credential>"
 export LLM_API_BASE="https://<approved-endpoint>"
 uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
@@ -48,6 +50,8 @@ Each non-interactive run writes bounded machine-readable artifacts under `strix_
 
 - `run.json` records lifecycle, model/reasoning metadata, usage, limits, and reproducibility fields;
 - `vulnerabilities.json` contains bounded structured finding candidates, control IDs, evidence metadata, and deterministic identities.
+
+Deep scans use a deterministic two-tier route: the Terra/medium root owns coordination and cross-file judgment, while Luna/medium child specialists handle focused tasks with smaller output reservations. Only the root can create or stop specialists, so child work cannot fan out recursively. Child agents start with a focused task and system-owned scope instead of copying the full parent conversation unless the coordinator explicitly requests inherited context. Stable per-scan cache keys improve repeated-prefix reuse, and per-request usage receipts retain the actual model so mixed-model spend can be reconciled against the rate card.
 
 The TypeScript worker treats all engine output as untrusted. It schema-validates these artifacts, never persists raw stdout/stderr, and does not allow model confidence to become independent verification proof. Existing artifact keys are compatibility-sensitive; coordinate changes with the worker contract tests in `lyrashield-ai`.
 
