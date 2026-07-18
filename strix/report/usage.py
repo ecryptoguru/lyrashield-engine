@@ -173,7 +173,7 @@ def _estimate_litellm_cost(usage: Usage, model: str | None) -> float | None:
     if not litellm_model:
         return None
 
-    entries = list(usage.request_usage_entries)
+    entries = list(usage.request_usage_entries or [])
     if not entries:
         return _estimate_litellm_entry_cost(usage, litellm_model)
 
@@ -262,7 +262,7 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
 
 
 def _serialize_request_usage_entries(usage: Usage) -> list[dict[str, Any]]:
-    entries: list[Any] = list(usage.request_usage_entries)
+    entries: list[Any] = list(usage.request_usage_entries or [])
     # An aggregate covering more than one request is not a billable receipt:
     # its cache buckets may differ per call. Keep it out of the exact-pricing
     # path until the provider supplies the individual records.

@@ -46,3 +46,12 @@ def test_usage_ledger_does_not_treat_multi_request_aggregate_as_a_receipt() -> N
     assert ledger.record(agent_id="agent-1", usage=usage, model="azure/gpt-5.6-luna")
 
     assert "request_usage_entries" not in ledger.to_record()
+
+
+def test_usage_ledger_handles_missing_provider_request_entries() -> None:
+    usage = Usage(requests=1, input_tokens=100, output_tokens=10, total_tokens=110)
+    usage.request_usage_entries = None
+    ledger = LLMUsageLedger()
+
+    assert ledger.record(agent_id="agent-1", usage=usage, model="azure/gpt-5.6-luna")
+    assert len(ledger.to_record()["request_usage_entries"]) == 1
