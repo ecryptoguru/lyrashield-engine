@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "sync-upstream-release.sh"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 def git(cwd: Path, *args: str, check: bool = True) -> str:
@@ -151,3 +152,23 @@ def test_rejects_invalid_or_older_release(tmp_path: Path) -> None:
     older = run_sync(fork, "v1.0.9")
     assert older.returncode == 2
     assert "older than recorded" in older.stderr
+
+
+def test_engine_ci_defines_complete_required_check() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    required_fragments = (
+        "name: Engine CI",
+        "pull_request:",
+        "workflow_dispatch:",
+        "verify:",
+        "timeout-minutes:",
+        "scripts/verify-thin-fork.sh",
+        "uv build",
+        "bash scripts/build.sh",
+        "containers/Dockerfile",
+        "--entrypoint sh",
+        "scripts/verify-worker-contract.sh",
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    )
+    for fragment in required_fragments:
+        assert fragment in workflow
