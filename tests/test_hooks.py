@@ -15,7 +15,7 @@ from strix.core.hooks import (
 
 
 def _make_hooks(max_budget: float | None) -> ReportUsageHooks:
-    return ReportUsageHooks(model="test-model", max_budget_usd=max_budget)
+    return ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=max_budget)
 
 
 def _make_report_state(cost: float) -> MagicMock:
@@ -149,3 +149,40 @@ async def test_single_oversized_item_is_compacted_without_blocking() -> None:
 
     assert len(items) == 2
     assert _estimate_input_tokens(hooks._model, "system", items, agent) < 272_000
+
+
+@pytest.mark.asyncio
+async def test_request_is_rejected_before_call_when_bounded_cost_exceeds_budget() -> None:
+    hooks = ReportUsageHooks(
+        model="azure_ai/gpt-5.6-luna",
+        max_budget_usd=0.001,
+        max_output_tokens=4_096,
+    )
+    agent = MagicMock()
+    agent.name = "root"
+    agent.tools = []
+    agent.output_type = None
+
+    with pytest.raises(BudgetExceededError, match=r"Next bounded GPT-5\.6 request"):
+        await hooks.on_llm_start(
+            _make_context(), agent, "system", [{"role": "user", "content": "scan"}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_tool_call_and_output_remain_grouped_after_compaction() -> None:
+    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
+    agent = MagicMock()
+    agent.tools = []
+    agent.output_type = None
+    items = [
+        {"role": "user", "content": "original task"},
+        {"role": "assistant", "content": "old context " * 300_000},
+        {"type": "function_call", "call_id": "call-1", "name": "shell"},
+        {"type": "function_call_output", "call_id": "call-1", "output": "result"},
+    ]
+
+    await hooks.on_llm_start(_make_context(), agent, "system", items)
+
+    retained_types = [item.get("type") for item in items if isinstance(item, dict)]
+    assert ("function_call" in retained_types) == ("function_call_output" in retained_types)

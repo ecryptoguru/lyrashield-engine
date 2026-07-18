@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from agents.sandbox.entries import BaseEntry, LocalDir
-from agents.sandbox.manifest import Environment, Manifest
+from agents.sandbox.manifest import EnvEntry, Environment, EnvValue, Manifest
 
 from strix.config import load_settings
 from strix.runtime.backends import get_backend
 from strix.runtime.caido_bootstrap import bootstrap_caido
+from strix.runtime.docker_client import host_gateway_enabled
 from strix.runtime.local_dir_staging import stage_symlink_safe_dir
 
 
@@ -27,6 +28,21 @@ _SESSION_CACHE: dict[str, dict[str, Any]] = {}
 
 # Manifest root inside the container; entry keys hang off this path.
 _WORKSPACE_ROOT = "/workspace"
+
+
+def build_sandbox_environment(
+    container_caido_url: str,
+) -> dict[str, str | EnvValue | EnvEntry]:
+    environment: dict[str, str | EnvValue | EnvEntry] = {
+        "PYTHONUNBUFFERED": "1",
+        "http_proxy": container_caido_url,
+        "https_proxy": container_caido_url,
+        "ALL_PROXY": container_caido_url,
+        "NO_PROXY": "localhost,127.0.0.1",
+    }
+    if host_gateway_enabled():
+        environment["HOST_GATEWAY"] = "host.docker.internal"
+    return environment
 
 
 def resolve_sandbox_endpoint(
@@ -126,16 +142,7 @@ async def create_or_reuse(
     container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
     manifest = Manifest(
         entries=entries,
-        environment=Environment(
-            value={
-                "PYTHONUNBUFFERED": "1",
-                "HOST_GATEWAY": "host.docker.internal",
-                "http_proxy": container_caido_url,
-                "https_proxy": container_caido_url,
-                "ALL_PROXY": container_caido_url,
-                "NO_PROXY": "localhost,127.0.0.1",
-            },
-        ),
+        environment=Environment(value=build_sandbox_environment(container_caido_url)),
     )
 
     backend_name = load_settings().runtime.backend

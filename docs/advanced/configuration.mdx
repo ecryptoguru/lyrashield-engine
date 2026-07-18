@@ -37,10 +37,6 @@ Configure Strix using environment variables or a config file.
 
 ## Optional Features
 
-<ParamField path="PERPLEXITY_API_KEY" type="string">
-  API key for Perplexity AI. Enables real-time web search during scans for OSINT and vulnerability research.
-</ParamField>
-
 <ParamField path="STRIX_TELEMETRY" default="1" type="string">
   Telemetry toggle. Set to `0`, `false`, `no`, or `off` to disable telemetry (PostHog, Scarf, OTEL).
 </ParamField>
@@ -117,11 +113,8 @@ strix --target ./app --config /path/to/config.json
 
 ```bash
 # Required
-export STRIX_LLM="openai/gpt-5.4"
+export STRIX_LLM="openai/gpt-5.6-luna"
 export LLM_API_KEY="sk-..."
-
-# Optional: Enable web search
-export PERPLEXITY_API_KEY="pplx-..."
 
 # Optional: Custom timeouts
 export LLM_TIMEOUT="600"

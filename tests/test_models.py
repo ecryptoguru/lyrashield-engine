@@ -7,6 +7,7 @@ from agents.model_settings import ModelSettings
 
 from strix.config.models import (
     RECOMMENDED_MODEL_NAMES,
+    is_gpt56_model,
     is_recommended_or_frontier_model,
     request_timeout_extra_args,
 )
@@ -36,6 +37,19 @@ def test_request_timeout_extra_args_disabled(value: float | None) -> None:
 
 def test_recommended_models_are_matched_case_insensitively() -> None:
     assert is_recommended_or_frontier_model("Vertex_AI/Gemini-3-Pro-Preview")
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["gpt-5.6-luna", "azure_ai/gpt-5.6-terra", "openai/gpt-5.6-sol", "prod-gpt-5.6-luna"],
+)
+def test_gpt56_deployment_names_are_accepted(model_name: str) -> None:
+    assert is_gpt56_model(model_name)
+
+
+@pytest.mark.parametrize("model_name", [None, "", "gpt-5.5", "gpt-5.60", "gpt-5.6fake"])
+def test_non_gpt56_deployment_names_are_rejected(model_name: str | None) -> None:
+    assert not is_gpt56_model(model_name)
 
 
 @pytest.mark.parametrize(

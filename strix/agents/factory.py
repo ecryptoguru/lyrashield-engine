@@ -51,7 +51,6 @@ from strix.tools.todo.tools import (
     mark_todo_pending,
     update_todo,
 )
-from strix.tools.web_search.tool import web_search
 
 
 if TYPE_CHECKING:
@@ -340,7 +339,6 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     get_note,
     update_note,
     delete_note,
-    web_search,
     create_vulnerability_report,
     create_dependency_report,
     list_requests,

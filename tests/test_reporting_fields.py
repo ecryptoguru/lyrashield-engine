@@ -6,13 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from strix.report.dedupe import (
-    MAX_DEDUPE_INPUT_BYTES,
-    _build_bounded_dedupe_message,
-    _check_dependency_duplicate,
-    _prepare_report_for_comparison,
-    check_duplicate,
-)
+from strix.report.dedupe import _check_dependency_duplicate, check_duplicate
 from strix.report.state import ReportState, set_global_report_state
 from strix.tools.finish.tool import finish_scan
 from strix.tools.reporting.tool import (
@@ -66,6 +60,7 @@ async def test_create_report_persists_new_fields(report_state: ReportState) -> N
         cve=None,
         cwe="CWE-79",
         code_locations=None,
+        control_ids=[11, 27],
         fix_pr_body="## Fix\nEncode output.",
     )
     assert result["success"] is True
@@ -75,6 +70,7 @@ async def test_create_report_persists_new_fields(report_state: ReportState) -> N
     assert report["fix_effort"] == "low"
     assert report["fix_pr_body"] == "## Fix\nEncode output."
     assert report["finding_class"] == "dynamic"
+    assert report["control_ids"] == [11, 27]
 
 
 async def test_create_report_requires_evidence_and_assumptions(
@@ -330,37 +326,24 @@ async def test_dependency_report_requires_ecosystem(report_state: ReportState) -
     assert not report_state.vulnerability_reports
 
 
-def test_dedupe_comparison_preserves_cve_identity() -> None:
-    cleaned = _prepare_report_for_comparison(
-        {
-            "title": "CVE-2021-23337 in lodash",
-            "description": "Pinned vulnerable dependency.",
-            "target": "repo/package.json",
-            "cve": "CVE-2021-23337",
-            "dependency_metadata": {"package_name": "lodash"},
-        }
-    )
+async def test_dynamic_dedupe_requires_exact_location_identity() -> None:
+    candidate = {
+        "title": "SQL injection in repository query",
+        "target": "repo",
+        "cwe": "CWE-89",
+        "code_locations": [{"file": "src/query.py", "start_line": 10, "end_line": 12}],
+    }
+    different_location = {
+        **candidate,
+        "id": "vuln-0001",
+        "code_locations": [{"file": "src/query.py", "start_line": 30, "end_line": 32}],
+    }
+    exact_location = {**candidate, "id": "vuln-0002"}
 
-    assert cleaned["cve"] == "CVE-2021-23337"
-    assert cleaned["dependency_metadata"] == {"package_name": "lodash"}
-
-
-def test_dedupe_prompt_is_compacted_below_the_request_budget() -> None:
-    candidate = {"id": "new", "title": "target finding", "endpoint": "/api/items"}
-    existing = [
-        {
-            "id": f"existing-{index}",
-            "title": "target finding" if index == 0 else f"other-{index}",
-            "description": "alpha beta gamma delta " * 2_000,
-            "endpoint": "/api/items" if index == 0 else f"/api/{index}",
-        }
-        for index in range(100)
-    ]
-
-    message = _build_bounded_dedupe_message(candidate, existing)
-
-    assert len(message.encode("utf-8")) < MAX_DEDUPE_INPUT_BYTES + 1_000
-    assert "existing-0" in message
+    assert (await check_duplicate(candidate, [different_location]))["is_duplicate"] is False
+    result = await check_duplicate(candidate, [different_location, exact_location])
+    assert result["is_duplicate"] is True
+    assert result["duplicate_id"] == "vuln-0002"
 
 
 async def test_dependency_dedupe_uses_cve_package_identity() -> None:
@@ -573,11 +556,11 @@ def test_tool_descriptions_include_formatting_guidance() -> None:
 
 def test_vuln_tool_exposes_new_params() -> None:
     props = create_vulnerability_report.params_json_schema["properties"]
-    for field in ("evidence", "assumptions", "fix_effort", "fix_pr_body"):
+    for field in ("evidence", "assumptions", "fix_effort", "control_ids", "fix_pr_body"):
         assert field in props
 
     dep_props = create_dependency_report.params_json_schema["properties"]
-    for field in ("package_name", "installed_version", "cve", "advisory_cvss"):
+    for field in ("package_name", "installed_version", "cve", "advisory_cvss", "control_ids"):
         assert field in dep_props
     dep_required = create_dependency_report.params_json_schema["required"]
     assert "package_ecosystem" in dep_required

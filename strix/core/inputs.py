@@ -128,11 +128,13 @@ def make_model_settings(
     model_name: str,
     force_required_tool_choice: bool = False,
     request_timeout: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> ModelSettings:
     model_settings = ModelSettings(
         parallel_tool_calls=False,
         retry=DEFAULT_MODEL_RETRY,
         include_usage=True,
+        max_tokens=max_output_tokens,
         extra_args=request_timeout_extra_args(request_timeout),
     )
     if (
@@ -160,8 +162,7 @@ def child_initial_input(
 
     Collapsing the inherited-context block, the identity line, and the task into
     one ``{"role": "user"}`` message keeps providers that require strictly
-    alternating roles (e.g. Perplexity, llama.cpp) from rejecting consecutive
-    user messages.
+    alternating roles from rejecting consecutive user messages.
     """
     parts: list[str] = []
     if parent_history:

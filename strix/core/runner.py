@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import uuid
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
 from agents import RunConfig
@@ -38,6 +40,7 @@ from strix.core.inputs import (
 )
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
+from strix.report.state import get_global_report_state
 from strix.runtime import session_manager
 from strix.telemetry.logging import set_scan_id, setup_scan_logging
 
@@ -50,6 +53,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 StreamEventSink = Callable[[str, Any], None]
+_MODE_AGENT_LIMITS = {"quick": 2, "standard": 4, "deep": 6}
+
+
+def _engine_version() -> str:
+    try:
+        return version("lyrashield-engine")
+    except PackageNotFoundError:
+        return "development"
+
+
+def _coordinator_for_scan_mode(
+    coordinator: AgentCoordinator | None,
+    scan_mode: str,
+) -> AgentCoordinator:
+    mode_agent_limit = _MODE_AGENT_LIMITS.get(scan_mode, 4)
+    if coordinator is None:
+        return AgentCoordinator(max_agents=mode_agent_limit)
+    if len(coordinator.statuses) > mode_agent_limit:
+        raise RuntimeError(
+            f"Existing coordinator has {len(coordinator.statuses)} agents, "
+            f"above the {scan_mode} mode limit ({mode_agent_limit})",
+        )
+    coordinator.max_agents = min(coordinator.max_agents, mode_agent_limit)
+    return coordinator
 
 
 def _merge_root_prompt_context(
@@ -75,10 +102,7 @@ def _compose_root_instructions_override(
     is_whitebox: bool,
     interactive: bool,
     system_prompt_context: dict[str, Any],
-) -> str | None:
-    if root_instructions_override is None:
-        return None
-
+) -> str:
     base_instructions = render_system_prompt(
         skills=skills,
         scan_mode=scan_mode,
@@ -87,6 +111,8 @@ def _compose_root_instructions_override(
         interactive=interactive,
         system_prompt_context=system_prompt_context,
     )
+    if root_instructions_override is None:
+        return base_instructions
     return (
         f"{base_instructions}\n\n"
         "<root_scan_instructions_override>\n"
@@ -156,8 +182,8 @@ async def run_strix_scan(
     logger.info("LLM model resolved: %s", resolved_model)
     chat_completions_tools = uses_chat_completions_tool_schema(resolved_model, settings)
 
-    if coordinator is None:
-        coordinator = AgentCoordinator()
+    scan_mode = str(scan_config.get("scan_mode") or "deep")
+    coordinator = _coordinator_for_scan_mode(coordinator, scan_mode)
     coordinator.set_snapshot_path(agents_path)
 
     from strix.tools.notes.tools import hydrate_notes_from_disk
@@ -207,15 +233,19 @@ async def run_strix_scan(
 
     try:
         targets = scan_config.get("targets") or []
-        scan_mode = str(scan_config.get("scan_mode") or "deep")
         is_whitebox = any(t.get("type") == "local_code" for t in targets)
         skills = list(scan_config.get("skills") or [])
         root_task = build_root_task(scan_config)
+        max_output_tokens = {"quick": 4_096, "standard": 8_192, "deep": 16_384}.get(
+            scan_mode,
+            8_192,
+        )
         model_settings = make_model_settings(
             settings.llm.reasoning_effort,
             model_name=resolved_model,
             force_required_tool_choice=settings.llm.force_required_tool_choice,
             request_timeout=settings.llm.timeout,
+            max_output_tokens=max_output_tokens,
         )
         run_config = RunConfig(
             model=resolved_model,
@@ -224,7 +254,11 @@ async def run_strix_scan(
             sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
             trace_include_sensitive_data=False,
         )
-        hooks = ReportUsageHooks(model=resolved_model, max_budget_usd=max_budget_usd)
+        hooks = ReportUsageHooks(
+            model=resolved_model,
+            max_budget_usd=max_budget_usd,
+            max_output_tokens=max_output_tokens,
+        )
 
         scope_context = build_scope_context(scan_config)
         root_context = _merge_root_prompt_context(scope_context, extra_system_prompt_context)
@@ -236,6 +270,21 @@ async def run_strix_scan(
             interactive=interactive,
             system_prompt_context=root_context,
         )
+        report_state = get_global_report_state()
+        if report_state is not None:
+            report_state.run_record.update(
+                {
+                    "engine_version": _engine_version(),
+                    "prompt_bundle_hash": hashlib.sha256(
+                        root_instructions.encode("utf-8")
+                    ).hexdigest(),
+                    "model": resolved_model,
+                    "reasoning_effort": settings.llm.reasoning_effort,
+                    "max_output_tokens": max_output_tokens,
+                    "max_agents": coordinator.max_agents,
+                }
+            )
+            report_state.save_run_data()
 
         root_agent = build_strix_agent(
             name="strix",

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from agents.sandbox.entries import LocalDir
 
 from strix.runtime.session_manager import (
+    build_sandbox_environment,
     build_session_entries,
     get_sandbox_container_ip,
     resolve_sandbox_endpoint,
@@ -28,6 +29,22 @@ def test_copied_source_becomes_localdir_entry(tmp_path: Path) -> None:
     assert staged_dirs == []
     assert isinstance(entries["repo"], LocalDir)
     assert entries["repo"].src == tmp_path.resolve()
+
+
+def test_host_gateway_is_not_advertised_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("STRIX_SANDBOX_ALLOW_HOST_GATEWAY", raising=False)
+
+    environment = build_sandbox_environment("http://127.0.0.1:48080")
+
+    assert "HOST_GATEWAY" not in environment
+
+
+def test_host_gateway_is_advertised_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("STRIX_SANDBOX_ALLOW_HOST_GATEWAY", "1")
+
+    environment = build_sandbox_environment("http://127.0.0.1:48080")
+
+    assert environment["HOST_GATEWAY"] == "host.docker.internal"
 
 
 def test_mounted_source_becomes_bind_mount(tmp_path: Path) -> None:

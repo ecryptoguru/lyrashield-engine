@@ -156,6 +156,18 @@ _REQUIRED_FIELDS = {
 _VALID_FIX_EFFORT = frozenset({"trivial", "low", "medium", "high"})
 
 
+def _normalize_control_ids(control_ids: list[int] | None) -> tuple[list[int], list[str]]:
+    if control_ids is None:
+        return [], []
+    normalized: list[int] = []
+    for value in control_ids:
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 50:
+            return [], ["control_ids must contain only integer ranks from 1 to 50"]
+        if value not in normalized:
+            normalized.append(value)
+    return normalized, []
+
+
 async def _do_create(  # noqa: PLR0912
     *,
     title: str,
@@ -175,6 +187,7 @@ async def _do_create(  # noqa: PLR0912
     cve: str | None,
     cwe: str | None,
     code_locations: list[dict[str, Any]] | None,
+    control_ids: list[int] | None = None,
     fix_pr_body: str | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
@@ -224,6 +237,8 @@ async def _do_create(  # noqa: PLR0912
         cwe_err = _validate_cwe(cwe)
         if cwe_err:
             errors.append(cwe_err)
+    normalized_control_ids, control_errors = _normalize_control_ids(control_ids)
+    errors.extend(control_errors)
 
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
@@ -255,6 +270,8 @@ async def _do_create(  # noqa: PLR0912
             "poc_script_code": poc_script_code,
             "endpoint": endpoint,
             "method": method,
+            "cwe": cwe,
+            "code_locations": parsed_locations,
         }
         dedupe = await check_duplicate(candidate, existing)
         if dedupe.get("is_duplicate"):
@@ -295,6 +312,7 @@ async def _do_create(  # noqa: PLR0912
             cve=cve,
             cwe=cwe,
             code_locations=parsed_locations,
+            control_ids=normalized_control_ids,
             fix_pr_body=fix_pr_body,
             agent_id=agent_id if isinstance(agent_id, str) else None,
             agent_name=agent_name if isinstance(agent_name, str) else None,
@@ -339,6 +357,7 @@ async def create_vulnerability_report(
     cve: str | None = None,
     cwe: str | None = None,
     code_locations: list[dict[str, Any]] | None = None,
+    control_ids: list[int] | None = None,
     fix_pr_body: str | None = None,
 ) -> str:
     """File a vulnerability report — one report per fully-verified finding.
@@ -425,7 +444,7 @@ async def create_vulnerability_report(
 
     **CVE / CWE rules**: pass the bare ID only (``CVE-2024-1234``,
     ``CWE-89``) — no name, no parenthetical. Be 100% certain; if
-    unsure, use ``web_search`` to verify the ID before passing, or omit
+    unsure, omit the field rather than guessing
     the field entirely. Always prefer the most specific child CWE over
     a broad parent (CWE-89 not CWE-74; CWE-78 not CWE-77). Do NOT use
     broad/parent CWEs like CWE-74, CWE-20, CWE-200, CWE-284, or
@@ -477,6 +496,7 @@ async def create_vulnerability_report(
         cve: ``CVE-YYYY-NNNNN`` if certain, else omit.
         cwe: ``CWE-NNN`` (most specific child) if certain, else omit.
         code_locations: White-box findings — list of location objects.
+        control_ids: Applicable LyraShield Vibe Security 50 ranks (1-50).
 
             **How ``fix_before`` / ``fix_after`` work**: they're used as
             literal GitHub/GitLab PR suggestion blocks. When a reviewer
@@ -610,6 +630,7 @@ async def create_vulnerability_report(
         cve=cve,
         cwe=cwe,
         code_locations=code_locations,
+        control_ids=control_ids,
         fix_pr_body=fix_pr_body,
         agent_id=agent_id,
         agent_name=agent_name,
@@ -686,6 +707,7 @@ async def _do_create_dependency(  # noqa: PLR0912
     advisory_cvss: float | None,
     technical_analysis: str | None,
     fix_effort: str,
+    control_ids: list[int] | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
 ) -> dict[str, Any]:
@@ -715,6 +737,8 @@ async def _do_create_dependency(  # noqa: PLR0912
         cwe_err = _validate_cwe(cwe)
         if cwe_err:
             errors.append(cwe_err)
+    normalized_control_ids, control_errors = _normalize_control_ids(control_ids)
+    errors.extend(control_errors)
 
     fix_effort = (fix_effort or "").strip().lower()
     if fix_effort not in _VALID_FIX_EFFORT:
@@ -801,6 +825,7 @@ async def _do_create_dependency(  # noqa: PLR0912
             cwe=cwe,
             finding_class="dependency_cve",
             dependency_metadata=dependency_metadata,
+            control_ids=normalized_control_ids,
             agent_id=agent_id if isinstance(agent_id, str) else None,
             agent_name=agent_name if isinstance(agent_name, str) else None,
         )
@@ -842,6 +867,7 @@ async def create_dependency_report(
     cwe: str | None = None,
     technical_analysis: str | None = None,
     fix_effort: str = "low",
+    control_ids: list[int] | None = None,
 ) -> str:
     """File a known-CVE dependency (SCA) finding — one report per CVE x package.
 
@@ -856,7 +882,7 @@ async def create_dependency_report(
 
     - A dependency is pinned to a version covered by a published CVE.
     - You have verified the CVE ID and the installed version falls in the
-      affected range (use ``web_search`` if unsure).
+      affected range from local scanner/advisory evidence.
 
     **When NOT to file**:
 
@@ -894,6 +920,7 @@ async def create_dependency_report(
         technical_analysis: Optional deeper mechanism/root-cause detail.
         fix_effort: One of ``trivial`` / ``low`` / ``medium`` / ``high``
             (dependency upgrades are usually ``trivial``/``low``).
+        control_ids: Applicable LyraShield Vibe Security 50 ranks (1-50).
     """
     inner = ctx.context if isinstance(ctx.context, dict) else {}
     raw_agent_id = inner.get("agent_id")
@@ -922,6 +949,7 @@ async def create_dependency_report(
         advisory_cvss=advisory_cvss,
         technical_analysis=technical_analysis,
         fix_effort=fix_effort,
+        control_ids=control_ids,
         agent_id=agent_id,
         agent_name=agent_name,
     )

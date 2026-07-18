@@ -155,11 +155,11 @@ async def test_extra_system_prompt_context_cannot_override_scope_context(
 
 
 @pytest.mark.asyncio
-async def test_root_prompt_options_default_to_none(
+async def test_root_prompt_options_default_to_rendered_prompt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """Without the new args, behavior is unchanged: no override, scope context as-is."""
+    """The default root prompt is rendered once so its exact hash can be retained."""
     scope_context = {"scope": "built-in"}
     captured = _patch_engine_scaffold(monkeypatch, tmp_path, scope_context)
 
@@ -171,5 +171,6 @@ async def test_root_prompt_options_default_to_none(
     )
 
     kwargs = captured["kwargs"]
-    assert kwargs["instructions_override"] is None
+    assert isinstance(kwargs["instructions_override"], str)
+    assert kwargs["instructions_override"]
     assert kwargs["system_prompt_context"] == {"scope": "built-in"}

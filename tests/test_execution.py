@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from strix.core.agents import AgentCoordinator
+from strix.core.runner import _coordinator_for_scan_mode
 
 
 @pytest.mark.asyncio
@@ -42,3 +43,31 @@ async def test_wait_for_message_returns_immediately_after_budget_stop() -> None:
 
     # No pending messages, but the stop flag short-circuits the wait.
     await asyncio.wait_for(coordinator.wait_for_message("agent"), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_agent_limit_is_enforced_atomically_during_registration() -> None:
+    coordinator = AgentCoordinator(max_agents=1)
+    await coordinator.register("root", "strix", parent_id=None)
+
+    with pytest.raises(RuntimeError, match=r"Scan agent limit reached \(1\)"):
+        await coordinator.register("child", "recon", parent_id="root")
+
+
+def test_caller_supplied_coordinator_is_capped_by_scan_mode() -> None:
+    coordinator = AgentCoordinator(max_agents=20)
+
+    resolved = _coordinator_for_scan_mode(coordinator, "quick")
+
+    assert resolved is coordinator
+    assert resolved.max_agents == 2
+
+
+@pytest.mark.asyncio
+async def test_overfull_caller_supplied_coordinator_is_rejected() -> None:
+    coordinator = AgentCoordinator(max_agents=20)
+    for index in range(3):
+        await coordinator.register(f"agent-{index}", f"agent-{index}", parent_id=None)
+
+    with pytest.raises(RuntimeError, match=r"above the quick mode limit \(2\)"):
+        _coordinator_for_scan_mode(coordinator, "quick")

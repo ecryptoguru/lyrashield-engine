@@ -68,5 +68,4 @@ Failure recovery:
 - If output is too broad, scope `--config`, add `--severity`, or exclude known irrelevant paths.
 - If Pro mode fails, rerun with `--oss-only` or without `--pro` and note the loss of cross-file coverage.
 
-If uncertain, query web_search with:
-`site:semgrep.dev semgrep <flag> cli`
+If uncertain, use `semgrep --help` and retain the installed-version output.

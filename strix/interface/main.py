@@ -6,6 +6,7 @@ Strix Agent Interface
 
 import argparse
 import asyncio
+import re
 import shutil
 import sys
 from datetime import UTC, datetime
@@ -21,12 +22,12 @@ from rich.text import Text
 from strix.config import (
     apply_config_override,
     load_settings,
-    persist_current,
 )
 from strix.config.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     configure_sdk_model_defaults,
+    is_gpt56_model,
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
 )
@@ -87,15 +88,29 @@ def validate_environment() -> None:
 
     if not settings.llm.model:
         missing_required_vars.append("STRIX_LLM")
+    elif not is_gpt56_model(settings.llm.model):
+        error_text = Text(
+            "LyraShield scans require a GPT-5.6 Sol, Terra, or Luna deployment",
+            style="bold red",
+        )
+        console.print("\n")
+        console.print(
+            Panel(
+                error_text,
+                title="[bold white]STRIX",
+                title_align="left",
+                border_style="red",
+                padding=(1, 2),
+            ),
+        )
+        console.print()
+        sys.exit(1)
 
     if not settings.llm.api_key:
         missing_optional_vars.append("LLM_API_KEY")
 
     if not settings.llm.api_base:
         missing_optional_vars.append("LLM_API_BASE")
-
-    if not settings.integrations.perplexity_api_key:
-        missing_optional_vars.append("PERPLEXITY_API_KEY")
 
     if missing_required_vars:
         error_text = Text()
@@ -118,8 +133,7 @@ def validate_environment() -> None:
                 error_text.append("• ", style="white")
                 error_text.append("STRIX_LLM", style="bold cyan")
                 error_text.append(
-                    " - Model name to use (e.g., 'openai/gpt-5.4' or "
-                    "'anthropic/claude-opus-4-7')\n",
+                    " - GPT-5.6 Sol, Terra, or Luna deployment name\n",
                     style="white",
                 )
 
@@ -130,22 +144,14 @@ def validate_environment() -> None:
                     error_text.append("• ", style="white")
                     error_text.append("LLM_API_KEY", style="bold cyan")
                     error_text.append(
-                        " - API key for the LLM provider "
-                        "(not needed for local models, Vertex AI, AWS, etc.)\n",
+                        " - API key for the configured GPT-5.6 endpoint\n",
                         style="white",
                     )
                 elif var == "LLM_API_BASE":
                     error_text.append("• ", style="white")
                     error_text.append("LLM_API_BASE", style="bold cyan")
                     error_text.append(
-                        " - Custom API base URL if using local models (e.g., Ollama, LMStudio)\n",
-                        style="white",
-                    )
-                elif var == "PERPLEXITY_API_KEY":
-                    error_text.append("• ", style="white")
-                    error_text.append("PERPLEXITY_API_KEY", style="bold cyan")
-                    error_text.append(
-                        " - API key for Perplexity AI web search (enables real-time research)\n",
+                        " - Base URL for the configured GPT-5.6 endpoint\n",
                         style="white",
                     )
                 elif var == "STRIX_REASONING_EFFORT":
@@ -158,25 +164,20 @@ def validate_environment() -> None:
                     )
 
         error_text.append("\nExample setup:\n", style="white")
-        error_text.append("export STRIX_LLM='openai/gpt-5.4'\n", style="dim white")
+        error_text.append("export STRIX_LLM='openai/gpt-5.6-luna'\n", style="dim white")
 
         if missing_optional_vars:
             for var in missing_optional_vars:
                 if var == "LLM_API_KEY":
                     error_text.append(
                         "export LLM_API_KEY='your-api-key-here'  "
-                        "# not needed for local models, Vertex AI, AWS, etc.\n",
+                        "# credential for the configured GPT-5.6 endpoint\n",
                         style="dim white",
                     )
                 elif var == "LLM_API_BASE":
                     error_text.append(
-                        "export LLM_API_BASE='http://localhost:11434'  "
-                        "# needed for local models only\n",
+                        "export LLM_API_BASE='https://your-gpt-5-6-endpoint.example'\n",
                         style="dim white",
-                    )
-                elif var == "PERPLEXITY_API_KEY":
-                    error_text.append(
-                        "export PERPLEXITY_API_KEY='your-perplexity-key-here'\n", style="dim white"
                     )
                 elif var == "STRIX_REASONING_EFFORT":
                     error_text.append(
@@ -400,6 +401,12 @@ def _positive_budget(value: str) -> float:
     return budget
 
 
+def _safe_run_name(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) or ".." in value:
+        raise argparse.ArgumentTypeError("run name must be a safe 1-128 character identifier")
+    return value
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Strix Multi-Agent Cybersecurity Penetration Testing Tool",
@@ -554,6 +561,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--run-name",
+        type=_safe_run_name,
+        help="Stable run identifier supplied by an orchestrator.",
+    )
+
+    parser.add_argument(
         "--resume",
         type=str,
         metavar="RUN_NAME",
@@ -584,6 +597,8 @@ Examples:
     args.user_explicit_instruction = args.instruction if args.resume else None
 
     if args.resume:
+        if args.run_name:
+            parser.error("Cannot combine --resume with --run-name")
         if args.target or args.target_list or args.mount:
             parser.error(
                 "Cannot combine --resume with --target/--target-list/--mount. "
@@ -856,11 +871,12 @@ def main() -> None:
     check_docker_installed()
     pull_docker_image()
 
-    asyncio.run(warm_up_llm(show_model_warning=args.non_interactive))
+    # Non-interactive worker runs must not make an unmetered warm-up request or
+    # persist provider credentials under the container home directory.
+    if not args.non_interactive:
+        asyncio.run(warm_up_llm(show_model_warning=False))
 
-    persist_current()
-
-    args.run_name = args.resume or generate_run_name(args.targets_info)
+    args.run_name = args.resume or args.run_name or generate_run_name(args.targets_info)
 
     if not args.resume:
         for target_info in args.targets_info:
@@ -941,7 +957,8 @@ def main() -> None:
             scarf.end(report_state, exit_reason=exit_reason)
 
     results_path = run_dir_for(args.run_name)
-    display_completion_message(args, results_path)
+    if not args.non_interactive:
+        display_completion_message(args, results_path)
 
     if args.non_interactive:
         report_state = get_global_report_state()

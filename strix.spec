@@ -129,7 +129,6 @@ hiddenimports = [
     'strix.interface.tui.renderers.thinking_renderer',
     'strix.interface.tui.renderers.todo_renderer',
     'strix.interface.tui.renderers.user_message_renderer',
-    'strix.interface.tui.renderers.web_search_renderer',
     'strix.interface.utils',
     'strix.agents',
     'strix.agents.factory',
@@ -162,7 +161,6 @@ hiddenimports = [
     'strix.tools.reporting.tool',
     'strix.tools.thinking.tool',
     'strix.tools.todo.tools',
-    'strix.tools.web_search.tool',
     'strix.skills',
 ]
 

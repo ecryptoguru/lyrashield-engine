@@ -226,7 +226,6 @@ ignore = [
 # not under TYPE_CHECKING.
 "strix/tools/todo/tools.py" = ["TC002"]
 "strix/tools/thinking/tool.py" = ["TC002"]
-"strix/tools/web_search/tool.py" = ["TC002"]
 "strix/tools/proxy/tools.py" = ["TC002", "PLR0911"]
 "strix/tools/agents_graph/tools.py" = ["TC002"]
 "strix/agents/factory.py" = ["TC002"]
