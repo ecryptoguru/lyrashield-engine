@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "sync-upstream-release.sh"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+SYNC_WORKFLOW = ROOT / ".github" / "workflows" / "upstream-sync.yml"
 
 
 def git(cwd: Path, *args: str, check: bool = True) -> str:
@@ -99,6 +100,20 @@ def test_same_release_is_a_noop(tmp_path: Path) -> None:
     assert git(fork, "diff", "--cached", "--stat") == ""
 
 
+def test_same_release_keeps_a_post_release_base(tmp_path: Path) -> None:
+    upstream, fork, _ = make_release_repositories(tmp_path)
+    write_project(upstream, marker="post release", version="1.1.0")
+    post_release_sha = commit_all(upstream, "post-release fix")
+    git(fork, "fetch", "upstream", "main")
+    (fork / ".lyrashield-upstream-base").write_text(f"{post_release_sha}\n", encoding="utf-8")
+    commit_all(fork, "record post-release base")
+
+    result = run_sync(fork, "v1.1.0")
+    assert result.returncode == 0, result.stderr
+    assert "needs_sync=false" in read_outputs(fork)
+    assert f"base_sha={post_release_sha}" in read_outputs(fork)
+
+
 def test_newer_release_applies_tree_delta_and_preserves_fork_files(tmp_path: Path) -> None:
     upstream, fork, _ = make_release_repositories(tmp_path)
     release_sha = publish_release(upstream, "v1.1.1")
@@ -172,3 +187,32 @@ def test_engine_ci_defines_complete_required_check() -> None:
     )
     for fragment in required_fragments:
         assert fragment in workflow
+
+
+def test_upstream_workflow_opens_reviewed_auto_merge_pr_or_conflict_issue() -> None:
+    workflow = SYNC_WORKFLOW.read_text(encoding="utf-8")
+    required_fragments = (
+        'cron: "23 3 * * *"',
+        "release_tag:",
+        "issues: write",
+        "repos/usestrix/strix/releases/latest",
+        "scripts/sync-upstream-release.sh",
+        "scripts/verify-thin-fork.sh",
+        "bash scripts/build.sh",
+        "containers/Dockerfile",
+        "scripts/verify-worker-contract.sh",
+        "--add-reviewer ecryptoguru",
+        "gh pr merge --auto --squash",
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "Upstream sync blocked:",
+        "upstream-sync",
+    )
+    for fragment in required_fragments:
+        assert fragment in workflow
+
+
+def test_upstream_workflow_does_not_rebase_or_deploy() -> None:
+    workflow = SYNC_WORKFLOW.read_text(encoding="utf-8")
+    assert "git rebase" not in workflow
+    for deployment_command in ("wrangler deploy", "docker push", "gh release create"):
+        assert deployment_command not in workflow

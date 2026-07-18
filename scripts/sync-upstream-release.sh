@@ -58,11 +58,8 @@ emit_outputs() {
 }
 
 if [[ "$release_tag" == "$recorded_tag" ]]; then
-  if [[ "$release_sha" != "$base_sha" ]]; then
-    fail "Recorded release $recorded_tag moved from $base_sha to $release_sha; refusing mutable tag"
-  fi
   emit_outputs false
-  echo "LyraShield already includes upstream $release_tag ($release_sha)" >&2
+  echo "LyraShield already includes upstream $release_tag (base $base_sha)" >&2
   exit 0
 fi
 

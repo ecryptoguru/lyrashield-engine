@@ -2,12 +2,18 @@ name: Upstream Engine Sync
 
 on:
   schedule:
-    - cron: "23 3 * * 1"
+    - cron: "23 3 * * *"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Stable Strix release tag; leave blank for latest
+        required: false
+        type: string
 
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 concurrency:
   group: upstream-engine-sync
@@ -15,7 +21,10 @@ concurrency:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      SYNC_REPORT_DIR: ${{ runner.temp }}/upstream-sync-report
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -24,33 +33,146 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
       - name: Configure upstream
         run: |
           git remote add upstream https://github.com/usestrix/strix.git 2>/dev/null || true
           git remote set-url upstream https://github.com/usestrix/strix.git
-      - id: upstream
-        name: Check ancestry
-        run: scripts/check-upstream.sh
-      - name: Rebase, verify, and open PR
-        if: steps.upstream.outputs.needs_sync == 'true'
+
+      - id: release
+        name: Select stable release
         env:
-          BASE_SHA: ${{ steps.upstream.outputs.base_sha }}
-          UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
           GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
         run: |
-          branch="automation/upstream-${UPSTREAM_SHA:0:12}"
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            release_tag="$REQUESTED_TAG"
+          else
+            release_tag="$(gh api repos/usestrix/strix/releases/latest --jq .tag_name)"
+          fi
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Refusing non-stable release tag: $release_tag" >&2
+            exit 2
+          fi
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - id: reconcile
+        name: Reconcile upstream release tree
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: |
+          set +e
+          scripts/sync-upstream-release.sh "$RELEASE_TAG"
+          status=$?
+          set -e
+          case "$status" in
+            0)
+              if [[ "$(grep '^needs_sync=' "$GITHUB_OUTPUT" | tail -1)" == "needs_sync=true" ]]; then
+                echo "outcome=applied" >> "$GITHUB_OUTPUT"
+              else
+                echo "outcome=noop" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            20)
+              echo "outcome=conflict" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              exit "$status"
+              ;;
+          esac
+
+      - name: Upload conflict evidence
+        if: steps.reconcile.outputs.outcome == 'conflict'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-sync-${{ steps.release.outputs.release_tag }}-${{ github.run_id }}
+          path: ${{ env.SYNC_REPORT_DIR }}/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create or update conflict issue
+        if: steps.reconcile.outputs.outcome == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: |
+          title="Upstream sync blocked: $RELEASE_TAG"
+          body="Tree-delta reconciliation found conflicts for $RELEASE_TAG. Review the conflict artifact attached to workflow run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The automation did not resolve or merge anything."
+          gh label create upstream-sync --color 5319e7 --description "Upstream release reconciliation" --force
+          issue_number="$(gh issue list --state open --label upstream-sync --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)"
+          if [[ -n "$issue_number" ]]; then
+            gh issue comment "$issue_number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --label upstream-sync
+          fi
+
+      - name: Stop after conflict escalation
+        if: steps.reconcile.outputs.outcome == 'conflict'
+        run: exit 1
+
+      - id: branch
+        name: Prepare review branch
+        if: steps.reconcile.outputs.outcome == 'applied'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.reconcile.outputs.release_tag }}
+          RELEASE_SHA: ${{ steps.reconcile.outputs.release_sha }}
+        run: |
+          branch="automation/upstream-${RELEASE_TAG}-${RELEASE_SHA:0:12}"
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+          existing="$(gh pr list --state open --head "$branch" --json number --jq 'length')"
+          if [[ "$existing" != "0" ]]; then
+            echo "existing=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "existing=false" >> "$GITHUB_OUTPUT"
           git switch -c "$branch"
-          git rebase --onto "$UPSTREAM_SHA" "$BASE_SHA"
-          printf '%s\n' "$UPSTREAM_SHA" > .lyrashield-upstream-base
+
+      - name: Lock and verify engine
+        if: steps.reconcile.outputs.outcome == 'applied' && steps.branch.outputs.existing == 'false'
+        run: |
           uv lock
           scripts/verify-thin-fork.sh
+          uv build
+          uv run lyrashield --version
+          bash scripts/build.sh
+
+      - name: Build and smoke sandbox image
+        if: steps.reconcile.outputs.outcome == 'applied' && steps.branch.outputs.existing == 'false'
+        run: |
+          docker build -f containers/Dockerfile -t lyrashield-sandbox:upstream-sync .
+          docker run --rm --entrypoint sh lyrashield-sandbox:upstream-sync -lc \
+            'test -f /app/certs/ca.p12 && caido-cli --version && nmap --version >/dev/null && python3 -c "import caido_api"'
+
+      - name: Verify public worker contract
+        if: steps.reconcile.outputs.outcome == 'applied' && steps.branch.outputs.existing == 'false'
+        run: |
+          git clone --depth 1 https://github.com/ecryptoguru/lyrashield-ai.git "$RUNNER_TEMP/lyrashield-ai"
+          scripts/verify-worker-contract.sh "$RUNNER_TEMP/lyrashield-ai"
+
+      - name: Publish ready auto-merge PR
+        if: steps.reconcile.outputs.outcome == 'applied' && steps.branch.outputs.existing == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_TAG: ${{ steps.reconcile.outputs.release_tag }}
+          RELEASE_SHA: ${{ steps.reconcile.outputs.release_sha }}
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "sync: rebase engine on upstream ${UPSTREAM_SHA:0:12}"
-          git push --set-upstream origin "$branch"
-          gh pr create \
-            --title "sync: upstream Strix ${UPSTREAM_SHA:0:12}" \
-            --body "Automated compatibility rebase. Review engine gates and LyraSec integration before merging." \
-            --base "$GITHUB_REF_NAME" \
-            --head "$branch"
+          git commit -m "sync: import upstream Strix $RELEASE_TAG"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git push origin --delete "$BRANCH"
+          fi
+          git push --set-upstream origin "$BRANCH"
+          pr_url="$(gh pr create \
+            --title "sync: upstream Strix $RELEASE_TAG" \
+            --body "Imports immutable Strix release \`$RELEASE_TAG\` at \`$RELEASE_SHA\` through the tested tree-delta path. All engine, native package, sandbox, and public worker-contract gates passed before this ready PR was opened. Approve this PR to let GitHub merge it automatically after the required Engine CI check is green. This workflow never deploys." \
+            --base main \
+            --head "$BRANCH")"
+          gh pr edit "$pr_url" --add-reviewer ecryptoguru
+          gh pr merge --auto --squash "$pr_url"
