@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from strix.report.dedupe import (
+    MAX_DEDUPE_INPUT_BYTES,
+    _build_bounded_dedupe_message,
     _check_dependency_duplicate,
     _prepare_report_for_comparison,
     check_duplicate,
@@ -341,6 +343,24 @@ def test_dedupe_comparison_preserves_cve_identity() -> None:
 
     assert cleaned["cve"] == "CVE-2021-23337"
     assert cleaned["dependency_metadata"] == {"package_name": "lodash"}
+
+
+def test_dedupe_prompt_is_compacted_below_the_request_budget() -> None:
+    candidate = {"id": "new", "title": "target finding", "endpoint": "/api/items"}
+    existing = [
+        {
+            "id": f"existing-{index}",
+            "title": "target finding" if index == 0 else f"other-{index}",
+            "description": "alpha beta gamma delta " * 2_000,
+            "endpoint": "/api/items" if index == 0 else f"/api/{index}",
+        }
+        for index in range(100)
+    ]
+
+    message = _build_bounded_dedupe_message(candidate, existing)
+
+    assert len(message.encode("utf-8")) < MAX_DEDUPE_INPUT_BYTES + 1_000
+    assert "existing-0" in message
 
 
 async def test_dependency_dedupe_uses_cve_package_identity() -> None:

@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from strix.core.hooks import BudgetExceededError, ReportUsageHooks
+from strix.core.hooks import (
+    MODEL_INPUT_COMPACTION_TRIGGER_TOKENS,
+    BudgetExceededError,
+    ReportUsageHooks,
+    _estimate_input_tokens,
+)
 
 
 def _make_hooks(max_budget: float | None) -> ReportUsageHooks:
@@ -106,3 +111,41 @@ def test_non_positive_budget_rejected(bad_budget: float) -> None:
 def test_budget_exceeded_error_is_runtime_error() -> None:
     err = BudgetExceededError("test")
     assert isinstance(err, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_large_context_is_compacted_before_the_model_request() -> None:
+    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
+    agent = MagicMock()
+    agent.tools = []
+    agent.output_type = None
+    items = [
+        {"role": "user", "content": "original scan task"},
+        *[
+            {
+                "role": "assistant",
+                "content": f"evidence-{index}-" + ("alpha beta gamma delta " * 5_000),
+            }
+            for index in range(60)
+        ],
+    ]
+
+    await hooks.on_llm_start(_make_context(), agent, "system", items)
+
+    assert len(items) < 61
+    assert _estimate_input_tokens(hooks._model, "system", items, agent) < 272_000
+    assert MODEL_INPUT_COMPACTION_TRIGGER_TOKENS < 272_000
+
+
+@pytest.mark.asyncio
+async def test_single_oversized_item_is_compacted_without_blocking() -> None:
+    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
+    agent = MagicMock()
+    agent.tools = []
+    agent.output_type = None
+    items = [{"role": "user", "content": "large task " * 300_000}]
+
+    await hooks.on_llm_start(_make_context(), agent, "system", items)
+
+    assert len(items) == 2
+    assert _estimate_input_tokens(hooks._model, "system", items, agent) < 272_000

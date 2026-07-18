@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+MAX_DEDUPE_INPUT_BYTES = 200_000
 
 DEDUPE_SYSTEM_PROMPT = """You are an expert vulnerability report deduplication judge.
 Your task is to determine if a candidate vulnerability report describes the SAME vulnerability
@@ -121,6 +122,34 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
             cleaned[field] = value
 
     return cleaned
+
+
+def _build_bounded_dedupe_message(
+    candidate: dict[str, Any], existing_reports: list[dict[str, Any]]
+) -> str:
+    ranked = sorted(
+        existing_reports,
+        key=lambda report: sum(
+            1
+            for field in ("cve", "endpoint", "target", "title")
+            if candidate.get(field) and candidate.get(field) == report.get(field)
+        ),
+        reverse=True,
+    )
+    retained: list[dict[str, Any]] = []
+    for report in ranked:
+        comparison_data = {"candidate": candidate, "existing_reports": [*retained, report]}
+        encoded = json.dumps(comparison_data, separators=(",", ":"), default=str)
+        if len(encoded.encode("utf-8")) > MAX_DEDUPE_INPUT_BYTES:
+            continue
+        retained.append(report)
+
+    comparison_data = {"candidate": candidate, "existing_reports": retained}
+    return (
+        "Compare this candidate vulnerability against existing reports:\n\n"
+        f"{json.dumps(comparison_data, separators=(',', ':'), default=str)}\n\n"
+        "Respond with ONLY the JSON object described in the system prompt."
+    )
 
 
 def _dependency_identity(report: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -297,13 +326,7 @@ async def check_duplicate(
 
         candidate_cleaned = _prepare_report_for_comparison(candidate)
         existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]
-        comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
-
-        user_msg = (
-            f"Compare this candidate vulnerability against existing reports:\n\n"
-            f"{json.dumps(comparison_data, indent=2)}\n\n"
-            f"Respond with ONLY the JSON object described in the system prompt."
-        )
+        user_msg = _build_bounded_dedupe_message(candidate_cleaned, existing_cleaned)
 
         configure_sdk_model_defaults(settings)
         resolved_model = model_name.strip()
