@@ -23,8 +23,6 @@ jobs:
   sync:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
-    env:
-      SYNC_REPORT_DIR: ${{ runner.temp }}/upstream-sync-report
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -62,6 +60,7 @@ jobs:
         name: Reconcile upstream release tree
         env:
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          SYNC_REPORT_DIR: ${{ runner.temp }}/upstream-sync-report
         run: |
           set +e
           scripts/sync-upstream-release.sh "$RELEASE_TAG"
@@ -88,7 +87,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: upstream-sync-${{ steps.release.outputs.release_tag }}-${{ github.run_id }}
-          path: ${{ env.SYNC_REPORT_DIR }}/
+          path: ${{ runner.temp }}/upstream-sync-report/
           if-no-files-found: error
           retention-days: 30
 
