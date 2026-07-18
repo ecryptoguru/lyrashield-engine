@@ -1,90 +1,17 @@
 ---
-title: "CI/CD Integration"
-description: "Run Strix in any CI/CD pipeline"
+title: "CI/CD integration (application-owned)"
+description: "Use the LyraShield application boundary"
 ---
 
-Strix runs in headless mode for automated pipelines.
+LyraShield Engine supports deterministic repository CI for its own source and a headless executable for the controlled worker. It is not distributed as a generic customer CI installer.
 
-## Headless Mode
+The application boundary provides queue admission, tenant authorization, target ownership, model routing, protected budgets, cancellation, evidence storage, deterministic scanners, result manifests, and reporting. Bypassing it would discard those controls.
 
-Use the `-n` or `--non-interactive` flag:
-
-```bash
-strix -n --target ./app --scan-mode quick
-```
-
-For pull-request style CI runs, Strix automatically scopes quick scans to changed files. You can force this behavior and set a base ref explicitly:
+For engine development, run:
 
 ```bash
-strix -n --target ./app --scan-mode quick --scope-mode diff --diff-base origin/main
+bash scripts/verify-thin-fork.sh
+git diff --check
 ```
 
-## Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | No vulnerabilities found |
-| 1 | Execution error |
-| 2 | Vulnerabilities found |
-
-## GitLab CI
-
-```yaml .gitlab-ci.yml
-security-scan:
-  image: docker:latest
-  services:
-    - docker:dind
-  variables:
-    STRIX_LLM: $STRIX_LLM
-    LLM_API_KEY: $LLM_API_KEY
-  script:
-    - curl -sSL https://strix.ai/install | bash
-    - strix -n -t ./ --scan-mode quick
-```
-
-## Jenkins
-
-```groovy Jenkinsfile
-pipeline {
-    agent any
-    environment {
-        STRIX_LLM = credentials('strix-llm')
-        LLM_API_KEY = credentials('llm-api-key')
-    }
-    stages {
-        stage('Security Scan') {
-            steps {
-                sh 'curl -sSL https://strix.ai/install | bash'
-                sh 'strix -n -t ./ --scan-mode quick'
-            }
-        }
-    }
-}
-```
-
-## CircleCI
-
-```yaml .circleci/config.yml
-version: 2.1
-jobs:
-  security-scan:
-    docker:
-      - image: cimg/base:current
-    steps:
-      - checkout
-      - setup_remote_docker
-      - run:
-          name: Install Strix
-          command: curl -sSL https://strix.ai/install | bash
-      - run:
-          name: Run Scan
-          command: strix -n -t ./ --scan-mode quick
-```
-
-<Note>
-All CI platforms require Docker access. Ensure your runner has Docker available.
-</Note>
-
-<Tip>
-If diff-scope fails in CI, fetch full git history (for example, `fetch-depth: 0` in GitHub Actions) so merge-base and branch comparison can be resolved.
-</Tip>
+For product CI/CD usage, follow the current LyraShield AI application documentation. Do not copy retained upstream Strix installer examples.

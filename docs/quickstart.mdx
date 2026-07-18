@@ -1,79 +1,60 @@
 ---
 title: "Quick Start"
-description: "Install Strix and run your first security scan"
+description: "Install and validate LyraShield Engine"
 ---
 
 ## Prerequisites
 
-- Docker (running)
-- An LLM API key from any [supported provider](/llm-providers/overview) (OpenAI, Anthropic, Google, etc.)
+- Python 3.12+
+- Docker running locally
+- [uv](https://docs.astral.sh/uv/)
+- a reviewed sandbox image
+- for an authorized scan only, an approved GPT-5.6 Sol, Terra, or Luna endpoint
 
-## Installation
-
-<Tabs>
-  <Tab title="curl">
-    ```bash
-    curl -sSL https://strix.ai/install | bash
-    ```
-  </Tab>
-  <Tab title="pipx">
-    ```bash
-    pipx install strix-agent
-    ```
-  </Tab>
-</Tabs>
-
-## Configuration
-
-Set your LLM provider:
+## Install from source
 
 ```bash
-export STRIX_LLM="openai/gpt-5.4"
-export LLM_API_KEY="your-api-key"
+git clone https://github.com/ecryptoguru/lyrashield-engine.git
+cd lyrashield-engine
+uv sync --frozen
+uv run lyrashield --version
+uv run lyrashield --help
 ```
 
-<Tip>
-For best results, use `openai/gpt-5.4`, `anthropic/claude-opus-4-6`, or `openai/gpt-5.2`.
-</Tip>
+There is no supported `strix` executable or `strix.ai` installer in this distribution. Production builds the sibling engine source into the LyraShield worker image.
 
-## Run Your First Scan
+## Configure GPT-5.6
 
 ```bash
-strix --target ./your-app
+export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+export LYRASHIELD_REASONING_EFFORT="medium"
+export LLM_API_KEY="<credential>"
+export LLM_API_BASE="https://<approved-endpoint>"
 ```
 
-<Note>
-First run pulls the Docker sandbox image automatically. Results are saved to `strix_runs/<run-name>`.
-</Note>
+Azure deployments can use the aliases documented in [Azure configuration](/llm-providers/azure). Provider credentials are optional only when the approved endpoint supplies authentication by another controlled mechanism.
 
-## Target Types
-
-Strix accepts multiple target types:
+## Run an authorized repository scan
 
 ```bash
-# Local codebase
-strix --target ./app-directory
-
-# GitHub repository
-strix --target https://github.com/org/repo
-
-# Live web application
-strix --target https://your-app.com
-
-# Multiple targets (white-box testing)
-strix -t https://github.com/org/repo -t https://your-app.com
-
-# Targets from a file, one target per non-empty, non-comment line
-strix --target-list ./targets.txt
+uv run lyrashield \
+  --target ./approved-repository \
+  --scan-mode quick \
+  --non-interactive \
+  --max-budget-usd 1.20
 ```
 
-## Next Steps
+<Warning>
+The CLI accepts several upstream target forms, but the LyraShield production contract invokes it only for repository targets. Do not use direct CLI URL scanning as evidence of the application's pinned URL-scanner behavior.
+</Warning>
 
-<CardGroup cols={2}>
-  <Card title="CLI Options" icon="terminal" href="/usage/cli">
-    Explore all command-line options.
-  </Card>
-  <Card title="Scan Modes" icon="gauge" href="/usage/scan-modes">
-    Choose the right scan depth.
-  </Card>
-</CardGroup>
+Results are written under `strix_runs/<run-name>/`. Treat engine artifacts as untrusted input and consume them through the application worker contract.
+
+## Verify without a paid scan
+
+```bash
+bash scripts/verify-thin-fork.sh
+git diff --check
+```
+
+The legacy script name is retained for automation compatibility. The repository is maintained as a controlled derivative.

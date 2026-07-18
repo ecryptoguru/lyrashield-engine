@@ -1,31 +1,16 @@
 ---
-title: "OpenAI"
-description: "Configure Strix with OpenAI models"
+title: "OpenAI-compatible"
+description: "Configure an approved GPT-5.6 endpoint"
 ---
 
-## Setup
-
 ```bash
-export STRIX_LLM="openai/gpt-5.4"
-export LLM_API_KEY="sk-..."
+export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+export LLM_API_KEY="<credential>"
+export LLM_API_BASE="https://<approved-endpoint>"
 ```
 
-## Available Models
+`LLM_API_BASE` may be omitted when the approved client default is correct. A compatible API shape is not sufficient by itself: the model/deployment name must identify GPT-5.6 Sol, Terra, or Luna.
 
-See [OpenAI Models Documentation](https://platform.openai.com/docs/models) for the full list of available models.
+Use `LYRASHIELD_REASONING_EFFORT` only for operator-controlled local execution. The application worker owns reasoning selection in production.
 
-## Get API Key
-
-1. Go to [platform.openai.com](https://platform.openai.com)
-2. Navigate to API Keys
-3. Create a new secret key
-
-## Custom Base URL
-
-For OpenAI-compatible APIs:
-
-```bash
-export STRIX_LLM="openai/gpt-5.4"
-export LLM_API_KEY="your-key"
-export LLM_API_BASE="https://your-proxy.com/v1"
-```
+Never commit credentials or place them in scan instructions. The worker passes only the bounded OpenAI/Azure credential surface to the engine subprocess.

@@ -3,11 +3,15 @@ title: "Browser"
 description: "Playwright-powered Chrome for web application testing"
 ---
 
-Strix uses a headless Chrome browser via Playwright to interact with web applications exactly like a real user would.
+The upstream-derived sandbox provides a Playwright-controlled headless Chrome browser for authorized dynamic analysis.
+
+<Warning>
+The LyraShield production worker sends repository targets only to this engine. Application URL targets use a separate pinned deterministic scanner; browser-tool availability does not change that boundary.
+</Warning>
 
 ## How It Works
 
-All browser traffic is automatically routed through the Caido proxy, giving Strix full visibility into every request and response. This enables:
+Sandbox browser traffic is routed through the Caido proxy so the agent can inspect requests and responses. This enables:
 
 - Testing client-side vulnerabilities (XSS, DOM manipulation)
 - Navigating authenticated flows (login, OAuth, MFA)

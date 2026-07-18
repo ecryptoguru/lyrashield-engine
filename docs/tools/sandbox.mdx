@@ -1,9 +1,13 @@
 ---
 title: "Sandbox Tools"
-description: "Pre-installed security tools in the Strix container"
+description: "Pre-installed tools in the engine sandbox"
 ---
 
-Strix runs inside a Kali Linux-based Docker container with a comprehensive set of security tools pre-installed. The agent can use any of these tools through the [terminal](/tools/terminal).
+The engine uses an upstream-derived Kali Linux-based Docker sandbox with security tools available through the [terminal](/tools/terminal).
+
+<Warning>
+The checked-in list describes the upstream sandbox capability surface. Production must pin and inspect the actual image digest; documentation alone does not prove a tool version, execution, coverage, or isolation property.
+</Warning>
 
 ## Reconnaissance
 

@@ -3,7 +3,11 @@ title: "Skills"
 description: "Specialized knowledge packages that enhance agent capabilities"
 ---
 
-Skills are structured knowledge packages that give Strix agents deep expertise in specific vulnerability types, technologies, and testing methodologies.
+Skills are structured knowledge packages that give engine agents task-specific vulnerability, technology, and testing context.
+
+<Warning>
+A skill influences model behavior; it does not prove a finding, coverage, or result quality. Evidence state is owned by the application, and quality claims require the LyraShield evaluation corpus.
+</Warning>
 
 ## The Idea
 
@@ -13,7 +17,7 @@ Skills inject this deep, specialized knowledge directly into the agent's context
 
 ## How They Work
 
-When Strix spawns an agent for a specific task, it selects up to 5 relevant skills based on the context:
+When the engine spawns an agent for a specific task, it selects a bounded set of relevant skills from the context:
 
 ```python
 # Agent created for JWT testing automatically loads relevant skills

@@ -1,7 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "maple",
-  "name": "Strix",
+  "name": "LyraShield Engine",
   "colors": {
     "primary": "#000000",
     "light": "#ffffff",
@@ -15,68 +15,23 @@
         "groups": [
           {
             "group": "Getting Started",
-            "pages": [
-              "index",
-              "quickstart"
-            ]
+            "pages": ["index", "quickstart"]
           },
           {
             "group": "Usage",
-            "pages": [
-              "usage/cli",
-              "usage/scan-modes",
-              "usage/instructions"
-            ]
+            "pages": ["usage/cli", "usage/scan-modes", "usage/instructions"]
           },
           {
-            "group": "LLM Providers",
-            "pages": [
-              "llm-providers/overview",
-              "llm-providers/openai",
-              "llm-providers/anthropic",
-              "llm-providers/openrouter",
-              "llm-providers/vertex",
-              "llm-providers/bedrock",
-              "llm-providers/azure",
-              "llm-providers/novita",
-              "llm-providers/local"
-            ]
-          },
-          {
-            "group": "Integrations",
-            "pages": [
-              "integrations/github-actions",
-              "integrations/ci-cd"
-            ]
+            "group": "GPT-5.6 Endpoints",
+            "pages": ["llm-providers/overview", "llm-providers/openai", "llm-providers/azure"]
           },
           {
             "group": "Tools",
-            "pages": [
-              "tools/overview",
-              "tools/browser",
-              "tools/proxy",
-              "tools/terminal",
-              "tools/sandbox"
-            ]
+            "pages": ["tools/overview", "tools/browser", "tools/proxy", "tools/terminal", "tools/sandbox"]
           },
           {
             "group": "Advanced",
-            "pages": [
-              "advanced/configuration",
-              "advanced/skills",
-              "contributing"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "Cloud",
-        "groups": [
-          {
-            "group": "Strix Cloud",
-            "pages": [
-              "cloud/overview"
-            ]
+            "pages": ["advanced/configuration", "advanced/skills", "contributing"]
           }
         ]
       }
@@ -85,45 +40,29 @@
       "anchors": [
         {
           "anchor": "GitHub",
-          "href": "https://github.com/usestrix/strix",
+          "href": "https://github.com/ecryptoguru/lyrashield-engine",
           "icon": "github"
-        },
-        {
-          "anchor": "Discord",
-          "href": "https://discord.gg/strix-ai",
-          "icon": "discord"
         }
       ]
     }
   },
   "navbar": {
-    "links": [],
-    "primary": {
-      "type": "button",
-      "label": "Try Strix Cloud",
-      "href": "https://app.strix.ai"
-    }
+    "links": []
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/strix_ai",
-      "github": "https://github.com/usestrix",
-      "discord": "https://discord.gg/strix-ai"
+      "github": "https://github.com/ecryptoguru/lyrashield-engine"
     }
   },
   "fonts": {
     "family": "Geist",
-    "heading": {
-      "family": "Geist"
-    },
-    "body": {
-      "family": "Geist"
-    }
+    "heading": { "family": "Geist" },
+    "body": { "family": "Geist" }
   },
   "appearance": {
     "default": "dark"
   },
-  "description": "Open-source AI Hackers to secure your Apps",
+  "description": "Controlled GPT-5.6 scan engine for LyraShield AI",
   "background": {
     "decoration": "grid"
   }

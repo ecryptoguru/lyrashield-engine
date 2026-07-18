@@ -3,7 +3,11 @@ title: "Terminal"
 description: "Bash shell for running commands and security tools"
 ---
 
-Strix has access to a persistent bash terminal running inside the Docker sandbox. This gives the agent access to all [pre-installed security tools](/tools/sandbox).
+Engine agents have access to a persistent bash terminal inside the Docker sandbox and its [pre-installed security tools](/tools/sandbox).
+
+<Warning>
+The container is a runtime boundary, not complete hostile-code isolation. Production also requires dedicated worker compute, a reviewed image digest, resource limits, and transport-level egress policy.
+</Warning>
 
 ## Capabilities
 

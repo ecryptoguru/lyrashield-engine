@@ -1,116 +1,57 @@
-# Contributing to Strix
+# Contributing to LyraShield Engine
 
-Thank you for your interest in contributing to Strix! This guide will help you get started with development and contributions.
+LyraShield Engine is a controlled derivative with a strict worker compatibility boundary. Keep changes focused, preserve attribution on modified upstream files, and do not broaden the supported model/provider surface.
 
-## 🚀 Development Setup
+## Development setup
 
-### Prerequisites
+Requirements: Python 3.12+, Docker, [uv](https://docs.astral.sh/uv/), and Git.
 
-- Python 3.12+
-- Docker (running)
-- [uv](https://docs.astral.sh/uv/) (for dependency management)
-- Git
+```bash
+git clone https://github.com/ecryptoguru/lyrashield-engine.git
+cd lyrashield-engine
+uv sync --frozen
+uv run lyrashield --version
+uv run lyrashield --help
+```
 
-### Local Development
+For an authorized local scan, configure an approved GPT-5.6 deployment:
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/usestrix/strix.git
-   cd strix
-   ```
+```bash
+export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+export LLM_API_KEY="<credential>"
+export LLM_API_BASE="https://<approved-endpoint>"
+uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
+```
 
-2. **Install development dependencies**
-   ```bash
-   make setup-dev
+Do not use paid model calls merely to verify documentation, packaging, or compatibility. The full deterministic gate does not require a paid scan.
 
-   # or manually:
-   uv sync
-   uv run pre-commit install
-   ```
+## Where changes belong
 
-3. **Configure your LLM provider**
-   ```bash
-   export STRIX_LLM="openai/gpt-5.4"
-   export LLM_API_KEY="your-api-key"
-   ```
+- `lyrashield_adapter/`: public executable and `LYRASHIELD_*` compatibility aliases.
+- `strix/`: reviewed derivative changes required for LyraShield model policy, bounded execution, lifecycle, identity, evidence, or artifact behavior. Retain the LyraShield modification banner on changed upstream Python files.
+- `tests/`: regression coverage for every contract or behavior change.
+- `scripts/` and `.github/workflows/`: deterministic verification and review-only release imports.
+- Root documentation and `UPGRADES.md`: current ownership, operation, attribution, and divergence truth.
 
-4. **Run Strix in development mode**
-   ```bash
-   uv run strix --target https://example.com
-   ```
+Avoid mechanical Strix-to-LyraShield rewrites. Generic upstream sandbox, tool, SDK, and skill behavior should remain close to the pinned release unless a concrete compatibility, safety, or product requirement justifies divergence.
 
-## 📚 Contributing Skills
+## Pull requests
 
-Skills are specialized knowledge packages that enhance agent capabilities. See [strix/skills/README.md](strix/skills/README.md) for detailed guidelines.
+1. Branch from current `main`; use a focused `codex/` branch for Codex changes.
+2. Make the smallest complete change and add regression tests.
+3. Update `NOTICE`, `UPGRADES.md`, and user/operator docs when the supported contract or divergence changes.
+4. Run `bash scripts/verify-thin-fork.sh` and `git diff --check`.
+5. Open a PR; never push directly to `main`.
+6. Require human review and green Engine CI before merge.
 
-### Quick Guide
+Artifact schema changes must also pass the public worker contract against `ecryptoguru/lyrashield-ai`. Do not remove or reinterpret existing fields without a coordinated compatibility release.
 
-1. **Choose the right category** (`/vulnerabilities`, `/frameworks`, `/technologies`, etc.)
-2. **Create a** `.md` file with your skill content
-3. **Include practical examples** - Working payloads, commands, or test cases
-4. **Provide validation methods** - How to confirm findings and avoid false positives
-5. **Submit via PR** with clear description
+## Skills and upstream imports
 
-## 🔧 Contributing Code
+Security skills live under `strix/skills/`. Changes must include practical, authorized test guidance and a method for distinguishing evidence from assumptions. A skill or prompt can improve behavior, but it is not proof of result quality; evaluation-corpus coverage is required for result claims.
 
-### Pull Request Process
+Stable upstream releases are imported through the workflow described in [UPGRADES.md](UPGRADES.md). The workflow may arm GitHub's squash auto-merge only after requesting owner review; branch protection still requires that human approval and green Engine CI. Never bypass those gates, force-push, execute unreviewed candidate code in a write-enabled preparation job, or invent automatic conflict resolution.
 
-1. **Create an issue first** - Describe the problem or feature
-2. **Fork and branch** - Work from the `main` branch
-3. **Make your changes** - Follow existing code style
-4. **Write/update tests** - Ensure coverage for new features
-5. **Run quality checks** - `make check-all` should pass
-6. **Submit PR** - Link to issue and provide context
+## Issue reports
 
-### PR Guidelines
-
-- **Clear description** - Explain what and why
-- **Small, focused changes** - One feature/fix per PR
-- **Include examples** - Show before/after behavior
-- **Update documentation** - If adding features
-- **Pass all checks** - Tests, linting, type checking
-
-### Code Style
-
-- Follow PEP 8 with 100-character line limit
-- Use type hints for all functions
-- Write docstrings for public methods
-- Keep functions focused and small
-- Use meaningful variable names
-
-## 🐛 Reporting Issues
-
-When reporting bugs, please include:
-
-- Python version and OS
-- Strix version
-- LLMs being used
-- Full error traceback
-- Steps to reproduce
-- Expected vs actual behavior
-
-## 💡 Feature Requests
-
-We welcome feature ideas! Please:
-
-- Check existing issues first
-- Describe the use case clearly
-- Explain why it would benefit users
-- Consider implementation approach
-- Be open to discussion
-
-## 🤝 Community
-
-- **Discord**: [Join our community](https://discord.gg/strix-ai)
-- **Issues**: [GitHub Issues](https://github.com/usestrix/strix/issues)
-
-## ✨ Recognition
-
-We value all contributions! Contributors will be:
-- Listed in release notes
-- Thanked in our Discord
-- Added to contributors list (coming soon)
-
----
-
-**Questions?** Reach out on [Discord](https://discord.gg/strix-ai) or create an issue. We're here to help!
+Include the engine commit/version, Python and Docker versions, host OS, sanitized command/target type, model family and reasoning effort (never credentials), relevant bounded artifact fields, and reproduction steps. Remove repository content, secrets, raw prompts/responses, and provider payloads before sharing logs.
