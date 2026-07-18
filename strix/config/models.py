@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import TYPE_CHECKING
 
 from agents import set_default_openai_api, set_default_openai_key, set_tracing_disabled
@@ -27,6 +28,14 @@ def request_timeout_extra_args(timeout_s: float | None) -> dict[str, float] | No
     if not timeout_s or timeout_s <= 0:
         return None
     return {"timeout": timeout_s}
+
+
+def is_gpt56_model(model_name: str | None) -> bool:
+    """Return whether a configured deployment is one of LyraShield's GPT-5.6 tiers."""
+    if not model_name:
+        return False
+    normalized = model_name.strip().lower().replace("_", "-")
+    return re.search(r"(?:^|[/.-])gpt-5\.6(?:$|[/.-])", normalized) is not None
 
 
 def _retry_statusless_provider_errors(context: RetryPolicyContext) -> bool:

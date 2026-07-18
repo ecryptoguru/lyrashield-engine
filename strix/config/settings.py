@@ -83,16 +83,9 @@ class TelemetrySettings(BaseSettings):
     enabled: bool = Field(default=True, alias="STRIX_TELEMETRY")
 
 
-class IntegrationSettings(BaseSettings):
-    model_config = _BASE_CONFIG
-
-    perplexity_api_key: str | None = Field(default=None, alias="PERPLEXITY_API_KEY")
-
-
 class Settings(BaseSettings):
     model_config = _BASE_CONFIG
 
     llm: LlmSettings = Field(default_factory=LlmSettings)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
-    integrations: IntegrationSettings = Field(default_factory=IntegrationSettings)

@@ -9,7 +9,6 @@ from . import (
     shell_renderer,
     thinking_renderer,
     todo_renderer,
-    web_search_renderer,
 )
 from .registry import render_tool_widget
 
@@ -26,5 +25,4 @@ __all__ = [
     "shell_renderer",
     "thinking_renderer",
     "todo_renderer",
-    "web_search_renderer",
 ]

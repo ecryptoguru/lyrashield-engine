@@ -42,3 +42,12 @@ async def test_wait_for_message_returns_immediately_after_budget_stop() -> None:
 
     # No pending messages, but the stop flag short-circuits the wait.
     await asyncio.wait_for(coordinator.wait_for_message("agent"), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_agent_limit_is_enforced_atomically_during_registration() -> None:
+    coordinator = AgentCoordinator(max_agents=1)
+    await coordinator.register("root", "strix", parent_id=None)
+
+    with pytest.raises(RuntimeError, match=r"Scan agent limit reached \(1\)"):
+        await coordinator.register("child", "recon", parent_id="root")

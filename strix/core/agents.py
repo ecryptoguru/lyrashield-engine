@@ -35,7 +35,7 @@ class AgentRuntime:
 class AgentCoordinator:
     """Single owner for graph state, SDK runtimes, messages, and resume snapshots."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_agents: int = 4) -> None:
         self.statuses: dict[str, Status] = {}
         self.parent_of: dict[str, str | None] = {}
         self.names: dict[str, str] = {}
@@ -46,6 +46,11 @@ class AgentCoordinator:
         self._snapshot_path: Path | None = None
         self.is_shutting_down = False
         self._budget_stopped = False
+        self.max_agents = max(1, max_agents)
+
+    async def can_spawn_agent(self) -> bool:
+        async with self._lock:
+            return len(self.statuses) < self.max_agents
 
     def set_snapshot_path(self, path: Path) -> None:
         self._snapshot_path = path
@@ -74,6 +79,8 @@ class AgentCoordinator:
         skills: list[str] | None = None,
     ) -> None:
         async with self._lock:
+            if agent_id not in self.statuses and len(self.statuses) >= self.max_agents:
+                raise RuntimeError(f"Scan agent limit reached ({self.max_agents})")
             self.statuses[agent_id] = "running"
             self.parent_of[agent_id] = parent_id
             self.names[agent_id] = name

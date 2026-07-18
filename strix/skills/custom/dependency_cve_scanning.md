@@ -122,8 +122,8 @@ findings and rejects empty PoC fields):
   the advisory score.
 - Use `assumptions` for reachability/exploitability caveats.
 
-Verify the CVE with `web_search` when available before reporting. Never guess or
-hallucinate a CVE id.
+Verify the CVE from locally available lockfiles, advisory databases, or scanner
+output before reporting. Never guess or hallucinate a CVE id.
 
 ## Anti-patterns
 

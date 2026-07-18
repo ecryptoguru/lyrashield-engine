@@ -53,6 +53,15 @@ logger = logging.getLogger(__name__)
 
 
 _SANDBOX_NETWORK_ENV = "STRIX_DOCKER_SANDBOX_NETWORK"
+_SANDBOX_HOST_GATEWAY_ENV = "STRIX_SANDBOX_ALLOW_HOST_GATEWAY"
+
+
+def _host_gateway_enabled() -> bool:
+    return os.environ.get(_SANDBOX_HOST_GATEWAY_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def _sandbox_network() -> str | None:
@@ -158,7 +167,7 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         if not self.image_exists(image):
             raise docker_errors.DockerException(f"Docker image unavailable after pull: {image}")
 
-    async def _create_container(
+    async def _create_container(  # noqa: PLR0912 - mirrors the pinned SDK container builder
         self,
         image: str,
         *,
@@ -221,8 +230,9 @@ class StrixDockerSandboxClient(DockerSandboxClient):
             if cap not in cap_add:
                 cap_add.append(cap)
 
-        extra_hosts = create_kwargs.setdefault("extra_hosts", {})
-        extra_hosts["host.docker.internal"] = "host-gateway"
+        if _host_gateway_enabled():
+            extra_hosts = create_kwargs.setdefault("extra_hosts", {})
+            extra_hosts["host.docker.internal"] = "host-gateway"
 
         _apply_sandbox_network(create_kwargs)
         _apply_resource_limits(create_kwargs)

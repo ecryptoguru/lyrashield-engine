@@ -66,7 +66,7 @@ def render_system_prompt(
     interactive: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> str:
-    """Render the system prompt. Returns empty string on template failure."""
+    """Render the system prompt or fail before a tool-capable agent is created."""
     try:
         prompt_dir = get_strix_resource_path("agents", _PROMPT_DIRNAME)
         loader_dirs = [prompt_dir, *skill_search_dirs()]
@@ -94,10 +94,12 @@ def render_system_prompt(
             system_prompt_context=system_prompt_context or {},
             **skill_content,
         )
-    except Exception:
-        logger.exception("render_system_prompt failed; returning empty prompt")
-        return ""
+    except Exception as exc:
+        logger.exception("render_system_prompt failed")
+        raise RuntimeError("Unable to build the required scan system prompt") from exc
     else:
+        if not rendered.strip():
+            raise RuntimeError("Required scan system prompt rendered empty")
         logger.debug(
             "render_system_prompt: scan_mode=%s root=%s whitebox=%s skills=%d prompt_len=%d",
             scan_mode,

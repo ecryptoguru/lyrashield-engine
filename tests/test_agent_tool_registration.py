@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from agents.tool import FunctionTool
 
-from strix.agents import factory
+from strix.agents import factory, prompt
 
 
 def _tool(name: str) -> FunctionTool:
@@ -86,3 +86,19 @@ def test_no_override_renders_builtin_prompt() -> None:
 
     assert isinstance(agent.instructions, str)
     assert agent.instructions != ""
+
+
+def test_builtin_prompt_failure_stops_agent_creation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        prompt,
+        "get_strix_resource_path",
+        lambda *_args: (_ for _ in ()).throw(FileNotFoundError("prompt missing")),
+    )
+
+    with pytest.raises(RuntimeError, match="required scan system prompt"):
+        factory.build_strix_agent(is_root=True)
+
+
+def test_default_agent_has_no_external_web_search_tool() -> None:
+    agent = factory.build_strix_agent(is_root=True)
+    assert "web_search" not in {tool.name for tool in agent.tools}

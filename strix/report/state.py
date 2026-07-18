@@ -237,6 +237,7 @@ class ReportState:
         fix_pr_body: str | None = None,
         finding_class: str | None = None,
         dependency_metadata: dict[str, str] | None = None,
+        control_ids: list[int] | None = None,
         agent_id: str | None = None,
         agent_name: str | None = None,
     ) -> str:
@@ -288,6 +289,8 @@ class ReportState:
         report["finding_class"] = (finding_class or "dynamic").strip().lower()
         if dependency_metadata:
             report["dependency_metadata"] = dependency_metadata
+        if control_ids:
+            report["control_ids"] = sorted(set(control_ids))
         if agent_id:
             report["agent_id"] = agent_id
         if agent_name:

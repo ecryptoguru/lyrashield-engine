@@ -62,5 +62,4 @@ Failure recovery:
 - If provider errors appear, lower `-rl` and apply `-rls` per source.
 - If runs take too long, lower scope or split domain batches.
 
-If uncertain, query web_search with:
-`site:docs.projectdiscovery.io subfinder <flag> usage`
+If uncertain, use `subfinder -h` and retain the installed-version output.

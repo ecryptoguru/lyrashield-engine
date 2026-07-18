@@ -37,6 +37,7 @@ def _resolve_sandbox_image() -> str:
 
 async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console = Console()
+    non_interactive = bool(getattr(args, "non_interactive", False))
 
     start_text = Text()
     start_text.append("Penetration test initiated", style="bold #22c55e")
@@ -76,9 +77,10 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         padding=(1, 2),
     )
 
-    console.print("\n")
-    console.print(startup_panel)
-    console.print()
+    if not non_interactive:
+        console.print("\n")
+        console.print(startup_panel)
+        console.print()
 
     scan_mode = getattr(args, "scan_mode", "deep")
 
@@ -103,6 +105,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")
+
+        if non_interactive:
+            logger.info(
+                "Finding recorded: id=%s severity=%s",
+                report_id,
+                report.get("severity", "unknown"),
+            )
+            return
 
         vuln_text = format_vulnerability_report(report)
 
@@ -195,7 +205,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print(f"[bold red]Error during penetration test:[/] {e}")
         raise
 
-    if report_state.final_scan_result:
+    if report_state.final_scan_result and not non_interactive:
         console.print()
 
         final_report_text = Text()

@@ -62,8 +62,7 @@ Failure recovery:
 - If response noise is too high, tighten `-mc/-fc/-fs` instead of increasing load.
 - If runtime is too long, lower `-rate/-t` and tighten scope.
 
-If uncertain, query web_search with:
-`site:github.com/ffuf/ffuf <flag> README`
+If uncertain, use `ffuf -h` and retain the installed-version output.
 
 Alternate tool for path/file enumeration: `dirsearch -u <url> -e php,html,js,json`
 ships with curated wordlists, sane defaults, and built-in recursion. Reach

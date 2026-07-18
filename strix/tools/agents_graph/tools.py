@@ -429,6 +429,16 @@ async def create_agent(
             ensure_ascii=False,
             default=str,
         )
+    if not await coordinator.can_spawn_agent():
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"Scan agent limit reached ({coordinator.max_agents})",
+                "agent_id": None,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
 
     skill_list = list(skills or [])
     skill_error = validate_requested_skills(skill_list)

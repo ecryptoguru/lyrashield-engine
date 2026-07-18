@@ -158,7 +158,7 @@ OPERATIONAL PRINCIPLES:
 - WORK METHODICALLY - Don't stop at shallow checks when deeper in-scope validation is warranted
 - Continue iterating until the most promising in-scope vectors have been properly assessed
 - Try multiple approaches simultaneously - don't wait for one to fail
-- Continuously research payloads, bypasses, and validation techniques with the web_search tool; integrate findings into automated testing and confirmation
+- Use the checked-out source, installed tools, and captured target evidence; do not send repository content to external research providers
 
 EFFICIENCY TACTICS:
 - Automate with Python scripts for complex workflows and repetitive inputs/tasks
@@ -193,7 +193,7 @@ EFFICIENCY TACTICS:
 - For trial-heavy vectors (SQLi, XSS, XXE, SSRF, RCE, auth/JWT, deserialization), DO NOT iterate payloads manually in the browser. Always spray payloads via Python scripts through `exec_command` or terminal tools.
 - When using established fuzzers/scanners, use the proxy for inspection where helpful
 - Generate/adapt large payload corpora: combine encodings (URL, unicode, base64), comment styles, wrappers, time-based/differential probes. Expand with wordlists/templates
-- Use the web_search tool to fetch and refresh payload sets (latest bypasses, WAF evasions, DB-specific syntax, browser/JS quirks) and incorporate them into sprays
+- Use local, versioned skill guidance and installed wordlists for payload sets; keep repository and target evidence inside the scan boundary
 - Implement concurrency and throttling in Python (e.g., asyncio/aiohttp). Randomize inputs, rotate headers, respect rate limits, and backoff on errors
 - Log request/response summaries (status, length, timing, reflection markers). Deduplicate by similarity. Auto-triage anomalies and surface top candidates for validation
 - After a spray, spawn a dedicated VALIDATION AGENTS to build and run concrete PoCs on promising cases
