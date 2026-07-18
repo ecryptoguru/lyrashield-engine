@@ -22,6 +22,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
@@ -46,8 +47,17 @@ jobs:
 
       - name: Smoke sandbox image
         run: |
-          docker run --rm --entrypoint sh lyrashield-sandbox:ci -lc \
-            'test -f /app/certs/ca.p12 && caido-cli --version && nmap --version >/dev/null && python3 -c "import caido_api"'
+          docker run --rm lyrashield-sandbox:ci sh -lc '
+            test "$(id -u)" != "0" &&
+            test "$(pwd)" = "/workspace" &&
+            test -f /app/certs/ca.p12 &&
+            test ! -S /var/run/docker.sock &&
+            test "$HTTP_PROXY" = "http://127.0.0.1:48080" &&
+            caido-cli --version &&
+            nmap --version >/dev/null &&
+            python3 -c "import caido_api" &&
+            curl -fsS http://127.0.0.1:48080/graphql/ >/dev/null
+          '
 
       - name: Check out public LyraShield app contract
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -55,6 +65,7 @@ jobs:
           repository: ecryptoguru/lyrashield-ai
           path: .ci/lyrashield-ai
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Verify worker compatibility
         run: scripts/verify-worker-contract.sh "$GITHUB_WORKSPACE/.ci/lyrashield-ai"

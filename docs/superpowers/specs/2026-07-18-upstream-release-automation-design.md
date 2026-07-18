@@ -91,7 +91,10 @@ that ledger and adding one focused regression test.
 
 ## Verification
 
-The sync branch must pass before a PR is opened:
+The write-enabled sync job only reconciles, locks, commits, and opens the PR. It
+does not execute candidate upstream code. The separate `Engine CI / verify`
+pull-request job has read-only repository permissions and disabled persisted
+checkout credentials. It must pass before auto-merge:
 
 1. `scripts/verify-thin-fork.sh` for Ruff lint/format, the full pytest suite,
    strict mypy, and Bandit.
@@ -109,18 +112,21 @@ The sync branch must pass before a PR is opened:
    - validate representative `run.json` and `vulnerabilities.json` artifacts
      with the application's bounded parser contract.
 
-Native and Docker jobs may run in parallel after the source gate passes. A
-failure in any required job blocks PR creation or auto-merge.
+The Docker smoke runs the real entrypoint and verifies Caido readiness,
+unprivileged execution, the `/workspace` workdir, proxy/CA setup, expected
+tools, and the absence of a Docker socket. A failure in any required check
+blocks auto-merge.
 
 ## Pull Request and Approval
 
-On success, the workflow commits the reconciled tree, pushes the automation
-branch, and opens one ready-for-review PR. The body includes:
+On successful reconciliation, the workflow commits the reconciled tree, pushes
+the automation branch, and opens one ready-for-review PR. The body includes:
 
 - previous and new release tags and commit SHAs;
 - upstream release notes link;
 - changed paths and any LyraShield patch-boundary overlap;
-- package, CLI, native, Docker, and worker-contract results;
+- the package, CLI, native, Docker, and worker-contract checks that GitHub will
+  require before merge;
 - an explicit statement that no deployment occurred.
 
 The workflow then requests review from `@ecryptoguru` and enables GitHub
@@ -150,8 +156,9 @@ retried as if they were infrastructure failures.
 - Pin third-party GitHub Actions to full commit SHAs.
 - Use the built-in token with only `contents`, `pull-requests`, and `issues`
   permissions required by the job.
-- Never execute scripts from the candidate upstream tree before applying it to
-  the fork and reviewing the resulting workflow diff.
+- Never execute candidate upstream code in the write-enabled synchronization
+  job. Candidate code runs only in the read-only required PR check with
+  persisted checkout credentials disabled.
 - Keep workflow changes themselves subject to repository review rules.
 - Do not expose application, model-provider, deployment, or production secrets
   to the synchronization job.

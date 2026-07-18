@@ -51,10 +51,7 @@ def make_release_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
     (fork / ".lyrashield-upstream-base").write_text(f"{base_sha}\n", encoding="utf-8")
     (fork / ".lyrashield-upstream-release").write_text("v1.1.0\n", encoding="utf-8")
     (fork / "UPGRADES.md").write_text(
-        "## Current upstream release\n\n"
-        "`v1.1.0`\n\n"
-        "## Current upstream base\n\n"
-        f"`{base_sha}`\n",
+        f"## Current upstream release\n\n`v1.1.0`\n\n## Current upstream base\n\n`{base_sha}`\n",
         encoding="utf-8",
     )
     (fork / "fork-only.txt").write_text("preserve me\n", encoding="utf-8")
@@ -181,7 +178,8 @@ def test_engine_ci_defines_complete_required_check() -> None:
         "uv build",
         "bash scripts/build.sh",
         "containers/Dockerfile",
-        "--entrypoint sh",
+        'test "$(id -u)" != "0"',
+        "test ! -S /var/run/docker.sock",
         "scripts/verify-worker-contract.sh",
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     )
@@ -197,11 +195,9 @@ def test_upstream_workflow_opens_reviewed_auto_merge_pr_or_conflict_issue() -> N
         "issues: write",
         "repos/usestrix/strix/releases/latest",
         "scripts/sync-upstream-release.sh",
-        "scripts/verify-thin-fork.sh",
-        "bash scripts/build.sh",
-        "containers/Dockerfile",
-        "scripts/verify-worker-contract.sh",
-        "--add-reviewer ecryptoguru",
+        "persist-credentials: false",
+        "uv lock",
+        "reviewers[]=ecryptoguru",
         "gh pr merge --auto --squash",
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
         "Upstream sync blocked:",
@@ -214,5 +210,9 @@ def test_upstream_workflow_opens_reviewed_auto_merge_pr_or_conflict_issue() -> N
 def test_upstream_workflow_does_not_rebase_or_deploy() -> None:
     workflow = SYNC_WORKFLOW.read_text(encoding="utf-8")
     assert "git rebase" not in workflow
+    assert "scripts/verify-thin-fork.sh" not in workflow
+    assert "bash scripts/build.sh" not in workflow
+    assert "docker build" not in workflow
+    assert "scripts/verify-worker-contract.sh" not in workflow
     for deployment_command in ("wrangler deploy", "docker push", "gh release create"):
         assert deployment_command not in workflow
