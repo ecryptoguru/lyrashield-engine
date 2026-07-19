@@ -312,11 +312,11 @@ async def _run_noninteractive_until_lifecycle(
         invalid_final_outputs += 1
         logger.warning(
             "agent %s produced non-lifecycle final output in non-interactive mode; "
-            "forcing tool continuation (%d/%d): %s",
+            "forcing tool continuation (%d/%d); output metadata: %s",
             agent_id,
             invalid_final_outputs,
             invalid_final_output_limit,
-            _final_output_preview(result),
+            _final_output_metadata(result),
         )
 
         if invalid_final_outputs >= invalid_final_output_limit:
@@ -469,14 +469,14 @@ async def _agent_status(coordinator: AgentCoordinator, agent_id: str) -> Status 
         return coordinator.statuses.get(agent_id)
 
 
-def _final_output_preview(result: RunResultBase | None) -> str:
+def _final_output_metadata(result: RunResultBase | None) -> str:
+    """Describe invalid model output without copying target-derived content to logs."""
     final_output = getattr(result, "final_output", None)
     if final_output is None:
-        return "<none>"
-    text = str(final_output).replace("\n", " ").strip()
-    if not text:
-        return "<empty>"
-    return text[:300]
+        return "type=NoneType"
+    if isinstance(final_output, str | bytes | list | tuple | dict):
+        return f"type={type(final_output).__name__} length={len(final_output)}"
+    return f"type={type(final_output).__name__}"
 
 
 async def _append_noninteractive_tool_required_message(

@@ -447,10 +447,10 @@ async def run_strix_scan(
                 logger.error(
                     "Scan %s ended without calling finish_scan. The agent "
                     "emitted a text-only turn instead of a lifecycle tool call, "
-                    "so no executive report was written. Final output (first "
-                    "300 chars): %r",
+                    "so no executive report was written. Final output was "
+                    "omitted from logs (type=%s).",
                     scan_id,
-                    str(final)[:300],
+                    type(final).__name__,
                 )
         return result  # noqa: TRY300
     except BudgetExceededError as exc:

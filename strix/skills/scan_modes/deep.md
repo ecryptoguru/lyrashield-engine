@@ -151,13 +151,13 @@ After reconnaissance, decompose the application hierarchically:
 2. **Feature level** - Login Form, Registration API, Password Reset
 3. **Vulnerability level** - SQLi Agent, XSS Agent, Auth Bypass Agent
 
-Spawn specialized agents at each level. Scale horizontally to maximum parallelization:
+The root spawns specialized agents at the level that best separates meaningful work. Use available slots selectively:
 - Do NOT overload a single agent with multiple vulnerability types
 - Each agent focuses on one specific area or vulnerability type
-- Creates a massive parallel swarm covering every angle
+- Avoid duplicate coverage and reserve capacity for independent validation
 
 ## Mindset
 
 Relentless. Creative. Patient. Thorough. Persistent.
 
-This is about finding what others miss. Test every parameter, every endpoint, every edge case. If one approach fails, try ten more. Understand how components interact to find systemic issues.
+This is about finding what others miss. Prioritize the highest-risk parameters, endpoints, and edge cases. If one approach fails, try materially different paths while protected limits permit. Understand how components interact to find systemic issues.
