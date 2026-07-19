@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from agents import RunContextWrapper
+    from agents.model_settings import ModelSettings
     from agents.tool import FunctionToolResult
 
 
@@ -347,9 +348,13 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     list_sitemap,
     view_sitemap_entry,
     scope_rules,
-    view_agent_graph,
     send_message_to_agent,
     wait_for_message,
+)
+
+
+_ROOT_ORCHESTRATION_TOOLS: tuple[Tool, ...] = (
+    view_agent_graph,
     create_agent,
     stop_agent,
 )
@@ -385,7 +390,16 @@ def register_agent_tools(*tools: Tool) -> None:
         if tool not in _EXTRA_TOOLS and tool not in new_tools:
             new_tools.append(tool)
 
-    _ensure_unique_tool_names([*_BASE_TOOLS, *_EXTRA_TOOLS, *new_tools, finish_scan, agent_finish])
+    _ensure_unique_tool_names(
+        [
+            *_BASE_TOOLS,
+            *_ROOT_ORCHESTRATION_TOOLS,
+            *_EXTRA_TOOLS,
+            *new_tools,
+            finish_scan,
+            agent_finish,
+        ]
+    )
 
     for tool in new_tools:
         _EXTRA_TOOLS.append(tool)
@@ -409,6 +423,8 @@ def build_strix_agent(
     system_prompt_context: dict[str, Any] | None = None,
     extra_tools: Sequence[Tool] | None = None,
     instructions_override: str | None = None,
+    model: str | None = None,
+    model_settings: ModelSettings | None = None,
 ) -> SandboxAgent[Any]:
     """Build a SandboxAgent for either root or child use.
 
@@ -434,7 +450,12 @@ def build_strix_agent(
 
     agent_tools = [*_EXTRA_TOOLS, *(extra_tools or [])]
     if is_root:
-        tools: list[Tool] = [*_BASE_TOOLS, *agent_tools, finish_scan]
+        tools: list[Tool] = [
+            *_BASE_TOOLS,
+            *_ROOT_ORCHESTRATION_TOOLS,
+            *agent_tools,
+            finish_scan,
+        ]
     else:
         tools = [*_BASE_TOOLS, *agent_tools, agent_finish]
     _ensure_unique_tool_names(tools)
@@ -449,12 +470,16 @@ def build_strix_agent(
         is_whitebox,
     )
 
+    agent_model_options: dict[str, Any] = {"model": model}
+    if model_settings is not None:
+        agent_model_options["model_settings"] = model_settings
+
     return SandboxAgent(
         name=name,
         instructions=instructions,
         tools=tools,
         tool_use_behavior=_finish_tool_use_behavior,
-        model=None,
+        **agent_model_options,
         capabilities=[
             Filesystem(
                 configure_tools=(
@@ -477,6 +502,8 @@ def make_child_factory(
     interactive: bool = False,
     chat_completions_tools: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
+    model: str | None = None,
+    model_settings: ModelSettings | None = None,
 ) -> Any:
     """Return the runner-owned builder used by ``spawn_child_agent``.
 
@@ -495,6 +522,8 @@ def make_child_factory(
             interactive=interactive,
             chat_completions_tools=chat_completions_tools,
             system_prompt_context=system_prompt_context,
+            model=model,
+            model_settings=model_settings,
         )
 
     return _factory

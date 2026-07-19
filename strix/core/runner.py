@@ -180,6 +180,19 @@ async def run_strix_scan(
             "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
         )
     logger.info("LLM model resolved: %s", resolved_model)
+    delegate_model = str(getattr(settings.llm, "delegate_model", None) or resolved_model).strip()
+    delegate_reasoning_effort = getattr(
+        settings.llm,
+        "delegate_reasoning_effort",
+        settings.llm.reasoning_effort,
+    )
+    logger.info(
+        "LLM routing resolved: coordinator=%s/%s delegate=%s/%s",
+        resolved_model,
+        settings.llm.reasoning_effort,
+        delegate_model,
+        delegate_reasoning_effort,
+    )
     chat_completions_tools = uses_chat_completions_tool_schema(resolved_model, settings)
 
     scan_mode = str(scan_config.get("scan_mode") or "deep")
@@ -246,6 +259,16 @@ async def run_strix_scan(
             force_required_tool_choice=settings.llm.force_required_tool_choice,
             request_timeout=settings.llm.timeout,
             max_output_tokens=max_output_tokens,
+            prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
+        )
+        delegate_max_output_tokens = min(max_output_tokens, 8_192)
+        delegate_model_settings = make_model_settings(
+            delegate_reasoning_effort,
+            model_name=delegate_model,
+            force_required_tool_choice=settings.llm.force_required_tool_choice,
+            request_timeout=settings.llm.timeout,
+            max_output_tokens=delegate_max_output_tokens,
+            prompt_cache_key=f"lyrashield:{scan_id}:delegates",
         )
         run_config = RunConfig(
             model=resolved_model,
@@ -280,6 +303,9 @@ async def run_strix_scan(
                     ).hexdigest(),
                     "model": resolved_model,
                     "reasoning_effort": settings.llm.reasoning_effort,
+                    "delegate_model": delegate_model,
+                    "delegate_reasoning_effort": delegate_reasoning_effort,
+                    "model_routing_policy": "coordinator-bounded-delegates-medium-v2",
                     "max_output_tokens": max_output_tokens,
                     "max_agents": coordinator.max_agents,
                 }
@@ -296,6 +322,8 @@ async def run_strix_scan(
             chat_completions_tools=chat_completions_tools,
             system_prompt_context=root_context,
             instructions_override=root_instructions,
+            model=resolved_model,
+            model_settings=model_settings,
         )
 
         if not is_resume:
@@ -313,6 +341,8 @@ async def run_strix_scan(
             interactive=interactive,
             chat_completions_tools=chat_completions_tools,
             system_prompt_context=scope_context,
+            model=delegate_model,
+            model_settings=delegate_model_settings,
         )
 
         async def spawn_child_agent(**kwargs: Any) -> dict[str, Any]:
@@ -417,10 +447,10 @@ async def run_strix_scan(
                 logger.error(
                     "Scan %s ended without calling finish_scan. The agent "
                     "emitted a text-only turn instead of a lifecycle tool call, "
-                    "so no executive report was written. Final output (first "
-                    "300 chars): %r",
+                    "so no executive report was written. Final output was "
+                    "omitted from logs (type=%s).",
                     scan_id,
-                    str(final)[:300],
+                    type(final).__name__,
                 )
         return result  # noqa: TRY300
     except BudgetExceededError as exc:

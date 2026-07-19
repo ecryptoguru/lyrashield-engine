@@ -89,7 +89,10 @@ def validate_environment() -> None:
 
     if not settings.llm.model:
         missing_required_vars.append("STRIX_LLM")
-    elif not is_gpt56_model(settings.llm.model):
+    elif not is_gpt56_model(settings.llm.model) or (
+        getattr(settings.llm, "delegate_model", None)
+        and not is_gpt56_model(settings.llm.delegate_model)
+    ):
         error_text = Text(
             "LyraShield scans require a GPT-5.6 Sol, Terra, or Luna deployment",
             style="bold red",

@@ -129,13 +129,17 @@ def make_model_settings(
     force_required_tool_choice: bool = False,
     request_timeout: float | None = None,
     max_output_tokens: int | None = None,
+    prompt_cache_key: str | None = None,
 ) -> ModelSettings:
+    extra_args: dict[str, Any] = request_timeout_extra_args(request_timeout) or {}
+    if prompt_cache_key:
+        extra_args["prompt_cache_key"] = prompt_cache_key
     model_settings = ModelSettings(
         parallel_tool_calls=False,
         retry=DEFAULT_MODEL_RETRY,
         include_usage=True,
         max_tokens=max_output_tokens,
-        extra_args=request_timeout_extra_args(request_timeout),
+        extra_args=extra_args or None,
     )
     if (
         reasoning_effort is not None

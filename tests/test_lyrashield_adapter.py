@@ -15,10 +15,15 @@ if TYPE_CHECKING:
     ("product", "upstream"),
     [
         ("LYRASHIELD_LLM", "STRIX_LLM"),
+        ("LYRASHIELD_DELEGATE_LLM", "STRIX_DELEGATE_LLM"),
         ("LYRASHIELD_IMAGE", "STRIX_IMAGE"),
         ("LYRASHIELD_RUNTIME_BACKEND", "STRIX_RUNTIME_BACKEND"),
         ("LYRASHIELD_MAX_LOCAL_COPY_MB", "STRIX_MAX_LOCAL_COPY_MB"),
         ("LYRASHIELD_REASONING_EFFORT", "STRIX_REASONING_EFFORT"),
+        (
+            "LYRASHIELD_DELEGATE_REASONING_EFFORT",
+            "STRIX_DELEGATE_REASONING_EFFORT",
+        ),
     ],
 )
 def test_prepare_environment_maps_product_variable(product: str, upstream: str) -> None:

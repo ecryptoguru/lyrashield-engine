@@ -170,6 +170,25 @@ async def test_request_is_rejected_before_call_when_bounded_cost_exceeds_budget(
 
 
 @pytest.mark.asyncio
+async def test_delegate_request_reservation_uses_delegate_model_rate() -> None:
+    hooks = ReportUsageHooks(
+        model="azure_ai/gpt-5.6-terra",
+        max_budget_usd=0.08,
+        max_output_tokens=16_384,
+    )
+    agent = MagicMock()
+    agent.name = "specialist"
+    agent.model = "azure_ai/gpt-5.6-luna"
+    agent.model_settings.max_tokens = 8_192
+    agent.tools = []
+    agent.output_type = None
+
+    await hooks.on_llm_start(
+        _make_context(), agent, "system", [{"role": "user", "content": "focused scan"}]
+    )
+
+
+@pytest.mark.asyncio
 async def test_tool_call_and_output_remain_grouped_after_compaction() -> None:
     hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
     agent = MagicMock()

@@ -45,6 +45,28 @@ def test_invalid_model_exits_with_clean_cli_message(capsys: pytest.CaptureFixtur
     assert "require a GPT-5.6 Sol, Terra, or Luna deployment" in capsys.readouterr().out
 
 
+def test_invalid_delegate_model_exits_before_sandbox_setup(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = SimpleNamespace(
+        llm=SimpleNamespace(
+            model="openai/gpt-5.6-terra",
+            delegate_model="openai/gpt-4o",
+            api_key="configured",
+            api_base="configured",
+        )
+    )
+
+    with (
+        patch.object(main_module, "load_settings", return_value=settings),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main_module.validate_environment()
+
+    assert exc_info.value.code == 1
+    assert "require a GPT-5.6 Sol, Terra, or Luna deployment" in capsys.readouterr().out
+
+
 def test_docker_client_has_no_shared_bind_mount_default() -> None:
     assert "strix_bind_mounts" not in StrixDockerSandboxClient.__dict__
 

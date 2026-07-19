@@ -228,6 +228,17 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         name = getattr(agent, "name", None)
         return name if isinstance(name, str) and name else "unknown"
 
+    def _agent_model(self, agent: Agent[dict[str, Any]]) -> str:
+        model = getattr(agent, "model", None)
+        return model if isinstance(model, str) and model.strip() else self._model
+
+    def _agent_max_output_tokens(self, agent: Agent[dict[str, Any]]) -> int:
+        model_settings = getattr(agent, "model_settings", None)
+        max_tokens = getattr(model_settings, "max_tokens", None)
+        if isinstance(max_tokens, int) and max_tokens > 0:
+            return max_tokens
+        return self._max_output_tokens
+
     async def on_llm_start(
         self,
         _context: RunContextWrapper[dict[str, Any]],
@@ -235,7 +246,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         system_prompt: str | None,
         input_items: list[Any],
     ) -> None:
-        before, after = _compact_input_items(self._model, system_prompt, input_items, agent)
+        model = self._agent_model(agent)
+        before, after = _compact_input_items(model, system_prompt, input_items, agent)
         if after < before:
             logger.info(
                 "Compacted model input before request: tokens=%s -> %s, items=%s",
@@ -244,11 +256,13 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 len(input_items),
             )
         if self._max_budget_usd is not None:
-            input_rate, output_rate = _model_rates(self._model)
+            input_rate, output_rate = _model_rates(model)
             multiplier = 2.0 if after > _GPT56_LONG_CONTEXT_TOKENS else 1.0
             reservation = (
                 after * input_rate * multiplier
-                + self._max_output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
+                + self._agent_max_output_tokens(agent)
+                * output_rate
+                * (1.5 if multiplier > 1 else 1.0)
             ) / 1_000_000
             agent_id = self._agent_id(_context, agent)
             async with self._reservation_lock:
@@ -276,13 +290,14 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         if not isinstance(agent_name, str):
             agent_name = None
         agent_id = self._agent_id(context, agent)
+        model = self._agent_model(agent)
 
         if report_state is not None:
             try:
                 report_state.record_sdk_usage(
                     agent_id=agent_id,
                     agent_name=agent_name,
-                    model=self._model,
+                    model=model,
                     usage=response.usage,
                 )
             except Exception:
@@ -291,7 +306,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         async with self._reservation_lock:
             self._reservations.pop(agent_id, None)
             if response.usage is not None:
-                self._committed_cost_floor += _usage_cost_upper_bound(self._model, response.usage)
+                self._committed_cost_floor += _usage_cost_upper_bound(model, response.usage)
 
         if self._max_budget_usd is not None:
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0

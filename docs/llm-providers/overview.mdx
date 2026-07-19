@@ -12,7 +12,7 @@ LyraShield Engine accepts only deployment names recognized as GPT-5.6 Sol, Terra
 
 Anthropic, Bedrock, Vertex, OpenRouter, Novita, local models, Perplexity, and Parallel are unsupported and rejected or outside the production contract.
 
-The application worker resolves the preset before spawning the engine: Safe/Quick/Standard use Luna with medium reasoning; Deep/Custom use Terra with high reasoning. `LYRASHIELD_LLM` remains the explicit fallback. This is mode routing, not an automatic Luna-to-Terra cascade within one scan.
+The application worker resolves the preset before spawning the engine: Safe/Quick/Standard use Luna with medium reasoning throughout. Deep/Custom use Terra with medium reasoning for the root coordinator and Luna with medium reasoning for focused child specialists. The route is deterministic: only the root can create or stop specialists, child agents cannot promote themselves or recursively fan out, and Terra retains final cross-file judgment. `LYRASHIELD_LLM` remains the explicit primary fallback; `LYRASHIELD_DELEGATE_LLM` configures the bounded specialist tier.
 
 <CardGroup cols={2}>
   <Card title="OpenAI-compatible" href="/llm-providers/openai">

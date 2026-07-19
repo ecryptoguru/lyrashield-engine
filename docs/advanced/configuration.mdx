@@ -11,6 +11,10 @@ Production configuration is owned by the LyraShield worker. The `lyrashield` ada
   GPT-5.6 Sol, Terra, or Luna deployment name. Maps to internal `STRIX_LLM`. Other model families are rejected before sandbox setup.
 </ParamField>
 
+<ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">
+  Optional GPT-5.6 deployment for child specialists. The application supplies Luna for Deep/Custom scans and otherwise uses the primary deployment.
+</ParamField>
+
 <ParamField path="LLM_API_KEY" type="string">
   Credential for the approved OpenAI-compatible endpoint. Azure aliases are listed below.
 </ParamField>
@@ -23,8 +27,12 @@ Production configuration is owned by the LyraShield worker. The `lyrashield` ada
   API version for endpoints that require it.
 </ParamField>
 
-<ParamField path="LYRASHIELD_REASONING_EFFORT" default="high" type="string">
-  Maps to internal reasoning effort. The application resolves medium for Safe/Quick/Standard and high for Deep/Custom.
+<ParamField path="LYRASHIELD_REASONING_EFFORT" default="medium" type="string">
+  Maps to internal reasoning effort. The application resolves medium for every scan mode.
+</ParamField>
+
+<ParamField path="LYRASHIELD_DELEGATE_REASONING_EFFORT" default="medium" type="string">
+  Reasoning effort for child specialists. Production keeps this at medium.
 </ParamField>
 
 <ParamField path="LLM_TIMEOUT" default="300" type="integer">

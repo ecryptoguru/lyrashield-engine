@@ -9,9 +9,9 @@ The engine exposes `quick`, `standard`, and `deep`. The LyraShield application o
 | --- | --- | --- | --- | --- |
 | Release Check / Safe | `quick`-class bounded execution | GPT-5.6 Luna | medium | Fast release-oriented repository review |
 | Code Review / Standard | `standard` | GPT-5.6 Luna | medium | Broader routine repository review |
-| Deep Security Review / Deep | `deep` | GPT-5.6 Terra | high | Authorized deeper repository analysis |
+| Deep Security Review / Deep | `deep` | GPT-5.6 Terra coordinator + GPT-5.6 Luna specialists | medium | Authorized deeper repository analysis |
 
-`CUSTOM` is an application-level approval-gated mode; it does not add a fourth engine CLI value. Mode routing selects one deployment for the run. It is not a Luna-to-Terra cascade.
+`CUSTOM` is an application-level approval-gated mode; it does not add a fourth engine CLI value. Deep/Custom routing is deterministic: the Terra/medium root owns final judgment and delegates bounded focused work to Luna/medium specialists.
 
 Duration is target-, environment-, model-, and limit-dependent. Do not promise fixed minutes or completeness. Every run can end completed, failed, cancelled, timed out, or stopped by a protected limit, and the application preserves those distinctions.
 
