@@ -50,7 +50,19 @@ if not scanned:
         }
     )
 
-bounded = scanned[:4000]
+priority_terms = (
+    "api", "auth", "config", "controller", "db", "handler", "middleware",
+    "payment", "route", "secret", "session", "token", "upload", "webhook",
+)
+ranked = sorted(
+    scanned,
+    key=lambda path: (
+        not any(term in path.lower() for term in priority_terms),
+        path,
+    ),
+)
+# ponytail: 500 AST targets; expand from Semgrep evidence when this misses a relevant path.
+bounded = ranked[:500]
 targets_file.write_text("".join(f"{p}\n" for p in bounded), encoding="utf-8")
 print(f"sg-targets: {len(bounded)}")
 PY

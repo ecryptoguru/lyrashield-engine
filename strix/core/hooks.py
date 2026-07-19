@@ -22,8 +22,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MODEL_INPUT_COMPACTION_TRIGGER_TOKENS = 240_000
-MODEL_INPUT_COMPACTION_TARGET_TOKENS = 180_000
+# Keep the root session comfortably below a request that could consume most of
+# a small protected scan budget. Older evidence remains available in sandbox
+# artifacts and can be re-read on demand.
+MODEL_INPUT_COMPACTION_TRIGGER_TOKENS = 96_000
+MODEL_INPUT_COMPACTION_TARGET_TOKENS = 64_000
 _COMPACTION_NOTICE = {
     "role": "user",
     "content": (
@@ -117,7 +120,7 @@ def _estimate_input_tokens(
     input_items: list[Any],
     agent: Any,
 ) -> int:
-    """Conservative local estimate; leaves 32k tokens below the 272k price boundary."""
+    """Conservative local estimate for bounded context and reservations."""
     import litellm  # noqa: PLC0415
 
     payload = json.dumps(

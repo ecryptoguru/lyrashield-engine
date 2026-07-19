@@ -35,10 +35,9 @@ def _resolve_skills(
        agent-browser CLI).
     4. ``tooling/python`` (always — Python runs through ``exec_command``;
        sandbox scripts can import ``caido_api`` for Caido automation).
-    5. For a whitebox root only, broad source-aware coordination/SAST guidance.
-       Child agents receive only their requested specialty and common tooling;
-       repeating scan-wide guidance in every child wastes context and can
-       contradict the child's narrower tool contract.
+    5. For a whitebox root only, compact source-aware coordination guidance.
+       The detailed SAST playbook is loaded only by an explicitly assigned
+       specialist; carrying it in the root's repeated prompt wastes context.
     """
     ordered: list[str] = list(requested or [])
     if is_root:
@@ -46,7 +45,6 @@ def _resolve_skills(
         ordered.append("coordination/root_agent")
         if is_whitebox:
             ordered.append("coordination/source_aware_whitebox")
-            ordered.append("custom/source_aware_sast")
     ordered.append("tooling/agent_browser")
     ordered.append("tooling/python")
 
