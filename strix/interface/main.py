@@ -948,6 +948,7 @@ def main() -> None:
         exit_reason = "error"
         posthog.error("unhandled_exception")
         scarf.error("unhandled_exception")
+        _exit_noninteractive_failure(non_interactive=args.non_interactive)
         raise
     finally:
         report_state = get_global_report_state()
@@ -983,6 +984,15 @@ def _non_interactive_exit_code(report_state: Any | None) -> int:
             return 4
         case _:
             return 5
+
+
+def _exit_noninteractive_failure(*, non_interactive: bool) -> None:
+    if not non_interactive:
+        return
+    # ``run_cli`` already emitted the fixed, class-only failure marker. Exit
+    # without an interpreter traceback because exception messages and frames
+    # may contain target-derived data.
+    raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

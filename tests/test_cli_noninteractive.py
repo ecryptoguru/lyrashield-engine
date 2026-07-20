@@ -64,3 +64,16 @@ def test_non_interactive_exit_code_requires_a_completed_receipt(
 ) -> None:
     report_state = SimpleNamespace(run_record=record, vulnerability_reports=findings)
     assert main_module._non_interactive_exit_code(report_state) == expected
+
+
+def test_non_interactive_unhandled_failure_exits_without_a_traceback() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main_module._exit_noninteractive_failure(non_interactive=True)
+
+    assert exc_info.value.code == 1
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__ is True
+
+
+def test_interactive_unhandled_failure_remains_raisable() -> None:
+    assert main_module._exit_noninteractive_failure(non_interactive=False) is None
