@@ -14,6 +14,41 @@ from strix.interface import cli
 main_module = import_module("strix.interface.main")
 
 
+class _ProviderFailureError(RuntimeError):
+    def __init__(self, body: object) -> None:
+        super().__init__("target-derived detail")
+        self.body = body
+
+
+def test_noninteractive_failure_label_includes_only_a_safe_provider_code() -> None:
+    failure = _ProviderFailureError(
+        {
+            "code": "context_length_exceeded",
+            "type": "invalid_request_error",
+            "param": "input",
+            "message": "target-derived detail",
+        }
+    )
+
+    assert (
+        cli._noninteractive_failure_label(failure)
+        == "_ProviderFailureError.context_length_exceeded"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"code": "unsafe value with spaces"},
+        {"code": "x" * 65},
+        {"message": "target-derived detail"},
+        "not-a-mapping",
+    ],
+)
+def test_noninteractive_failure_label_rejects_unbounded_provider_details(body: object) -> None:
+    assert cli._noninteractive_failure_label(_ProviderFailureError(body)) == "_ProviderFailureError"
+
+
 @pytest.mark.asyncio
 async def test_non_interactive_scan_bypasses_live_display() -> None:
     args = SimpleNamespace(
