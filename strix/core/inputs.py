@@ -34,6 +34,22 @@ def _accepts_required_tool_choice(model_name: str | None) -> bool:
     return name.startswith("openai/") or is_known_openai_bare_model(name)
 
 
+def _supports_parallel_tool_calls_setting(model_name: str | None) -> bool:
+    """Return whether the routed provider accepts ``parallel_tool_calls``.
+
+    The Azure AI GPT-5.6 Chat Completions route rejects the parameter itself,
+    including the value ``false``, with HTTP 400. Omitting it keeps the request
+    compatible; LyraShield's turn, agent, concurrency, and spend limits remain
+    enforced independently of this provider hint.
+    """
+    name = (model_name or "").strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return not name.startswith("azure_ai/gpt-5.6-")
+
+
 def build_root_task(scan_config: dict[str, Any]) -> str:
     targets = scan_config.get("targets", []) or []
     diff_scope = scan_config.get("diff_scope") or {}
@@ -136,7 +152,7 @@ def make_model_settings(
     if prompt_cache_key:
         extra_args["prompt_cache_key"] = prompt_cache_key
     model_settings = ModelSettings(
-        parallel_tool_calls=False,
+        parallel_tool_calls=(False if _supports_parallel_tool_calls_setting(model_name) else None),
         retry=DEFAULT_MODEL_RETRY,
         include_usage=True,
         max_tokens=max_output_tokens,
