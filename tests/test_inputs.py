@@ -202,6 +202,29 @@ def test_make_model_settings_adds_stable_prompt_cache_key() -> None:
         "timeout": 300.0,
         "prompt_cache_key": "lyrashield:scan-1:coordinator",
     }
+    assert settings.parallel_tool_calls is None
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "azure_ai/gpt-5.6-luna",
+        "litellm/azure_ai/gpt-5.6-terra",
+        "any-llm/azure_ai/gpt-5.6-sol",
+    ],
+)
+def test_make_model_settings_omits_rejected_azure_gpt56_parallel_tool_setting(
+    model_name: str,
+) -> None:
+    settings = make_model_settings("medium", model_name=model_name)
+
+    assert settings.parallel_tool_calls is None
+
+
+def test_make_model_settings_disables_parallel_tools_for_supported_provider() -> None:
+    settings = make_model_settings("medium", model_name="openai/gpt-5.6-luna")
+
+    assert settings.parallel_tool_calls is False
 
 
 def test_make_model_settings_timeout_survives_reasoning_resolve() -> None:
