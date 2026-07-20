@@ -133,15 +133,18 @@ RUN git clone https://github.com/aravind0x7/JS-Snooper.git && \
 USER root
 
 RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+ARG GITLEAKS_VERSION=8.30.1
+ARG GITLEAKS_LINUX_X64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+ARG GITLEAKS_LINUX_ARM64_SHA256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
 RUN set -eux; \
     ARCH="$(uname -m)"; \
     case "$ARCH" in \
-        x86_64) GITLEAKS_ARCH="x64" ;; \
-        aarch64|arm64) GITLEAKS_ARCH="arm64" ;; \
+        x86_64) GITLEAKS_ARCH="x64"; GITLEAKS_SHA256="$GITLEAKS_LINUX_X64_SHA256" ;; \
+        aarch64|arm64) GITLEAKS_ARCH="arm64"; GITLEAKS_SHA256="$GITLEAKS_LINUX_ARM64_SHA256" ;; \
         *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
     esac; \
-    TAG="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r .tag_name)"; \
-    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/${TAG}/gitleaks_${TAG#v}_linux_${GITLEAKS_ARCH}.tar.gz" -o /tmp/gitleaks.tgz; \
+    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GITLEAKS_ARCH}.tar.gz" -o /tmp/gitleaks.tgz; \
+    echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -; \
     tar -xzf /tmp/gitleaks.tgz -C /tmp; \
     install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks; \
     rm -f /tmp/gitleaks /tmp/gitleaks.tgz
