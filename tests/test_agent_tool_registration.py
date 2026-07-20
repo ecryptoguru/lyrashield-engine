@@ -160,8 +160,8 @@ def test_child_prompt_omits_scan_wide_skill_bundles() -> None:
         "scan_modes/deep",
         "coordination/root_agent",
         "coordination/source_aware_whitebox",
-        "custom/source_aware_sast",
     } <= set(root_skills)
+    assert "custom/source_aware_sast" not in root_skills
     assert child_skills == [
         "vulnerabilities/xss",
         "tooling/agent_browser",

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_MAX_TURNS = 500
+MAX_CHILD_INHERITED_HISTORY_BYTES = 24 * 1024
 
 
 def _accepts_required_tool_choice(model_name: str | None) -> bool:
@@ -175,6 +176,14 @@ def child_initial_input(
             ensure_ascii=False,
             default=str,
         )
+        encoded = rendered.encode("utf-8")
+        if len(encoded) > MAX_CHILD_INHERITED_HISTORY_BYTES:
+            # ponytail: bounded handoff; large evidence stays in sandbox artifacts.
+            rendered = encoded[-MAX_CHILD_INHERITED_HISTORY_BYTES:].decode("utf-8", errors="ignore")
+            rendered = (
+                "[Earlier parent history omitted; inspect referenced artifacts as needed.]\n"
+                + rendered
+            )
         parts.append(
             "== Inherited context from parent (background only) ==\n"
             f"{rendered}\n"

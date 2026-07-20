@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from strix.core.hooks import (
+    MODEL_INPUT_COMPACTION_TARGET_TOKENS,
     MODEL_INPUT_COMPACTION_TRIGGER_TOKENS,
     BudgetExceededError,
     ReportUsageHooks,
@@ -135,6 +136,24 @@ async def test_large_context_is_compacted_before_the_model_request() -> None:
     assert len(items) < 61
     assert _estimate_input_tokens(hooks._model, "system", items, agent) < 272_000
     assert MODEL_INPUT_COMPACTION_TRIGGER_TOKENS < 272_000
+
+
+@pytest.mark.asyncio
+async def test_medium_context_is_compacted_to_the_budget_safe_target() -> None:
+    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
+    agent = MagicMock()
+    agent.tools = []
+    agent.output_type = None
+    items = [
+        {"role": "user", "content": "original scan task"},
+        {"role": "assistant", "content": "evidence " * 40_000},
+    ]
+
+    await hooks.on_llm_start(_make_context(), agent, "system", items)
+
+    assert _estimate_input_tokens(hooks._model, "system", items, agent) <= (
+        MODEL_INPUT_COMPACTION_TARGET_TOKENS
+    )
 
 
 @pytest.mark.asyncio

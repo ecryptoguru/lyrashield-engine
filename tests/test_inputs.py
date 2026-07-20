@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from strix.core.inputs import build_root_task, child_initial_input, make_model_settings
+from strix.core.inputs import (
+    MAX_CHILD_INHERITED_HISTORY_BYTES,
+    build_root_task,
+    child_initial_input,
+    make_model_settings,
+)
 
 
 def _child_kwargs(parent_history: list[Any]) -> dict[str, Any]:
@@ -42,6 +47,17 @@ def test_child_initial_input_single_message_with_history() -> None:
     assert "previous work" in content
     assert "agent scout (agent-2)" in content
     assert "Audit the login flow." in content
+
+
+def test_child_initial_input_bounds_large_inherited_history() -> None:
+    history = [{"role": "assistant", "content": "old-" * 20_000 + "recent-evidence"}]
+
+    result = child_initial_input(**_child_kwargs(history))
+
+    content = result[0]["content"]
+    assert "Earlier parent history omitted" in content
+    assert "recent-evidence" in content
+    assert len(content.encode("utf-8")) < MAX_CHILD_INHERITED_HISTORY_BYTES + 1_000
 
 
 @pytest.mark.parametrize(

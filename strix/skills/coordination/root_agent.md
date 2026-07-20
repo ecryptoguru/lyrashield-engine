@@ -81,6 +81,9 @@ The root creates each specialized phase; children return evidence instead of spa
 - Terminate agents when objectives are met or no longer relevant
 - Use message passing only when essential (requests/answers, critical handoffs)
 - Prefer batched updates over routine status messages
+- Give specialists a focused task, artifact paths, and the smallest relevant
+  evidence excerpt. Keep `inherit_context` false unless the child cannot
+  reproduce the work from those inputs.
 
 ## Completion
 
