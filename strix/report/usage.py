@@ -20,6 +20,7 @@ class LLMUsageLedger:
         self._agent_metadata: dict[str, dict[str, str]] = {}
         self._request_usage_entries: list[dict[str, Any]] = []
         self._total_cost = 0.0
+        self._has_cost = False
 
     def record(
         self,
@@ -47,12 +48,14 @@ class LLMUsageLedger:
             estimated = _estimate_litellm_cost(usage, model)
             if estimated:
                 self._total_cost += estimated
+                self._has_cost = True
 
         return True
 
     def record_observed_cost(self, cost: float) -> None:
         if isinstance(cost, int | float) and cost > 0:
             self._total_cost += float(cost)
+            self._has_cost = True
 
     @property
     def total_cost(self) -> float:
@@ -72,7 +75,8 @@ class LLMUsageLedger:
             # aggregate. It has no per-call cache buckets, so it cannot be
             # used for exact pricing.
             record.pop("request_usage_entries", None)
-        record["cost"] = _round_cost(self._total_cost)
+        if self._has_cost:
+            record["cost"] = _round_cost(self._total_cost)
         record["agents"] = []
 
         agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}
@@ -103,6 +107,7 @@ class LLMUsageLedger:
         self._agent_metadata.clear()
         self._request_usage_entries.clear()
         self._total_cost = 0.0
+        self._has_cost = False
 
         if not isinstance(raw_usage, dict):
             return
@@ -113,7 +118,9 @@ class LLMUsageLedger:
             logger.exception("Failed to hydrate aggregate llm_usage from run.json")
             self._total_usage = Usage()
 
-        self._total_cost = _float_or_zero(raw_usage.get("cost"))
+        if "cost" in raw_usage:
+            self._total_cost = _float_or_zero(raw_usage.get("cost"))
+            self._has_cost = True
         self._request_usage_entries = _hydrate_request_usage_entries(
             raw_usage.get("request_usage_entries")
         )
