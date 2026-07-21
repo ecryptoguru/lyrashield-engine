@@ -52,6 +52,31 @@ class StrixProvider(MultiProvider):
     ``litellm/deepseek/deepseek-chat``.
     """
 
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        llm = settings.llm if settings is not None else None
+        configured_models = (
+            (getattr(llm, "model", None), getattr(llm, "delegate_model", None))
+            if llm is not None
+            else (None, None)
+        )
+        self._azure_responses_enabled = any(
+            _is_azure_model(model_name) and is_gpt56_model(model_name)
+            for model_name in configured_models
+        )
+
+        if self._azure_responses_enabled:
+            if llm is None or not llm.api_base:
+                raise RuntimeError(
+                    "Azure GPT-5.6 requires LLM_API_BASE or an Azure endpoint variable."
+                )
+            super().__init__(
+                openai_api_key=llm.api_key,
+                openai_base_url=_azure_responses_base_url(llm.api_base),
+                openai_use_responses=True,
+            )
+        else:
+            super().__init__()
+
     def _resolve_prefixed_model(
         self,
         *,
@@ -59,6 +84,8 @@ class StrixProvider(MultiProvider):
         prefix: str,
         stripped_model_name: str | None,
     ) -> tuple[ModelProvider, str | None]:
+        if prefix in {"azure", "azure_ai"} and self._azure_responses_enabled:
+            return self.openai_provider, stripped_model_name
         if prefix in {"openai", "litellm", "any-llm"}:
             return super()._resolve_prefixed_model(
                 original_model_name=original_model_name,
@@ -68,6 +95,16 @@ class StrixProvider(MultiProvider):
         if prefix == "ollama" and stripped_model_name:
             return self._get_fallback_provider("litellm"), f"ollama_chat/{stripped_model_name}"
         return self._get_fallback_provider("litellm"), original_model_name
+
+
+def _azure_responses_base_url(api_base: str) -> str:
+    """Normalize an Azure resource or project endpoint for the v1 Responses API."""
+    base = api_base.strip().rstrip("/")
+    if not base:
+        raise RuntimeError("Azure GPT-5.6 requires a non-empty API base URL.")
+    if not base.lower().endswith("/openai/v1"):
+        base = f"{base}/openai/v1"
+    return f"{base}/"
 
 
 DEFAULT_MODEL_RETRY = ModelRetrySettings(
