@@ -41,6 +41,25 @@ def test_usage_ledger_does_not_invent_missing_cache_write_tokens() -> None:
     assert ledger.to_record()["request_usage_entries"][0]["model"] == "azure/gpt-5.6-luna"
 
 
+def test_usage_ledger_omits_unavailable_native_provider_cost() -> None:
+    usage = Usage(requests=1, input_tokens=100, output_tokens=10, total_tokens=110)
+    ledger = LLMUsageLedger()
+
+    assert ledger.record(agent_id="agent-1", usage=usage, model="azure/gpt-5.6-luna")
+
+    assert "cost" not in ledger.to_record()
+    assert ledger.total_cost == 0
+
+
+def test_usage_ledger_retains_observed_provider_cost() -> None:
+    ledger = LLMUsageLedger()
+
+    ledger.record_observed_cost(0.25)
+
+    assert ledger.to_record()["cost"] == 0.25
+    assert ledger.total_cost == 0.25
+
+
 def test_usage_ledger_does_not_treat_multi_request_aggregate_as_a_receipt() -> None:
     usage = Usage(requests=2, input_tokens=200, output_tokens=20, total_tokens=220)
     ledger = LLMUsageLedger()
