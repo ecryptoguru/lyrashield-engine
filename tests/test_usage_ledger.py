@@ -47,7 +47,9 @@ def test_usage_ledger_omits_unavailable_native_provider_cost() -> None:
 
     assert ledger.record(agent_id="agent-1", usage=usage, model="azure/gpt-5.6-luna")
 
-    assert "cost" not in ledger.to_record()
+    record = ledger.to_record()
+    assert "cost" not in record
+    assert "cost" not in record["agents"][0]
     assert ledger.total_cost == 0
 
 

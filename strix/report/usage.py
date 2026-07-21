@@ -94,9 +94,10 @@ class LLMUsageLedger:
                     "agent_id": agent_id,
                     "agent_name": metadata.get("agent_name") or agent_id,
                     "model": metadata.get("model"),
-                    "cost": _round_cost(agent_cost),
                 }
             )
+            if self._has_cost:
+                agent_record["cost"] = _round_cost(agent_cost)
             record["agents"].append(agent_record)
 
         return record

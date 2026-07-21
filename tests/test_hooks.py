@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from strix.core.hooks import (
     BudgetExceededError,
     ReportUsageHooks,
     _estimate_input_tokens,
+    _usage_cost_upper_bound,
 )
 
 
@@ -112,6 +114,19 @@ def test_non_positive_budget_rejected(bad_budget: float) -> None:
 def test_budget_exceeded_error_is_runtime_error() -> None:
     err = BudgetExceededError("test")
     assert isinstance(err, RuntimeError)
+
+
+def test_usage_upper_bound_honors_provider_reported_cache_reads() -> None:
+    usage = SimpleNamespace(
+        input_tokens=1_000,
+        output_tokens=100,
+        input_tokens_details=SimpleNamespace(cached_tokens=800),
+        request_usage_entries=None,
+    )
+
+    assert _usage_cost_upper_bound("azure_ai/gpt-5.6-luna", usage) == pytest.approx(
+        (200 * 1.25 + 800 * 0.1 + 100 * 6) / 1_000_000
+    )
 
 
 @pytest.mark.asyncio

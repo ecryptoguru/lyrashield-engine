@@ -38,13 +38,13 @@ _COMPACTION_NOTICE = {
 _COMPACTED_ITEM_MAX_BYTES = 64_000
 _GPT56_LONG_CONTEXT_TOKENS = 272_000
 _GPT56_RATES = {
-    "sol": (6.25, 30.0),
-    "terra": (3.125, 15.0),
-    "luna": (1.25, 6.0),
+    "sol": (6.25, 0.5, 30.0),
+    "terra": (3.125, 0.25, 15.0),
+    "luna": (1.25, 0.1, 6.0),
 }
 
 
-def _model_rates(model: str) -> tuple[float, float]:
+def _model_rates(model: str) -> tuple[float, float, float]:
     normalized = model.lower()
     for tier, rates in _GPT56_RATES.items():
         if tier in normalized:
@@ -53,15 +53,24 @@ def _model_rates(model: str) -> tuple[float, float]:
 
 
 def _usage_cost_upper_bound(model: str, usage: Any) -> float:
-    input_rate, output_rate = _model_rates(model)
+    input_rate, cached_input_rate, output_rate = _model_rates(model)
     entries = list(getattr(usage, "request_usage_entries", None) or [usage])
     total = 0.0
     for entry in entries:
         input_tokens = max(0, int(getattr(entry, "input_tokens", 0) or 0))
         output_tokens = max(0, int(getattr(entry, "output_tokens", 0) or 0))
+        input_details = getattr(entry, "input_tokens_details", None)
+        if isinstance(input_details, list):
+            input_details = input_details[0] if input_details else None
+        cached_input_tokens = min(
+            input_tokens,
+            max(0, int(getattr(input_details, "cached_tokens", 0) or 0)),
+        )
+        uncached_input_tokens = input_tokens - cached_input_tokens
         multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_TOKENS else 1.0
         total += (
-            input_tokens * input_rate * multiplier
+            uncached_input_tokens * input_rate * multiplier
+            + cached_input_tokens * cached_input_rate * multiplier
             + output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
         ) / 1_000_000
     return total
@@ -259,7 +268,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 len(input_items),
             )
         if self._max_budget_usd is not None:
-            input_rate, output_rate = _model_rates(model)
+            input_rate, _, output_rate = _model_rates(model)
             multiplier = 2.0 if after > _GPT56_LONG_CONTEXT_TOKENS else 1.0
             reservation = (
                 after * input_rate * multiplier
