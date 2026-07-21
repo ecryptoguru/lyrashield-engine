@@ -340,7 +340,7 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
                 ),
             )
 
-        model = StrixProvider().get_model(raw_model)
+        model = StrixProvider(settings=settings).get_model(raw_model)
         await asyncio.wait_for(
             model.get_response(
                 system_instructions="You are a helpful assistant.",

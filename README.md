@@ -40,7 +40,7 @@ export LLM_API_BASE="https://<approved-endpoint>"
 uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
 ```
 
-Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). Deployment names must still identify GPT-5.6 Sol, Terra, or Luna. Anthropic, Bedrock, Vertex, OpenRouter, local models, Perplexity, and Parallel are not supported execution paths.
+Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Sol, Terra, or Luna. Anthropic, Bedrock, Vertex, OpenRouter, local models, Perplexity, and Parallel are not supported execution paths.
 
 Repository targets are the production worker boundary. The LyraShield application routes URL targets to its pinned deterministic URL scanner instead of this engine. Run only against targets you are authorized to test.
 

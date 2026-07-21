@@ -272,7 +272,7 @@ async def run_strix_scan(
         )
         run_config = RunConfig(
             model=resolved_model,
-            model_provider=StrixProvider(),
+            model_provider=StrixProvider(settings=settings),
             model_settings=model_settings,
             sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
             trace_include_sensitive_data=False,

@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import pytest
 from agents.model_settings import ModelSettings
+from agents.models.openai_responses import OpenAIResponsesModel
 
 from strix.config.models import (
     RECOMMENDED_MODEL_NAMES,
+    StrixProvider,
+    _azure_responses_base_url,
     is_gpt56_model,
     is_recommended_or_frontier_model,
     request_timeout_extra_args,
 )
+from strix.config.settings import LlmSettings, Settings
 
 
 @pytest.mark.parametrize("model_name", RECOMMENDED_MODEL_NAMES)
@@ -50,6 +54,56 @@ def test_gpt56_deployment_names_are_accepted(model_name: str) -> None:
 @pytest.mark.parametrize("model_name", [None, "", "gpt-5.5", "gpt-5.60", "gpt-5.6fake"])
 def test_non_gpt56_deployment_names_are_rejected(model_name: str | None) -> None:
     assert not is_gpt56_model(model_name)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected"),
+    [
+        (
+            "https://example.services.ai.azure.com",
+            "https://example.services.ai.azure.com/openai/v1/",
+        ),
+        (
+            "https://example.openai.azure.com/openai/v1/",
+            "https://example.openai.azure.com/openai/v1/",
+        ),
+        (
+            "https://example.services.ai.azure.com/api/projects/demo",
+            "https://example.services.ai.azure.com/api/projects/demo/openai/v1/",
+        ),
+    ],
+)
+def test_azure_responses_base_url(api_base: str, expected: str) -> None:
+    assert _azure_responses_base_url(api_base) == expected
+
+
+def test_azure_gpt56_routes_through_responses_with_stripped_deployment_name() -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="azure_ai/gpt-5.6-luna",
+            delegate_model="azure_ai/gpt-5.6-luna",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+        )
+    )
+
+    model = StrixProvider(settings=settings).get_model("azure_ai/gpt-5.6-luna")
+
+    assert isinstance(model, OpenAIResponsesModel)
+    assert model.model == "gpt-5.6-luna"
+    assert str(model._client.base_url) == "https://example.services.ai.azure.com/openai/v1/"
+
+
+def test_azure_gpt56_route_fails_closed_without_endpoint() -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="azure_ai/gpt-5.6-luna",
+            api_key="test-key",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="requires LLM_API_BASE"):
+        StrixProvider(settings=settings)
 
 
 @pytest.mark.parametrize(
