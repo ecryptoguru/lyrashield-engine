@@ -200,26 +200,22 @@ async def respawn_subagents(
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
 ) -> None:
-    async with coordinator._lock:
-        agents_snapshot = [
-            (aid, status, dict(coordinator.metadata.get(aid, {})))
-            for aid, status in coordinator.statuses.items()
-        ]
-        candidates: list[tuple[str, str, str | None, dict[str, Any]]] = []
-        for aid, status, md in agents_snapshot:
-            if not interactive and status not in {"running", "waiting"}:
-                continue
-            if coordinator.parent_of.get(aid) is None or aid == root_id:
-                continue
-            md["_restored_status"] = status
-            candidates.append(
-                (
-                    aid,
-                    coordinator.names.get(aid, aid),
-                    coordinator.parent_of.get(aid),
-                    md,
-                )
+    agents_snapshot = await coordinator.agents_with_metadata()
+    candidates: list[tuple[str, str, str | None, dict[str, Any]]] = []
+    for aid, status, parent, name, md in agents_snapshot:
+        if not interactive and status not in {"running", "waiting"}:
+            continue
+        if parent is None or aid == root_id:
+            continue
+        md["_restored_status"] = status
+        candidates.append(
+            (
+                aid,
+                name,
+                parent,
+                md,
             )
+        )
 
     for child_id, name, parent_id, md in candidates:
         try:
@@ -452,8 +448,7 @@ async def _settle_run_result(
     agent_id: str,
     interactive: bool,
 ) -> None:
-    async with coordinator._lock:
-        current_status = coordinator.statuses.get(agent_id)
+    current_status = await coordinator.get_status(agent_id)
 
     if current_status != "running":
         return
@@ -465,8 +460,7 @@ async def _settle_run_result(
 
 
 async def _agent_status(coordinator: AgentCoordinator, agent_id: str) -> Status | None:
-    async with coordinator._lock:
-        return coordinator.statuses.get(agent_id)
+    return await coordinator.get_status(agent_id)
 
 
 def _final_output_metadata(result: RunResultBase | None) -> str:
@@ -511,9 +505,7 @@ async def _notify_parent_on_crash(
 ) -> None:
     if status != "crashed":
         return
-    async with coordinator._lock:
-        parent = coordinator.parent_of.get(agent_id)
-        name = coordinator.names.get(agent_id, agent_id)
+    parent, name = await coordinator.get_parent_and_name(agent_id)
     if parent is None:
         return
     await coordinator.send(

@@ -31,11 +31,16 @@ def request_timeout_extra_args(timeout_s: float | None) -> dict[str, float] | No
 
 
 def is_gpt56_model(model_name: str | None) -> bool:
-    """Return whether a configured deployment is one of LyraShield's GPT-5.6 tiers."""
+    r"""Return whether a configured deployment is one of LyraShield's GPT-5.6 tiers.
+
+    Matches the worker's allowed set: Sol, Terra, or Luna. The worker regex is
+    ``/(?:^|[/.-])gpt-5\.6-(?:sol|terra|luna)(?:$|[/.-])/`` after lower-casing
+    and converting underscores to dashes.
+    """
     if not model_name:
         return False
     normalized = model_name.strip().lower().replace("_", "-")
-    return re.search(r"(?:^|[/.-])gpt-5\.6(?:$|[/.-])", normalized) is not None
+    return re.search(r"(?:^|[/.-])gpt-5\.6-(?:sol|terra|luna)(?:$|[/.-])", normalized) is not None
 
 
 def _retry_statusless_provider_errors(context: RetryPolicyContext) -> bool:
@@ -87,7 +92,7 @@ DEFAULT_MODEL_RETRY = ModelRetrySettings(
 )
 
 RECOMMENDED_MODEL_NAMES = (
-    "openai/gpt-5.6",
+    "openai/gpt-5.6-luna",
     "openai/gpt-5.6-sol",
     "openai/gpt-5.6-terra",
     "openai/gpt-5.5",

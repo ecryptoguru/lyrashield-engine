@@ -9,6 +9,12 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _lyra(upstream: str) -> AliasChoices:
+    """Product alias pair for a single upstream STRIX_* env var."""
+    product = upstream.replace("STRIX_", "LYRASHIELD_", 1)
+    return AliasChoices(upstream, product)
+
+
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
 _BASE_CONFIG = SettingsConfigDict(
@@ -21,8 +27,11 @@ _BASE_CONFIG = SettingsConfigDict(
 class LlmSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
-    model: str | None = Field(default=None, alias="STRIX_LLM")
-    delegate_model: str | None = Field(default=None, alias="STRIX_DELEGATE_LLM")
+    model: str | None = Field(default=None, validation_alias=_lyra("STRIX_LLM"))
+    delegate_model: str | None = Field(
+        default=None,
+        validation_alias=_lyra("STRIX_DELEGATE_LLM"),
+    )
     api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -53,16 +62,22 @@ class LlmSettings(BaseSettings):
             "AZURE_OPENAI_API_VERSION",
         ),
     )
-    reasoning_effort: ReasoningEffort = Field(default="medium", alias="STRIX_REASONING_EFFORT")
+    reasoning_effort: ReasoningEffort = Field(
+        default="medium",
+        validation_alias=_lyra("STRIX_REASONING_EFFORT"),
+    )
     delegate_reasoning_effort: ReasoningEffort = Field(
         default="medium",
-        alias="STRIX_DELEGATE_REASONING_EFFORT",
+        validation_alias=_lyra("STRIX_DELEGATE_REASONING_EFFORT"),
     )
     force_required_tool_choice: bool = Field(
         default=False,
-        alias="STRIX_FORCE_REQUIRED_TOOL_CHOICE",
+        validation_alias=_lyra("STRIX_FORCE_REQUIRED_TOOL_CHOICE"),
     )
-    timeout: int = Field(default=300, alias="LLM_TIMEOUT")
+    timeout: int = Field(
+        default=300,
+        validation_alias=AliasChoices("LLM_TIMEOUT", "LYRASHIELD_LLM_TIMEOUT"),
+    )
 
 
 class RuntimeSettings(BaseSettings):
@@ -70,22 +85,35 @@ class RuntimeSettings(BaseSettings):
 
     image: str = Field(
         default="ghcr.io/usestrix/strix-sandbox:1.0.0",
-        alias="STRIX_IMAGE",
+        validation_alias=_lyra("STRIX_IMAGE"),
     )
-    backend: str = Field(default="docker", alias="STRIX_RUNTIME_BACKEND")
+    backend: str = Field(
+        default="docker",
+        validation_alias=_lyra("STRIX_RUNTIME_BACKEND"),
+    )
     # Hard cap on a local target's size before we refuse to stream it into the
     # sandbox file-by-file (the SDK copies every file individually, which stalls
     # on large repos). Above this, the user must bind-mount via ``--mount``.
     # Set to 0 (or less) to disable the pre-flight check entirely.
-    max_local_copy_mb: int = Field(default=1024, alias="STRIX_MAX_LOCAL_COPY_MB")
+    max_local_copy_mb: int = Field(
+        default=1024,
+        validation_alias=_lyra("STRIX_MAX_LOCAL_COPY_MB"),
+    )
     # Max screenshot/image tool outputs kept live per agent context (0 = none).
-    max_context_images: int = Field(default=3, ge=0, alias="STRIX_MAX_CONTEXT_IMAGES")
+    max_context_images: int = Field(
+        default=3,
+        ge=0,
+        validation_alias=_lyra("STRIX_MAX_CONTEXT_IMAGES"),
+    )
 
 
 class TelemetrySettings(BaseSettings):
     model_config = _BASE_CONFIG
 
-    enabled: bool = Field(default=True, alias="STRIX_TELEMETRY")
+    enabled: bool = Field(
+        default=True,
+        validation_alias=_lyra("STRIX_TELEMETRY"),
+    )
 
 
 class Settings(BaseSettings):

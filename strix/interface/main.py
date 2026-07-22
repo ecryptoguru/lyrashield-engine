@@ -82,16 +82,15 @@ logger = logging.getLogger(__name__)
 def validate_environment() -> None:
     logger.info("Validating environment")
     console = Console()
-    missing_required_vars = []
-    missing_optional_vars = []
+    missing_required_vars: list[str] = []
+    missing_optional_vars: list[str] = []
 
     settings = load_settings()
 
     if not settings.llm.model:
-        missing_required_vars.append("STRIX_LLM")
+        missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
     elif not is_gpt56_model(settings.llm.model) or (
-        getattr(settings.llm, "delegate_model", None)
-        and not is_gpt56_model(settings.llm.delegate_model)
+        settings.llm.delegate_model and not is_gpt56_model(settings.llm.delegate_model)
     ):
         error_text = Text(
             "LyraShield scans require a GPT-5.6 Sol, Terra, or Luna deployment",
@@ -133,9 +132,9 @@ def validate_environment() -> None:
 
         error_text.append("\nRequired environment variables:\n", style="white")
         for var in missing_required_vars:
-            if var == "STRIX_LLM":
+            if var in {"STRIX_LLM or LYRASHIELD_LLM", "STRIX_LLM"}:
                 error_text.append("• ", style="white")
-                error_text.append("STRIX_LLM", style="bold cyan")
+                error_text.append("STRIX_LLM / LYRASHIELD_LLM", style="bold cyan")
                 error_text.append(
                     " - GPT-5.6 Sol, Terra, or Luna deployment name\n",
                     style="white",
@@ -158,9 +157,12 @@ def validate_environment() -> None:
                         " - Base URL for the configured GPT-5.6 endpoint\n",
                         style="white",
                     )
-                elif var == "STRIX_REASONING_EFFORT":
+                elif var in {"STRIX_REASONING_EFFORT", "LYRASHIELD_REASONING_EFFORT"}:
                     error_text.append("• ", style="white")
-                    error_text.append("STRIX_REASONING_EFFORT", style="bold cyan")
+                    error_text.append(
+                        "STRIX_REASONING_EFFORT / LYRASHIELD_REASONING_EFFORT",
+                        style="bold cyan",
+                    )
                     error_text.append(
                         " - Reasoning effort level: none, minimal, low, medium, high, xhigh "
                         "(default: high)\n",
@@ -168,7 +170,10 @@ def validate_environment() -> None:
                     )
 
         error_text.append("\nExample setup:\n", style="white")
-        error_text.append("export STRIX_LLM='openai/gpt-5.6-luna'\n", style="dim white")
+        error_text.append(
+            "export STRIX_LLM='openai/gpt-5.6-luna'  # or LYRASHIELD_LLM\n",
+            style="dim white",
+        )
 
         if missing_optional_vars:
             for var in missing_optional_vars:
@@ -183,9 +188,9 @@ def validate_environment() -> None:
                         "export LLM_API_BASE='https://your-gpt-5-6-endpoint.example'\n",
                         style="dim white",
                     )
-                elif var == "STRIX_REASONING_EFFORT":
+                elif var in {"STRIX_REASONING_EFFORT", "LYRASHIELD_REASONING_EFFORT"}:
                     error_text.append(
-                        "export STRIX_REASONING_EFFORT='high'\n",
+                        "export STRIX_REASONING_EFFORT='high'  # or LYRASHIELD_REASONING_EFFORT\n",
                         style="dim white",
                     )
 

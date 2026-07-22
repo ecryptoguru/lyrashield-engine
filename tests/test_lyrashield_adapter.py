@@ -19,11 +19,17 @@ if TYPE_CHECKING:
         ("LYRASHIELD_IMAGE", "STRIX_IMAGE"),
         ("LYRASHIELD_RUNTIME_BACKEND", "STRIX_RUNTIME_BACKEND"),
         ("LYRASHIELD_MAX_LOCAL_COPY_MB", "STRIX_MAX_LOCAL_COPY_MB"),
+        ("LYRASHIELD_MAX_CONTEXT_IMAGES", "STRIX_MAX_CONTEXT_IMAGES"),
         ("LYRASHIELD_REASONING_EFFORT", "STRIX_REASONING_EFFORT"),
         (
             "LYRASHIELD_DELEGATE_REASONING_EFFORT",
             "STRIX_DELEGATE_REASONING_EFFORT",
         ),
+        (
+            "LYRASHIELD_FORCE_REQUIRED_TOOL_CHOICE",
+            "STRIX_FORCE_REQUIRED_TOOL_CHOICE",
+        ),
+        ("LYRASHIELD_LLM_TIMEOUT", "LLM_TIMEOUT"),
     ],
 )
 def test_prepare_environment_maps_product_variable(product: str, upstream: str) -> None:

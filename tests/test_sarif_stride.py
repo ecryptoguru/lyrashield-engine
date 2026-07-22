@@ -9,7 +9,7 @@ reports have no gaps.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -34,7 +34,7 @@ def _finding(**overrides: Any) -> dict[str, Any]:
 
 
 def _rule_tags(doc: dict[str, Any]) -> list[str]:
-    return doc["runs"][0]["tool"]["driver"]["rules"][0]["properties"]["tags"]
+    return cast("list[str]", doc["runs"][0]["tool"]["driver"]["rules"][0]["properties"]["tags"])
 
 
 def test_stride_tags_on_rule_for_known_cwe() -> None:

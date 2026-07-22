@@ -52,6 +52,32 @@ class AgentCoordinator:
         async with self._lock:
             return len(self.statuses) < self.max_agents
 
+    async def get_status(self, agent_id: str) -> Status | None:
+        async with self._lock:
+            return self.statuses.get(agent_id)
+
+    async def get_parent_and_name(self, agent_id: str) -> tuple[str | None, str]:
+        async with self._lock:
+            return self.parent_of.get(agent_id), self.names.get(agent_id, agent_id)
+
+    async def agents_with_metadata(
+        self,
+    ) -> list[tuple[str, Status, str | None, str, dict[str, Any]]]:
+        async with self._lock:
+            return [
+                (
+                    aid,
+                    status,
+                    self.parent_of.get(aid),
+                    self.names.get(aid, aid),
+                    dict(self.metadata.get(aid, {})),
+                )
+                for aid, status in self.statuses.items()
+            ]
+
+    async def maybe_snapshot(self) -> None:
+        await self._maybe_snapshot()
+
     def set_snapshot_path(self, path: Path) -> None:
         self._snapshot_path = path
 

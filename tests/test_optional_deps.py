@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import cast
 
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -11,7 +12,7 @@ PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 def _optional_dependencies() -> dict[str, list[str]]:
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    return data["project"]["optional-dependencies"]
+    return cast("dict[str, list[str]]", data["project"]["optional-dependencies"])
 
 
 def test_vertex_extra_pins_google_auth() -> None:
