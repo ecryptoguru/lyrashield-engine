@@ -47,8 +47,6 @@ dependencies = [
   "requests>=2.32.0",
   "cvss>=3.2",
   "caido-sdk-client>=0.2.0",
-  "reportlab>=4.0",
-  "pypdf>=5.0",
   # Cap <49: 49.x drops the universal2 macOS wheel (arm64-only), which breaks
   # the Intel macOS (macos-x86_64) release build's `uv sync --frozen`.
   "cryptography>=48.0.1,<49",
@@ -57,6 +55,10 @@ dependencies = [
 [project.optional-dependencies]
 vertex = ["google-auth>=2.0.0"]
 bedrock = ["boto3>=1.28.0"]
+# Encrypted PDF export for the local viewer (`strix view`). Imported lazily by
+# strix/viewer/server.py, and the LyraShield worker never runs the viewer, so
+# these stay out of the base install rather than shipping in every scan image.
+viewer = ["reportlab>=4.0", "pypdf>=5.0"]
 
 [project.scripts]
 lyrashield = "lyrashield_adapter.cli:main"
@@ -122,6 +124,7 @@ module = [
     "pydantic_settings.*",
     "reportlab.*",
     "pypdf.*",
+    "pygments.*",
 ]
 ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
@@ -214,6 +217,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# `_strip_code_fence` lives behind the optional `viewer` extra, so the two tests
+# that use it import inside the function body under a skipif guard. A top-level
+# import would break collection on a base install.
+"tests/test_fenced_code.py" = ["PLC0415"]
 # Test doubles use fixture tokens/passwords and match a callee signature whose
 # args they intentionally ignore.
 "tests/test_viewer_auth.py" = ["S105", "S106", "ARG001"]

@@ -367,7 +367,23 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.CONFLICT, {"error": "run_not_finished"})
                 return
 
-            from strix.viewer.report_pdf import build_encrypted_report
+            try:
+                from strix.viewer.report_pdf import build_encrypted_report
+            except ImportError:
+                # PDF export lives in the optional `viewer` extra; the scan
+                # engine and the LyraShield worker never need it.
+                logger.info("PDF export requested without the viewer extra installed")
+                self._send_json(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    {
+                        "error": "pdf_export_unavailable",
+                        "detail": (
+                            "Encrypted PDF export requires the optional viewer extra. "
+                            'Install it with: pipx install "strix-agent[viewer]"'
+                        ),
+                    },
+                )
+                return
 
             pdf_bytes, password, filename = build_encrypted_report(run_dir)
             run_name = str(summary.get("run_name") or run_dir.name)

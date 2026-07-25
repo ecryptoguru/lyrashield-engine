@@ -42,6 +42,12 @@ from strix.interface.tui.renderers.agent_message_renderer import AgentMessageRen
 from strix.interface.tui.renderers.user_message_renderer import UserMessageRenderer
 from strix.interface.utils import build_tui_stats_text
 from strix.report.state import ReportState, set_global_report_state
+from strix.report.writer import (
+    guess_language_name,
+    parse_fenced_code,
+    resolve_lexer,
+    safe_fence,
+)
 from strix.runtime import session_manager
 
 
@@ -330,12 +336,11 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
             return "#65a30d"
         return "#6b7280"
 
-    def _highlight_python(self, code: str) -> Text:
+    def _highlight_python(self, code: str, language: str | None = None) -> Text:
         try:
-            from pygments.lexers import PythonLexer
             from pygments.styles import get_style_by_name
 
-            lexer = PythonLexer()
+            lexer = resolve_lexer(language, code)
             style = get_style_by_name("native")
             colors = {
                 token: f"#{style_def['color']}" for token, style_def in style if style_def["color"]
@@ -501,10 +506,11 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
 
         poc_script_code = vuln.get("poc_script_code", "")
         if poc_script_code:
+            poc_language, poc_code = parse_fenced_code(poc_script_code)
             text.append("\n\n")
             text.append("PoC Code", style=self.FIELD_STYLE)
             text.append("\n")
-            text.append_text(self._highlight_python(poc_script_code))
+            text.append_text(self._highlight_python(poc_code, poc_language))
 
         remediation_steps = vuln.get("remediation_steps", "")
         if remediation_steps:
@@ -601,9 +607,12 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
                 lines.append(vuln["poc_description"])
                 lines.append("")
             if vuln.get("poc_script_code"):
-                lines.append("```python")
-                lines.append(vuln["poc_script_code"])
-                lines.append("```")
+                poc_language, poc_code = parse_fenced_code(vuln["poc_script_code"])
+                fence_lang = poc_language or guess_language_name(poc_code)
+                fence = safe_fence(poc_code)
+                lines.append(f"{fence}{fence_lang}")
+                lines.append(poc_code)
+                lines.append(fence)
 
         if vuln.get("code_locations"):
             lines.extend(["", "## Code Analysis", ""])
@@ -619,7 +628,9 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
                 if loc.get("label"):
                     lines.append(f"  {loc['label']}")
                 if loc.get("snippet"):
-                    lines.append(f"```\n{loc['snippet']}\n```")
+                    snippet = str(loc["snippet"])
+                    snippet_fence = safe_fence(snippet)
+                    lines.append(f"{snippet_fence}\n{snippet}\n{snippet_fence}")
                 if loc.get("fix_before") or loc.get("fix_after"):
                     lines.append("**Suggested Fix:**")
                     lines.append("```diff")
