@@ -1,4 +1,4 @@
-.PHONY: help install dev-install format lint type-check security check-all clean pre-commit setup-dev dev
+.PHONY: help install dev-install format lint type-check security check-all clean pre-commit setup-dev dev viewer
 
 help:
 	@echo "Available commands:"
@@ -15,6 +15,7 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  pre-commit    - Run pre-commit hooks on all files"
+	@echo "  viewer        - Rebuild the local-viewer SPA (commit the output)"
 	@echo "  clean         - Clean up cache files and artifacts"
 
 install:
@@ -63,6 +64,11 @@ clean:
 	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -name "*.pyc" -delete 2>/dev/null || true
 	@echo "✅ Cleanup complete!"
+
+viewer:
+	@echo "🖥️  Building the local-viewer SPA..."
+	cd strix/viewer/frontend && npm ci && npm run build
+	@echo "✅ Viewer built to strix/viewer/static/ (commit the changes)."
 
 dev: format lint type-check
 	@echo "✅ Development cycle complete!"

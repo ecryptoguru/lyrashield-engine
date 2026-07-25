@@ -6,6 +6,8 @@ import logging
 import re
 from typing import Any
 
+    from strix.config.settings import DedupeSettings
+
 
 logger = logging.getLogger(__name__)
 

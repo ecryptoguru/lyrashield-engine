@@ -6,6 +6,7 @@ import logging
 import signal
 import sys
 import threading
+import webbrowser
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -768,6 +769,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         Binding("ctrl+q", "request_quit", "Quit", priority=True),
         Binding("ctrl+c", "request_quit", "Quit", priority=True),
         Binding("escape", "stop_selected_agent", "Stop Agent", priority=True),
+        Binding("ctrl+o", "open_viewer", "Open Viewer", priority=True),
     ]
 
     def __init__(self, args: argparse.Namespace):
@@ -794,10 +796,13 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self._displayed_events: list[str] = []
 
         self._scan_thread: threading.Thread | None = None
+        self._viewer_httpd: Any = None
+        self._viewer_url: str | None = None
         self._scan_loop: asyncio.AbstractEventLoop | None = None
         self._scan_stop_event = threading.Event()
         self._scan_completed = threading.Event()
         self._scan_error: BaseException | None = None
+        self._error_noted_agents: set[str] = set()
 
         self._spinner_frame_index: int = 0
         self._sweep_num_squares: int = 6
@@ -903,7 +908,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
             vulnerabilities_panel = VulnerabilitiesPanel(id="vulnerabilities_panel")
 
-            sidebar = Vertical(agents_tree, vulnerabilities_panel, stats_scroll, id="sidebar")
+            viewer_cta = Static(self._viewer_cta_markup(), id="viewer_cta")
+            viewer_cta.ALLOW_SELECT = False
+
+            sidebar = Vertical(
+                viewer_cta, agents_tree, vulnerabilities_panel, stats_scroll, id="sidebar"
+            )
 
             content_container.mount(chat_area_container)
             content_container.mount(sidebar)
@@ -1006,22 +1016,32 @@ class StrixTUIApp(App):  # type: ignore[misc]
             else:
                 self._agent_graph_sync_future = None
                 try:
-                    parent_of, statuses, names = future.result()
+                    parent_of, statuses, names, errors = future.result()
                 except Exception:
                     logger.exception("TUI agent graph sync failed")
                 else:
                     for agent_id, status in statuses.items():
+                        error = errors.get(agent_id)
                         self.live_view.upsert_agent(
                             agent_id,
                             name=names.get(agent_id, agent_id),
                             parent_id=parent_of.get(agent_id),
                             status=status,
+                            error_message=error,
                         )
+                        if status in {"failed", "crashed"} and error:
+                            if agent_id not in self._error_noted_agents:
+                                self._error_noted_agents.add(agent_id)
+                                self.live_view.record_agent_error(agent_id, error)
+                        else:
+                            self._error_noted_agents.discard(agent_id)
 
         if self._scan_loop is None or self._scan_loop.is_closed():
             return
 
-        async def collect() -> tuple[dict[str, str | None], dict[str, Any], dict[str, str]]:
+        async def collect() -> tuple[
+            dict[str, str | None], dict[str, Any], dict[str, str], dict[str, str]
+        ]:
             return await self.coordinator.graph_snapshot()
 
         self._agent_graph_sync_future = asyncio.run_coroutine_threadsafe(collect(), self._scan_loop)
@@ -1040,6 +1060,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 "waiting": "⏸",
                 "completed": "🟢",
                 "failed": "🔴",
+                "crashed": "🔴",
                 "stopped": "■",
             }
 
@@ -1225,13 +1246,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
             text.append(msg)
             return (text, Text(), False)
 
-        if status == "failed":
+        if status in {"failed", "crashed"}:
             error_msg = agent_data.get("error_message", "")
             text = Text()
-            if error_msg:
-                text.append(error_msg, style="red")
-            else:
-                text.append("Scan failed", style="red")
+            text.append(error_msg or "Agent failed", style="red")
+            text.append(" · ", style="dim")
+            text.append("Send message to resume", style="dim")
             self._stop_dot_animation()
             return (text, Text(), False)
 
@@ -1530,6 +1550,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "waiting": "⏸",
             "completed": "🟢",
             "failed": "🔴",
+            "crashed": "🔴",
             "stopped": "■",
         }
 
@@ -1575,6 +1596,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "waiting": "⏸",
             "completed": "🟢",
             "failed": "🔴",
+            "crashed": "🔴",
             "stopped": "■",
         }
 
@@ -1805,6 +1827,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
     async def action_custom_quit(self) -> None:
         self._fire_sandbox_cleanup()
+        self._shutdown_viewer()
 
         if self._scan_thread and self._scan_thread.is_alive():
             self._scan_stop_event.set()
@@ -1812,6 +1835,70 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.report_state.cleanup()
 
         self.exit()
+
+    def _viewer_cta_markup(self, url: str | None = None) -> str:
+        if url:
+            return f"[@click=app.open_viewer][#22c55e]● Viewer running[/][/]\n[dim]{url}[/]"
+        return "[@click=app.open_viewer]▶ Watch live in browser[/]"
+
+    def _set_viewer_cta(self, markup: str) -> None:
+        with contextlib.suppress(Exception):
+            self.query_one("#viewer_cta", Static).update(markup)
+
+    def action_open_viewer(self) -> None:
+        if self._viewer_url:
+            with contextlib.suppress(Exception):
+                webbrowser.open(self._viewer_url)
+            return
+        try:
+            from strix.viewer.server import authorized_url, bundle_is_built, serve
+
+            if not bundle_is_built():
+                self._set_viewer_cta("[#eab308]Viewer UI not built[/]")
+                return
+            run_dir = self.report_state.get_run_dir()
+
+            def _viewer_steer(agent_id: str, message: str) -> bool:
+                # Reuse the exact TUI delivery path, but target the agent the
+                # web graph selected (not the TUI's current selection).
+                return send_user_message_to_agent(
+                    coordinator=self.coordinator,
+                    loop=self._scan_loop,
+                    live_view=self.live_view,
+                    target_agent_id=agent_id,
+                    message=message,
+                )
+
+            httpd, url, token = serve(run_dir, open_browser=True, steer_handler=_viewer_steer)
+        except Exception:
+            logger.debug("failed to start local viewer", exc_info=True)
+            self._set_viewer_cta("[red]Viewer failed to start[/]")
+            return
+        self._viewer_httpd = httpd
+        # Store the tokened URL so reopening the CTA re-authorizes the browser
+        # (this viewer carries a steer handler, so the session is required).
+        self._viewer_url = authorized_url(url, token)
+        self._set_viewer_cta(self._viewer_cta_markup(self._viewer_url))
+
+        with contextlib.suppress(Exception):
+            from strix.telemetry import posthog
+
+            live = self.report_state.run_record.get("status") not in {
+                "completed",
+                "stopped",
+                "failed",
+                "interrupted",
+            }
+            posthog.viewer_opened(source="tui", live=live)
+
+    def _shutdown_viewer(self) -> None:
+        httpd = self._viewer_httpd
+        if httpd is None:
+            return
+        self._viewer_httpd = None
+        with contextlib.suppress(Exception):
+            httpd.shutdown()
+            httpd.server_close()
 
     def _fire_sandbox_cleanup(self) -> None:
         self.coordinator.mark_shutting_down()

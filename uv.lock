@@ -469,7 +469,7 @@ wheels = [
 
 [[package]]
 name = "cryptography"
-version = "46.0.7"
+version = "48.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
@@ -1118,6 +1118,7 @@ version = "1.1.0.post1"
 source = { editable = "." }
 dependencies = [
     { name = "caido-sdk-client" },
+    { name = "cryptography" },
     { name = "cvss" },
     { name = "docker" },
     { name = "litellm" },
@@ -1125,6 +1126,8 @@ dependencies = [
     { name = "openai-agents", extra = ["litellm"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pypdf" },
+    { name = "reportlab" },
     { name = "requests" },
     { name = "rich" },
     { name = "textual" },
@@ -1154,6 +1157,7 @@ dev = [
 requires-dist = [
     { name = "boto3", marker = "extra == 'bedrock'", specifier = ">=1.28.0" },
     { name = "caido-sdk-client", specifier = ">=0.2.0" },
+    { name = "cryptography", specifier = ">=48.0.1,<49" },
     { name = "cvss", specifier = ">=3.2" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
@@ -1162,6 +1166,8 @@ requires-dist = [
     { name = "openai-agents", extras = ["litellm"], specifier = "==0.14.6" },
     { name = "pydantic", specifier = ">=2.11.3" },
     { name = "pydantic-settings", specifier = ">=2.13.0" },
+    { name = "pypdf", specifier = ">=5.0" },
+    { name = "reportlab", specifier = ">=4.0" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rich" },
     { name = "textual", specifier = ">=6.0.0" },

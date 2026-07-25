@@ -98,6 +98,18 @@ class LlmSettings(BaseSettings):
     )
 
 
+class DedupeSettings(BaseSettings):
+    model_config = _BASE_CONFIG
+
+    model: str | None = Field(default=None, alias="STRIX_DEDUPE_MODEL")
+    reasoning_effort: ReasoningEffort | None = Field(
+        default=None,
+        alias="STRIX_DEDUPE_REASONING_EFFORT",
+    )
+    api_key: str | None = Field(default=None, alias="DEDUPE_LLM_API_KEY")
+    api_base: str | None = Field(default=None, alias="DEDUPE_LLM_API_BASE")
+
+
 class RuntimeSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
@@ -134,9 +146,19 @@ class TelemetrySettings(BaseSettings):
     )
 
 
+class ViewerSettings(BaseSettings):
+    model_config = _BASE_CONFIG
+
+    # Base URL of the Strix relay the local viewer proxies to for email
+    # verification and encrypted report delivery. The browser never talks to
+    # the relay directly; the local server is the only caller.
+    app_url: str = Field(default="https://app.strix.ai", alias="STRIX_APP_URL")
+
+
 class Settings(BaseSettings):
     model_config = _BASE_CONFIG
 
     llm: LlmSettings = Field(default_factory=LlmSettings)
+    dedupe: DedupeSettings = Field(default_factory=DedupeSettings)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)

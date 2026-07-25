@@ -44,7 +44,7 @@ class LLMUsageLedger:
         if model:
             metadata["model"] = model
 
-        if not _is_litellm_routed(model):
+        if not self.zero_cost and not _is_litellm_routed(model):
             estimated = _estimate_litellm_cost(usage, model)
             if estimated:
                 self._total_cost += estimated
@@ -53,6 +53,8 @@ class LLMUsageLedger:
         return True
 
     def record_observed_cost(self, cost: float) -> None:
+        if self.zero_cost:
+            return
         if isinstance(cost, int | float) and cost > 0:
             self._total_cost += float(cost)
             self._has_cost = True

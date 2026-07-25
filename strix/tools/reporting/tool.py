@@ -442,6 +442,30 @@ async def create_vulnerability_report(
             "availability": "H"
         }
 
+    **CVSS calibration** — score the weakness you actually proved, not a
+    hypothetical worst case. Most over-rating comes from these mistakes:
+
+    - **Don't presuppose a separate compromise.** If exploitation
+      requires the attacker to already hold a victim secret (a stolen
+      session cookie/token, a leaked one-time link, intercepted traffic),
+      that acquisition is not free. Do not score it as
+      ``privileges_required:N`` with ``attack_complexity:L`` as if
+      directly reachable, and do not rate a replay-of-captured-secret
+      issue High/Critical unless the *same* finding demonstrates a
+      concrete way to obtain that secret. Issues like a session that
+      survives logout or a replayable link are session-management /
+      defense-in-depth weaknesses — usually Low/Medium on their own.
+    - **Reserve ``H`` impact for demonstrated broad impact.** ``C:H`` /
+      ``I:H`` require proof of wide or systemic read/write. A single
+      user's data, a read-only information leak, or merely confirming
+      that an account / domain / software version *exists* (enumeration)
+      is ``C:L`` (often ``I:N``) — not ``C:H``.
+    - **Model required position and interaction honestly.** An
+      adversary-in-the-middle prerequisite (e.g. cleartext transmission)
+      or a required victim action is not guaranteed — reflect it in
+      ``attack_complexity`` / ``user_interaction`` instead of assuming the
+      ideal condition always holds.
+
     **CVE / CWE rules**: pass the bare ID only (``CVE-2024-1234``,
     ``CWE-89``) — no name, no parenthetical. Be 100% certain; if
     unsure, omit the field rather than guessing
