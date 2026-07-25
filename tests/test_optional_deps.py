@@ -25,3 +25,24 @@ def test_bedrock_extra_pins_boto3() -> None:
     extras = _optional_dependencies()
     assert "bedrock" in extras
     assert any(req.startswith("boto3") for req in extras["bedrock"])
+
+
+def test_viewer_extra_carries_the_pdf_dependencies() -> None:
+    extras = _optional_dependencies()
+    assert "viewer" in extras
+    assert any(req.startswith("reportlab") for req in extras["viewer"])
+    assert any(req.startswith("pypdf") for req in extras["viewer"])
+
+
+def test_pdf_dependencies_are_not_in_the_base_install() -> None:
+    """The worker never runs the viewer, so its scan image should not carry these."""
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    base = cast("list[str]", data["project"]["dependencies"])
+    assert not [req for req in base if req.startswith(("reportlab", "pypdf"))]
+
+
+def test_cryptography_stays_in_the_base_install() -> None:
+    """Used outside the viewer, and the <49 cap keeps the Intel macOS wheel."""
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    base = cast("list[str]", data["project"]["dependencies"])
+    assert any(req.startswith("cryptography") for req in base)
