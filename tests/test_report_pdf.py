@@ -7,6 +7,13 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+
+
+# Encrypted PDF export lives in the optional `viewer` extra, so this module
+# cannot even import on a base (worker) install. Skip there instead of failing
+# collection; CI installs the extra and runs these for real.
+pytest.importorskip("pypdf", reason="requires the optional 'viewer' extra")
+
 from pypdf import PdfReader
 from pypdf.errors import WrongPasswordError
 

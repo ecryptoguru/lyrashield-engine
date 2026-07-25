@@ -40,7 +40,10 @@ if ! command -v uv &> /dev/null; then
 fi
 
 echo -e "\n${BLUE}Installing dependencies...${NC}"
-uv sync --frozen
+# --extra viewer: strix.spec bundles reportlab/pypdf for the viewer's encrypted
+# PDF export, so the binary needs them even though they are optional for the
+# library install (the LyraShield worker never runs the viewer).
+uv sync --frozen --extra viewer
 
 VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 echo -e "${YELLOW}Version:${NC} $VERSION"

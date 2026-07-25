@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
 
 from strix.config import loader
 from strix.config.settings import DedupeSettings
+from strix.core import hooks as hooks_module
+from strix.report import dedupe as dedupe_module
 from strix.report.dedupe import (
     _MAX_EXISTING_REPORTS_CHARS,
     _bound_existing_reports,
     _dedupe_model_settings,
 )
-
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    import pytest
 
 
 def test_dedupe_key_sent_per_call_not_via_global_env() -> None:
@@ -134,3 +134,90 @@ def test_bound_existing_reports_encoded_payload_never_exceeds_the_cap() -> None:
 def test_bound_existing_reports_drops_a_report_whose_identity_alone_overflows() -> None:
     unshrinkable = {"id": "x" * (_MAX_EXISTING_REPORTS_CHARS + 1)}
     assert _bound_existing_reports([unshrinkable]) == []
+
+
+@pytest.mark.asyncio
+async def test_dedupe_call_reserves_and_releases_against_the_scan_budget() -> None:
+    """The dedupe model call is metered, so it must reserve like any agent request."""
+    events: list[str] = []
+
+    class _Hooks:
+        async def reserve_out_of_band_request(self, **kwargs: object) -> None:
+            events.append(f"reserve:{kwargs['key']}")
+
+        async def release_out_of_band_request(self, **kwargs: object) -> None:
+            events.append(f"release:{kwargs['key']}")
+
+    async def _fake_get_response(**_kwargs: object) -> SimpleNamespace:
+        events.append("request")
+        return SimpleNamespace(usage=None)
+
+    hooks_module.set_active_hooks(cast("Any", _Hooks()))
+    try:
+        response = await dedupe_module._request_dedupe_judgement(
+            model=SimpleNamespace(get_response=_fake_get_response),
+            model_name="gpt-5.6-luna",
+            model_settings=cast("Any", None),
+            user_msg="compare",
+        )
+    finally:
+        hooks_module.set_active_hooks(None)
+
+    assert response is not None
+    assert [e.split(":")[0] for e in events] == ["reserve", "request", "release"]
+
+
+@pytest.mark.asyncio
+async def test_dedupe_releases_its_reservation_when_the_request_fails() -> None:
+    """A provider error must not strand the reservation for the rest of the scan."""
+    events: list[str] = []
+
+    class _Hooks:
+        async def reserve_out_of_band_request(self, **_kwargs: object) -> None:
+            events.append("reserve")
+
+        async def release_out_of_band_request(self, **_kwargs: object) -> None:
+            events.append("release")
+
+    async def _boom(**_kwargs: object) -> None:
+        raise RuntimeError("provider exploded")
+
+    hooks_module.set_active_hooks(cast("Any", _Hooks()))
+    try:
+        with pytest.raises(RuntimeError, match="provider exploded"):
+            await dedupe_module._request_dedupe_judgement(
+                model=SimpleNamespace(get_response=_boom),
+                model_name="gpt-5.6-luna",
+                model_settings=cast("Any", None),
+                user_msg="compare",
+            )
+    finally:
+        hooks_module.set_active_hooks(None)
+
+    assert events == ["reserve", "release"]
+
+
+@pytest.mark.asyncio
+async def test_dedupe_works_without_active_hooks() -> None:
+    """Dedupe outside a scan (no registered hooks) must not crash."""
+    assert hooks_module.get_active_hooks() is None
+
+    async def _fake_get_response(**_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(usage=None)
+
+    response = await dedupe_module._request_dedupe_judgement(
+        model=SimpleNamespace(get_response=_fake_get_response),
+        model_name="gpt-5.6-luna",
+        model_settings=cast("Any", None),
+        user_msg="compare",
+    )
+    assert response is not None
+
+
+def test_runner_clears_active_hooks_on_every_exit_path() -> None:
+    """A stale hooks registration would let a later scan reserve against a dead budget."""
+    runner = Path("strix/core/runner.py").read_text(encoding="utf-8")
+    assert "set_active_hooks(hooks)" in runner
+    # The clear must live in the `finally` so it runs on success, failure, and cancel.
+    finally_block = runner.split("\n    finally:\n", 1)[1]
+    assert "set_active_hooks(None)" in finally_block
