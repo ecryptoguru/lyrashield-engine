@@ -6,10 +6,11 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, ValidationError
 from pydantic.fields import FieldInfo
 
 from strix.config import loader
+from strix.config.settings import Settings
 
 
 if TYPE_CHECKING:
@@ -227,3 +228,51 @@ def test_persist_current_sets_0600_mode(tmp_path: Path, monkeypatch: pytest.Monk
     loader.persist_current()
 
     assert target.stat().st_mode & 0o777 == 0o600
+
+
+class TestTokenCapSettings:
+    """LYRASHIELD_MAX_*_TOKENS must resolve through the product alias pair."""
+
+    def test_unset_caps_default_to_none(self) -> None:
+        settings = Settings()
+
+        # None means "keep the runner's per-scan-mode default" — existing
+        # deployments must see no behavior change from these fields existing.
+        assert settings.llm.max_output_tokens is None
+        assert settings.llm.max_input_tokens is None
+
+    @pytest.mark.parametrize(
+        "env_name",
+        ["LYRASHIELD_MAX_OUTPUT_TOKENS", "STRIX_MAX_OUTPUT_TOKENS"],
+    )
+    def test_output_cap_resolves_from_either_alias(
+        self, env_name: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(env_name, "2048")
+
+        assert Settings().llm.max_output_tokens == 2048
+
+    @pytest.mark.parametrize(
+        "env_name",
+        ["LYRASHIELD_MAX_INPUT_TOKENS", "STRIX_MAX_INPUT_TOKENS"],
+    )
+    def test_input_cap_resolves_from_either_alias(
+        self, env_name: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(env_name, "50000")
+
+        assert Settings().llm.max_input_tokens == 50000
+
+    @pytest.mark.parametrize("bad_value", ["0", "-1", "not-a-number"])
+    @pytest.mark.parametrize(
+        "env_name", ["LYRASHIELD_MAX_OUTPUT_TOKENS", "LYRASHIELD_MAX_INPUT_TOKENS"]
+    )
+    def test_invalid_caps_fail_loudly(
+        self, env_name: str, bad_value: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(env_name, bad_value)
+
+        # A cost control that silently ignores a malformed value is worse than
+        # no cost control, so loading must raise rather than fall back.
+        with pytest.raises(ValidationError):
+            Settings()

@@ -45,13 +45,27 @@ def test_recommended_models_are_matched_case_insensitively() -> None:
 
 @pytest.mark.parametrize(
     "model_name",
-    ["gpt-5.6-luna", "azure_ai/gpt-5.6-terra", "openai/gpt-5.6-sol", "prod-gpt-5.6-luna"],
+    ["gpt-5.6-luna", "azure_ai/gpt-5.6-terra", "openai/gpt-5.6-terra", "prod-gpt-5.6-luna"],
 )
 def test_gpt56_deployment_names_are_accepted(model_name: str) -> None:
     assert is_gpt56_model(model_name)
 
 
-@pytest.mark.parametrize("model_name", [None, "", "gpt-5.5", "gpt-5.60", "gpt-5.6fake"])
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        None,
+        "",
+        "gpt-5.5",
+        "gpt-5.60",
+        "gpt-5.6fake",
+        # Sol was retired from the supported set. It must be rejected here at
+        # startup, because budget enforcement no longer carries a Sol rate and
+        # would otherwise raise mid-scan.
+        "gpt-5.6-sol",
+        "openai/gpt-5.6-sol",
+    ],
+)
 def test_non_gpt56_deployment_names_are_rejected(model_name: str | None) -> None:
     assert not is_gpt56_model(model_name)
 

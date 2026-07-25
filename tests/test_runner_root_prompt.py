@@ -48,6 +48,8 @@ def _patch_engine_scaffold(
             delegate_reasoning_effort="medium",
             force_required_tool_choice=False,
             timeout=300,
+            max_output_tokens=None,
+            max_input_tokens=None,
         ),
         runtime=types.SimpleNamespace(max_context_images=3),
     )

@@ -78,6 +78,24 @@ class LlmSettings(BaseSettings):
         default=300,
         validation_alias=AliasChoices("LLM_TIMEOUT", "LYRASHIELD_LLM_TIMEOUT"),
     )
+    # Hard cap on tokens generated per request. Unset keeps the per-scan-mode
+    # default chosen by the runner; when set it replaces that default for every
+    # agent (delegates stay separately clamped). Also tightens the pre-request
+    # budget reservation, which reads this back off ``ModelSettings.max_tokens``.
+    max_output_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        validation_alias=_lyra("STRIX_MAX_OUTPUT_TOKENS"),
+    )
+    # Ceiling that history compaction keeps a request's input under. This is NOT
+    # a hard reject: exceeding it compacts older history rather than failing the
+    # request. Clamped below the GPT-5.6 long-context boundary, above which input
+    # is billed at 2x — the clamp is what stops this knob from raising cost.
+    max_input_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        validation_alias=_lyra("STRIX_MAX_INPUT_TOKENS"),
+    )
 
 
 class RuntimeSettings(BaseSettings):

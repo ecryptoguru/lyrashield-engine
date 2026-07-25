@@ -38,16 +38,60 @@ _COMPACTION_NOTICE = {
 _COMPACTED_ITEM_MAX_BYTES = 64_000
 _GPT56_LONG_CONTEXT_TOKENS = 272_000
 _GPT56_RATES = {
-    "sol": (5.0, 30.0),
     "terra": (2.5, 15.0),
     "luna": (1.0, 6.0),
 }
 
 _GPT56_CACHED_RATES = {
-    "sol": 0.5,
     "terra": 0.25,
     "luna": 0.1,
 }
+
+# Headroom kept between a compaction trigger and the long-context boundary, so a
+# request that trips the trigger still has room for its output allowance without
+# crossing into 2x input billing.
+_LONG_CONTEXT_SAFETY_MARGIN_TOKENS = 32_000
+# Ratio between the compaction target and its trigger, preserved from the
+# defaults above (64k / 96k) so a custom ceiling compacts equally aggressively.
+_COMPACTION_TARGET_RATIO = (
+    MODEL_INPUT_COMPACTION_TARGET_TOKENS / MODEL_INPUT_COMPACTION_TRIGGER_TOKENS
+)
+# A compacted request always retains the first item plus the notice; below this
+# a "ceiling" cannot be honored at all, so refuse to shrink past it.
+_MIN_COMPACTION_TARGET_TOKENS = 4_000
+
+
+def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, int]:
+    """Resolve the (trigger, target) token thresholds for input compaction.
+
+    ``max_input_tokens`` is a ceiling that compaction keeps requests under, not a
+    hard reject. Unset preserves the module defaults exactly.
+
+    The effective trigger is clamped strictly below the GPT-5.6 long-context
+    boundary: compaction exists to keep requests out of 2x input billing, so a
+    ceiling above that boundary would defeat the very cost protection this knob is
+    meant to provide. Clamping is logged rather than applied silently.
+    """
+    if max_input_tokens is None:
+        return MODEL_INPUT_COMPACTION_TRIGGER_TOKENS, MODEL_INPUT_COMPACTION_TARGET_TOKENS
+
+    ceiling = _GPT56_LONG_CONTEXT_TOKENS - _LONG_CONTEXT_SAFETY_MARGIN_TOKENS
+    trigger = max_input_tokens
+    if trigger > ceiling:
+        logger.warning(
+            "LYRASHIELD_MAX_INPUT_TOKENS=%s exceeds the safe long-context ceiling; "
+            "clamping to %s to keep requests below the %s-token 2x billing boundary",
+            max_input_tokens,
+            ceiling,
+            _GPT56_LONG_CONTEXT_TOKENS,
+        )
+        trigger = ceiling
+
+    target = max(int(trigger * _COMPACTION_TARGET_RATIO), _MIN_COMPACTION_TARGET_TOKENS)
+    # A pathologically low ceiling must still leave the target below the trigger,
+    # otherwise compaction could never report progress.
+    target = min(target, trigger)
+    return trigger, target
 
 
 def _model_rates(model: str) -> tuple[float, float]:
@@ -185,16 +229,18 @@ def _compact_input_items(
     system_prompt: str | None,
     input_items: list[Any],
     agent: Any,
+    thresholds: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
+    trigger, target = thresholds or (
+        MODEL_INPUT_COMPACTION_TRIGGER_TOKENS,
+        MODEL_INPUT_COMPACTION_TARGET_TOKENS,
+    )
     before = _estimate_input_tokens(model, system_prompt, input_items, agent)
-    if before < MODEL_INPUT_COMPACTION_TRIGGER_TOKENS or not input_items:
+    if before < trigger or not input_items:
         return before, before
 
     first = input_items[0]
-    if (
-        _estimate_input_tokens(model, system_prompt, [first, _COMPACTION_NOTICE], agent)
-        > MODEL_INPUT_COMPACTION_TARGET_TOKENS
-    ):
+    if _estimate_input_tokens(model, system_prompt, [first, _COMPACTION_NOTICE], agent) > target:
         first = _compact_item(first)
 
     groups = _history_groups(input_items[1:])
@@ -208,10 +254,7 @@ def _compact_input_items(
     while low < high:
         middle = (low + high) // 2
         candidate = [first, _COMPACTION_NOTICE, *suffix(middle)]
-        if (
-            _estimate_input_tokens(model, system_prompt, candidate, agent)
-            <= MODEL_INPUT_COMPACTION_TARGET_TOKENS
-        ):
+        if _estimate_input_tokens(model, system_prompt, candidate, agent) <= target:
             high = middle
         else:
             low = middle + 1
@@ -226,7 +269,7 @@ def _compact_input_items(
                 [first, _COMPACTION_NOTICE, compacted_group],
                 agent,
             )
-            <= MODEL_INPUT_COMPACTION_TARGET_TOKENS
+            <= target
         ):
             recent = [compacted_group]
 
@@ -247,6 +290,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         model: str,
         max_budget_usd: float | None = None,
         max_output_tokens: int = 8_192,
+        max_input_tokens: int | None = None,
     ) -> None:
         if max_budget_usd is not None and (
             not math.isfinite(max_budget_usd) or max_budget_usd <= 0
@@ -255,9 +299,23 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._model = model
         self._max_budget_usd = max_budget_usd
         self._max_output_tokens = max_output_tokens
+        # Resolved once here (including the long-context clamp and its warning)
+        # rather than per request, and passed into compaction as a plain tuple so
+        # the compaction helper stays free of settings/env coupling.
+        self._compaction_thresholds = resolve_compaction_thresholds(max_input_tokens)
         self._reservation_lock = asyncio.Lock()
         self._reservations: dict[str, float] = {}
         self._committed_cost_floor = 0.0
+
+    @property
+    def compaction_trigger_tokens(self) -> int:
+        """Input-token threshold above which history is compacted (post-clamp)."""
+        return self._compaction_thresholds[0]
+
+    @property
+    def compaction_target_tokens(self) -> int:
+        """Input-token size compaction aims for once triggered (post-clamp)."""
+        return self._compaction_thresholds[1]
 
     @staticmethod
     def _agent_id(context: RunContextWrapper[dict[str, Any]], agent: Agent[dict[str, Any]]) -> str:
@@ -287,7 +345,13 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         input_items: list[Any],
     ) -> None:
         model = self._agent_model(agent)
-        before, after = _compact_input_items(model, system_prompt, input_items, agent)
+        before, after = _compact_input_items(
+            model,
+            system_prompt,
+            input_items,
+            agent,
+            self._compaction_thresholds,
+        )
         if after < before:
             logger.info(
                 "Compacted model input before request: tokens=%s -> %s, items=%s",
