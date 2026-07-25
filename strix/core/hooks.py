@@ -66,6 +66,13 @@ def _cached_input_rate(model: str) -> float:
     raise RuntimeError("Unsupported model for LyraShield budget enforcement")
 
 
+def _usage_value(entry: Any, field: str) -> Any:
+    """Read a usage counter from either a dict or an object."""
+    if isinstance(entry, dict):
+        return entry.get(field)
+    return getattr(entry, field, None)
+
+
 def _cached_tokens_from_entry(entry: Any) -> int:
     details = getattr(entry, "input_tokens_details", None)
     if details is None and isinstance(entry, dict):
@@ -84,10 +91,10 @@ def _usage_cost_upper_bound(model: str, usage: Any) -> float:
     entries = list(getattr(usage, "request_usage_entries", None) or [usage])
     total = 0.0
     for entry in entries:
-        input_tokens = max(0, int(getattr(entry, "input_tokens", 0) or 0))
+        input_tokens = max(0, int(_usage_value(entry, "input_tokens") or 0))
         cached_tokens = min(_cached_tokens_from_entry(entry), input_tokens)
         uncached_tokens = input_tokens - cached_tokens
-        output_tokens = max(0, int(getattr(entry, "output_tokens", 0) or 0))
+        output_tokens = max(0, int(_usage_value(entry, "output_tokens") or 0))
         multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_TOKENS else 1.0
         total += (
             uncached_tokens * input_rate * multiplier
