@@ -503,6 +503,18 @@ def _markdown_flowables(  # noqa: PLR0915 - cohesive block parser, splitting hur
     return flow
 
 
+_FENCE_RE = re.compile(r"^```([^\n`]*)\n(.*?)\n?```$", re.DOTALL)
+
+
+def _strip_code_fence(value: Any) -> Any:
+    """Drop a wrapping markdown code fence so raw-code fields don't show the
+    ``` ```lang ``` marker lines literally in the PDF."""
+    if not isinstance(value, str):
+        return value
+    match = _FENCE_RE.match(value.strip())
+    return match.group(2) if match else value
+
+
 def _field_block(
     styles: dict[str, ParagraphStyle], label: str, value: Any, *, code: bool = False
 ) -> list[Flowable]:
@@ -544,7 +556,8 @@ def _finding_flowables(
     story.extend(_field_block(styles, "Impact", vuln.get("impact")))
     story.extend(_field_block(styles, "Technical analysis", vuln.get("technical_analysis")))
     story.extend(_field_block(styles, "Proof of concept", vuln.get("poc_description")))
-    story.extend(_field_block(styles, "PoC script", vuln.get("poc_script_code"), code=True))
+    poc_script = _strip_code_fence(vuln.get("poc_script_code"))
+    story.extend(_field_block(styles, "PoC script", poc_script, code=True))
     story.extend(_field_block(styles, "Evidence", vuln.get("evidence"), code=True))
 
     remediation = vuln.get("remediation_steps")

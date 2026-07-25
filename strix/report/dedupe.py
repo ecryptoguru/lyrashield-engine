@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
@@ -174,6 +176,75 @@ _TRUNCATION_MARKER = "...[truncated]"
 # the encoder adds to each nested line. Small and deliberately generous — the
 # budget must never be under-counted.
 _PER_ITEM_ENCODING_OVERHEAD = 8
+
+# Output allowance reserved for a dedupe reply. The response is a small fixed
+# JSON object, so this is deliberately generous rather than tuned.
+_DEDUPE_MAX_OUTPUT_TOKENS = 512
+
+# Conservative chars-per-token ratio for sizing the reservation. Under-counting
+# would let the reservation understate real spend, so round pessimistically.
+_CHARS_PER_TOKEN = 3.5
+
+
+def _estimate_reservation_tokens(*parts: str) -> int:
+    """Rough upper-bound token count for the reservation.
+
+    The exact count is only known after the provider responds; the reservation
+    just needs to be a safe over-estimate that is released immediately after.
+    """
+    return max(1, math.ceil(sum(len(part) for part in parts) / _CHARS_PER_TOKEN))
+
+
+async def _request_dedupe_judgement(
+    *,
+    model: Any,
+    model_name: str,
+    model_settings: ModelSettings,
+    user_msg: str,
+) -> ModelResponse:
+    """Run the dedupe model call under a scan-budget reservation.
+
+    This call is metered but does not flow through the agent run hooks, so it
+    reserves explicitly. Without a reservation, dedupe traffic is only counted
+    after the fact and a scan can overshoot ``max_budget_usd``.
+    """
+    # Lazy import: strix.core.hooks imports strix.report.state, so a
+    # module-level import here would close a cycle.
+    from strix.core.hooks import get_active_hooks
+
+    hooks = get_active_hooks()
+    reservation_key = f"dedupe:{uuid4().hex}"
+    if hooks is not None:
+        await hooks.reserve_out_of_band_request(
+            key=reservation_key,
+            model=model_name,
+            input_tokens=_estimate_reservation_tokens(DEDUPE_SYSTEM_PROMPT, user_msg),
+            max_output_tokens=_DEDUPE_MAX_OUTPUT_TOKENS,
+        )
+    response: ModelResponse | None = None
+    try:
+        response = await model.get_response(
+            system_instructions=DEDUPE_SYSTEM_PROMPT,
+            input=user_msg,
+            model_settings=model_settings,
+            tools=[],
+            output_schema=None,
+            handoffs=[],
+            tracing=ModelTracing.DISABLED,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
+        )
+    finally:
+        # Always release: a failed request must not strand its reservation and
+        # shrink the remaining budget for the rest of the scan.
+        if hooks is not None:
+            await hooks.release_out_of_band_request(
+                key=reservation_key,
+                model=model_name,
+                usage=response.usage if response is not None else None,
+            )
+    return response
 
 
 def _truncate_report_to_budget(report: dict[str, Any], budget: int) -> dict[str, Any] | None:
@@ -482,18 +553,12 @@ async def check_duplicate(
 
         configure_sdk_model_defaults(settings)
         resolved_model = model_name.strip()
-        model = StrixProvider().get_model(resolved_model)
-        response = await model.get_response(
-            system_instructions=DEDUPE_SYSTEM_PROMPT,
-            input=user_msg,
-            model_settings=_dedupe_model_settings(dedupe, resolved_model, settings.llm.timeout),
-            tools=[],
-            output_schema=None,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=None,
-            prompt=None,
+        dedupe_settings = _dedupe_model_settings(dedupe, resolved_model, settings.llm.timeout)
+        response = await _request_dedupe_judgement(
+            model=StrixProvider().get_model(resolved_model),
+            model_name=resolved_model,
+            model_settings=dedupe_settings,
+            user_msg=user_msg,
         )
         report_state = get_global_report_state()
         if report_state is not None:

@@ -23,7 +23,17 @@ syncing releases.
 - `lyrashield_adapter`: compatibility adapter for LyraShield invocation. It
   forces telemetry off, disables the upstream update check, and rejects
   `chatgpt/` subscription-backed models (which bypass the Terra/Luna gate and
-  zero out metered cost accounting).
+  zero out metered cost accounting). It also sets
+  `LYRASHIELD_PRODUCT_BOUNDARY`, which `validate_environment` uses to re-check
+  the resolved model after `--config` is applied; the bare upstream `strix` CLI
+  does not set it and keeps upstream subscription support.
+- Out-of-band budget reservations: metered calls made outside the agent run
+  loop (report deduplication) reserve against `max_budget_usd` through
+  `ReportUsageHooks.reserve_out_of_band_request`, registered per scan via
+  `set_active_hooks`. Upstream has no budget enforcement, so this has no
+  upstream equivalent to reconcile with.
+- Bounded dedupe payload: `strix/report/dedupe.py` caps the serialized
+  existing-report list. Upstream compares against every prior report.
 - Telemetry defaults: LyraShield-safe telemetry behavior by default.
 - Self-update disabled: `--update` and the startup update notice are disabled
   in `strix/interface/main.py` — upstream self-update fetches usestrix/strix
@@ -44,12 +54,23 @@ syncing releases.
 
 ## Current upstream base
 
-`08126eb5185fb4adc772f2e60eb4369f43b2eb67`
+`8157ccba276c8fdd5eaa07a1a9d8d686315f6bd1` (fully current with upstream `main`
+as of 2026-07-26)
 
-The 2026-07-25 manual merge (`418c0e3`) incorporated upstream through
-`08126eb` (dedicated deduplication model). The only later upstream commit at
-merge time, `f23fadf` (cosmetic root-agent rename to "Strix"), was not
-imported. The merge also removed the automated upstream-sync workflow and
+Imported on 2026-07-26 as a tree delta (`git diff 08126eb..upstream/main`
+applied with `git apply --3way`) rather than a merge: this fork's history is a
+squashed sync with no shared merge base, so `git merge` reports spurious
+add/add conflicts on files both sides created independently. The delta applied
+cleanly across all 15 files with no conflicts against LyraShield-owned code.
+
+Contents: the root-agent rename to "Strix" (`f23fadf`) plus five report
+fence-handling fixes (`31c18f8`, `97ed7e7`, `2124348`, `95d2e5f`, `8157ccb`)
+that move `parse_fenced_code` / `safe_fence` / `guess_language_name` into
+`strix/report/writer.py`. That file is LyraShield-modified, so re-verify those
+helpers on the next import.
+
+Prior base was `08126eb`, incorporated by the 2026-07-25 manual merge
+(`418c0e3`), which also removed the automated upstream-sync workflow and
 scripts (`.github/workflows/upstream-sync.yml`,
 `scripts/sync-upstream-release.sh`, `scripts/check-upstream.sh`); release
 imports are now manual, reviewed merges.
