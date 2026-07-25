@@ -113,6 +113,24 @@ def test_bound_existing_reports_drops_oldest_beyond_budget() -> None:
     assert sum(len(json.dumps(r)) for r in bounded) <= _MAX_EXISTING_REPORTS_CHARS
 
 
-def test_bound_existing_reports_always_keeps_the_newest_report() -> None:
+def test_bound_existing_reports_truncates_an_oversized_newest_report() -> None:
     oversized = {"id": "vuln-big", "description": "x" * (_MAX_EXISTING_REPORTS_CHARS + 1)}
-    assert _bound_existing_reports([{"id": "vuln-old"}, oversized]) == [oversized]
+    bounded = _bound_existing_reports([{"id": "vuln-old"}, oversized])
+    assert len(bounded) == 1
+    kept = bounded[0]
+    # Identity is preserved, the payload is not.
+    assert kept["id"] == "vuln-big"
+    assert kept["description"].endswith("...[truncated]")
+    assert len(json.dumps(kept, indent=2)) <= _MAX_EXISTING_REPORTS_CHARS
+
+
+def test_bound_existing_reports_encoded_payload_never_exceeds_the_cap() -> None:
+    """The transmitted payload is indented, so the cap must hold against that form."""
+    reports = [{"id": f"vuln-{i:04d}", "description": "x" * 8000} for i in range(200)]
+    bounded = _bound_existing_reports(reports)
+    assert len(json.dumps(bounded, indent=2)) <= _MAX_EXISTING_REPORTS_CHARS
+
+
+def test_bound_existing_reports_drops_a_report_whose_identity_alone_overflows() -> None:
+    unshrinkable = {"id": "x" * (_MAX_EXISTING_REPORTS_CHARS + 1)}
+    assert _bound_existing_reports([unshrinkable]) == []

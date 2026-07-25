@@ -19,6 +19,13 @@ if TYPE_CHECKING:
 _SUBSCRIPTION_PREFIX = "chatgpt/"
 _MODEL_ENV_VARS = ("STRIX_LLM", "STRIX_DELEGATE_LLM", "STRIX_DEDUPE_MODEL")
 
+# Marks the process as running behind the product entry point. ``--config`` is
+# applied after this module hands off to the upstream CLI and can set a model
+# the env gate below never saw, so ``validate_environment`` re-checks the
+# resolved settings when this flag is present. The bare ``strix`` dev CLI does
+# not set it and keeps upstream behavior. Imported lazily in
+# ``prepare_environment`` to keep ``--version`` free of the strix import cost.
+
 
 ENV_ALIASES = {
     "LYRASHIELD_LLM": "STRIX_LLM",
@@ -46,6 +53,9 @@ def prepare_environment(
     # Self-update would replace this controlled derivative with the upstream
     # distribution; the update check also makes network calls during scans.
     env["STRIX_NO_UPDATE_CHECK"] = "1"
+    from strix.config.settings import PRODUCT_BOUNDARY_ENV_VAR  # noqa: PLC0415
+
+    env[PRODUCT_BOUNDARY_ENV_VAR] = "1"
     _reject_subscription_models(env)
     return env
 
