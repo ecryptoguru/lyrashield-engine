@@ -931,15 +931,25 @@ def main() -> None:
 
         _persist_run_record(args)
 
-    _telemetry_start_kwargs = {
-        "model": load_settings().llm.model,
-        "scan_mode": args.scan_mode,
-        "is_whitebox": is_whitebox_scan(args.targets_info),
-        "interactive": not args.non_interactive,
-        "has_instructions": bool(args.instruction),
-    }
-    posthog.start(**_telemetry_start_kwargs)
-    scarf.start(**_telemetry_start_kwargs)
+    _telemetry_model = load_settings().llm.model
+    _telemetry_scan_mode = args.scan_mode
+    _telemetry_is_whitebox = is_whitebox_scan(args.targets_info)
+    _telemetry_interactive = not args.non_interactive
+    _telemetry_has_instructions = bool(args.instruction)
+    posthog.start(
+        model=_telemetry_model,
+        scan_mode=_telemetry_scan_mode,
+        is_whitebox=_telemetry_is_whitebox,
+        interactive=_telemetry_interactive,
+        has_instructions=_telemetry_has_instructions,
+    )
+    scarf.start(
+        model=_telemetry_model,
+        scan_mode=_telemetry_scan_mode,
+        is_whitebox=_telemetry_is_whitebox,
+        interactive=_telemetry_interactive,
+        has_instructions=_telemetry_has_instructions,
+    )
 
     exit_reason = "user_exit"
     try:
