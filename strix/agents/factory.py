@@ -6,7 +6,7 @@ import inspect
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.agent import ToolsToFinalOutputResult
 from agents.sandbox import SandboxAgent
@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from agents import RunContextWrapper
+    from agents.model_settings import ModelSettings
     from agents.tool import FunctionToolResult
 
 
@@ -159,7 +160,7 @@ def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
 
 
 def _configure_chat_completions_filesystem_tools(toolset: Any) -> None:
-    for name, tool in vars(toolset).items():
+    for name, tool in cast("dict[str, Any]", vars(toolset)).items():
         if isinstance(tool, CustomTool):
             setattr(toolset, name, _custom_tool_as_function_tool(tool))
         elif isinstance(tool, FunctionTool):
@@ -239,9 +240,12 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
             parsed = json.loads(raw_input)
         except json.JSONDecodeError:
             parsed = None
-        if isinstance(parsed, dict) and isinstance(parsed.get("chars"), str):
-            parsed["chars"] = _decode_chars_escape(parsed["chars"])
-            raw_input = json.dumps(parsed)
+        if isinstance(parsed, dict):
+            parsed_dict = cast("dict[str, Any]", parsed)
+            chars = parsed_dict.get("chars")
+            if isinstance(chars, str):
+                parsed_dict["chars"] = _decode_chars_escape(chars)
+                raw_input = json.dumps(parsed_dict)
         try:
             return await invoke_tool(ctx, raw_input)
         except ValidationError as exc:
@@ -252,7 +256,7 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
 
 
 def _configure_shell_tools(toolset: Any, *, chat_completions: bool) -> None:
-    for name, tool in vars(toolset).items():
+    for name, tool in cast("dict[str, Any]", vars(toolset)).items():
         if not isinstance(tool, FunctionTool):
             continue
         wrapped = tool
@@ -286,7 +290,10 @@ def _lifecycle_tool_completed(tool_name: str, output: Any) -> bool:
         parsed = json.loads(output)
     except (TypeError, ValueError):
         return False
-    return bool(isinstance(parsed, dict) and parsed.get("success") and parsed.get(completion_key))
+    if not isinstance(parsed, dict):
+        return False
+    parsed_dict = cast("dict[str, Any]", parsed)
+    return bool(parsed_dict.get("success") and parsed_dict.get(completion_key))
 
 
 def _wait_tool_parked(tool_name: str, output: Any) -> bool:
@@ -296,11 +303,10 @@ def _wait_tool_parked(tool_name: str, output: Any) -> bool:
         parsed = json.loads(output)
     except (TypeError, ValueError):
         return False
-    return bool(
-        isinstance(parsed, dict)
-        and parsed.get("success")
-        and parsed.get("wait_outcome") == "waiting"
-    )
+    if not isinstance(parsed, dict):
+        return False
+    parsed_dict = cast("dict[str, Any]", parsed)
+    return bool(parsed_dict.get("success") and parsed_dict.get("wait_outcome") == "waiting")
 
 
 def _finish_tool_use_behavior(
@@ -308,9 +314,11 @@ def _finish_tool_use_behavior(
     tool_results: list[FunctionToolResult],
 ) -> ToolsToFinalOutputResult:
     """Stop only after a lifecycle tool reports successful completion."""
-    interactive = (
-        bool(ctx.context.get("interactive", False)) if isinstance(ctx.context, dict) else False
-    )
+    if isinstance(ctx.context, dict):
+        context = cast("dict[str, Any]", ctx.context)
+        interactive = bool(context.get("interactive", False))
+    else:
+        interactive = False
     for tool_result in tool_results:
         if _lifecycle_tool_completed(tool_result.tool.name, tool_result.output):
             return ToolsToFinalOutputResult(
@@ -347,9 +355,13 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     list_sitemap,
     view_sitemap_entry,
     scope_rules,
-    view_agent_graph,
     send_message_to_agent,
     wait_for_message,
+)
+
+
+_ROOT_ORCHESTRATION_TOOLS: tuple[Tool, ...] = (
+    view_agent_graph,
     create_agent,
     stop_agent,
 )
@@ -385,7 +397,16 @@ def register_agent_tools(*tools: Tool) -> None:
         if tool not in _EXTRA_TOOLS and tool not in new_tools:
             new_tools.append(tool)
 
-    _ensure_unique_tool_names([*_BASE_TOOLS, *_EXTRA_TOOLS, *new_tools, finish_scan, agent_finish])
+    _ensure_unique_tool_names(
+        [
+            *_BASE_TOOLS,
+            *_ROOT_ORCHESTRATION_TOOLS,
+            *_EXTRA_TOOLS,
+            *new_tools,
+            finish_scan,
+            agent_finish,
+        ]
+    )
 
     for tool in new_tools:
         _EXTRA_TOOLS.append(tool)
@@ -409,6 +430,8 @@ def build_strix_agent(
     system_prompt_context: dict[str, Any] | None = None,
     extra_tools: Sequence[Tool] | None = None,
     instructions_override: str | None = None,
+    model: str | None = None,
+    model_settings: ModelSettings | None = None,
 ) -> SandboxAgent[Any]:
     """Build a SandboxAgent for either root or child use.
 
@@ -434,7 +457,12 @@ def build_strix_agent(
 
     agent_tools = [*_EXTRA_TOOLS, *(extra_tools or [])]
     if is_root:
-        tools: list[Tool] = [*_BASE_TOOLS, *agent_tools, finish_scan]
+        tools: list[Tool] = [
+            *_BASE_TOOLS,
+            *_ROOT_ORCHESTRATION_TOOLS,
+            *agent_tools,
+            finish_scan,
+        ]
     else:
         tools = [*_BASE_TOOLS, *agent_tools, agent_finish]
     _ensure_unique_tool_names(tools)
@@ -449,12 +477,18 @@ def build_strix_agent(
         is_whitebox,
     )
 
+    agent_model_options: dict[str, Any] = {}
+    if model is not None:
+        agent_model_options["model"] = model
+    if model_settings is not None:
+        agent_model_options["model_settings"] = model_settings
+
     return SandboxAgent(
         name=name,
         instructions=instructions,
         tools=tools,
         tool_use_behavior=_finish_tool_use_behavior,
-        model=None,
+        **agent_model_options,
         capabilities=[
             Filesystem(
                 configure_tools=(
@@ -477,6 +511,8 @@ def make_child_factory(
     interactive: bool = False,
     chat_completions_tools: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
+    model: str | None = None,
+    model_settings: ModelSettings | None = None,
 ) -> Any:
     """Return the runner-owned builder used by ``spawn_child_agent``.
 
@@ -495,6 +531,8 @@ def make_child_factory(
             interactive=interactive,
             chat_completions_tools=chat_completions_tools,
             system_prompt_context=system_prompt_context,
+            model=model,
+            model_settings=model_settings,
         )
 
     return _factory

@@ -20,6 +20,7 @@ class LLMUsageLedger:
         self._agent_metadata: dict[str, dict[str, str]] = {}
         self._request_usage_entries: list[dict[str, Any]] = []
         self._total_cost = 0.0
+        self._has_cost = False
 
     def record(
         self,
@@ -35,7 +36,7 @@ class LLMUsageLedger:
         normalized_agent_id = str(agent_id or "unknown")
         self._total_usage.add(usage)
         self._agent_usage.setdefault(normalized_agent_id, Usage()).add(usage)
-        self._request_usage_entries.extend(_serialize_request_usage_entries(usage))
+        self._request_usage_entries.extend(_serialize_request_usage_entries(usage, model=model))
 
         metadata = self._agent_metadata.setdefault(normalized_agent_id, {})
         if agent_name:
@@ -47,12 +48,14 @@ class LLMUsageLedger:
             estimated = _estimate_litellm_cost(usage, model)
             if estimated:
                 self._total_cost += estimated
+                self._has_cost = True
 
         return True
 
     def record_observed_cost(self, cost: float) -> None:
         if isinstance(cost, int | float) and cost > 0:
             self._total_cost += float(cost)
+            self._has_cost = True
 
     @property
     def total_cost(self) -> float:
@@ -72,7 +75,8 @@ class LLMUsageLedger:
             # aggregate. It has no per-call cache buckets, so it cannot be
             # used for exact pricing.
             record.pop("request_usage_entries", None)
-        record["cost"] = _round_cost(self._total_cost)
+        if self._has_cost:
+            record["cost"] = _round_cost(self._total_cost)
         record["agents"] = []
 
         agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}
@@ -90,9 +94,10 @@ class LLMUsageLedger:
                     "agent_id": agent_id,
                     "agent_name": metadata.get("agent_name") or agent_id,
                     "model": metadata.get("model"),
-                    "cost": _round_cost(agent_cost),
                 }
             )
+            if self._has_cost:
+                agent_record["cost"] = _round_cost(agent_cost)
             record["agents"].append(agent_record)
 
         return record
@@ -103,6 +108,7 @@ class LLMUsageLedger:
         self._agent_metadata.clear()
         self._request_usage_entries.clear()
         self._total_cost = 0.0
+        self._has_cost = False
 
         if not isinstance(raw_usage, dict):
             return
@@ -113,7 +119,9 @@ class LLMUsageLedger:
             logger.exception("Failed to hydrate aggregate llm_usage from run.json")
             self._total_usage = Usage()
 
-        self._total_cost = _float_or_zero(raw_usage.get("cost"))
+        if "cost" in raw_usage:
+            self._total_cost = _float_or_zero(raw_usage.get("cost"))
+            self._has_cost = True
         self._request_usage_entries = _hydrate_request_usage_entries(
             raw_usage.get("request_usage_entries")
         )
@@ -261,14 +269,22 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
     return {str(k): v for k, v in details.items() if v is not None}
 
 
-def _serialize_request_usage_entries(usage: Usage) -> list[dict[str, Any]]:
+def _serialize_request_usage_entries(
+    usage: Usage,
+    *,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
     entries: list[Any] = list(usage.request_usage_entries or [])
     # An aggregate covering more than one request is not a billable receipt:
     # its cache buckets may differ per call. Keep it out of the exact-pricing
     # path until the provider supplies the individual records.
     if not entries and usage.requests == 1 and _usage_has_activity(usage):
         entries = [usage]
-    return [_serialize_request_usage_entry(entry) for entry in entries]
+    serialized = [_serialize_request_usage_entry(entry) for entry in entries]
+    if model:
+        for entry in serialized:
+            entry["model"] = model
+    return serialized
 
 
 def _serialize_request_usage_entry(entry: Any) -> dict[str, Any]:
@@ -297,7 +313,11 @@ def _hydrate_request_usage_entries(value: Any) -> list[dict[str, Any]]:
     for entry in value:
         if not isinstance(entry, dict):
             continue
-        entries.append(_serialize_request_usage_entry(_UsageEntryAdapter(entry)))
+        serialized = _serialize_request_usage_entry(_UsageEntryAdapter(entry))
+        model = entry.get("model")
+        if isinstance(model, str) and model:
+            serialized["model"] = model
+        entries.append(serialized)
     return entries
 
 

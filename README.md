@@ -4,6 +4,25 @@ LyraShield Engine is the sandboxed repository-analysis process used by the LyraS
 
 See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
 
+## Project map
+
+- [LyraShield AI public site](https://lyrashieldai.com) · [public Lite Check](https://lyrashieldai.com/scan) · [methodology](https://lyrashieldai.com/methodology) · [synthetic sample report](https://lyrashieldai.com/sample-report).
+- [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai): public Lite Check, authenticated evidence console, worker integration, and release-assurance product; see its [Build Week judge path](https://github.com/ecryptoguru/lyrashield-ai#openai-build-week-judge-path).
+- [Ownership boundary](#ownership-boundary): which execution behavior LyraShield owns versus the retained Strix substrate.
+- [Worker artifact contract](#worker-artifact-contract): compatibility-sensitive `run.json` and `vulnerabilities.json` boundary.
+- [Verification](#verification): the implementation gate, not an accuracy claim.
+- [Upstream releases](#upstream-releases) and [UPGRADES.md](UPGRADES.md): recorded base, upgrade process, and retained compatibility patches.
+
+## Build Week provenance
+
+This repository contains both LyraShield commits and imported Strix history. Its top-level commit dates alone are therefore not a fair measure of LyraShield-authored Build Week work. The submission-wide source of truth is the application repository's pre-event baseline [`72ba1e2`](https://github.com/ecryptoguru/lyrashield-ai/commit/72ba1e2a54fdedf81989325031c781f41d14dec6), authored before **July 13, 2026, 9:00 AM PT (16:00 UTC)**, and its explicit [`72ba1e2..HEAD` comparison](https://github.com/ecryptoguru/lyrashield-ai/compare/72ba1e2a54fdedf81989325031c781f41d14dec6...main).
+
+Before the event, LyraShield had already established the controlled-derivative boundary, compatibility adapter, upstream verification, and packaging hygiene. During Build Week, the engine-side work included containerized-worker sandbox reachability, review-gated immutable upstream imports, public worker-contract verification, context compaction, GPT-5.6 execution/evidence hardening, terminal receipt preservation, and bounded Luna specialist routing. Inspect LyraShield-only engine history without conflating imported upstream commits:
+
+```bash
+git log upstream/main..main --since='2026-07-13T16:00:00Z' --date=iso-strict --oneline
+```
+
 ## Ownership boundary
 
 LyraShield owns:
@@ -33,12 +52,14 @@ uv run lyrashield --version
 uv run lyrashield --help
 
 export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+# Optional for Deep scans: Terra coordinates while Luna runs focused specialists.
+export LYRASHIELD_DELEGATE_LLM="openai/gpt-5.6-luna"
 export LLM_API_KEY="<credential>"
 export LLM_API_BASE="https://<approved-endpoint>"
 uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
 ```
 
-Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). Deployment names must still identify GPT-5.6 Sol, Terra, or Luna. Anthropic, Bedrock, Vertex, OpenRouter, local models, Perplexity, and Parallel are not supported execution paths.
+Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Sol, Terra, or Luna. Anthropic, Bedrock, Vertex, OpenRouter, local models, Perplexity, and Parallel are not supported execution paths.
 
 Repository targets are the production worker boundary. The LyraShield application routes URL targets to its pinned deterministic URL scanner instead of this engine. Run only against targets you are authorized to test.
 
@@ -48,6 +69,8 @@ Each non-interactive run writes bounded machine-readable artifacts under `strix_
 
 - `run.json` records lifecycle, model/reasoning metadata, usage, limits, and reproducibility fields;
 - `vulnerabilities.json` contains bounded structured finding candidates, control IDs, evidence metadata, and deterministic identities.
+
+Deep scans use a deterministic two-tier route: the Terra/medium root owns coordination and cross-file judgment, while Luna/medium child specialists handle focused tasks with smaller output reservations. Only the root can create or stop specialists, so child work cannot fan out recursively. Child agents start with a focused task and system-owned scope instead of copying the full parent conversation unless the coordinator explicitly requests inherited context. Stable per-scan cache keys improve repeated-prefix reuse, and per-request usage receipts retain the actual model so mixed-model spend can be reconciled against the rate card.
 
 The TypeScript worker treats all engine output as untrusted. It schema-validates these artifacts, never persists raw stdout/stderr, and does not allow model confidence to become independent verification proof. Existing artifact keys are compatibility-sensitive; coordinate changes with the worker contract tests in `lyrashield-ai`.
 
@@ -59,7 +82,7 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-thin-fork.sh
 ```
 
-The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, 329 tests, headless mypy, Bandit, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
+The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, 329 tests, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
 
 These checks prove implementation compatibility, not detection accuracy. The inherited Strix v0.4 XBEN result is historical upstream evidence only. LyraShield must establish result quality with its own versioned evaluation corpus before making accuracy, coverage, or comparative claims; see [benchmarks/README.md](benchmarks/README.md).
 

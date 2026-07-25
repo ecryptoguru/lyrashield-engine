@@ -14,6 +14,41 @@ from strix.interface import cli
 main_module = import_module("strix.interface.main")
 
 
+class _ProviderFailureError(RuntimeError):
+    def __init__(self, body: object) -> None:
+        super().__init__("target-derived detail")
+        self.body = body
+
+
+def test_noninteractive_failure_label_includes_only_a_safe_provider_code() -> None:
+    failure = _ProviderFailureError(
+        {
+            "code": "context_length_exceeded",
+            "type": "invalid_request_error",
+            "param": "input",
+            "message": "target-derived detail",
+        }
+    )
+
+    assert (
+        cli._noninteractive_failure_label(failure)
+        == "_ProviderFailureError.context_length_exceeded"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"code": "unsafe value with spaces"},
+        {"code": "x" * 65},
+        {"message": "target-derived detail"},
+        "not-a-mapping",
+    ],
+)
+def test_noninteractive_failure_label_rejects_unbounded_provider_details(body: object) -> None:
+    assert cli._noninteractive_failure_label(_ProviderFailureError(body)) == "_ProviderFailureError"
+
+
 @pytest.mark.asyncio
 async def test_non_interactive_scan_bypasses_live_display() -> None:
     args = SimpleNamespace(
@@ -64,3 +99,16 @@ def test_non_interactive_exit_code_requires_a_completed_receipt(
 ) -> None:
     report_state = SimpleNamespace(run_record=record, vulnerability_reports=findings)
     assert main_module._non_interactive_exit_code(report_state) == expected
+
+
+def test_non_interactive_unhandled_failure_exits_without_a_traceback() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main_module._exit_noninteractive_failure(non_interactive=True)
+
+    assert exc_info.value.code == 1
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__ is True
+
+
+def test_interactive_unhandled_failure_remains_raisable() -> None:
+    assert main_module._exit_noninteractive_failure(non_interactive=False) is None

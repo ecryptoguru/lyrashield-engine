@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_MAX_TURNS = 500
+MAX_CHILD_INHERITED_HISTORY_BYTES = 24 * 1024
 
 
 def _accepts_required_tool_choice(model_name: str | None) -> bool:
@@ -31,6 +32,22 @@ def _accepts_required_tool_choice(model_name: str | None) -> bool:
             name = name[len(prefix) :]
             break
     return name.startswith("openai/") or is_known_openai_bare_model(name)
+
+
+def _supports_parallel_tool_calls_setting(model_name: str | None) -> bool:
+    """Return whether the routed provider accepts ``parallel_tool_calls``.
+
+    The Azure AI GPT-5.6 Chat Completions route rejects the parameter itself,
+    including the value ``false``, with HTTP 400. Omitting it keeps the request
+    compatible; LyraShield's turn, agent, concurrency, and spend limits remain
+    enforced independently of this provider hint.
+    """
+    name = (model_name or "").strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return not name.startswith("azure_ai/gpt-5.6-")
 
 
 def build_root_task(scan_config: dict[str, Any]) -> str:
@@ -129,13 +146,17 @@ def make_model_settings(
     force_required_tool_choice: bool = False,
     request_timeout: float | None = None,
     max_output_tokens: int | None = None,
+    prompt_cache_key: str | None = None,
 ) -> ModelSettings:
+    extra_args: dict[str, Any] = request_timeout_extra_args(request_timeout) or {}
+    if prompt_cache_key:
+        extra_args["prompt_cache_key"] = prompt_cache_key
     model_settings = ModelSettings(
-        parallel_tool_calls=False,
+        parallel_tool_calls=(False if _supports_parallel_tool_calls_setting(model_name) else None),
         retry=DEFAULT_MODEL_RETRY,
         include_usage=True,
         max_tokens=max_output_tokens,
-        extra_args=request_timeout_extra_args(request_timeout),
+        extra_args=extra_args or None,
     )
     if (
         reasoning_effort is not None
@@ -171,6 +192,14 @@ def child_initial_input(
             ensure_ascii=False,
             default=str,
         )
+        encoded = rendered.encode("utf-8")
+        if len(encoded) > MAX_CHILD_INHERITED_HISTORY_BYTES:
+            # ponytail: bounded handoff; large evidence stays in sandbox artifacts.
+            rendered = encoded[-MAX_CHILD_INHERITED_HISTORY_BYTES:].decode("utf-8", errors="ignore")
+            rendered = (
+                "[Earlier parent history omitted; inspect referenced artifacts as needed.]\n"
+                + rendered
+            )
         parts.append(
             "== Inherited context from parent (background only) ==\n"
             f"{rendered}\n"

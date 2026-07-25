@@ -11,6 +11,10 @@ Production configuration is owned by the LyraShield worker. The `lyrashield` ada
   GPT-5.6 Sol, Terra, or Luna deployment name. Maps to internal `STRIX_LLM`. Other model families are rejected before sandbox setup.
 </ParamField>
 
+<ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">
+  Optional GPT-5.6 deployment for child specialists. The application supplies Luna for Deep/Custom scans and otherwise uses the primary deployment.
+</ParamField>
+
 <ParamField path="LLM_API_KEY" type="string">
   Credential for the approved OpenAI-compatible endpoint. Azure aliases are listed below.
 </ParamField>
@@ -23,12 +27,30 @@ Production configuration is owned by the LyraShield worker. The `lyrashield` ada
   API version for endpoints that require it.
 </ParamField>
 
-<ParamField path="LYRASHIELD_REASONING_EFFORT" default="high" type="string">
-  Maps to internal reasoning effort. The application resolves medium for Safe/Quick/Standard and high for Deep/Custom.
+<ParamField path="LYRASHIELD_REASONING_EFFORT" default="medium" type="string">
+  Maps to internal reasoning effort. The application resolves medium for every scan mode.
+</ParamField>
+
+<ParamField path="LYRASHIELD_DELEGATE_REASONING_EFFORT" default="medium" type="string">
+  Reasoning effort for child specialists. Production keeps this at medium.
 </ParamField>
 
 <ParamField path="LLM_TIMEOUT" default="300" type="integer">
   Model request timeout in seconds.
+</ParamField>
+
+## Token limits
+
+<ParamField path="LYRASHIELD_MAX_OUTPUT_TOKENS" type="integer">
+  Hard cap on tokens generated per request. Unset keeps the per-scan-mode default (`quick` 4096, `standard` 8192, `deep` 16384); when set it replaces that default for every scan mode. Child specialists remain separately clamped at 8192, so raising this does not multiply spend across delegates. The value also tightens the pre-request budget reservation, so a lower cap admits more requests under the same `--max-budget`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_MAX_INPUT_TOKENS" type="integer">
+  Ceiling that history compaction keeps a request's input under. Unset uses the default 96000 trigger (compacting toward 64000). This is **not** a hard reject: crossing the ceiling compacts older history rather than failing the request, so a scan is never aborted by this setting.
+
+  Values above 240000 are clamped down to 240000 with a logged warning. That is the GPT-5.6 long-context boundary (272000 tokens, where input is billed at 2x) minus a 32000-token safety margin, so a request that trips the trigger still has room for its output allowance without crossing into 2x billing. Compaction exists to keep requests out of that pricing tier, so a ceiling above the margin would defeat the cost protection this setting provides.
+
+  The applied trigger and target are recorded in `run.json` as `compaction_trigger_tokens` and `compaction_target_tokens`, so the enforced values are auditable per scan.
 </ParamField>
 
 Azure compatibility aliases:

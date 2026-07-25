@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 from strix.core.agents import AgentCoordinator
+from strix.core.execution import _final_output_metadata
 from strix.core.runner import _coordinator_for_scan_mode
 
 
@@ -61,6 +63,15 @@ def test_caller_supplied_coordinator_is_capped_by_scan_mode() -> None:
 
     assert resolved is coordinator
     assert resolved.max_agents == 2
+
+
+def test_invalid_final_output_logs_metadata_without_content() -> None:
+    target_content = "target-derived-sensitive-content"
+
+    metadata = _final_output_metadata(SimpleNamespace(final_output=target_content))
+
+    assert metadata == f"type=str length={len(target_content)}"
+    assert target_content not in metadata
 
 
 @pytest.mark.asyncio

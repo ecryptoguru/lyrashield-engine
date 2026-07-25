@@ -1,6 +1,7 @@
 import atexit
 import contextlib
 import logging
+import re
 import signal
 import sys
 import threading
@@ -24,6 +25,19 @@ from .utils import (
 
 
 logger = logging.getLogger(__name__)
+_SAFE_PROVIDER_ERROR_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _noninteractive_failure_label(exc: Exception) -> str:
+    label = type(exc).__name__
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return label
+    for key in ("code", "type", "param"):
+        component = body.get(key)
+        if isinstance(component, str) and _SAFE_PROVIDER_ERROR_COMPONENT.fullmatch(component):
+            return f"{label}.{component}"
+    return label
 
 
 def _resolve_sandbox_image() -> str:
@@ -216,7 +230,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
             # contain target-derived content in non-interactive worker runs.
             logger.error(  # noqa: TRY400
                 "Non-interactive scan failed: %s",
-                type(e).__name__,
+                _noninteractive_failure_label(e),
             )
         else:
             console.print(f"[bold red]Error during penetration test:[/] {e}")

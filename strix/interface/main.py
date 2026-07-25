@@ -82,16 +82,18 @@ logger = logging.getLogger(__name__)
 def validate_environment() -> None:
     logger.info("Validating environment")
     console = Console()
-    missing_required_vars = []
-    missing_optional_vars = []
+    missing_required_vars: list[str] = []
+    missing_optional_vars: list[str] = []
 
     settings = load_settings()
 
     if not settings.llm.model:
-        missing_required_vars.append("STRIX_LLM")
-    elif not is_gpt56_model(settings.llm.model):
+        missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
+    elif not is_gpt56_model(settings.llm.model) or (
+        settings.llm.delegate_model and not is_gpt56_model(settings.llm.delegate_model)
+    ):
         error_text = Text(
-            "LyraShield scans require a GPT-5.6 Sol, Terra, or Luna deployment",
+            "LyraShield scans require a GPT-5.6 Terra or Luna deployment",
             style="bold red",
         )
         console.print("\n")
@@ -130,11 +132,11 @@ def validate_environment() -> None:
 
         error_text.append("\nRequired environment variables:\n", style="white")
         for var in missing_required_vars:
-            if var == "STRIX_LLM":
+            if var in {"STRIX_LLM or LYRASHIELD_LLM", "STRIX_LLM"}:
                 error_text.append("• ", style="white")
-                error_text.append("STRIX_LLM", style="bold cyan")
+                error_text.append("STRIX_LLM / LYRASHIELD_LLM", style="bold cyan")
                 error_text.append(
-                    " - GPT-5.6 Sol, Terra, or Luna deployment name\n",
+                    " - GPT-5.6 Terra or Luna deployment name\n",
                     style="white",
                 )
 
@@ -155,9 +157,12 @@ def validate_environment() -> None:
                         " - Base URL for the configured GPT-5.6 endpoint\n",
                         style="white",
                     )
-                elif var == "STRIX_REASONING_EFFORT":
+                elif var in {"STRIX_REASONING_EFFORT", "LYRASHIELD_REASONING_EFFORT"}:
                     error_text.append("• ", style="white")
-                    error_text.append("STRIX_REASONING_EFFORT", style="bold cyan")
+                    error_text.append(
+                        "STRIX_REASONING_EFFORT / LYRASHIELD_REASONING_EFFORT",
+                        style="bold cyan",
+                    )
                     error_text.append(
                         " - Reasoning effort level: none, minimal, low, medium, high, xhigh "
                         "(default: high)\n",
@@ -165,7 +170,10 @@ def validate_environment() -> None:
                     )
 
         error_text.append("\nExample setup:\n", style="white")
-        error_text.append("export STRIX_LLM='openai/gpt-5.6-luna'\n", style="dim white")
+        error_text.append(
+            "export STRIX_LLM='openai/gpt-5.6-luna'  # or LYRASHIELD_LLM\n",
+            style="dim white",
+        )
 
         if missing_optional_vars:
             for var in missing_optional_vars:
@@ -180,9 +188,9 @@ def validate_environment() -> None:
                         "export LLM_API_BASE='https://your-gpt-5-6-endpoint.example'\n",
                         style="dim white",
                     )
-                elif var == "STRIX_REASONING_EFFORT":
+                elif var in {"STRIX_REASONING_EFFORT", "LYRASHIELD_REASONING_EFFORT"}:
                     error_text.append(
-                        "export STRIX_REASONING_EFFORT='high'\n",
+                        "export STRIX_REASONING_EFFORT='high'  # or LYRASHIELD_REASONING_EFFORT\n",
                         style="dim white",
                     )
 
@@ -337,7 +345,7 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
                 ),
             )
 
-        model = StrixProvider().get_model(raw_model)
+        model = StrixProvider(settings=settings).get_model(raw_model)
         await asyncio.wait_for(
             model.get_response(
                 system_instructions="You are a helpful assistant.",
@@ -923,15 +931,25 @@ def main() -> None:
 
         _persist_run_record(args)
 
-    _telemetry_start_kwargs = {
-        "model": load_settings().llm.model,
-        "scan_mode": args.scan_mode,
-        "is_whitebox": is_whitebox_scan(args.targets_info),
-        "interactive": not args.non_interactive,
-        "has_instructions": bool(args.instruction),
-    }
-    posthog.start(**_telemetry_start_kwargs)
-    scarf.start(**_telemetry_start_kwargs)
+    _telemetry_model = load_settings().llm.model
+    _telemetry_scan_mode = args.scan_mode
+    _telemetry_is_whitebox = is_whitebox_scan(args.targets_info)
+    _telemetry_interactive = not args.non_interactive
+    _telemetry_has_instructions = bool(args.instruction)
+    posthog.start(
+        model=_telemetry_model,
+        scan_mode=_telemetry_scan_mode,
+        is_whitebox=_telemetry_is_whitebox,
+        interactive=_telemetry_interactive,
+        has_instructions=_telemetry_has_instructions,
+    )
+    scarf.start(
+        model=_telemetry_model,
+        scan_mode=_telemetry_scan_mode,
+        is_whitebox=_telemetry_is_whitebox,
+        interactive=_telemetry_interactive,
+        has_instructions=_telemetry_has_instructions,
+    )
 
     exit_reason = "user_exit"
     try:
@@ -945,6 +963,7 @@ def main() -> None:
         exit_reason = "error"
         posthog.error("unhandled_exception")
         scarf.error("unhandled_exception")
+        _exit_noninteractive_failure(non_interactive=args.non_interactive)
         raise
     finally:
         report_state = get_global_report_state()
@@ -980,6 +999,15 @@ def _non_interactive_exit_code(report_state: Any | None) -> int:
             return 4
         case _:
             return 5
+
+
+def _exit_noninteractive_failure(*, non_interactive: bool) -> None:
+    if not non_interactive:
+        return
+    # ``run_cli`` already emitted the fixed, class-only failure marker. Exit
+    # without an interpreter traceback because exception messages and frames
+    # may contain target-derived data.
+    raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

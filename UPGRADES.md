@@ -73,6 +73,17 @@ the generated patch and conflicting paths, then creates or updates one issue
 labelled `upstream-sync`. Resolve that release through a reviewed PR; never add
 automatic conflict resolution to the scheduled job.
 
+## LyraShield PR #20 (2026-07-25)
+
+Merged from branch `codex/engine-v5`. This change set refined the GPT-5.6 cost accounting and telemetry plumbing while keeping the execution boundary intact:
+
+- `strix/core/hooks.py`: `_model_rates` now returns a 2-tuple (input, output) matching the GPT-5.6 Terra/Luna rate card; `_usage_cost_upper_bound` handles provider-reported cache-read tokens and extracts `input_tokens`/`output_tokens` from both dict and object usage entries via `_usage_value`.
+- `strix/interface/main.py`: telemetry start arguments are passed as explicit keyword arguments to `posthog.start` and `scarf.start` instead of an untyped kwargs dict.
+- `tests/conftest.py`: a pytest fixture clears LLM-related environment variables before each test to isolate unit tests from leaked Azure endpoints.
+- `Makefile`: the `type-check` and `security` targets now match `scripts/verify-thin-fork.sh` (mypy excludes `strix/interface/tui`, bandit covers `strix` and `lyrashield_adapter`).
+
+The existing worker artifact contract and `run.json`/`vulnerabilities.json` schema did not change.
+
 ## Independence decision
 
 Continue maintaining the controlled derivative while the reviewed upstream
