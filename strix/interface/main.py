@@ -93,7 +93,7 @@ def validate_environment() -> None:
         settings.llm.delegate_model and not is_gpt56_model(settings.llm.delegate_model)
     ):
         error_text = Text(
-            "LyraShield scans require a GPT-5.6 Sol, Terra, or Luna deployment",
+            "LyraShield scans require a GPT-5.6 Terra or Luna deployment",
             style="bold red",
         )
         console.print("\n")
@@ -136,7 +136,7 @@ def validate_environment() -> None:
                 error_text.append("• ", style="white")
                 error_text.append("STRIX_LLM / LYRASHIELD_LLM", style="bold cyan")
                 error_text.append(
-                    " - GPT-5.6 Sol, Terra, or Luna deployment name\n",
+                    " - GPT-5.6 Terra or Luna deployment name\n",
                     style="white",
                 )
 

@@ -56,6 +56,24 @@ logger = logging.getLogger(__name__)
 
 StreamEventSink = Callable[[str, Any], None]
 _MODE_AGENT_LIMITS = {"quick": 2, "standard": 4, "deep": 6}
+_MODE_OUTPUT_TOKEN_LIMITS = {"quick": 4_096, "standard": 8_192, "deep": 16_384}
+_DEFAULT_OUTPUT_TOKENS = 8_192
+# Ceiling applied to delegate agents regardless of the coordinator's budget, so
+# raising the coordinator cap does not silently multiply spend across children.
+DELEGATE_OUTPUT_TOKEN_CEILING = 8_192
+
+
+def resolve_max_output_tokens(scan_mode: str, configured: int | None) -> int:
+    """Resolve the per-request output-token cap for a scan.
+
+    Scan mode selects the default; an explicit ``LYRASHIELD_MAX_OUTPUT_TOKENS``
+    replaces it globally (one operator knob rather than one per mode). The value
+    also tightens the pre-request budget reservation, which reads it back off
+    ``ModelSettings.max_tokens``.
+    """
+    if configured is not None:
+        return configured
+    return _MODE_OUTPUT_TOKEN_LIMITS.get(scan_mode, _DEFAULT_OUTPUT_TOKENS)
 
 
 def _engine_version() -> str:
@@ -252,9 +270,9 @@ async def run_strix_scan(
         is_whitebox = any(t.get("type") == "local_code" for t in targets)
         skills = list(scan_config.get("skills") or [])
         root_task = build_root_task(scan_config)
-        max_output_tokens = {"quick": 4_096, "standard": 8_192, "deep": 16_384}.get(
+        max_output_tokens = resolve_max_output_tokens(
             scan_mode,
-            8_192,
+            settings.llm.max_output_tokens,
         )
         model_settings = make_model_settings(
             settings.llm.reasoning_effort,
@@ -264,7 +282,7 @@ async def run_strix_scan(
             max_output_tokens=max_output_tokens,
             prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
         )
-        delegate_max_output_tokens = min(max_output_tokens, 8_192)
+        delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
         delegate_model_settings = make_model_settings(
             delegate_reasoning_effort,
             model_name=delegate_model,
@@ -284,6 +302,7 @@ async def run_strix_scan(
             model=resolved_model,
             max_budget_usd=max_budget_usd,
             max_output_tokens=max_output_tokens,
+            max_input_tokens=settings.llm.max_input_tokens,
         )
 
         scope_context = build_scope_context(scan_config)
@@ -310,6 +329,11 @@ async def run_strix_scan(
                     "delegate_reasoning_effort": delegate_reasoning_effort,
                     "model_routing_policy": "coordinator-bounded-delegates-medium-v2",
                     "max_output_tokens": max_output_tokens,
+                    # Record the thresholds actually in force (post-clamp) so
+                    # "was a cap applied to this scan?" is answerable from the run
+                    # record rather than by inspecting deployment env.
+                    "compaction_trigger_tokens": hooks.compaction_trigger_tokens,
+                    "compaction_target_tokens": hooks.compaction_target_tokens,
                     "max_agents": coordinator.max_agents,
                 }
             )

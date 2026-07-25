@@ -210,7 +210,7 @@ def test_make_model_settings_adds_stable_prompt_cache_key() -> None:
     [
         "azure_ai/gpt-5.6-luna",
         "litellm/azure_ai/gpt-5.6-terra",
-        "any-llm/azure_ai/gpt-5.6-sol",
+        "any-llm/azure_ai/gpt-5.6-terra",
     ],
 )
 def test_make_model_settings_omits_rejected_azure_gpt56_parallel_tool_setting(
@@ -238,3 +238,26 @@ def test_make_model_settings_timeout_survives_reasoning_resolve() -> None:
 
     assert settings.extra_args is not None
     assert settings.extra_args["timeout"] == 120.0
+
+
+def test_make_model_settings_applies_the_output_token_cap() -> None:
+    settings = make_model_settings(
+        "medium",
+        model_name="azure_ai/gpt-5.6-terra",
+        max_output_tokens=2_048,
+    )
+
+    assert settings.max_tokens == 2_048
+
+
+def test_make_model_settings_output_cap_survives_reasoning_resolve() -> None:
+    # ``resolve`` merges a second ModelSettings; the cap must not be dropped by
+    # that merge, or the budget reservation would over-estimate every request.
+    settings = make_model_settings(
+        "high",
+        model_name="azure_ai/gpt-5.6-terra",
+        max_output_tokens=1_024,
+        force_required_tool_choice=True,
+    )
+
+    assert settings.max_tokens == 1_024
