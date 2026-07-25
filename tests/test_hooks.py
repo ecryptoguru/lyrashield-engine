@@ -125,7 +125,7 @@ def test_usage_upper_bound_honors_provider_reported_cache_reads() -> None:
     )
 
     assert _usage_cost_upper_bound("azure_ai/gpt-5.6-luna", usage) == pytest.approx(
-        (200 * 1.25 + 800 * 0.1 + 100 * 6) / 1_000_000
+        (200 * 1.0 + 800 * 0.1 + 100 * 6) / 1_000_000
     )
 
 

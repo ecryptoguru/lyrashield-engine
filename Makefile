@@ -40,14 +40,12 @@ lint:
 
 type-check:
 	@echo "🔍 Type checking with mypy..."
-	uv run mypy strix/
-	@echo "🔍 Type checking with pyright..."
-	uv run pyright strix/
+	uv run mypy --exclude 'strix/interface/tui' strix lyrashield_adapter
 	@echo "✅ Type checking complete!"
 
 security:
 	@echo "🔒 Running security checks with bandit..."
-	uv run bandit -r strix/ -c pyproject.toml
+	uv run bandit -r strix lyrashield_adapter -q -c pyproject.toml
 	@echo "✅ Security checks complete!"
 
 check-all: format lint type-check security

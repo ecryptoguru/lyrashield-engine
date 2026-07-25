@@ -6,7 +6,7 @@ import inspect
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.agent import ToolsToFinalOutputResult
 from agents.sandbox import SandboxAgent
@@ -160,7 +160,7 @@ def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
 
 
 def _configure_chat_completions_filesystem_tools(toolset: Any) -> None:
-    for name, tool in vars(toolset).items():
+    for name, tool in cast("dict[str, Any]", vars(toolset)).items():
         if isinstance(tool, CustomTool):
             setattr(toolset, name, _custom_tool_as_function_tool(tool))
         elif isinstance(tool, FunctionTool):
@@ -240,9 +240,12 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
             parsed = json.loads(raw_input)
         except json.JSONDecodeError:
             parsed = None
-        if isinstance(parsed, dict) and isinstance(parsed.get("chars"), str):
-            parsed["chars"] = _decode_chars_escape(parsed["chars"])
-            raw_input = json.dumps(parsed)
+        if isinstance(parsed, dict):
+            parsed_dict = cast("dict[str, Any]", parsed)
+            chars = parsed_dict.get("chars")
+            if isinstance(chars, str):
+                parsed_dict["chars"] = _decode_chars_escape(chars)
+                raw_input = json.dumps(parsed_dict)
         try:
             return await invoke_tool(ctx, raw_input)
         except ValidationError as exc:
@@ -253,7 +256,7 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
 
 
 def _configure_shell_tools(toolset: Any, *, chat_completions: bool) -> None:
-    for name, tool in vars(toolset).items():
+    for name, tool in cast("dict[str, Any]", vars(toolset)).items():
         if not isinstance(tool, FunctionTool):
             continue
         wrapped = tool
@@ -287,7 +290,10 @@ def _lifecycle_tool_completed(tool_name: str, output: Any) -> bool:
         parsed = json.loads(output)
     except (TypeError, ValueError):
         return False
-    return bool(isinstance(parsed, dict) and parsed.get("success") and parsed.get(completion_key))
+    if not isinstance(parsed, dict):
+        return False
+    parsed_dict = cast("dict[str, Any]", parsed)
+    return bool(parsed_dict.get("success") and parsed_dict.get(completion_key))
 
 
 def _wait_tool_parked(tool_name: str, output: Any) -> bool:
@@ -297,11 +303,10 @@ def _wait_tool_parked(tool_name: str, output: Any) -> bool:
         parsed = json.loads(output)
     except (TypeError, ValueError):
         return False
-    return bool(
-        isinstance(parsed, dict)
-        and parsed.get("success")
-        and parsed.get("wait_outcome") == "waiting"
-    )
+    if not isinstance(parsed, dict):
+        return False
+    parsed_dict = cast("dict[str, Any]", parsed)
+    return bool(parsed_dict.get("success") and parsed_dict.get("wait_outcome") == "waiting")
 
 
 def _finish_tool_use_behavior(
@@ -309,9 +314,11 @@ def _finish_tool_use_behavior(
     tool_results: list[FunctionToolResult],
 ) -> ToolsToFinalOutputResult:
     """Stop only after a lifecycle tool reports successful completion."""
-    interactive = (
-        bool(ctx.context.get("interactive", False)) if isinstance(ctx.context, dict) else False
-    )
+    if isinstance(ctx.context, dict):
+        context = cast("dict[str, Any]", ctx.context)
+        interactive = bool(context.get("interactive", False))
+    else:
+        interactive = False
     for tool_result in tool_results:
         if _lifecycle_tool_completed(tool_result.tool.name, tool_result.output):
             return ToolsToFinalOutputResult(
@@ -470,7 +477,9 @@ def build_strix_agent(
         is_whitebox,
     )
 
-    agent_model_options: dict[str, Any] = {"model": model}
+    agent_model_options: dict[str, Any] = {}
+    if model is not None:
+        agent_model_options["model"] = model
     if model_settings is not None:
         agent_model_options["model_settings"] = model_settings
 
