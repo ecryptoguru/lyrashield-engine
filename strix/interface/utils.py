@@ -256,6 +256,20 @@ def _llm_usage(report_state: Any) -> dict[str, Any]:
     return usage if isinstance(usage, dict) else {}
 
 
+def _is_subscription(report_state: Any) -> bool:
+    """Whether this run uses a model subscription (no metered cost).
+
+    Prefers the run record so it's correct for hydrated/resumed runs; falls back
+    to current settings.
+    """
+    record = getattr(report_state, "run_record", None)
+    if isinstance(record, dict) and record.get("auth_mode"):
+        return record.get("auth_mode") == "subscription"
+    from strix.config import codex
+
+    return codex.auth_mode(load_settings().llm.model) == "subscription"
+
+
 def _int_stat(usage: dict[str, Any], key: str) -> int:
     try:
         return max(0, int(usage.get(key) or 0))
@@ -286,11 +300,16 @@ def _build_llm_usage_stats(
     *,
     live: bool = False,
 ) -> None:
+    subscription = _is_subscription(report_state)
     usage = _llm_usage(report_state)
     if not usage or _int_stat(usage, "requests") <= 0:
         stats_text.append("\n")
         stats_text.append("Cost ", style="dim")
-        stats_text.append("$0.0000 ", style="#fbbf24")
+        if subscription:
+            stats_text.append("$0.00 ", style="#22c55e")
+            stats_text.append("(subscription) ", style="dim")
+        else:
+            stats_text.append("$0.0000 ", style="#fbbf24")
         stats_text.append("· ", style="dim white")
         stats_text.append("Tokens ", style="dim")
         stats_text.append("0", style="white")
@@ -315,7 +334,12 @@ def _build_llm_usage_stats(
     stats_text.append("Output Tokens ", style="dim")
     stats_text.append(format_token_count(output_tokens), style="white")
 
-    if live or cost > 0:
+    if subscription:
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("Cost ", style="dim")
+        stats_text.append("$0.00", style="#22c55e")
+        stats_text.append(" (subscription)", style="dim")
+    elif live or cost > 0:
         stats_text.append("  ·  ", style="dim white")
         stats_text.append("Cost ", style="dim")
         stats_text.append(f"${cost:.4f}", style="#fbbf24")
@@ -340,6 +364,9 @@ def build_live_stats_text(report_state: Any) -> Text:
     model = load_settings().llm.model or "unknown"
     stats_text.append("Model ", style="dim")
     stats_text.append(str(model), style="white")
+    if _is_subscription(report_state):
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("ChatGPT subscription", style="#22c55e")
     stats_text.append("\n")
 
     vuln_count = len(report_state.vulnerability_reports)
@@ -382,6 +409,10 @@ def build_tui_stats_text(report_state: Any) -> Text:
 
     model = load_settings().llm.model or "unknown"
     stats_text.append(str(model), style="white")
+    subscription = _is_subscription(report_state)
+    if subscription:
+        stats_text.append("\n")
+        stats_text.append("ChatGPT subscription", style="#22c55e")
 
     usage = _llm_usage(report_state)
     if usage and _int_stat(usage, "total_tokens") > 0:
@@ -391,7 +422,10 @@ def build_tui_stats_text(report_state: Any) -> Text:
             style="white",
         )
         cost = _float_stat(usage, "cost")
-        if cost > 0:
+        if subscription:
+            stats_text.append(" · ", style="white")
+            stats_text.append("$0.00", style="white")
+        elif cost > 0:
             stats_text.append(" · ", style="white")
             stats_text.append(f"${cost:.2f}", style="white")
 
@@ -413,7 +447,7 @@ def _slugify_for_run_name(text: str, max_length: int = 32) -> str:
     return text or "pentest"
 
 
-def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None) -> str:  # noqa: PLR0911
+def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None) -> str:
     if not targets_info:
         return "pentest"
 
@@ -819,9 +853,11 @@ def _truncate_file_list(
 def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:
     lines = [
         "The user is requesting a review of a Pull Request.",
-        "Instruction: Direct your analysis primarily at the changes in the listed files. "
-        "You may reference other files in the repository for context (imports, definitions, "
-        "usage), but report findings only if they relate to the listed changes.",
+        (
+            "Instruction: Direct your analysis primarily at the changes in the listed files. "
+            "You may reference other files in the repository for context (imports, definitions, "
+            "usage), but report findings only if they relate to the listed changes."
+        ),
         "For Added files, review the entire file content.",
         "For Modified files, focus primarily on the changed areas.",
     ]
@@ -1075,7 +1111,7 @@ def _is_http_git_repo(url: str) -> bool:
         return False
 
 
-def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911
+def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
     if not target or not isinstance(target, str):
         raise ValueError("Target must be a non-empty string")
 

@@ -87,7 +87,7 @@ async def view_agent_graph(ctx: RunContextWrapper) -> str:
             default=str,
         )
 
-    parent_of, statuses, names = await coordinator.graph_snapshot()
+    parent_of, statuses, names, _ = await coordinator.graph_snapshot()
 
     lines: list[str] = []
 
@@ -219,7 +219,7 @@ def _session_items_payload(items: list[Any]) -> list[dict[str, Any]]:
 
 
 @function_tool(timeout=601)
-async def wait_for_message(  # noqa: PLR0911
+async def wait_for_message(
     ctx: RunContextWrapper,
     reason: str = "Waiting for messages from other agents",
     timeout_seconds: int = 600,
@@ -645,7 +645,7 @@ async def stop_agent(
             ensure_ascii=False,
             default=str,
         )
-    _, statuses, _ = await coordinator.graph_snapshot()
+    _, statuses, _, _ = await coordinator.graph_snapshot()
     if target_agent_id not in statuses:
         return json.dumps(
             {"success": False, "error": f"Unknown agent_id: {target_agent_id}"},

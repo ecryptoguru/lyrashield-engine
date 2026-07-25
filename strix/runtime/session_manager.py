@@ -72,7 +72,7 @@ def get_sandbox_container_ip(client: Any, session: Any) -> str | None:
         for network in networks.values():
             if isinstance(network, dict) and isinstance(network.get("IPAddress"), str):
                 return network["IPAddress"] or None
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("Could not resolve sandbox container IP", exc_info=True)
     return None
 
@@ -208,7 +208,7 @@ async def cleanup(scan_id: str) -> None:
     if caido_client is not None:
         try:
             await caido_client.aclose()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("cleanup(%s): caido_client.aclose() raised", scan_id, exc_info=True)
 
     client = bundle["client"]
@@ -225,5 +225,5 @@ async def cleanup(scan_id: str) -> None:
     if docker_client is not None:
         try:
             docker_client.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("cleanup(%s): docker_client.close() raised", scan_id, exc_info=True)

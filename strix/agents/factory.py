@@ -113,7 +113,7 @@ def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
     async def invoke(ctx: Any, raw_input: str) -> Any:
         try:
             return await invoke_tool(ctx, raw_input)
-        except Exception as exc:  # noqa: BLE001 - tool errors should be model-visible results.
+        except Exception as exc:
             logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
             return _format_tool_error(exc)
 
@@ -128,7 +128,7 @@ def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
             return f"`{_custom_tool_input_field(tool)}` must be a non-empty string."
         try:
             return await tool.on_invoke_tool(ctx, custom_input)
-        except Exception as exc:  # noqa: BLE001 - matches SDK CustomTool error-as-result behavior.
+        except Exception as exc:
             logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
             return _format_tool_error(exc)
 

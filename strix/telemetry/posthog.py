@@ -44,7 +44,7 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
         )
         with urllib.request.urlopen(req, timeout=10):  # noqa: S310  # nosec B310
             pass
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("posthog send failed for event %s", event, exc_info=True)
         return False
     else:
@@ -58,12 +58,14 @@ def start(
     is_whitebox: bool,
     interactive: bool,
     has_instructions: bool,
+    auth_mode: str | None = None,
 ) -> None:
     _send(
         "scan_started",
         {
             **base_props(),
             "model": model or "unknown",
+            "auth_mode": auth_mode or "api_key",
             "scan_mode": scan_mode or "unknown",
             "scan_type": "whitebox" if is_whitebox else "blackbox",
             "interactive": interactive,
@@ -133,6 +135,7 @@ def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
         "scan_ended",
         {
             **base_props(),
+            "auth_mode": report_state.run_record.get("auth_mode") or "api_key",
             "exit_reason": report_state.scan_ended_exit_reason,
             "duration_seconds": round(duration),
             "vulnerabilities_total": len(report_state.vulnerability_reports),
@@ -140,6 +143,52 @@ def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
             **llm_props,
         },
     )
+
+
+def viewer_opened(source: str, live: bool) -> None:
+    _send(
+        "viewer_opened",
+        {
+            **base_props(),
+            "source": source,
+            "live": live,
+        },
+    )
+
+
+def viewer_cta_clicked(cta: str, surface: str | None = None) -> None:
+    props = {
+        **base_props(),
+        "cta": cta[:64],
+    }
+    if surface:
+        props["surface"] = surface[:64]
+    _send("viewer_cta_clicked", props)
+
+
+_VIEWER_EMAIL_STEPS = frozenset(
+    {"email_submitted", "email_verified", "report_sent", "work_email_required"}
+)
+
+
+def viewer_email_event(step: str, purpose: str | None = None) -> None:
+    if step not in _VIEWER_EMAIL_STEPS:
+        return
+    _send(
+        f"viewer_{step}",
+        {
+            **base_props(),
+            **({"purpose": purpose} if purpose else {}),
+        },
+    )
+
+
+def viewer_feedback_submitted() -> None:
+    _send("viewer_feedback_submitted", {**base_props()})
+
+
+def viewer_agent_steered() -> None:
+    _send("viewer_agent_steered", {**base_props()})
 
 
 def error(error_type: str) -> None:

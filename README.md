@@ -11,7 +11,7 @@ See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the owne
 - [Ownership boundary](#ownership-boundary): which execution behavior LyraShield owns versus the retained Strix substrate.
 - [Worker artifact contract](#worker-artifact-contract): compatibility-sensitive `run.json` and `vulnerabilities.json` boundary.
 - [Verification](#verification): the implementation gate, not an accuracy claim.
-- [Upstream releases](#upstream-releases) and [UPGRADES.md](UPGRADES.md): recorded base, upgrade process, and retained compatibility patches.
+- [UPGRADES.md](UPGRADES.md): retained compatibility patches and ownership ledger.
 
 ## Build Week provenance
 
@@ -85,16 +85,6 @@ bash scripts/verify-thin-fork.sh
 The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, 329 tests, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
 
 These checks prove implementation compatibility, not detection accuracy. The inherited Strix v0.4 XBEN result is historical upstream evidence only. LyraShield must establish result quality with its own versioned evaluation corpus before making accuracy, coverage, or comparative claims; see [benchmarks/README.md](benchmarks/README.md).
-
-## Upstream releases
-
-`.lyrashield-upstream-base` records the incorporated upstream tree. Check upstream state with:
-
-```bash
-bash scripts/check-upstream.sh
-```
-
-The scheduled workflow compares stable release trees and prepares a review PR. Candidate upstream code is not executed in the write-enabled preparation job. Imports require human approval and the read-only engine CI gate; conflicts are never auto-resolved, history is never force-pushed, and the workflow never deploys.
 
 ## License
 
