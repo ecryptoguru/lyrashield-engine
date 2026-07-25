@@ -82,7 +82,7 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-thin-fork.sh
 ```
 
-The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, 329 tests, headless mypy, Bandit, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
+The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, 329 tests, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
 
 These checks prove implementation compatibility, not detection accuracy. The inherited Strix v0.4 XBEN result is historical upstream evidence only. LyraShield must establish result quality with its own versioned evaluation corpus before making accuracy, coverage, or comparative claims; see [benchmarks/README.md](benchmarks/README.md).
 
