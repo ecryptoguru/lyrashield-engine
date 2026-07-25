@@ -24,6 +24,13 @@ _BASE_CONFIG = SettingsConfigDict(
 )
 
 
+# Set by the LyraShield product entry point (``lyrashield_adapter.cli``) to mark
+# the process as running behind the product boundary. Gates that must not apply
+# to the bare upstream ``strix`` dev CLI check for it. Lives here so the adapter
+# and the CLI share one definition without ``strix`` importing the adapter.
+PRODUCT_BOUNDARY_ENV_VAR = "LYRASHIELD_PRODUCT_BOUNDARY"
+
+
 class LlmSettings(BaseSettings):
     model_config = _BASE_CONFIG
 

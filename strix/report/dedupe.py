@@ -160,6 +160,94 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+# Upper bound on the serialized existing-report payload sent to the dedupe
+# model. Per-report fields are already truncated at 8k chars, but the report
+# COUNT is unbounded — every new finding compares against all prior ones, so a
+# long scan's dedupe calls would otherwise grow without limit (and each token is
+# metered). ~200k chars keeps the request well under the long-context pricing
+# boundary while fitting hundreds of typical reports.
+_MAX_EXISTING_REPORTS_CHARS = 200_000
+
+_TRUNCATION_MARKER = "...[truncated]"
+
+# Per-item cost of the enclosing JSON list: the separator plus the indentation
+# the encoder adds to each nested line. Small and deliberately generous — the
+# budget must never be under-counted.
+_PER_ITEM_ENCODING_OVERHEAD = 8
+
+
+def _truncate_report_to_budget(report: dict[str, Any], budget: int) -> dict[str, Any] | None:
+    """Shrink one report's longest text fields until it encodes within ``budget``.
+
+    Applies to a single report large enough to blow the whole budget on its own.
+    Identity fields (``id``, ``target``, ``endpoint``, ``method``) are never
+    truncated — they are what the model compares on — so a report is dropped
+    outright if even those exceed the budget.
+    """
+    identity_fields = {"id", "target", "endpoint", "method"}
+    trimmed = dict(report)
+    while _encoded_size(trimmed) > budget:
+        longest = max(
+            (f for f in trimmed if f not in identity_fields and isinstance(trimmed[f], str)),
+            key=lambda f: len(trimmed[f]),
+            default=None,
+        )
+        if longest is None:
+            return None
+        excess = _encoded_size(trimmed) - budget
+        keep = len(trimmed[longest]) - excess - len(_TRUNCATION_MARKER)
+        if keep <= 0:
+            del trimmed[longest]
+        else:
+            trimmed[longest] = trimmed[longest][:keep] + _TRUNCATION_MARKER
+    return trimmed
+
+
+def _encoded_size(report: dict[str, Any]) -> int:
+    """Encoded length of one report as it appears in the transmitted payload.
+
+    Matches ``json.dumps(..., indent=2)`` at the call site: indentation and the
+    enclosing list's separators are what actually reach the model, so a compact
+    estimate would under-count and let the payload exceed the cap.
+    """
+    return len(json.dumps(report, indent=2)) + _PER_ITEM_ENCODING_OVERHEAD
+
+
+def _bound_existing_reports(cleaned: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the most recent cleaned reports within the payload budget.
+
+    Newest-first retention: a fresh candidate most often duplicates a recent
+    finding from the same testing phase, and deterministic identity checks have
+    already run against the full report list before the LLM is consulted.
+
+    The budget is a hard limit on the encoded payload. A newest report that
+    exceeds it alone is truncated rather than passed through, so a single
+    oversized finding cannot defeat the cost guard.
+    """
+    total = 0
+    kept_reversed: list[dict[str, Any]] = []
+    for report in reversed(cleaned):
+        size = _encoded_size(report)
+        if total + size > _MAX_EXISTING_REPORTS_CHARS:
+            if kept_reversed:
+                break
+            truncated = _truncate_report_to_budget(report, _MAX_EXISTING_REPORTS_CHARS)
+            if truncated is None:
+                break
+            kept_reversed.append(truncated)
+            logger.info("Dedupe comparison payload bounded: truncated an oversized report")
+            break
+        total += size
+        kept_reversed.append(report)
+    if len(kept_reversed) < len(cleaned):
+        logger.info(
+            "Dedupe comparison payload bounded: keeping %d of %d existing reports",
+            len(kept_reversed),
+            len(cleaned),
+        )
+    return list(reversed(kept_reversed))
+
+
 def _dependency_identity(report: dict[str, Any]) -> tuple[str, str, str] | None:
     metadata = report.get("dependency_metadata")
     if not isinstance(metadata, dict):
@@ -381,7 +469,9 @@ async def check_duplicate(
             }
 
         candidate_cleaned = _prepare_report_for_comparison(candidate)
-        existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]
+        existing_cleaned = _bound_existing_reports(
+            [_prepare_report_for_comparison(r) for r in existing_reports]
+        )
         comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
 
         user_msg = (

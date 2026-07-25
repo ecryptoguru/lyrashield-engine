@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 
 from strix.config import loader
 from strix.config.settings import DedupeSettings
-from strix.report.dedupe import _dedupe_model_settings
+from strix.report.dedupe import (
+    _MAX_EXISTING_REPORTS_CHARS,
+    _bound_existing_reports,
+    _dedupe_model_settings,
+)
 
 
 if TYPE_CHECKING:
@@ -92,3 +96,41 @@ def test_config_file_loads_dedupe_model(
     assert settings.dedupe.reasoning_effort == "minimal"
     # Main model stays independent of the dedupe override.
     assert settings.llm.model == "openai/root"
+
+
+def test_bound_existing_reports_keeps_small_lists_intact() -> None:
+    reports = [{"id": f"vuln-{i}", "title": "x" * 100} for i in range(50)]
+    assert _bound_existing_reports(reports) == reports
+
+
+def test_bound_existing_reports_drops_oldest_beyond_budget() -> None:
+    big = "x" * 8000
+    reports = [{"id": f"vuln-{i:04d}", "description": big} for i in range(100)]
+    bounded = _bound_existing_reports(reports)
+    assert 0 < len(bounded) < len(reports)
+    # Newest reports are retained, in original order.
+    assert bounded == reports[len(reports) - len(bounded) :]
+    assert sum(len(json.dumps(r)) for r in bounded) <= _MAX_EXISTING_REPORTS_CHARS
+
+
+def test_bound_existing_reports_truncates_an_oversized_newest_report() -> None:
+    oversized = {"id": "vuln-big", "description": "x" * (_MAX_EXISTING_REPORTS_CHARS + 1)}
+    bounded = _bound_existing_reports([{"id": "vuln-old"}, oversized])
+    assert len(bounded) == 1
+    kept = bounded[0]
+    # Identity is preserved, the payload is not.
+    assert kept["id"] == "vuln-big"
+    assert kept["description"].endswith("...[truncated]")
+    assert len(json.dumps(kept, indent=2)) <= _MAX_EXISTING_REPORTS_CHARS
+
+
+def test_bound_existing_reports_encoded_payload_never_exceeds_the_cap() -> None:
+    """The transmitted payload is indented, so the cap must hold against that form."""
+    reports = [{"id": f"vuln-{i:04d}", "description": "x" * 8000} for i in range(200)]
+    bounded = _bound_existing_reports(reports)
+    assert len(json.dumps(bounded, indent=2)) <= _MAX_EXISTING_REPORTS_CHARS
+
+
+def test_bound_existing_reports_drops_a_report_whose_identity_alone_overflows() -> None:
+    unshrinkable = {"id": "x" * (_MAX_EXISTING_REPORTS_CHARS + 1)}
+    assert _bound_existing_reports([unshrinkable]) == []
