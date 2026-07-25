@@ -7,6 +7,8 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+
+pytest.importorskip("pypdf", reason="requires the optional 'viewer' extra")
 from pypdf import PdfReader
 from pypdf.errors import WrongPasswordError
 

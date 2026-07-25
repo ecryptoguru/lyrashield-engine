@@ -47,14 +47,16 @@ dependencies = [
   "requests>=2.32.0",
   "cvss>=3.2",
   "caido-sdk-client>=0.2.0",
-  "reportlab>=4.0",
-  "pypdf>=5.0",
   # Cap <49: 49.x drops the universal2 macOS wheel (arm64-only), which breaks
   # the Intel macOS (macos-x86_64) release build's `uv sync --frozen`.
   "cryptography>=48.0.1,<49",
 ]
 
 [project.optional-dependencies]
+# Encrypted PDF export for the local viewer (`strix view`). Imported lazily by
+# strix/viewer/server.py, and the LyraShield worker never runs the viewer, so
+# these stay out of the base install rather than shipping in every scan image.
+viewer = ["reportlab>=4.0", "pypdf>=5.0"]
 vertex = ["google-auth>=2.0.0"]
 bedrock = ["boto3>=1.28.0"]
 
@@ -222,7 +224,7 @@ ignore = [
 # Stdlib HTTP handler overrides (do_GET/do_POST).
 "strix/interface/auth_cli.py" = ["N802"]
 "tests/test_codex_streaming.py" = ["N802"]
-"tests/test_report_pdf.py" = ["S105", "S106"]
+"tests/test_report_pdf.py" = ["S105", "S106", "E402", "I001"]
 # Stdlib HTTP handler overrides (do_GET/do_POST) and lazy imports that avoid a
 # circular dependency with strix.telemetry / strix.viewer.report_pdf.
 "strix/viewer/server.py" = ["N802", "PLC0415"]

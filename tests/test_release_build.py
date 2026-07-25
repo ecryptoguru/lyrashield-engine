@@ -4,6 +4,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _uv_sync_lines(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    return [line for line in text.splitlines() if "uv sync --frozen" in line]
+
+
+def test_build_script_syncs_with_viewer_extra() -> None:
+    lines = _uv_sync_lines(ROOT / "scripts" / "build.sh")
+    assert lines, "expected a uv sync line in scripts/build.sh"
+    for line in lines:
+        assert "--extra viewer" in line
+
+
+def test_release_workflow_syncs_with_viewer_extra() -> None:
+    lines = _uv_sync_lines(ROOT / ".github" / "workflows" / "build-release.yml")
+    assert lines, "expected a uv sync line in .github/workflows/build-release.yml"
+    for line in lines:
+        assert "--extra viewer" in line
+
+
+def test_verify_thin_fork_syncs_with_viewer_extra() -> None:
+    lines = _uv_sync_lines(ROOT / "scripts" / "verify-thin-fork.sh")
+    assert lines, "expected a uv sync line in scripts/verify-thin-fork.sh"
+    for line in lines:
+        assert "--extra viewer" in line
+
+
 def test_binary_uses_product_adapter_entrypoint() -> None:
     spec = (ROOT / "strix.spec").read_text()
     assert "['lyrashield_adapter/cli.py']" in spec

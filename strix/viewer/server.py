@@ -23,7 +23,7 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from strix.core.paths import run_record_path
@@ -193,8 +193,10 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             try:
                 body = json.loads(raw or b"{}")
             except json.JSONDecodeError:
-                return {}
-            return body if isinstance(body, dict) else {}
+                return cast("dict[str, Any]", {})
+            if isinstance(body, dict):
+                return cast("dict[str, Any]", body)
+            return cast("dict[str, Any]", {})
 
         # Funnel events the viewer is allowed to forward. This handler is the
         # trust boundary: only these event names, with only their known props,
@@ -367,7 +369,21 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.CONFLICT, {"error": "run_not_finished"})
                 return
 
-            from strix.viewer.report_pdf import build_encrypted_report
+            try:
+                from strix.viewer.report_pdf import build_encrypted_report
+            except ImportError:
+                logger.info("PDF export requested but the 'viewer' extra is not installed")
+                self._send_json(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    {
+                        "error": "pdf_export_unavailable",
+                        "detail": (
+                            "Encrypted PDF export requires the optional 'viewer' extra. "
+                            'Install with: pipx install "strix-agent[viewer]"'
+                        ),
+                    },
+                )
+                return
 
             pdf_bytes, password, filename = build_encrypted_report(run_dir)
             run_name = str(summary.get("run_name") or run_dir.name)
