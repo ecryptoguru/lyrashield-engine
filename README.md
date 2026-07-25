@@ -4,6 +4,25 @@ LyraShield Engine is the sandboxed repository-analysis process used by the LyraS
 
 See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
 
+## Project map
+
+- [LyraShield AI public site](https://lyrashieldai.com) · [public Lite Check](https://lyrashieldai.com/scan) · [methodology](https://lyrashieldai.com/methodology) · [synthetic sample report](https://lyrashieldai.com/sample-report).
+- [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai): public Lite Check, authenticated evidence console, worker integration, and release-assurance product; see its [Build Week judge path](https://github.com/ecryptoguru/lyrashield-ai#openai-build-week-judge-path).
+- [Ownership boundary](#ownership-boundary): which execution behavior LyraShield owns versus the retained Strix substrate.
+- [Worker artifact contract](#worker-artifact-contract): compatibility-sensitive `run.json` and `vulnerabilities.json` boundary.
+- [Verification](#verification): the implementation gate, not an accuracy claim.
+- [Upstream releases](#upstream-releases) and [UPGRADES.md](UPGRADES.md): recorded base, upgrade process, and retained compatibility patches.
+
+## Build Week provenance
+
+This repository contains both LyraShield commits and imported Strix history. Its top-level commit dates alone are therefore not a fair measure of LyraShield-authored Build Week work. The submission-wide source of truth is the application repository's pre-event baseline [`72ba1e2`](https://github.com/ecryptoguru/lyrashield-ai/commit/72ba1e2a54fdedf81989325031c781f41d14dec6), authored before **July 13, 2026, 9:00 AM PT (16:00 UTC)**, and its explicit [`72ba1e2..HEAD` comparison](https://github.com/ecryptoguru/lyrashield-ai/compare/72ba1e2a54fdedf81989325031c781f41d14dec6...main).
+
+Before the event, LyraShield had already established the controlled-derivative boundary, compatibility adapter, upstream verification, and packaging hygiene. During Build Week, the engine-side work included containerized-worker sandbox reachability, review-gated immutable upstream imports, public worker-contract verification, context compaction, GPT-5.6 execution/evidence hardening, terminal receipt preservation, and bounded Luna specialist routing. Inspect LyraShield-only engine history without conflating imported upstream commits:
+
+```bash
+git log upstream/main..main --since='2026-07-13T16:00:00Z' --date=iso-strict --oneline
+```
+
 ## Ownership boundary
 
 LyraShield owns:
