@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from strix.core.hooks import (
+    _GPT56_LONG_CONTEXT_TOKENS,
+    MODEL_INPUT_COMPACTION_TARGET_TOKENS,
     MODEL_INPUT_COMPACTION_TRIGGER_TOKENS,
     BudgetExceededError,
     ReportUsageHooks,
     _estimate_input_tokens,
+    _usage_cost_upper_bound,
+    resolve_compaction_thresholds,
 )
 
 
@@ -113,6 +119,19 @@ def test_budget_exceeded_error_is_runtime_error() -> None:
     assert isinstance(err, RuntimeError)
 
 
+def test_usage_upper_bound_honors_provider_reported_cache_reads() -> None:
+    usage = SimpleNamespace(
+        input_tokens=1_000,
+        output_tokens=100,
+        input_tokens_details=SimpleNamespace(cached_tokens=800),
+        request_usage_entries=None,
+    )
+
+    assert _usage_cost_upper_bound("azure_ai/gpt-5.6-luna", usage) == pytest.approx(
+        (200 * 1.0 + 800 * 0.1 + 100 * 6) / 1_000_000
+    )
+
+
 @pytest.mark.asyncio
 async def test_large_context_is_compacted_before_the_model_request() -> None:
     hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
@@ -135,6 +154,24 @@ async def test_large_context_is_compacted_before_the_model_request() -> None:
     assert len(items) < 61
     assert _estimate_input_tokens(hooks._model, "system", items, agent) < 272_000
     assert MODEL_INPUT_COMPACTION_TRIGGER_TOKENS < 272_000
+
+
+@pytest.mark.asyncio
+async def test_medium_context_is_compacted_to_the_budget_safe_target() -> None:
+    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
+    agent = MagicMock()
+    agent.tools = []
+    agent.output_type = None
+    items = [
+        {"role": "user", "content": "original scan task"},
+        {"role": "assistant", "content": "evidence " * 40_000},
+    ]
+
+    await hooks.on_llm_start(_make_context(), agent, "system", items)
+
+    assert _estimate_input_tokens(hooks._model, "system", items, agent) <= (
+        MODEL_INPUT_COMPACTION_TARGET_TOKENS
+    )
 
 
 @pytest.mark.asyncio
@@ -170,6 +207,25 @@ async def test_request_is_rejected_before_call_when_bounded_cost_exceeds_budget(
 
 
 @pytest.mark.asyncio
+async def test_delegate_request_reservation_uses_delegate_model_rate() -> None:
+    hooks = ReportUsageHooks(
+        model="azure_ai/gpt-5.6-terra",
+        max_budget_usd=0.08,
+        max_output_tokens=16_384,
+    )
+    agent = MagicMock()
+    agent.name = "specialist"
+    agent.model = "azure_ai/gpt-5.6-luna"
+    agent.model_settings.max_tokens = 8_192
+    agent.tools = []
+    agent.output_type = None
+
+    await hooks.on_llm_start(
+        _make_context(), agent, "system", [{"role": "user", "content": "focused scan"}]
+    )
+
+
+@pytest.mark.asyncio
 async def test_tool_call_and_output_remain_grouped_after_compaction() -> None:
     hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
     agent = MagicMock()
@@ -186,3 +242,100 @@ async def test_tool_call_and_output_remain_grouped_after_compaction() -> None:
 
     retained_types = [item.get("type") for item in items if isinstance(item, dict)]
     assert ("function_call" in retained_types) == ("function_call_output" in retained_types)
+
+
+class TestCompactionThresholdResolution:
+    """LYRASHIELD_MAX_INPUT_TOKENS is a compaction ceiling, never a hard reject."""
+
+    def test_unset_preserves_the_module_defaults(self) -> None:
+        assert resolve_compaction_thresholds(None) == (
+            MODEL_INPUT_COMPACTION_TRIGGER_TOKENS,
+            MODEL_INPUT_COMPACTION_TARGET_TOKENS,
+        )
+
+    def test_lower_ceiling_compacts_earlier_and_keeps_the_default_ratio(self) -> None:
+        trigger, target = resolve_compaction_thresholds(48_000)
+
+        assert trigger == 48_000
+        assert trigger < MODEL_INPUT_COMPACTION_TRIGGER_TOKENS
+        assert target < trigger
+        # 2:3 target:trigger ratio carried over from the defaults (64k / 96k).
+        assert target == int(
+            48_000 * (MODEL_INPUT_COMPACTION_TARGET_TOKENS / MODEL_INPUT_COMPACTION_TRIGGER_TOKENS)
+        )
+
+    def test_ceiling_above_the_long_context_boundary_is_clamped_and_warned(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            trigger, target = resolve_compaction_thresholds(500_000)
+
+        # Compaction exists to stay out of 2x input billing; a ceiling above that
+        # boundary would defeat the protection this knob is meant to provide.
+        assert trigger < _GPT56_LONG_CONTEXT_TOKENS
+        assert target <= trigger
+        assert any("clamping" in record.message for record in caplog.records)
+
+    def test_documented_clamp_boundary_is_exact(self) -> None:
+        # docs/advanced/configuration.mdx promises values above 240_000 are clamped
+        # to 240_000 (272k boundary minus the 32k output margin). Pin it so the
+        # documented number and the implementation cannot drift apart.
+        assert resolve_compaction_thresholds(240_000)[0] == 240_000
+        assert resolve_compaction_thresholds(240_001)[0] == 240_000
+        assert resolve_compaction_thresholds(250_000)[0] == 240_000
+
+    @pytest.mark.parametrize("ceiling", [1, 1_000, 50_000, 100_000, 271_999, 10_000_000])
+    def test_resolved_trigger_never_reaches_the_long_context_boundary(self, ceiling: int) -> None:
+        trigger, target = resolve_compaction_thresholds(ceiling)
+
+        assert trigger < _GPT56_LONG_CONTEXT_TOKENS
+        assert 0 < target <= trigger
+
+    def test_pathologically_low_ceiling_still_yields_a_usable_target(self) -> None:
+        trigger, target = resolve_compaction_thresholds(500)
+
+        # Must not collapse to zero or exceed the trigger, or compaction could
+        # never report progress and would loop or emit an empty request.
+        assert trigger == 500
+        assert 0 < target <= trigger
+
+
+@pytest.mark.asyncio
+async def test_custom_input_ceiling_compacts_a_context_the_default_would_allow() -> None:
+    agent = MagicMock()
+    agent.tools = []
+    agent.output_type = None
+
+    def _items() -> list[dict[str, str]]:
+        return [
+            {"role": "user", "content": "original scan task"},
+            *[{"role": "assistant", "content": "evidence " * 500} for _ in range(20)],
+        ]
+
+    default_items = _items()
+    await ReportUsageHooks(model="azure_ai/gpt-5.6-luna").on_llm_start(
+        _make_context(), agent, "system", default_items
+    )
+
+    capped_items = _items()
+    capped_hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna", max_input_tokens=6_000)
+    await capped_hooks.on_llm_start(_make_context(), agent, "system", capped_items)
+
+    # Below the 96k default this context passes untouched; the custom ceiling
+    # brings compaction into play.
+    assert len(default_items) == 21
+    assert len(capped_items) < 21
+    assert (
+        _estimate_input_tokens(capped_hooks._model, "system", capped_items, agent)
+        <= capped_hooks.compaction_trigger_tokens
+    )
+
+
+def test_applied_thresholds_are_exposed_for_the_run_record() -> None:
+    default_hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
+    assert default_hooks.compaction_trigger_tokens == MODEL_INPUT_COMPACTION_TRIGGER_TOKENS
+    assert default_hooks.compaction_target_tokens == MODEL_INPUT_COMPACTION_TARGET_TOKENS
+
+    # Post-clamp values, so the run record reflects what was actually enforced.
+    clamped_hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna", max_input_tokens=999_999)
+    assert clamped_hooks.compaction_trigger_tokens < _GPT56_LONG_CONTEXT_TOKENS

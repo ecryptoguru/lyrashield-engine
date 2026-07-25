@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from strix.core.inputs import build_root_task, child_initial_input, make_model_settings
+from strix.core.inputs import (
+    MAX_CHILD_INHERITED_HISTORY_BYTES,
+    build_root_task,
+    child_initial_input,
+    make_model_settings,
+)
 
 
 def _child_kwargs(parent_history: list[Any]) -> dict[str, Any]:
@@ -42,6 +47,17 @@ def test_child_initial_input_single_message_with_history() -> None:
     assert "previous work" in content
     assert "agent scout (agent-2)" in content
     assert "Audit the login flow." in content
+
+
+def test_child_initial_input_bounds_large_inherited_history() -> None:
+    history = [{"role": "assistant", "content": "old-" * 20_000 + "recent-evidence"}]
+
+    result = child_initial_input(**_child_kwargs(history))
+
+    content = result[0]["content"]
+    assert "Earlier parent history omitted" in content
+    assert "recent-evidence" in content
+    assert len(content.encode("utf-8")) < MAX_CHILD_INHERITED_HISTORY_BYTES + 1_000
 
 
 @pytest.mark.parametrize(
@@ -174,6 +190,43 @@ def test_make_model_settings_omits_timeout_when_unset() -> None:
     assert settings.extra_args is None
 
 
+def test_make_model_settings_adds_stable_prompt_cache_key() -> None:
+    settings = make_model_settings(
+        "medium",
+        model_name="azure_ai/gpt-5.6-terra",
+        request_timeout=300.0,
+        prompt_cache_key="lyrashield:scan-1:coordinator",
+    )
+
+    assert settings.extra_args == {
+        "timeout": 300.0,
+        "prompt_cache_key": "lyrashield:scan-1:coordinator",
+    }
+    assert settings.parallel_tool_calls is None
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "azure_ai/gpt-5.6-luna",
+        "litellm/azure_ai/gpt-5.6-terra",
+        "any-llm/azure_ai/gpt-5.6-terra",
+    ],
+)
+def test_make_model_settings_omits_rejected_azure_gpt56_parallel_tool_setting(
+    model_name: str,
+) -> None:
+    settings = make_model_settings("medium", model_name=model_name)
+
+    assert settings.parallel_tool_calls is None
+
+
+def test_make_model_settings_disables_parallel_tools_for_supported_provider() -> None:
+    settings = make_model_settings("medium", model_name="openai/gpt-5.6-luna")
+
+    assert settings.parallel_tool_calls is False
+
+
 def test_make_model_settings_timeout_survives_reasoning_resolve() -> None:
     # Reasoning is resolved via ModelSettings.resolve(); the timeout in extra_args
     # must not be dropped when a reasoning override is merged in.
@@ -185,3 +238,26 @@ def test_make_model_settings_timeout_survives_reasoning_resolve() -> None:
 
     assert settings.extra_args is not None
     assert settings.extra_args["timeout"] == 120.0
+
+
+def test_make_model_settings_applies_the_output_token_cap() -> None:
+    settings = make_model_settings(
+        "medium",
+        model_name="azure_ai/gpt-5.6-terra",
+        max_output_tokens=2_048,
+    )
+
+    assert settings.max_tokens == 2_048
+
+
+def test_make_model_settings_output_cap_survives_reasoning_resolve() -> None:
+    # ``resolve`` merges a second ModelSettings; the cap must not be dropped by
+    # that merge, or the budget reservation would over-estimate every request.
+    settings = make_model_settings(
+        "high",
+        model_name="azure_ai/gpt-5.6-terra",
+        max_output_tokens=1_024,
+        force_required_tool_choice=True,
+    )
+
+    assert settings.max_tokens == 1_024

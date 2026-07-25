@@ -29,24 +29,24 @@ def _resolve_skills(
     Order:
 
     1. Whatever the caller asked for, in order.
-    2. ``scan_modes/<mode>`` (always).
+    2. For the root only, ``scan_modes/<mode>`` and orchestration guidance.
+       The root owns scan-wide coverage and delegates bounded specialist tasks.
     3. ``tooling/agent_browser`` (always — every agent has shell + the
        agent-browser CLI).
     4. ``tooling/python`` (always — Python runs through ``exec_command``;
        sandbox scripts can import ``caido_api`` for Caido automation).
-    5. ``coordination/root_agent`` for the root agent only — orchestration
-       guidance for delegating to specialist subagents.
-    6. Whitebox-specific skills if applicable.
+    5. For a whitebox root only, compact source-aware coordination guidance.
+       The detailed SAST playbook is loaded only by an explicitly assigned
+       specialist; carrying it in the root's repeated prompt wastes context.
     """
     ordered: list[str] = list(requested or [])
-    ordered.append(f"scan_modes/{scan_mode}")
+    if is_root:
+        ordered.append(f"scan_modes/{scan_mode}")
+        ordered.append("coordination/root_agent")
+        if is_whitebox:
+            ordered.append("coordination/source_aware_whitebox")
     ordered.append("tooling/agent_browser")
     ordered.append("tooling/python")
-    if is_root:
-        ordered.append("coordination/root_agent")
-    if is_whitebox:
-        ordered.append("coordination/source_aware_whitebox")
-        ordered.append("custom/source_aware_sast")
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -91,6 +91,9 @@ def render_system_prompt(
             loaded_skill_names=list(skill_content.keys()),
             available_skills=get_available_skills(),
             interactive=interactive,
+            is_root=is_root,
+            scan_mode=scan_mode,
+            is_whitebox=is_whitebox,
             system_prompt_context=system_prompt_context or {},
             **skill_content,
         )

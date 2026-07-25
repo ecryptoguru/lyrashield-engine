@@ -31,11 +31,18 @@ def request_timeout_extra_args(timeout_s: float | None) -> dict[str, float] | No
 
 
 def is_gpt56_model(model_name: str | None) -> bool:
-    """Return whether a configured deployment is one of LyraShield's GPT-5.6 tiers."""
+    r"""Return whether a configured deployment is one of LyraShield's GPT-5.6 tiers.
+
+    Matches the worker's allowed set: Terra or Luna. The worker regex is
+    ``/(?:^|[/.-])gpt-5\.6-(?:terra|luna)(?:$|[/.-])/`` after lower-casing and
+    converting underscores to dashes. Sol was retired from the supported set, so
+    it is rejected here at startup rather than reaching budget enforcement (which
+    no longer carries a Sol rate) and failing mid-scan.
+    """
     if not model_name:
         return False
     normalized = model_name.strip().lower().replace("_", "-")
-    return re.search(r"(?:^|[/.-])gpt-5\.6(?:$|[/.-])", normalized) is not None
+    return re.search(r"(?:^|[/.-])gpt-5\.6-(?:terra|luna)(?:$|[/.-])", normalized) is not None
 
 
 def _retry_statusless_provider_errors(context: RetryPolicyContext) -> bool:
@@ -52,6 +59,31 @@ class StrixProvider(MultiProvider):
     ``litellm/deepseek/deepseek-chat``.
     """
 
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        llm = settings.llm if settings is not None else None
+        configured_models = (
+            (getattr(llm, "model", None), getattr(llm, "delegate_model", None))
+            if llm is not None
+            else (None, None)
+        )
+        self._azure_responses_enabled = any(
+            _is_azure_model(model_name) and is_gpt56_model(model_name)
+            for model_name in configured_models
+        )
+
+        if self._azure_responses_enabled:
+            if llm is None or not llm.api_base:
+                raise RuntimeError(
+                    "Azure GPT-5.6 requires LLM_API_BASE or an Azure endpoint variable."
+                )
+            super().__init__(
+                openai_api_key=llm.api_key,
+                openai_base_url=_azure_responses_base_url(llm.api_base),
+                openai_use_responses=True,
+            )
+        else:
+            super().__init__()
+
     def _resolve_prefixed_model(
         self,
         *,
@@ -59,6 +91,8 @@ class StrixProvider(MultiProvider):
         prefix: str,
         stripped_model_name: str | None,
     ) -> tuple[ModelProvider, str | None]:
+        if prefix in {"azure", "azure_ai"} and self._azure_responses_enabled:
+            return self.openai_provider, stripped_model_name
         if prefix in {"openai", "litellm", "any-llm"}:
             return super()._resolve_prefixed_model(
                 original_model_name=original_model_name,
@@ -68,6 +102,16 @@ class StrixProvider(MultiProvider):
         if prefix == "ollama" and stripped_model_name:
             return self._get_fallback_provider("litellm"), f"ollama_chat/{stripped_model_name}"
         return self._get_fallback_provider("litellm"), original_model_name
+
+
+def _azure_responses_base_url(api_base: str) -> str:
+    """Normalize an Azure resource or project endpoint for the v1 Responses API."""
+    base = api_base.strip().rstrip("/")
+    if not base:
+        raise RuntimeError("Azure GPT-5.6 requires a non-empty API base URL.")
+    if not base.lower().endswith("/openai/v1"):
+        base = f"{base}/openai/v1"
+    return f"{base}/"
 
 
 DEFAULT_MODEL_RETRY = ModelRetrySettings(
@@ -87,8 +131,7 @@ DEFAULT_MODEL_RETRY = ModelRetrySettings(
 )
 
 RECOMMENDED_MODEL_NAMES = (
-    "openai/gpt-5.6",
-    "openai/gpt-5.6-sol",
+    "openai/gpt-5.6-luna",
     "openai/gpt-5.6-terra",
     "openai/gpt-5.5",
     "openai/gpt-5.5-pro",

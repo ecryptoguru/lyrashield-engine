@@ -9,7 +9,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agents import RunConfig
 from agents.sandbox import SandboxRunConfig
@@ -49,11 +49,31 @@ if TYPE_CHECKING:
     from agents.memory import SQLiteSession
     from agents.result import RunResultBase
 
+    from strix.config.settings import ReasoningEffort
+
 
 logger = logging.getLogger(__name__)
 
 StreamEventSink = Callable[[str, Any], None]
 _MODE_AGENT_LIMITS = {"quick": 2, "standard": 4, "deep": 6}
+_MODE_OUTPUT_TOKEN_LIMITS = {"quick": 4_096, "standard": 8_192, "deep": 16_384}
+_DEFAULT_OUTPUT_TOKENS = 8_192
+# Ceiling applied to delegate agents regardless of the coordinator's budget, so
+# raising the coordinator cap does not silently multiply spend across children.
+DELEGATE_OUTPUT_TOKEN_CEILING = 8_192
+
+
+def resolve_max_output_tokens(scan_mode: str, configured: int | None) -> int:
+    """Resolve the per-request output-token cap for a scan.
+
+    Scan mode selects the default; an explicit ``LYRASHIELD_MAX_OUTPUT_TOKENS``
+    replaces it globally (one operator knob rather than one per mode). The value
+    also tightens the pre-request budget reservation, which reads it back off
+    ``ModelSettings.max_tokens``.
+    """
+    if configured is not None:
+        return configured
+    return _MODE_OUTPUT_TOKEN_LIMITS.get(scan_mode, _DEFAULT_OUTPUT_TOKENS)
 
 
 def _engine_version() -> str:
@@ -180,7 +200,21 @@ async def run_strix_scan(
             "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
         )
     logger.info("LLM model resolved: %s", resolved_model)
+    delegate_model = str(getattr(settings.llm, "delegate_model", None) or resolved_model).strip()
+    delegate_reasoning_effort: ReasoningEffort = getattr(
+        settings.llm,
+        "delegate_reasoning_effort",
+        settings.llm.reasoning_effort,
+    )
+    logger.info(
+        "LLM routing resolved: coordinator=%s/%s delegate=%s/%s",
+        resolved_model,
+        settings.llm.reasoning_effort,
+        delegate_model,
+        delegate_reasoning_effort,
+    )
     chat_completions_tools = uses_chat_completions_tool_schema(resolved_model, settings)
+    delegate_chat_completions_tools = uses_chat_completions_tool_schema(delegate_model, settings)
 
     scan_mode = str(scan_config.get("scan_mode") or "deep")
     coordinator = _coordinator_for_scan_mode(coordinator, scan_mode)
@@ -232,13 +266,13 @@ async def run_strix_scan(
     sessions_to_close: list[SQLiteSession] = []
 
     try:
-        targets = scan_config.get("targets") or []
+        targets: list[Any] = list(scan_config.get("targets") or [])
         is_whitebox = any(t.get("type") == "local_code" for t in targets)
         skills = list(scan_config.get("skills") or [])
         root_task = build_root_task(scan_config)
-        max_output_tokens = {"quick": 4_096, "standard": 8_192, "deep": 16_384}.get(
+        max_output_tokens = resolve_max_output_tokens(
             scan_mode,
-            8_192,
+            settings.llm.max_output_tokens,
         )
         model_settings = make_model_settings(
             settings.llm.reasoning_effort,
@@ -246,10 +280,20 @@ async def run_strix_scan(
             force_required_tool_choice=settings.llm.force_required_tool_choice,
             request_timeout=settings.llm.timeout,
             max_output_tokens=max_output_tokens,
+            prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
+        )
+        delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
+        delegate_model_settings = make_model_settings(
+            delegate_reasoning_effort,
+            model_name=delegate_model,
+            force_required_tool_choice=settings.llm.force_required_tool_choice,
+            request_timeout=settings.llm.timeout,
+            max_output_tokens=delegate_max_output_tokens,
+            prompt_cache_key=f"lyrashield:{scan_id}:delegates",
         )
         run_config = RunConfig(
             model=resolved_model,
-            model_provider=StrixProvider(),
+            model_provider=StrixProvider(settings=settings),
             model_settings=model_settings,
             sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
             trace_include_sensitive_data=False,
@@ -258,6 +302,7 @@ async def run_strix_scan(
             model=resolved_model,
             max_budget_usd=max_budget_usd,
             max_output_tokens=max_output_tokens,
+            max_input_tokens=settings.llm.max_input_tokens,
         )
 
         scope_context = build_scope_context(scan_config)
@@ -280,7 +325,15 @@ async def run_strix_scan(
                     ).hexdigest(),
                     "model": resolved_model,
                     "reasoning_effort": settings.llm.reasoning_effort,
+                    "delegate_model": delegate_model,
+                    "delegate_reasoning_effort": delegate_reasoning_effort,
+                    "model_routing_policy": "coordinator-bounded-delegates-medium-v2",
                     "max_output_tokens": max_output_tokens,
+                    # Record the thresholds actually in force (post-clamp) so
+                    # "was a cap applied to this scan?" is answerable from the run
+                    # record rather than by inspecting deployment env.
+                    "compaction_trigger_tokens": hooks.compaction_trigger_tokens,
+                    "compaction_target_tokens": hooks.compaction_target_tokens,
                     "max_agents": coordinator.max_agents,
                 }
             )
@@ -296,6 +349,8 @@ async def run_strix_scan(
             chat_completions_tools=chat_completions_tools,
             system_prompt_context=root_context,
             instructions_override=root_instructions,
+            model=resolved_model,
+            model_settings=model_settings,
         )
 
         if not is_resume:
@@ -311,8 +366,10 @@ async def run_strix_scan(
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
             interactive=interactive,
-            chat_completions_tools=chat_completions_tools,
+            chat_completions_tools=delegate_chat_completions_tools,
             system_prompt_context=scope_context,
+            model=delegate_model,
+            model_settings=delegate_model_settings,
         )
 
         async def spawn_child_agent(**kwargs: Any) -> dict[str, Any]:
@@ -382,8 +439,7 @@ async def run_strix_scan(
                 len(resume_instruction),
             )
 
-        async with coordinator._lock:
-            root_status = coordinator.statuses.get(root_id)
+        root_status = await coordinator.get_status(root_id)
 
         result = await run_agent_loop(
             agent=root_agent,
@@ -405,30 +461,33 @@ async def run_strix_scan(
             if isinstance(final, str):
                 try:
                     parsed = json.loads(final)
-                    scan_completed = bool(isinstance(parsed, dict) and parsed.get("scan_completed"))
                 except (ValueError, TypeError):
                     scan_completed = False
+                else:
+                    scan_completed = isinstance(parsed, dict) and bool(
+                        cast("dict[str, Any]", parsed).get("scan_completed")
+                    )
             elif isinstance(final, dict):
-                scan_completed = bool(final.get("scan_completed"))
+                scan_completed = bool(cast("dict[str, Any]", final).get("scan_completed"))
             if not scan_completed:
                 report_state = get_global_report_state()
                 if report_state is not None:
                     report_state.set_terminal_reason("incomplete")
+                final_type = type(cast("object", final)).__name__
                 logger.error(
                     "Scan %s ended without calling finish_scan. The agent "
                     "emitted a text-only turn instead of a lifecycle tool call, "
-                    "so no executive report was written. Final output (first "
-                    "300 chars): %r",
+                    "so no executive report was written. Final output was "
+                    "omitted from logs (type=%s).",
                     scan_id,
-                    str(final)[:300],
+                    final_type,
                 )
         return result  # noqa: TRY300
     except BudgetExceededError as exc:
         logger.info("Scan %s stopped: %s", scan_id, exc)
-        if root_id is not None:
-            await coordinator.cancel_descendants(root_id)
-            with contextlib.suppress(Exception):
-                await coordinator.set_status(root_id, "stopped")
+        await coordinator.cancel_descendants(root_id)
+        with contextlib.suppress(Exception):
+            await coordinator.set_status(root_id, "stopped")
         report_state = get_global_report_state()
         if report_state is not None:
             report_state.set_terminal_reason("budget_exceeded")
@@ -441,27 +500,25 @@ async def run_strix_scan(
             exc,
             scan_id,
         )
-        if root_id is not None:
-            await coordinator.cancel_descendants(root_id)
-            with contextlib.suppress(Exception):
-                await coordinator.set_status(root_id, "stopped")
+        await coordinator.cancel_descendants(root_id)
+        with contextlib.suppress(Exception):
+            await coordinator.set_status(root_id, "stopped")
         report_state = get_global_report_state()
         if report_state is not None:
             report_state.set_terminal_reason("rate_limited")
         return None
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)
-        if root_id is not None:
-            await coordinator.cancel_descendants(root_id)
-            with contextlib.suppress(Exception):
-                await coordinator.set_status(root_id, "failed")
+        await coordinator.cancel_descendants(root_id)
+        with contextlib.suppress(Exception):
+            await coordinator.set_status(root_id, "failed")
         raise
     finally:
         for s in sessions_to_close:
             with contextlib.suppress(Exception):
                 s.close()
         with contextlib.suppress(Exception):
-            await coordinator._maybe_snapshot()
+            await coordinator.maybe_snapshot()
         if cleanup_on_exit:
             logger.info("Tearing down sandbox session for scan %s", scan_id)
             await session_manager.cleanup(scan_id)

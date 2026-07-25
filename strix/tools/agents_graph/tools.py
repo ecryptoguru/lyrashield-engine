@@ -366,7 +366,7 @@ async def create_agent(
     ctx: RunContextWrapper,
     name: str,
     task: str,
-    inherit_context: bool = True,
+    inherit_context: bool = False,
     skills: list[str] | None = None,
 ) -> str:
     """Spawn a specialist child agent to run in parallel.
@@ -403,9 +403,9 @@ async def create_agent(
             ``send_message_to_agent`` flows).
         task: Specific objective. Be concrete — what to test, what
             success looks like, any constraints.
-        inherit_context: Default ``True``. The child receives the
-            parent's input history as background; only set ``False``
-            when starting a clean-slate task.
+        inherit_context: Default ``False``. The focused task and system-owned
+            scope are sufficient for most specialists. Set ``True`` only when
+            prior conversation evidence is essential to the child.
         skills: List of skill names (e.g. ``["xss", "sql_injection"]``).
             Max 5; prefer 1-3.
     """

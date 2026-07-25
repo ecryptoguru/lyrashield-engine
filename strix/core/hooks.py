@@ -22,8 +22,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MODEL_INPUT_COMPACTION_TRIGGER_TOKENS = 240_000
-MODEL_INPUT_COMPACTION_TARGET_TOKENS = 180_000
+# Keep the root session comfortably below a request that could consume most of
+# a small protected scan budget. Older evidence remains available in sandbox
+# artifacts and can be re-read on demand.
+MODEL_INPUT_COMPACTION_TRIGGER_TOKENS = 96_000
+MODEL_INPUT_COMPACTION_TARGET_TOKENS = 64_000
 _COMPACTION_NOTICE = {
     "role": "user",
     "content": (
@@ -35,10 +38,60 @@ _COMPACTION_NOTICE = {
 _COMPACTED_ITEM_MAX_BYTES = 64_000
 _GPT56_LONG_CONTEXT_TOKENS = 272_000
 _GPT56_RATES = {
-    "sol": (6.25, 30.0),
-    "terra": (3.125, 15.0),
-    "luna": (1.25, 6.0),
+    "terra": (2.5, 15.0),
+    "luna": (1.0, 6.0),
 }
+
+_GPT56_CACHED_RATES = {
+    "terra": 0.25,
+    "luna": 0.1,
+}
+
+# Headroom kept between a compaction trigger and the long-context boundary, so a
+# request that trips the trigger still has room for its output allowance without
+# crossing into 2x input billing.
+_LONG_CONTEXT_SAFETY_MARGIN_TOKENS = 32_000
+# Ratio between the compaction target and its trigger, preserved from the
+# defaults above (64k / 96k) so a custom ceiling compacts equally aggressively.
+_COMPACTION_TARGET_RATIO = (
+    MODEL_INPUT_COMPACTION_TARGET_TOKENS / MODEL_INPUT_COMPACTION_TRIGGER_TOKENS
+)
+# A compacted request always retains the first item plus the notice; below this
+# a "ceiling" cannot be honored at all, so refuse to shrink past it.
+_MIN_COMPACTION_TARGET_TOKENS = 4_000
+
+
+def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, int]:
+    """Resolve the (trigger, target) token thresholds for input compaction.
+
+    ``max_input_tokens`` is a ceiling that compaction keeps requests under, not a
+    hard reject. Unset preserves the module defaults exactly.
+
+    The effective trigger is clamped strictly below the GPT-5.6 long-context
+    boundary: compaction exists to keep requests out of 2x input billing, so a
+    ceiling above that boundary would defeat the very cost protection this knob is
+    meant to provide. Clamping is logged rather than applied silently.
+    """
+    if max_input_tokens is None:
+        return MODEL_INPUT_COMPACTION_TRIGGER_TOKENS, MODEL_INPUT_COMPACTION_TARGET_TOKENS
+
+    ceiling = _GPT56_LONG_CONTEXT_TOKENS - _LONG_CONTEXT_SAFETY_MARGIN_TOKENS
+    trigger = max_input_tokens
+    if trigger > ceiling:
+        logger.warning(
+            "LYRASHIELD_MAX_INPUT_TOKENS=%s exceeds the safe long-context ceiling; "
+            "clamping to %s to keep requests below the %s-token 2x billing boundary",
+            max_input_tokens,
+            ceiling,
+            _GPT56_LONG_CONTEXT_TOKENS,
+        )
+        trigger = ceiling
+
+    target = max(int(trigger * _COMPACTION_TARGET_RATIO), _MIN_COMPACTION_TARGET_TOKENS)
+    # A pathologically low ceiling must still leave the target below the trigger,
+    # otherwise compaction could never report progress.
+    target = min(target, trigger)
+    return trigger, target
 
 
 def _model_rates(model: str) -> tuple[float, float]:
@@ -49,16 +102,47 @@ def _model_rates(model: str) -> tuple[float, float]:
     raise RuntimeError("Unsupported model for LyraShield budget enforcement")
 
 
+def _cached_input_rate(model: str) -> float:
+    normalized = model.lower()
+    for tier, rate in _GPT56_CACHED_RATES.items():
+        if tier in normalized:
+            return rate
+    raise RuntimeError("Unsupported model for LyraShield budget enforcement")
+
+
+def _usage_value(entry: Any, field: str) -> Any:
+    """Read a usage counter from either a dict or an object."""
+    if isinstance(entry, dict):
+        return entry.get(field)
+    return getattr(entry, field, None)
+
+
+def _cached_tokens_from_entry(entry: Any) -> int:
+    details = getattr(entry, "input_tokens_details", None)
+    if details is None and isinstance(entry, dict):
+        details = entry.get("input_tokens_details")
+    if not details:
+        return 0
+    if isinstance(details, dict):
+        return max(0, int(details.get("cached_tokens", 0) or 0))
+    cached = getattr(details, "cached_tokens", None)
+    return max(0, int(cached or 0))
+
+
 def _usage_cost_upper_bound(model: str, usage: Any) -> float:
     input_rate, output_rate = _model_rates(model)
+    cached_rate = _cached_input_rate(model)
     entries = list(getattr(usage, "request_usage_entries", None) or [usage])
     total = 0.0
     for entry in entries:
-        input_tokens = max(0, int(getattr(entry, "input_tokens", 0) or 0))
-        output_tokens = max(0, int(getattr(entry, "output_tokens", 0) or 0))
+        input_tokens = max(0, int(_usage_value(entry, "input_tokens") or 0))
+        cached_tokens = min(_cached_tokens_from_entry(entry), input_tokens)
+        uncached_tokens = input_tokens - cached_tokens
+        output_tokens = max(0, int(_usage_value(entry, "output_tokens") or 0))
         multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_TOKENS else 1.0
         total += (
-            input_tokens * input_rate * multiplier
+            uncached_tokens * input_rate * multiplier
+            + cached_tokens * cached_rate * multiplier
             + output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
         ) / 1_000_000
     return total
@@ -117,7 +201,7 @@ def _estimate_input_tokens(
     input_items: list[Any],
     agent: Any,
 ) -> int:
-    """Conservative local estimate; leaves 32k tokens below the 272k price boundary."""
+    """Conservative local estimate for bounded context and reservations."""
     import litellm  # noqa: PLC0415
 
     payload = json.dumps(
@@ -145,16 +229,18 @@ def _compact_input_items(
     system_prompt: str | None,
     input_items: list[Any],
     agent: Any,
+    thresholds: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
+    trigger, target = thresholds or (
+        MODEL_INPUT_COMPACTION_TRIGGER_TOKENS,
+        MODEL_INPUT_COMPACTION_TARGET_TOKENS,
+    )
     before = _estimate_input_tokens(model, system_prompt, input_items, agent)
-    if before < MODEL_INPUT_COMPACTION_TRIGGER_TOKENS or not input_items:
+    if before < trigger or not input_items:
         return before, before
 
     first = input_items[0]
-    if (
-        _estimate_input_tokens(model, system_prompt, [first, _COMPACTION_NOTICE], agent)
-        > MODEL_INPUT_COMPACTION_TARGET_TOKENS
-    ):
+    if _estimate_input_tokens(model, system_prompt, [first, _COMPACTION_NOTICE], agent) > target:
         first = _compact_item(first)
 
     groups = _history_groups(input_items[1:])
@@ -168,10 +254,7 @@ def _compact_input_items(
     while low < high:
         middle = (low + high) // 2
         candidate = [first, _COMPACTION_NOTICE, *suffix(middle)]
-        if (
-            _estimate_input_tokens(model, system_prompt, candidate, agent)
-            <= MODEL_INPUT_COMPACTION_TARGET_TOKENS
-        ):
+        if _estimate_input_tokens(model, system_prompt, candidate, agent) <= target:
             high = middle
         else:
             low = middle + 1
@@ -186,7 +269,7 @@ def _compact_input_items(
                 [first, _COMPACTION_NOTICE, compacted_group],
                 agent,
             )
-            <= MODEL_INPUT_COMPACTION_TARGET_TOKENS
+            <= target
         ):
             recent = [compacted_group]
 
@@ -207,6 +290,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         model: str,
         max_budget_usd: float | None = None,
         max_output_tokens: int = 8_192,
+        max_input_tokens: int | None = None,
     ) -> None:
         if max_budget_usd is not None and (
             not math.isfinite(max_budget_usd) or max_budget_usd <= 0
@@ -215,9 +299,23 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._model = model
         self._max_budget_usd = max_budget_usd
         self._max_output_tokens = max_output_tokens
+        # Resolved once here (including the long-context clamp and its warning)
+        # rather than per request, and passed into compaction as a plain tuple so
+        # the compaction helper stays free of settings/env coupling.
+        self._compaction_thresholds = resolve_compaction_thresholds(max_input_tokens)
         self._reservation_lock = asyncio.Lock()
         self._reservations: dict[str, float] = {}
         self._committed_cost_floor = 0.0
+
+    @property
+    def compaction_trigger_tokens(self) -> int:
+        """Input-token threshold above which history is compacted (post-clamp)."""
+        return self._compaction_thresholds[0]
+
+    @property
+    def compaction_target_tokens(self) -> int:
+        """Input-token size compaction aims for once triggered (post-clamp)."""
+        return self._compaction_thresholds[1]
 
     @staticmethod
     def _agent_id(context: RunContextWrapper[dict[str, Any]], agent: Agent[dict[str, Any]]) -> str:
@@ -228,6 +326,17 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         name = getattr(agent, "name", None)
         return name if isinstance(name, str) and name else "unknown"
 
+    def _agent_model(self, agent: Agent[dict[str, Any]]) -> str:
+        model = getattr(agent, "model", None)
+        return model if isinstance(model, str) and model.strip() else self._model
+
+    def _agent_max_output_tokens(self, agent: Agent[dict[str, Any]]) -> int:
+        model_settings = getattr(agent, "model_settings", None)
+        max_tokens = getattr(model_settings, "max_tokens", None)
+        if isinstance(max_tokens, int) and max_tokens > 0:
+            return max_tokens
+        return self._max_output_tokens
+
     async def on_llm_start(
         self,
         _context: RunContextWrapper[dict[str, Any]],
@@ -235,7 +344,14 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         system_prompt: str | None,
         input_items: list[Any],
     ) -> None:
-        before, after = _compact_input_items(self._model, system_prompt, input_items, agent)
+        model = self._agent_model(agent)
+        before, after = _compact_input_items(
+            model,
+            system_prompt,
+            input_items,
+            agent,
+            self._compaction_thresholds,
+        )
         if after < before:
             logger.info(
                 "Compacted model input before request: tokens=%s -> %s, items=%s",
@@ -244,11 +360,13 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 len(input_items),
             )
         if self._max_budget_usd is not None:
-            input_rate, output_rate = _model_rates(self._model)
+            input_rate, output_rate = _model_rates(model)
             multiplier = 2.0 if after > _GPT56_LONG_CONTEXT_TOKENS else 1.0
             reservation = (
                 after * input_rate * multiplier
-                + self._max_output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
+                + self._agent_max_output_tokens(agent)
+                * output_rate
+                * (1.5 if multiplier > 1 else 1.0)
             ) / 1_000_000
             agent_id = self._agent_id(_context, agent)
             async with self._reservation_lock:
@@ -276,13 +394,14 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         if not isinstance(agent_name, str):
             agent_name = None
         agent_id = self._agent_id(context, agent)
+        model = self._agent_model(agent)
 
         if report_state is not None:
             try:
                 report_state.record_sdk_usage(
                     agent_id=agent_id,
                     agent_name=agent_name,
-                    model=self._model,
+                    model=model,
                     usage=response.usage,
                 )
             except Exception:
@@ -291,7 +410,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         async with self._reservation_lock:
             self._reservations.pop(agent_id, None)
             if response.usage is not None:
-                self._committed_cost_floor += _usage_cost_upper_bound(self._model, response.usage)
+                self._committed_cost_floor += _usage_cost_upper_bound(model, response.usage)
 
         if self._max_budget_usd is not None:
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0

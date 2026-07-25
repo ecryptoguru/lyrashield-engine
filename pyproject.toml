@@ -110,6 +110,7 @@ module = [
     "rich.*",
     "jinja2.*",
     "textual.*",
+    "pygments.*",
     "cvss.*",
     "docker.*",
     "caido_sdk_client.*",

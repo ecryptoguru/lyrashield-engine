@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import os
+import shutil
 import sys
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -56,12 +56,36 @@ def test_directory_size_skips_symlinks(tmp_path: Path) -> None:
     assert directory_size_bytes(tmp_path) == 100
 
 
+def _permissions_are_enforced(tmp_path: Path) -> bool:
+    """Whether an unreadable directory is really unreadable for this process.
+
+    Checking ``geteuid() == 0`` is not sufficient: containers commonly grant
+    CAP_DAC_OVERRIDE to a non-root user, which bypasses mode bits exactly like
+    root does. Probing the actual behavior is the only reliable signal, and
+    without it this test fails for an environmental reason rather than a real
+    regression.
+    """
+    probe = tmp_path / "_perm_probe"
+    probe.mkdir()
+    (probe / "inner.bin").write_bytes(b"x")
+    probe.chmod(0o000)
+    try:
+        next(probe.iterdir(), None)
+    except PermissionError:
+        return True
+    else:
+        return False
+    finally:
+        probe.chmod(0o755)
+        shutil.rmtree(probe, ignore_errors=True)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="relies on POSIX permissions")
 def test_directory_size_logs_and_skips_unreadable_subdir(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        pytest.skip("root bypasses directory permissions")
+    if not _permissions_are_enforced(tmp_path):
+        pytest.skip("process bypasses directory permissions (root or CAP_DAC_OVERRIDE)")
     _write_file(tmp_path / "top.txt", 100)
     locked = tmp_path / "locked"
     locked.mkdir()
