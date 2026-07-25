@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
@@ -158,6 +160,163 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
             cleaned[field] = value
 
     return cleaned
+
+
+# Upper bound on the serialized existing-report payload sent to the dedupe
+# model. Per-report fields are already truncated at 8k chars, but the report
+# COUNT is unbounded — every new finding compares against all prior ones, so a
+# long scan's dedupe calls would otherwise grow without limit (and each token is
+# metered). ~200k chars keeps the request well under the long-context pricing
+# boundary while fitting hundreds of typical reports.
+_MAX_EXISTING_REPORTS_CHARS = 200_000
+
+_TRUNCATION_MARKER = "...[truncated]"
+
+# Per-item cost of the enclosing JSON list: the separator plus the indentation
+# the encoder adds to each nested line. Small and deliberately generous — the
+# budget must never be under-counted.
+_PER_ITEM_ENCODING_OVERHEAD = 8
+
+# Output allowance reserved for a dedupe reply. The response is a small fixed
+# JSON object, so this is deliberately generous rather than tuned.
+_DEDUPE_MAX_OUTPUT_TOKENS = 512
+
+# Conservative chars-per-token ratio for sizing the reservation. Under-counting
+# would let the reservation understate real spend, so round pessimistically.
+_CHARS_PER_TOKEN = 3.5
+
+
+def _estimate_reservation_tokens(*parts: str) -> int:
+    """Rough upper-bound token count for the reservation.
+
+    The exact count is only known after the provider responds; the reservation
+    just needs to be a safe over-estimate that is released immediately after.
+    """
+    return max(1, math.ceil(sum(len(part) for part in parts) / _CHARS_PER_TOKEN))
+
+
+async def _request_dedupe_judgement(
+    *,
+    model: Any,
+    model_name: str,
+    model_settings: ModelSettings,
+    user_msg: str,
+) -> ModelResponse:
+    """Run the dedupe model call under a scan-budget reservation.
+
+    This call is metered but does not flow through the agent run hooks, so it
+    reserves explicitly. Without a reservation, dedupe traffic is only counted
+    after the fact and a scan can overshoot ``max_budget_usd``.
+    """
+    # Lazy import: strix.core.hooks imports strix.report.state, so a
+    # module-level import here would close a cycle.
+    from strix.core.hooks import get_active_hooks
+
+    hooks = get_active_hooks()
+    reservation_key = f"dedupe:{uuid4().hex}"
+    if hooks is not None:
+        await hooks.reserve_out_of_band_request(
+            key=reservation_key,
+            model=model_name,
+            input_tokens=_estimate_reservation_tokens(DEDUPE_SYSTEM_PROMPT, user_msg),
+            max_output_tokens=_DEDUPE_MAX_OUTPUT_TOKENS,
+        )
+    response: ModelResponse | None = None
+    try:
+        response = await model.get_response(
+            system_instructions=DEDUPE_SYSTEM_PROMPT,
+            input=user_msg,
+            model_settings=model_settings,
+            tools=[],
+            output_schema=None,
+            handoffs=[],
+            tracing=ModelTracing.DISABLED,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
+        )
+    finally:
+        # Always release: a failed request must not strand its reservation and
+        # shrink the remaining budget for the rest of the scan.
+        if hooks is not None:
+            await hooks.release_out_of_band_request(
+                key=reservation_key,
+                model=model_name,
+                usage=response.usage if response is not None else None,
+            )
+    return response
+
+
+def _truncate_report_to_budget(report: dict[str, Any], budget: int) -> dict[str, Any] | None:
+    """Shrink one report's longest text fields until it encodes within ``budget``.
+
+    Applies to a single report large enough to blow the whole budget on its own.
+    Identity fields (``id``, ``target``, ``endpoint``, ``method``) are never
+    truncated — they are what the model compares on — so a report is dropped
+    outright if even those exceed the budget.
+    """
+    identity_fields = {"id", "target", "endpoint", "method"}
+    trimmed = dict(report)
+    while _encoded_size(trimmed) > budget:
+        longest = max(
+            (f for f in trimmed if f not in identity_fields and isinstance(trimmed[f], str)),
+            key=lambda f: len(trimmed[f]),
+            default=None,
+        )
+        if longest is None:
+            return None
+        excess = _encoded_size(trimmed) - budget
+        keep = len(trimmed[longest]) - excess - len(_TRUNCATION_MARKER)
+        if keep <= 0:
+            del trimmed[longest]
+        else:
+            trimmed[longest] = trimmed[longest][:keep] + _TRUNCATION_MARKER
+    return trimmed
+
+
+def _encoded_size(report: dict[str, Any]) -> int:
+    """Encoded length of one report as it appears in the transmitted payload.
+
+    Matches ``json.dumps(..., indent=2)`` at the call site: indentation and the
+    enclosing list's separators are what actually reach the model, so a compact
+    estimate would under-count and let the payload exceed the cap.
+    """
+    return len(json.dumps(report, indent=2)) + _PER_ITEM_ENCODING_OVERHEAD
+
+
+def _bound_existing_reports(cleaned: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the most recent cleaned reports within the payload budget.
+
+    Newest-first retention: a fresh candidate most often duplicates a recent
+    finding from the same testing phase, and deterministic identity checks have
+    already run against the full report list before the LLM is consulted.
+
+    The budget is a hard limit on the encoded payload. A newest report that
+    exceeds it alone is truncated rather than passed through, so a single
+    oversized finding cannot defeat the cost guard.
+    """
+    total = 0
+    kept_reversed: list[dict[str, Any]] = []
+    for report in reversed(cleaned):
+        size = _encoded_size(report)
+        if total + size > _MAX_EXISTING_REPORTS_CHARS:
+            if kept_reversed:
+                break
+            truncated = _truncate_report_to_budget(report, _MAX_EXISTING_REPORTS_CHARS)
+            if truncated is None:
+                break
+            kept_reversed.append(truncated)
+            logger.info("Dedupe comparison payload bounded: truncated an oversized report")
+            break
+        total += size
+        kept_reversed.append(report)
+    if len(kept_reversed) < len(cleaned):
+        logger.info(
+            "Dedupe comparison payload bounded: keeping %d of %d existing reports",
+            len(kept_reversed),
+            len(cleaned),
+        )
+    return list(reversed(kept_reversed))
 
 
 def _dependency_identity(report: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -381,7 +540,9 @@ async def check_duplicate(
             }
 
         candidate_cleaned = _prepare_report_for_comparison(candidate)
-        existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]
+        existing_cleaned = _bound_existing_reports(
+            [_prepare_report_for_comparison(r) for r in existing_reports]
+        )
         comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
 
         user_msg = (
@@ -392,18 +553,12 @@ async def check_duplicate(
 
         configure_sdk_model_defaults(settings)
         resolved_model = model_name.strip()
-        model = StrixProvider().get_model(resolved_model)
-        response = await model.get_response(
-            system_instructions=DEDUPE_SYSTEM_PROMPT,
-            input=user_msg,
-            model_settings=_dedupe_model_settings(dedupe, resolved_model, settings.llm.timeout),
-            tools=[],
-            output_schema=None,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=None,
-            prompt=None,
+        dedupe_settings = _dedupe_model_settings(dedupe, resolved_model, settings.llm.timeout)
+        response = await _request_dedupe_judgement(
+            model=StrixProvider().get_model(resolved_model),
+            model_name=resolved_model,
+            model_settings=dedupe_settings,
+            user_msg=user_msg,
         )
         report_state = get_global_report_state()
         if report_state is not None:

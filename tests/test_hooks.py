@@ -339,3 +339,73 @@ def test_applied_thresholds_are_exposed_for_the_run_record() -> None:
     # Post-clamp values, so the run record reflects what was actually enforced.
     clamped_hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna", max_input_tokens=999_999)
     assert clamped_hooks.compaction_trigger_tokens < _GPT56_LONG_CONTEXT_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_out_of_band_reservation_blocks_a_request_over_budget() -> None:
+    """Dedupe calls must be refused when they would breach the scan budget."""
+    hooks = _make_hooks(0.01)
+    with (
+        patch("strix.core.hooks.get_global_report_state", return_value=_make_report_state(0.0)),
+        pytest.raises(BudgetExceededError),
+    ):
+        await hooks.reserve_out_of_band_request(
+            key="dedupe:1",
+            model="gpt-5.6-luna",
+            input_tokens=10_000_000,
+            max_output_tokens=512,
+        )
+
+
+@pytest.mark.asyncio
+async def test_out_of_band_reservation_counts_against_concurrent_requests() -> None:
+    """A held reservation must shrink the headroom seen by the next request."""
+    hooks = _make_hooks(0.05)
+    with patch("strix.core.hooks.get_global_report_state", return_value=_make_report_state(0.0)):
+        # ~0.04 of the 0.05 budget.
+        await hooks.reserve_out_of_band_request(
+            key="dedupe:a",
+            model="gpt-5.6-luna",
+            input_tokens=40_000,
+            max_output_tokens=0,
+        )
+        with pytest.raises(BudgetExceededError):
+            await hooks.reserve_out_of_band_request(
+                key="dedupe:b",
+                model="gpt-5.6-luna",
+                input_tokens=40_000,
+                max_output_tokens=0,
+            )
+
+
+@pytest.mark.asyncio
+async def test_releasing_an_out_of_band_reservation_frees_headroom() -> None:
+    """A failed or finished call must not strand its reservation for the whole scan."""
+    hooks = _make_hooks(0.05)
+    with patch("strix.core.hooks.get_global_report_state", return_value=_make_report_state(0.0)):
+        await hooks.reserve_out_of_band_request(
+            key="dedupe:a",
+            model="gpt-5.6-luna",
+            input_tokens=40_000,
+            max_output_tokens=0,
+        )
+        # usage=None mirrors a request that raised before returning a response.
+        await hooks.release_out_of_band_request(key="dedupe:a", model="gpt-5.6-luna", usage=None)
+        await hooks.reserve_out_of_band_request(
+            key="dedupe:b",
+            model="gpt-5.6-luna",
+            input_tokens=40_000,
+            max_output_tokens=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_out_of_band_reservation_is_a_noop_without_a_budget() -> None:
+    hooks = _make_hooks(None)
+    await hooks.reserve_out_of_band_request(
+        key="dedupe:1",
+        model="gpt-5.6-luna",
+        input_tokens=10_000_000,
+        max_output_tokens=512,
+    )
+    await hooks.release_out_of_band_request(key="dedupe:1", model="gpt-5.6-luna", usage=None)

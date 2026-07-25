@@ -6,6 +6,7 @@ Strix Agent Interface
 
 import argparse
 import asyncio
+import os
 import re
 import shutil
 import sys
@@ -33,13 +34,10 @@ from strix.config.models import (
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
 )
+from strix.config.settings import PRODUCT_BOUNDARY_ENV_VAR, Settings
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
-from strix.interface.update_check import (
-    notify_update,
-    self_update,
-)
 from strix.interface.utils import (
     assign_workspace_subdirs,
     build_final_stats_text,
@@ -84,6 +82,29 @@ import logging  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
+def _reject_resolved_subscription_models(settings: Settings, console: Console) -> None:
+    """Reject subscription-backed models that reached settings via `--config`.
+
+    The product entry point (`lyrashield_adapter.cli`) rejects `chatgpt/` models
+    at the environment level, but `--config` is applied afterwards. A
+    subscription route bypasses the Terra/Luna gate and zeroes the metered cost
+    ledger, so the worker would bill nothing for a real scan.
+    """
+    configured = {
+        "STRIX_LLM": settings.llm.model,
+        "STRIX_DELEGATE_LLM": settings.llm.delegate_model,
+        "STRIX_DEDUPE_MODEL": settings.dedupe.model,
+    }
+    for name, value in configured.items():
+        if codex.subscription_model(value):
+            console.print(
+                f"[bold red]{name}={value} routes through a ChatGPT subscription, "
+                "which is not supported for LyraShield scans.[/] Configure a GPT-5.6 "
+                "Terra or Luna API deployment instead."
+            )
+            sys.exit(1)
+
+
 def validate_environment() -> None:
     logger.info("Validating environment")
     console = Console()
@@ -91,6 +112,14 @@ def validate_environment() -> None:
     missing_optional_vars: list[str] = []
 
     settings = load_settings()
+
+    # `--config` is applied after the product entry point's env-level gate, so a
+    # config file could still name a subscription-backed model. Re-check the
+    # resolved settings here, where every source (env, JSON, --config) has been
+    # merged. Only enforced behind the product boundary; the bare `strix` dev CLI
+    # keeps upstream subscription support.
+    if os.environ.get(PRODUCT_BOUNDARY_ENV_VAR):
+        _reject_resolved_subscription_models(settings, console)
 
     if codex.subscription_model(settings.llm.model):
         if not codex.is_authenticated():
@@ -545,9 +574,9 @@ Examples:
     parser.add_argument(
         "--update",
         action="store_true",
-        help="Update strix to the latest version and exit. Self-updates the "
-        "standalone binary install; for pip/pipx/uv installs, prints the "
-        "matching upgrade command instead.",
+        help="Disabled in LyraShield Engine: self-update would replace this "
+        "controlled derivative with the upstream distribution. Upgrade via a "
+        "reviewed LyraShield Engine release instead.",
     )
 
     parser.add_argument(
@@ -675,7 +704,15 @@ Examples:
     args = parser.parse_args()
 
     if args.update:
-        sys.exit(0 if self_update() else 1)
+        # Upstream self-update fetches usestrix/strix release artifacts (or the
+        # strix-agent package), which would replace this controlled derivative
+        # with the upstream distribution. Upgrades ship as reviewed LyraShield
+        # Engine releases instead.
+        Console().print(
+            "[bold red]Self-update is disabled in LyraShield Engine.[/] "
+            "Upgrade by installing a reviewed LyraShield Engine release."
+        )
+        sys.exit(1)
 
     if args.instruction and args.instruction_file:
         parser.error(
@@ -910,8 +947,8 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
         "[#60a5fa]discord.gg/strix-ai[/]"
     )
     console.print()
-    if not args.non_interactive:
-        notify_update(console)
+    # Upstream shows an update notice here; LyraShield Engine ships as reviewed
+    # releases, so the upstream version check would suggest the wrong package.
 
 
 def pull_docker_image() -> None:

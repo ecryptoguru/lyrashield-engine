@@ -281,6 +281,23 @@ class BudgetExceededError(RuntimeError):
     """Raised when the accumulated LLM cost reaches the configured budget."""
 
 
+_active_hooks: ReportUsageHooks | None = None
+
+
+def set_active_hooks(hooks: ReportUsageHooks | None) -> None:
+    """Register the hooks driving the current scan.
+
+    Lets metered call sites outside the agent run loop (deduplication) reserve
+    against the same budget. Mirrors the existing global report-state pattern.
+    """
+    global _active_hooks  # noqa: PLW0603
+    _active_hooks = hooks
+
+
+def get_active_hooks() -> ReportUsageHooks | None:
+    return _active_hooks
+
+
 class ReportUsageHooks(RunHooks[dict[str, Any]]):
     """Persist SDK-native usage after every model response."""
 
@@ -306,6 +323,51 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._reservation_lock = asyncio.Lock()
         self._reservations: dict[str, float] = {}
         self._committed_cost_floor = 0.0
+
+    async def reserve_out_of_band_request(
+        self,
+        *,
+        key: str,
+        model: str,
+        input_tokens: int,
+        max_output_tokens: int,
+    ) -> None:
+        """Reserve budget for a metered call that does not flow through these hooks.
+
+        Deduplication queries the model directly rather than through an agent
+        run, so `on_llm_start` never sees them. Without this they were only
+        recorded after the fact, letting a scan overshoot `max_budget_usd` by
+        the cost of every dedupe call in flight.
+
+        Raises `BudgetExceededError` when the request would breach the budget;
+        callers must pair this with `release_out_of_band_request`.
+        """
+        if self._max_budget_usd is None:
+            return
+        input_rate, output_rate = _model_rates(model)
+        multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_TOKENS else 1.0
+        reservation = (
+            input_tokens * input_rate * multiplier
+            + max_output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
+        ) / 1_000_000
+        async with self._reservation_lock:
+            self._reservations.pop(key, None)
+            report_state = get_global_report_state()
+            observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
+            committed = max(observed, self._committed_cost_floor)
+            reserved = sum(self._reservations.values())
+            if committed + reserved + reservation > self._max_budget_usd:
+                raise BudgetExceededError(
+                    f"Next bounded GPT-5.6 request would exceed ${self._max_budget_usd:.2f}"
+                )
+            self._reservations[key] = reservation
+
+    async def release_out_of_band_request(self, *, key: str, model: str, usage: Any = None) -> None:
+        """Drop an out-of-band reservation and commit its observed cost."""
+        async with self._reservation_lock:
+            self._reservations.pop(key, None)
+            if usage is not None:
+                self._committed_cost_floor += _usage_cost_upper_bound(model, usage)
 
     @property
     def compaction_trigger_tokens(self) -> int:
