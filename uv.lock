@@ -1131,8 +1131,6 @@ dependencies = [
     { name = "openai-agents", extra = ["litellm"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pypdf" },
-    { name = "reportlab" },
     { name = "requests" },
     { name = "rich" },
     { name = "textual" },
@@ -1144,6 +1142,10 @@ bedrock = [
 ]
 vertex = [
     { name = "google-auth" },
+]
+viewer = [
+    { name = "pypdf" },
+    { name = "reportlab" },
 ]
 
 [package.dev-dependencies]
@@ -1171,13 +1173,13 @@ requires-dist = [
     { name = "openai-agents", extras = ["litellm"], specifier = "==0.14.6" },
     { name = "pydantic", specifier = ">=2.11.3" },
     { name = "pydantic-settings", specifier = ">=2.13.0" },
-    { name = "pypdf", specifier = ">=5.0" },
-    { name = "reportlab", specifier = ">=4.0" },
+    { name = "pypdf", marker = "extra == 'viewer'", specifier = ">=5.0" },
+    { name = "reportlab", marker = "extra == 'viewer'", specifier = ">=4.0" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rich" },
     { name = "textual", specifier = ">=6.0.0" },
 ]
-provides-extras = ["vertex", "bedrock"]
+provides-extras = ["viewer", "vertex", "bedrock"]
 
 [package.metadata.requires-dev]
 dev = [

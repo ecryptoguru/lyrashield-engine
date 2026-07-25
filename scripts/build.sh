@@ -40,7 +40,10 @@ if ! command -v uv &> /dev/null; then
 fi
 
 echo -e "\n${BLUE}Installing dependencies...${NC}"
-uv sync --frozen
+# The release binary includes PyInstaller hooks for reportlab/pypdf, so the
+# viewer extra must be present at sync time (a bare sync would omit it and the
+# build would succeed while breaking PDF export at runtime).
+uv sync --frozen --extra viewer
 
 VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 echo -e "${YELLOW}Version:${NC} $VERSION"
