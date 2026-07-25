@@ -50,7 +50,7 @@ _GPT56_CACHED_RATES = {
 }
 
 
-def _model_rates(model: str) -> tuple[float, float, float]:
+def _model_rates(model: str) -> tuple[float, float]:
     normalized = model.lower()
     for tier, rates in _GPT56_RATES.items():
         if tier in normalized:
@@ -289,7 +289,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 len(input_items),
             )
         if self._max_budget_usd is not None:
-            input_rate, _, output_rate = _model_rates(model)
+            input_rate, output_rate = _model_rates(model)
             multiplier = 2.0 if after > _GPT56_LONG_CONTEXT_TOKENS else 1.0
             reservation = (
                 after * input_rate * multiplier
