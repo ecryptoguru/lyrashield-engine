@@ -160,6 +160,38 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+# Upper bound on the serialized existing-report payload sent to the dedupe
+# model. Per-report fields are already truncated at 8k chars, but the report
+# COUNT is unbounded — every new finding compares against all prior ones, so a
+# long scan's dedupe calls would otherwise grow without limit (and each token is
+# metered). ~200k chars keeps the request well under the long-context pricing
+# boundary while fitting hundreds of typical reports.
+_MAX_EXISTING_REPORTS_CHARS = 200_000
+
+
+def _bound_existing_reports(cleaned: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the most recent cleaned reports within the payload budget.
+
+    Newest-first retention: a fresh candidate most often duplicates a recent
+    finding from the same testing phase, and deterministic identity checks have
+    already run against the full report list before the LLM is consulted.
+    """
+    total = 0
+    kept_reversed: list[dict[str, Any]] = []
+    for report in reversed(cleaned):
+        total += len(json.dumps(report))
+        if total > _MAX_EXISTING_REPORTS_CHARS and kept_reversed:
+            break
+        kept_reversed.append(report)
+    if len(kept_reversed) < len(cleaned):
+        logger.info(
+            "Dedupe comparison payload bounded: keeping %d of %d existing reports",
+            len(kept_reversed),
+            len(cleaned),
+        )
+    return list(reversed(kept_reversed))
+
+
 def _dependency_identity(report: dict[str, Any]) -> tuple[str, str, str] | None:
     metadata = report.get("dependency_metadata")
     if not isinstance(metadata, dict):
@@ -381,7 +413,9 @@ async def check_duplicate(
             }
 
         candidate_cleaned = _prepare_report_for_comparison(candidate)
-        existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]
+        existing_cleaned = _bound_existing_reports(
+            [_prepare_report_for_comparison(r) for r in existing_reports]
+        )
         comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
 
         user_msg = (

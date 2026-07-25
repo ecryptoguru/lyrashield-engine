@@ -12,6 +12,14 @@ if TYPE_CHECKING:
     from collections.abc import MutableMapping
 
 
+# ``chatgpt/<model>`` routes inference through a ChatGPT subscription
+# (``strix/config/codex.py``), which bypasses the Terra/Luna deployment gate and
+# records the run with zero metered cost. LyraShield scans are metered per token,
+# so the product entry point refuses subscription-backed models outright.
+_SUBSCRIPTION_PREFIX = "chatgpt/"
+_MODEL_ENV_VARS = ("STRIX_LLM", "STRIX_DELEGATE_LLM", "STRIX_DEDUPE_MODEL")
+
+
 ENV_ALIASES = {
     "LYRASHIELD_LLM": "STRIX_LLM",
     "LYRASHIELD_DELEGATE_LLM": "STRIX_DELEGATE_LLM",
@@ -35,7 +43,23 @@ def prepare_environment(
         if upstream_name not in env and product_name in env:
             env[upstream_name] = env[product_name]
     env["STRIX_TELEMETRY"] = "0"
+    # Self-update would replace this controlled derivative with the upstream
+    # distribution; the update check also makes network calls during scans.
+    env["STRIX_NO_UPDATE_CHECK"] = "1"
+    _reject_subscription_models(env)
     return env
+
+
+def _reject_subscription_models(env: MutableMapping[str, str]) -> None:
+    for name in _MODEL_ENV_VARS:
+        value = env.get(name, "").strip()
+        if value.lower().startswith(_SUBSCRIPTION_PREFIX):
+            msg = (
+                f"{name}={value} routes through a ChatGPT subscription, which is "
+                "not supported for LyraShield scans. Configure a GPT-5.6 Terra or "
+                "Luna API deployment instead."
+            )
+            raise SystemExit(msg)
 
 
 def get_version() -> str:

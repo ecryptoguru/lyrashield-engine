@@ -8,8 +8,9 @@ syncing releases.
 
 ## LyraShield-owned contract
 
-- GPT-5.6 Sol, Terra, and Luna acceptance; OpenAI/Azure-compatible credential
-  routing; no Perplexity, Parallel, or non-OpenAI model path.
+- GPT-5.6 Terra and Luna acceptance (Sol retired in PR #22); OpenAI/Azure
+  API-key credential routing; no Perplexity, Parallel, non-OpenAI, or
+  ChatGPT-subscription model path at the product boundary.
 - Context compaction, bounded output and agent count, and concurrent
   pre-request spend reservations.
 - Non-interactive lifecycle, cancellation, cleanup, target-safe errors, and
@@ -19,8 +20,14 @@ syncing releases.
 
 ## Compatibility patches retained across imports
 
-- `lyrashield_adapter`: compatibility adapter for LyraShield invocation.
+- `lyrashield_adapter`: compatibility adapter for LyraShield invocation. It
+  forces telemetry off, disables the upstream update check, and rejects
+  `chatgpt/` subscription-backed models (which bypass the Terra/Luna gate and
+  zero out metered cost accounting).
 - Telemetry defaults: LyraShield-safe telemetry behavior by default.
+- Self-update disabled: `--update` and the startup update notice are disabled
+  in `strix/interface/main.py` — upstream self-update fetches usestrix/strix
+  artifacts, which would replace the controlled derivative.
 - Pydantic compatibility: fixes required by the supported runtime.
 - Pre-Docker validation: validate inputs before container setup.
 - Per-instance binds: avoid shared mutable configuration between scans.
@@ -37,10 +44,15 @@ syncing releases.
 
 ## Current upstream base
 
-`7d5a67d234bd3faef34d22be8c6f5a9607de41a3`
+`08126eb5185fb4adc772f2e60eb4369f43b2eb67`
 
-This will be updated to the new upstream commit after the manual merge is
-complete.
+The 2026-07-25 manual merge (`418c0e3`) incorporated upstream through
+`08126eb` (dedicated deduplication model). The only later upstream commit at
+merge time, `f23fadf` (cosmetic root-agent rename to "Strix"), was not
+imported. The merge also removed the automated upstream-sync workflow and
+scripts (`.github/workflows/upstream-sync.yml`,
+`scripts/sync-upstream-release.sh`, `scripts/check-upstream.sh`); release
+imports are now manual, reviewed merges.
 
 ## LyraShield PR #20 (2026-07-25)
 

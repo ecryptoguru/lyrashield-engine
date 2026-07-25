@@ -36,10 +36,6 @@ from strix.config.models import (
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
-from strix.interface.update_check import (
-    notify_update,
-    self_update,
-)
 from strix.interface.utils import (
     assign_workspace_subdirs,
     build_final_stats_text,
@@ -545,9 +541,9 @@ Examples:
     parser.add_argument(
         "--update",
         action="store_true",
-        help="Update strix to the latest version and exit. Self-updates the "
-        "standalone binary install; for pip/pipx/uv installs, prints the "
-        "matching upgrade command instead.",
+        help="Disabled in LyraShield Engine: self-update would replace this "
+        "controlled derivative with the upstream distribution. Upgrade via a "
+        "reviewed LyraShield Engine release instead.",
     )
 
     parser.add_argument(
@@ -675,7 +671,15 @@ Examples:
     args = parser.parse_args()
 
     if args.update:
-        sys.exit(0 if self_update() else 1)
+        # Upstream self-update fetches usestrix/strix release artifacts (or the
+        # strix-agent package), which would replace this controlled derivative
+        # with the upstream distribution. Upgrades ship as reviewed LyraShield
+        # Engine releases instead.
+        Console().print(
+            "[bold red]Self-update is disabled in LyraShield Engine.[/] "
+            "Upgrade by installing a reviewed LyraShield Engine release."
+        )
+        sys.exit(1)
 
     if args.instruction and args.instruction_file:
         parser.error(
@@ -910,8 +914,8 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
         "[#60a5fa]discord.gg/strix-ai[/]"
     )
     console.print()
-    if not args.non_interactive:
-        notify_update(console)
+    # Upstream shows an update notice here; LyraShield Engine ships as reviewed
+    # releases, so the upstream version check would suggest the wrong package.
 
 
 def pull_docker_image() -> None:

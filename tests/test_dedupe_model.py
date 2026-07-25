@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 
 from strix.config import loader
 from strix.config.settings import DedupeSettings
-from strix.report.dedupe import _dedupe_model_settings
+from strix.report.dedupe import (
+    _MAX_EXISTING_REPORTS_CHARS,
+    _bound_existing_reports,
+    _dedupe_model_settings,
+)
 
 
 if TYPE_CHECKING:
@@ -92,3 +96,23 @@ def test_config_file_loads_dedupe_model(
     assert settings.dedupe.reasoning_effort == "minimal"
     # Main model stays independent of the dedupe override.
     assert settings.llm.model == "openai/root"
+
+
+def test_bound_existing_reports_keeps_small_lists_intact() -> None:
+    reports = [{"id": f"vuln-{i}", "title": "x" * 100} for i in range(50)]
+    assert _bound_existing_reports(reports) == reports
+
+
+def test_bound_existing_reports_drops_oldest_beyond_budget() -> None:
+    big = "x" * 8000
+    reports = [{"id": f"vuln-{i:04d}", "description": big} for i in range(100)]
+    bounded = _bound_existing_reports(reports)
+    assert 0 < len(bounded) < len(reports)
+    # Newest reports are retained, in original order.
+    assert bounded == reports[len(reports) - len(bounded) :]
+    assert sum(len(json.dumps(r)) for r in bounded) <= _MAX_EXISTING_REPORTS_CHARS
+
+
+def test_bound_existing_reports_always_keeps_the_newest_report() -> None:
+    oversized = {"id": "vuln-big", "description": "x" * (_MAX_EXISTING_REPORTS_CHARS + 1)}
+    assert _bound_existing_reports([{"id": "vuln-old"}, oversized]) == [oversized]

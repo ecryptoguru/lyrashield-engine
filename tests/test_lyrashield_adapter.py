@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from typing import TYPE_CHECKING
 
 import pytest
@@ -76,3 +77,40 @@ def test_main_delegates_non_version_arguments(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(cli.sys, "argv", ["lyrashield", "--non-interactive"])
     cli.main()
     assert called is True
+
+
+def test_prepare_environment_disables_update_check() -> None:
+    env: MutableMapping[str, str] = {}
+    cli.prepare_environment(env)
+    assert env["STRIX_NO_UPDATE_CHECK"] == "1"
+
+
+@pytest.mark.parametrize("name", ["STRIX_LLM", "STRIX_DELEGATE_LLM", "STRIX_DEDUPE_MODEL"])
+def test_prepare_environment_rejects_subscription_models(name: str) -> None:
+    env: MutableMapping[str, str] = {name: "chatgpt/gpt-5.6-luna"}
+    with pytest.raises(SystemExit, match="ChatGPT subscription"):
+        cli.prepare_environment(env)
+
+
+def test_prepare_environment_rejects_subscription_model_via_product_alias() -> None:
+    env: MutableMapping[str, str] = {"LYRASHIELD_LLM": "ChatGPT/gpt-5.6-terra"}
+    with pytest.raises(SystemExit, match="ChatGPT subscription"):
+        cli.prepare_environment(env)
+
+
+def test_prepare_environment_accepts_api_key_deployments() -> None:
+    env: MutableMapping[str, str] = {
+        "LYRASHIELD_LLM": "azure/gpt-5.6-terra",
+        "STRIX_DELEGATE_LLM": "azure/gpt-5.6-luna",
+    }
+    cli.prepare_environment(env)
+    assert env["STRIX_LLM"] == "azure/gpt-5.6-terra"
+
+
+def test_cli_update_flag_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    strix_main = importlib.import_module("strix.interface.main")
+
+    monkeypatch.setattr(strix_main.sys, "argv", ["strix", "--update"])
+    with pytest.raises(SystemExit) as excinfo:
+        strix_main.parse_arguments()
+    assert excinfo.value.code == 1

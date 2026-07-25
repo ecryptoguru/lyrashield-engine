@@ -242,7 +242,6 @@ DEFAULT_MODEL_RETRY = ModelRetrySettings(
 RECOMMENDED_MODEL_NAMES = (
     "openai/gpt-5.6-luna",
     "openai/gpt-5.6-terra",
-    "openai/gpt-5.6-luna",
     "openai/gpt-5.6",
     "openai/gpt-5.5-pro",
     "openai/gpt-5.5",
