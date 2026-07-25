@@ -276,6 +276,14 @@ class TestCompactionThresholdResolution:
         assert target <= trigger
         assert any("clamping" in record.message for record in caplog.records)
 
+    def test_documented_clamp_boundary_is_exact(self) -> None:
+        # docs/advanced/configuration.mdx promises values above 240_000 are clamped
+        # to 240_000 (272k boundary minus the 32k output margin). Pin it so the
+        # documented number and the implementation cannot drift apart.
+        assert resolve_compaction_thresholds(240_000)[0] == 240_000
+        assert resolve_compaction_thresholds(240_001)[0] == 240_000
+        assert resolve_compaction_thresholds(250_000)[0] == 240_000
+
     @pytest.mark.parametrize("ceiling", [1, 1_000, 50_000, 100_000, 271_999, 10_000_000])
     def test_resolved_trigger_never_reaches_the_long_context_boundary(self, ceiling: int) -> None:
         trigger, target = resolve_compaction_thresholds(ceiling)

@@ -48,7 +48,7 @@ Production configuration is owned by the LyraShield worker. The `lyrashield` ada
 <ParamField path="LYRASHIELD_MAX_INPUT_TOKENS" type="integer">
   Ceiling that history compaction keeps a request's input under. Unset uses the default 96000 trigger (compacting toward 64000). This is **not** a hard reject: crossing the ceiling compacts older history rather than failing the request, so a scan is never aborted by this setting.
 
-  Values above the GPT-5.6 long-context boundary (272000 tokens, where input is billed at 2x) are clamped down with a logged warning. Compaction exists to keep requests out of that pricing tier, so a ceiling above it would defeat the cost protection this setting provides.
+  Values above 240000 are clamped down to 240000 with a logged warning. That is the GPT-5.6 long-context boundary (272000 tokens, where input is billed at 2x) minus a 32000-token safety margin, so a request that trips the trigger still has room for its output allowance without crossing into 2x billing. Compaction exists to keep requests out of that pricing tier, so a ceiling above the margin would defeat the cost protection this setting provides.
 
   The applied trigger and target are recorded in `run.json` as `compaction_trigger_tokens` and `compaction_target_tokens`, so the enforced values are auditable per scan.
 </ParamField>
