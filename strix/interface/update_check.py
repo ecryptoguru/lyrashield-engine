@@ -16,7 +16,7 @@ import os
 import platform
 import shutil
 import stat
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tarfile
 import tempfile
@@ -111,7 +111,7 @@ def _fetch_latest_version() -> str | None:
         response.raise_for_status()
         version = response.json().get("info", {}).get("version")
         return str(version) if version else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("update check failed", exc_info=True)
         return None
 
@@ -129,7 +129,7 @@ def _fetch_asset_digest(version: str, filename: str) -> str | None:
                 digest = asset.get("digest") or ""
                 if digest.startswith("sha256:"):
                     return digest.removeprefix("sha256:")
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("release asset digest lookup failed", exc_info=True)
     return None
 
@@ -220,7 +220,7 @@ def run_package_upgrade(console: Console, method: str) -> bool:
     command = get_upgrade_command(method).split()
     console.print(f"[dim]Running[/] [#60a5fa]{' '.join(command)}[/]")
     try:
-        result = subprocess.run(command, check=False)  # noqa: S603
+        result = subprocess.run(command, check=False)  # noqa: S603  # nosec B603
     except OSError as e:
         console.print(f"[bold red]Update failed:[/] {e}")
         return False
@@ -375,7 +375,7 @@ def self_update(console: Console | None = None, version: str | None = None) -> b
 
     try:
         _download_and_replace(latest, target, console)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("self-update failed", exc_info=True)
         console.print(f"[bold red]Update failed:[/] {e}")
         console.print(

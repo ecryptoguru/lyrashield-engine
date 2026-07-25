@@ -447,7 +447,7 @@ def _slugify_for_run_name(text: str, max_length: int = 32) -> str:
     return text or "pentest"
 
 
-def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None) -> str:  # noqa: PLR0911
+def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None) -> str:
     if not targets_info:
         return "pentest"
 
@@ -853,9 +853,11 @@ def _truncate_file_list(
 def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:
     lines = [
         "The user is requesting a review of a Pull Request.",
-        "Instruction: Direct your analysis primarily at the changes in the listed files. "
-        "You may reference other files in the repository for context (imports, definitions, "
-        "usage), but report findings only if they relate to the listed changes.",
+        (
+            "Instruction: Direct your analysis primarily at the changes in the listed files. "
+            "You may reference other files in the repository for context (imports, definitions, "
+            "usage), but report findings only if they relate to the listed changes."
+        ),
         "For Added files, review the entire file content.",
         "For Modified files, focus primarily on the changed areas.",
     ]
@@ -1109,7 +1111,7 @@ def _is_http_git_repo(url: str) -> bool:
         return False
 
 
-def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911
+def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
     if not target or not isinstance(target, str):
         raise ValueError("Target must be a non-empty string")
 

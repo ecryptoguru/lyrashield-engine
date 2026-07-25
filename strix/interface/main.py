@@ -37,11 +37,8 @@ from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
 from strix.interface.update_check import (
-    is_binary_install,
     notify_update,
-    prompt_update_if_available,
     self_update,
-    start_background_check,
 )
 from strix.interface.utils import (
     assign_workspace_subdirs,

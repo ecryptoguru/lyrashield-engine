@@ -188,8 +188,8 @@ def build_authorize_url(challenge: str, state: str) -> str:
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "state": state,
-        "id_token_add_organizations": "true",
-        "codex_cli_simplified_flow": "true",
+        "id_token_add_organizations": "true",  # nosec B105
+        "codex_cli_simplified_flow": "true",  # nosec B105
         "originator": ORIGINATOR,
     }
     return f"{AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
@@ -222,7 +222,7 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
 
 def _post_form(payload: dict[str, str]) -> dict[str, Any]:
     body = urllib.parse.urlencode(payload).encode("ascii")
-    request = urllib.request.Request(  # noqa: S310 - fixed https OAuth endpoint
+    request = urllib.request.Request(
         TOKEN_URL,
         data=body,
         headers={

@@ -155,7 +155,7 @@ def _post_json(path: str, payload: dict[str, Any], *, timeout: int) -> tuple[int
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310  # nosec B310
             return response.status, _parse_body(response.read())
     except urllib.error.HTTPError as exc:
         return exc.code, _parse_body(exc.read())

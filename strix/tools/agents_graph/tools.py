@@ -219,7 +219,7 @@ def _session_items_payload(items: list[Any]) -> list[dict[str, Any]]:
 
 
 @function_tool(timeout=601)
-async def wait_for_message(  # noqa: PLR0911
+async def wait_for_message(
     ctx: RunContextWrapper,
     reason: str = "Waiting for messages from other agents",
     timeout_seconds: int = 600,

@@ -605,7 +605,7 @@ def _estimate_response_cost(kwargs: Any, completion_response: Any) -> float | No
     returns no ``response_cost`` for models missing from its cost map, so try
     the provider-prefixed name, the raw name, and the bare model name.
     """
-    from litellm import completion_cost  # noqa: PLC0415
+    from litellm import completion_cost
 
     model = kwargs.get("model") if isinstance(kwargs, dict) else None
     if not isinstance(model, str) or not model:

@@ -600,7 +600,7 @@ def serve(
 def _open_browser(url: str) -> None:
     try:
         webbrowser.open(url)
-    except Exception:  # noqa: BLE001 - launching the browser is best-effort
+    except Exception:
         logger.debug("could not open browser for %s", url, exc_info=True)
 
 

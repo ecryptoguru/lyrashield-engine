@@ -7,7 +7,7 @@ import contextlib
 import inspect
 import os
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agents import (
     set_default_openai_api,

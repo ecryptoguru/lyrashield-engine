@@ -201,6 +201,8 @@ ignore = [
     "COM812", # Missing trailing comma (handled by formatter)
     "ISC001", # Single line implicit string concatenation (handled by formatter)
     "PLR0913", # Too many arguments to function call
+    "PLR0917", # Too many positional arguments
+    "PLR0911", # Too many return statements
     "TRY003",  # Avoid specifying long messages outside the exception class
     "EM101",   # Exception must not use a string literal
     "EM102",   # Exception must not use an f-string literal

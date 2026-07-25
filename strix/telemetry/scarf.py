@@ -45,7 +45,7 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
         req = urllib.request.Request(url, method="POST")  # noqa: S310
         with urllib.request.urlopen(req, timeout=10):  # noqa: S310  # nosec B310
             pass
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("scarf send failed for event %s", event, exc_info=True)
         return False
     else:

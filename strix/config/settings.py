@@ -162,3 +162,4 @@ class Settings(BaseSettings):
     dedupe: DedupeSettings = Field(default_factory=DedupeSettings)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
+    viewer: ViewerSettings = Field(default_factory=ViewerSettings)

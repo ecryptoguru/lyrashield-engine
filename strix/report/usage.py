@@ -21,6 +21,9 @@ class LLMUsageLedger:
         self._request_usage_entries: list[dict[str, Any]] = []
         self._total_cost = 0.0
         self._has_cost = False
+        # When True, tokens are still tracked but cost stays $0 — the run is on a
+        # model subscription, so there is no metered per-token charge to report.
+        self.zero_cost = False
 
     def record(
         self,
@@ -77,7 +80,7 @@ class LLMUsageLedger:
             # aggregate. It has no per-call cache buckets, so it cannot be
             # used for exact pricing.
             record.pop("request_usage_entries", None)
-        if self._has_cost:
+        if self._has_cost or self.zero_cost:
             record["cost"] = _round_cost(self._total_cost)
         record["agents"] = []
 
