@@ -106,6 +106,10 @@ async def run_agent_loop(
         except asyncio.CancelledError:
             return result
 
+        current_status = await coordinator.get_status(agent_id)
+        if current_status not in {"running", "waiting"}:
+            return result
+
         if coordinator.budget_stopped:
             await coordinator.set_status(agent_id, "stopped")
             raise BudgetExceededError("scan budget reached")

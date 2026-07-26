@@ -141,7 +141,7 @@ class AgentCoordinator:
 
     async def mark_running(self, agent_id: str) -> None:
         async with self._lock:
-            if agent_id in self.statuses:
+            if agent_id in self.statuses and self.statuses[agent_id] in _ACTIVE_STATUSES:
                 self.statuses[agent_id] = "running"
                 self.errors.pop(agent_id, None)
         await self._maybe_snapshot()
@@ -182,24 +182,23 @@ class AgentCoordinator:
             session = runtime.session
             stream = runtime.stream
             interrupt = runtime.interrupt_on_message
-        if session is None:
-            logger.warning(
-                "agent.send dropped target=%s because its SDK session is not attached",
-                target_agent_id,
-            )
-            return False
-        try:
-            async with session_write_lock(session):
-                await session.add_items([self._message_to_session_item(message)])
-        except Exception:
-            logger.exception(
-                "agent.send failed to append to SDK session target=%s",
-                target_agent_id,
-            )
-            return False
-        async with self._lock:
+            if session is None:
+                logger.warning(
+                    "agent.send dropped target=%s because its SDK session is not attached",
+                    target_agent_id,
+                )
+                return False
+            try:
+                async with session_write_lock(session):
+                    await session.add_items([self._message_to_session_item(message)])
+            except Exception:
+                logger.exception(
+                    "agent.send failed to append to SDK session target=%s",
+                    target_agent_id,
+                )
+                return False
             self.pending_counts[target_agent_id] = self.pending_counts.get(target_agent_id, 0) + 1
-            self.runtimes.setdefault(target_agent_id, AgentRuntime()).wake.set()
+            runtime.wake.set()
         if stream is not None and interrupt:
             stream.cancel(mode="immediate")
         await self._maybe_snapshot()
