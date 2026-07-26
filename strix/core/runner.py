@@ -541,7 +541,7 @@ async def run_strix_scan(
             with contextlib.suppress(Exception):
                 close = getattr(s, "close", None)
                 if callable(close):
-                    await close()
+                    close()
         with contextlib.suppress(Exception):
             await coordinator.maybe_snapshot()
         if cleanup_on_exit:
