@@ -135,9 +135,7 @@ def _fallback_model_rates(model: str) -> tuple[float, float]:
             except (TypeError, ValueError):
                 pass
 
-    logger.warning(
-        "No LiteLLM cost rates for model %s; using conservative fallback rates", model
-    )
+    logger.warning("No LiteLLM cost rates for model %s; using conservative fallback rates", model)
     return _DEFAULT_FALLBACK_INPUT_RATE, _DEFAULT_FALLBACK_OUTPUT_RATE
 
 

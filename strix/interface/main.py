@@ -133,9 +133,11 @@ def validate_environment() -> None:
 
     if not settings.llm.model:
         missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
-    elif not is_gpt56_model(settings.llm.model) or (
-        settings.llm.delegate_model and not is_gpt56_model(settings.llm.delegate_model)
-    ) or (settings.dedupe.model and not is_gpt56_model(settings.dedupe.model)):
+    elif (
+        not is_gpt56_model(settings.llm.model)
+        or (settings.llm.delegate_model and not is_gpt56_model(settings.llm.delegate_model))
+        or (settings.dedupe.model and not is_gpt56_model(settings.dedupe.model))
+    ):
         error_text = Text(
             "LyraShield scans require a GPT-5.6 Terra or Luna deployment",
             style="bold red",
@@ -995,9 +997,7 @@ def _verify_image_digest(client: Any, image: str, expected_digest: str) -> None:
     try:
         pulled = client.images.get(image)
     except ImageNotFound as e:
-        raise RuntimeError(
-            f"Pulled image {image} not found for digest verification"
-        ) from e
+        raise RuntimeError(f"Pulled image {image} not found for digest verification") from e
 
     expected = _normalize_digest(expected_digest)
     if not expected:
@@ -1013,8 +1013,7 @@ def _verify_image_digest(client: Any, image: str, expected_digest: str) -> None:
             return
 
     raise RuntimeError(
-        f"Image digest verification failed for {image}: "
-        f"expected {expected_digest}, found {digests}"
+        f"Image digest verification failed for {image}: expected {expected_digest}, found {digests}"
     )
 
 
