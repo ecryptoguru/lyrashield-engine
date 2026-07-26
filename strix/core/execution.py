@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from agents.items import TResponseInputItem
     from agents.lifecycle import RunHooks
-    from agents.memory import Session, SQLiteSession
+    from agents.memory import Session
     from agents.result import RunResultBase
 
     from strix.core.agents import AgentCoordinator, Status
