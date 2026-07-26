@@ -249,14 +249,15 @@ def test_make_model_settings_adds_stable_prompt_cache_key() -> None:
     assert settings.parallel_tool_calls is None
 
 
-def test_make_model_settings_enables_explicit_cache_only_with_a_breakpoint() -> None:
+def test_make_model_settings_does_not_set_prompt_cache_options() -> None:
     settings = make_model_settings(
         "medium",
         model_name="azure_ai/gpt-5.6-terra",
-        prompt_cache_breakpoints=True,
+        prompt_cache_key="lyrashield:scan-1:coordinator",
     )
 
-    assert settings.prompt_cache_options == {"mode": "explicit", "ttl": "30m"}
+    assert settings.prompt_cache_options is None
+    assert settings.extra_args == {"prompt_cache_key": "lyrashield:scan-1:coordinator"}
 
 
 @pytest.mark.parametrize(

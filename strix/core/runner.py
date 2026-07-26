@@ -290,7 +290,6 @@ async def run_strix_scan(
             request_timeout=settings.llm.timeout,
             max_output_tokens=max_output_tokens,
             prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
-            prompt_cache_breakpoints=isinstance(initial_input, list) and bool(initial_input),
         )
         delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
         delegate_model_settings = make_model_settings(
