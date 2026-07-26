@@ -1004,6 +1004,11 @@ def _verify_image_digest(client: Any, image: str, expected_digest: str) -> None:
         raise RuntimeError(
             f"Image digest value for {image} is empty or malformed: {expected_digest!r}"
         )
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise RuntimeError(
+            f"Image digest value for {image} is not a 64-character "
+            f"SHA-256 hex string: {expected_digest!r}"
+        )
 
     digests = cast("list[Any]", pulled.attrs.get("RepoDigests") or [])
     for digest_ref in digests:

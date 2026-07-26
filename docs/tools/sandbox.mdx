@@ -16,7 +16,7 @@ The engine starts the sandbox with `NET_ADMIN` and `NET_RAW` capabilities so too
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES` | unset | Set to `1`/`true`/`yes` to omit `NET_ADMIN`/`NET_RAW` from new containers. |
-| `STRIX_IMAGE_DIGEST` | unset | Optional digest to verify after `pull_docker_image` completes (for example, `sha256:abc123…`). The pull fails if the local image digest does not contain this value. |
+| `STRIX_IMAGE_DIGEST` | unset | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |
 | `LYRASHIELD_IMAGE` | `strix-sandbox:dev` | Image reference. Combine with `STRIX_IMAGE_DIGEST` for a pinned, auditable deployment. |
 
 `STRIX_SANDBOX_ALLOW_HOST_GATEWAY` remains opt-in; do not enable it unless an explicitly authorized local workflow requires `host.docker.internal` access.

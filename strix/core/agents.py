@@ -45,6 +45,7 @@ class AgentCoordinator:
         self.metadata: dict[str, dict[str, Any]] = {}
         self.pending_counts: dict[str, int] = {}
         self.errors: dict[str, str] = {}
+        self.conversation_ids: dict[str, str] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
         self._lock = asyncio.Lock()
         self._snapshot_path: Path | None = None
@@ -374,6 +375,25 @@ class AgentCoordinator:
             queue.extend(child for child, parent in self.parent_of.items() if parent == aid)
         return order
 
+    async def track_conversation_id(self, agent_id: str) -> bool:
+        """Capture the OpenAI conversation ID for a server-managed session."""
+        async with self._lock:
+            runtime = self.runtimes.get(agent_id)
+            if runtime is None:
+                return False
+            session = runtime.session
+            if session is None:
+                return False
+            try:
+                conversation_id = getattr(session, "session_id", None)
+                if conversation_id and isinstance(conversation_id, str):
+                    self.conversation_ids[agent_id] = conversation_id
+                    return True
+            except ValueError:
+                # OpenAIConversationsSession raises ValueError before lazy init.
+                pass
+            return False
+
     async def snapshot(self) -> dict[str, Any]:
         async with self._lock:
             return {
@@ -383,6 +403,7 @@ class AgentCoordinator:
                 "metadata": {aid: dict(md) for aid, md in self.metadata.items()},
                 "pending_counts": dict(self.pending_counts),
                 "errors": dict(self.errors),
+                "conversation_ids": dict(self.conversation_ids),
             }
 
     async def restore(self, snap: dict[str, Any]) -> None:
@@ -393,6 +414,7 @@ class AgentCoordinator:
             self.metadata = {aid: dict(md) for aid, md in snap.get("metadata", {}).items()}
             self.pending_counts = dict(snap.get("pending_counts", {}))
             self.errors = dict(snap.get("errors", {}))
+            self.conversation_ids = dict(snap.get("conversation_ids", {}))
             for aid in self.statuses:
                 self.runtimes.setdefault(aid, AgentRuntime())
 

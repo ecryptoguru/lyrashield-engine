@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import math
@@ -102,6 +103,7 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
     return trigger, target
 
 
+@functools.cache
 def _model_rates(model: str) -> tuple[float, float]:
     normalized = model.lower()
     for tier, rates in _GPT56_RATES.items():
@@ -110,6 +112,7 @@ def _model_rates(model: str) -> tuple[float, float]:
     return _fallback_model_rates(model)
 
 
+@functools.cache
 def _cached_input_rate(model: str) -> float:
     normalized = model.lower()
     for tier, rate in _GPT56_CACHED_RATES.items():
@@ -118,6 +121,7 @@ def _cached_input_rate(model: str) -> float:
     return _fallback_cached_input_rate(model)
 
 
+@functools.cache
 def _fallback_model_rates(model: str) -> tuple[float, float]:
     """Return (input_rate, output_rate) in dollars per 1M tokens.
 
@@ -139,6 +143,7 @@ def _fallback_model_rates(model: str) -> tuple[float, float]:
     return _DEFAULT_FALLBACK_INPUT_RATE, _DEFAULT_FALLBACK_OUTPUT_RATE
 
 
+@functools.cache
 def _fallback_cached_input_rate(model: str) -> float:
     """Return a cached-input rate in dollars per 1M tokens.
 
@@ -155,7 +160,7 @@ def _fallback_cached_input_rate(model: str) -> float:
                 pass
 
     input_rate, _ = _model_rates(model)
-    return min(input_rate * 0.1, _DEFAULT_FALLBACK_CACHE_RATE)
+    return max(input_rate * 0.1, _DEFAULT_FALLBACK_CACHE_RATE)
 
 
 def _lookup_litellm_cost(model: str) -> dict[str, Any] | None:

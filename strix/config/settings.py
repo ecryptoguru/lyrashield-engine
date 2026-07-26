@@ -142,6 +142,13 @@ class RuntimeSettings(BaseSettings):
         ge=0,
         validation_alias=_lyra("STRIX_MAX_CONTEXT_IMAGES"),
     )
+    # Use OpenAI server-managed conversations (OpenAIConversationsSession) instead of
+    # the local SQLiteSession. Requires an endpoint that supports the conversations
+    # API and is off by default until endpoint capability is proven.
+    server_conversation: bool = Field(
+        default=False,
+        validation_alias=_lyra("STRIX_SERVER_CONVERSATION"),
+    )
 
 
 class TelemetrySettings(BaseSettings):

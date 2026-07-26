@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
-from agents.memory import SQLiteSession
+from agents.memory import OpenAIConversationsSession, SQLiteSession
 
 
 if TYPE_CHECKING:
@@ -20,7 +20,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def open_agent_session(agent_id: str, path: Path) -> SQLiteSession:
+def open_agent_session(
+    agent_id: str,
+    path: Path,
+    *,
+    server_conversation: bool = False,
+    conversation_id: str | None = None,
+) -> Session:
+    """Open an agent session, preferring a server-managed conversation when enabled.
+
+    ``server_conversation`` gates ``OpenAIConversationsSession``; it is fail-closed
+    and falls back to ``SQLiteSession`` if the feature is not enabled or no
+    ``conversation_id`` can be reused.
+    """
+    if server_conversation:
+        try:
+            return OpenAIConversationsSession(conversation_id=conversation_id)
+        except Exception:
+            logger.exception(
+                "server conversation session unavailable for %s; falling back to SQLite", agent_id
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     return SQLiteSession(session_id=agent_id, db_path=path)
 

@@ -104,7 +104,7 @@ Azure compatibility aliases:
 </ParamField>
 
 <ParamField path="STRIX_IMAGE_DIGEST" type="string">
-  Optional image digest to verify after pulling the sandbox image (for example, `sha256:abc123…`). The pull fails if the local image digest does not contain this value. Combine with `LYRASHIELD_IMAGE` for a pinned deployment.
+  Optional 64-character SHA-256 digest to verify after pulling the sandbox image (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. Combine with `LYRASHIELD_IMAGE` for a pinned deployment.
 </ParamField>
 
 ## Budget and cost accounting
