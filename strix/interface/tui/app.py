@@ -793,6 +793,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.report_state.set_scan_config(self.scan_config)
         self.report_state.save_run_data()
         set_global_report_state(self.report_state)
+
+        for warm_model, warm_usage in getattr(args, "warm_up_usages", []) or []:
+            self.report_state.record_sdk_usage(
+                agent_id="warmup", agent_name="warmup", model=warm_model, usage=warm_usage
+            )
+
         self.live_view = TuiLiveView()
         self.live_view.hydrate_from_run_dir(self.report_state.get_run_dir())
         self._agent_graph_sync_future: Any | None = None

@@ -392,7 +392,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                     # mistaken for the LiteLLM "after shutdown" race below.
                     raise
                 except RuntimeError as stream_exc:
-                    if "after shutdown" not in str(stream_exc):
+                    if "after shutdown" not in str(stream_exc).strip().lower():
                         raise
                     logger.warning(
                         "Ignoring LiteLLM end-of-stream shutdown race for %s",

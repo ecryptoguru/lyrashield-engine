@@ -13,7 +13,8 @@ deltas:
    starts inside the container and ``bootstrap_caido`` retries against a
    dead port.
 2. Append NET_ADMIN/NET_RAW to ``cap_add`` (required by ``nmap -sS`` and
-   other raw-socket tools).
+   other raw-socket tools). Operators can disable this by setting
+   ``STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES=1``.
 3. Optionally add ``host.docker.internal`` → host-gateway to ``extra_hosts``
    when ``STRIX_SANDBOX_ALLOW_HOST_GATEWAY`` is explicitly enabled.
 
@@ -234,9 +235,16 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         else:
             cap_add = []
         create_kwargs["cap_add"] = cap_add
-        for cap in ("NET_ADMIN", "NET_RAW"):
-            if cap not in cap_add:
-                cap_add.append(cap)
+        if os.environ.get("STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES", "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+        }:
+            for cap in ("NET_ADMIN", "NET_RAW"):
+                if cap not in cap_add:
+                    cap_add.append(cap)
+        else:
+            logger.info("Network capabilities disabled for sandbox by environment setting")
 
         if host_gateway_enabled():
             extra_hosts = create_kwargs.setdefault("extra_hosts", {})

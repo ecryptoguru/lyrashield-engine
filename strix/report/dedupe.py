@@ -458,18 +458,73 @@ def _dynamic_identity(report: dict[str, Any]) -> tuple[str, ...] | None:
     )
 
 
-def _parse_dedupe_response(content: str) -> dict[str, Any]:
-    text = content.strip()
+def _first_unquoted_brace(text: str) -> int:
+    """Return the index of the first '{' that is not inside a JSON string."""
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            return i
+
+    return -1
+
+
+def _extract_balanced_json(text: str) -> str:
+    """Return the first top-level JSON object from text, accounting for nesting."""
+    text = text.strip()
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
             text = text[4:]
         text = text.strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"No JSON object found in dedupe response: {content[:500]}")
-    parsed = json.loads(text[start : end + 1])
+
+    start = _first_unquoted_brace(text)
+    if start == -1:
+        raise ValueError(f"No JSON object found in dedupe response: {text[:500]}")
+
+    brace_depth = 0
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text[start:], start=start):
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            brace_depth += 1
+        elif ch == "}":
+            brace_depth -= 1
+            if brace_depth == 0:
+                return text[start : i + 1]
+
+    raise ValueError(f"No balanced JSON object found in dedupe response: {text[:500]}")
+
+
+def _parse_dedupe_response(content: str) -> dict[str, Any]:
+    json_text = _extract_balanced_json(content)
+    parsed = json.loads(json_text)
 
     duplicate_id = str(parsed.get("duplicate_id") or "")[:64]
     reason = str(parsed.get("reason") or "")[:500]

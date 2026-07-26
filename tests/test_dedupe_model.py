@@ -17,6 +17,8 @@ from strix.report.dedupe import (
     _MAX_EXISTING_REPORTS_CHARS,
     _bound_existing_reports,
     _dedupe_model_settings,
+    _extract_balanced_json,
+    _parse_dedupe_response,
 )
 
 
@@ -221,3 +223,50 @@ def test_runner_clears_active_hooks_on_every_exit_path() -> None:
     # The clear must live in the `finally` so it runs on success, failure, and cancel.
     finally_block = runner.split("\n    finally:\n", 1)[1]
     assert "set_active_hooks(None)" in finally_block
+
+
+def test_extract_balanced_json_handles_fences_and_nesting() -> None:
+    cases = [
+        ('{"is_duplicate": true, "confidence": 0.9}', '{"is_duplicate": true, "confidence": 0.9}'),
+        ('```json\n{"is_duplicate": true}\n```', '{"is_duplicate": true}'),
+        (
+            'Here is the result: {"is_duplicate": true, "reason": "same"}',
+            '{"is_duplicate": true, "reason": "same"}',
+        ),
+        (
+            json.dumps({"is_duplicate": True, "reason": 'has a { brace and " escaped quote'}),
+            json.dumps({"is_duplicate": True, "reason": 'has a { brace and " escaped quote'}),
+        ),
+        (
+            '{"outer": {"inner": 1}}',
+            '{"outer": {"inner": 1}}',
+        ),
+    ]
+    for raw, expected in cases:
+        assert _extract_balanced_json(raw) == expected
+
+
+def test_extract_balanced_json_rejects_missing_object() -> None:
+    with pytest.raises(ValueError, match="No JSON object found"):
+        _extract_balanced_json("just prose")
+
+
+def test_extract_balanced_json_rejects_unbalanced_object() -> None:
+    with pytest.raises(ValueError, match="No balanced JSON object found"):
+        _extract_balanced_json('{"is_duplicate": true')
+
+
+def test_parse_dedupe_response_coerces_fields_and_truncates() -> None:
+    payload = json.dumps(
+        {
+            "is_duplicate": True,
+            "duplicate_id": "x" * 100,
+            "confidence": "bad",
+            "reason": "y" * 1000,
+        }
+    )
+    parsed = _parse_dedupe_response(payload)
+    assert parsed["is_duplicate"] is True
+    assert len(parsed["duplicate_id"]) <= 64
+    assert parsed["confidence"] == 0.0
+    assert len(parsed["reason"]) <= 500

@@ -16,7 +16,7 @@ from typing import Any, cast
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
-from docker.errors import DockerException
+from docker.errors import DockerException, ImageNotFound
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -135,7 +135,7 @@ def validate_environment() -> None:
         missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
     elif not is_gpt56_model(settings.llm.model) or (
         settings.llm.delegate_model and not is_gpt56_model(settings.llm.delegate_model)
-    ):
+    ) or (settings.dedupe.model and not is_gpt56_model(settings.dedupe.model)):
         error_text = Text(
             "LyraShield scans require a GPT-5.6 Terra or Luna deployment",
             style="bold red",
@@ -344,7 +344,17 @@ def _subscription_error_hint(exc: BaseException) -> str | None:
     return None
 
 
-async def warm_up_llm(show_model_warning: bool = True) -> None:
+async def warm_up_llm(
+    show_model_warning: bool = True,
+    *,
+    usages: list[tuple[str, Any]] | None = None,
+) -> None:
+    """Warm up the configured LLM and optional dedupe model.
+
+    If ``usages`` is supplied, each model's ``response.usage`` is appended as
+    ``(model_name, usage)`` so the CLI/TUI can record warm-up tokens in the run
+    ledger. Non-interactive runs skip warm-up and leave the list empty.
+    """
     console = Console()
     logger.info("Warming up LLM connection")
 
@@ -413,7 +423,7 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
             )
 
         model = StrixProvider(settings=settings).get_model(raw_model)
-        await asyncio.wait_for(
+        response = await asyncio.wait_for(
             model.get_response(
                 system_instructions="You are a helpful assistant.",
                 input="Reply with just 'OK'.",
@@ -428,6 +438,8 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
             ),
             timeout=llm.timeout,
         )
+        if usages is not None and getattr(response, "usage", None) is not None:
+            usages.append((raw_model, response.usage))
         logger.info("LLM warm-up succeeded for model %s", (llm.model or "").strip())
 
         if settings.dedupe.model:
@@ -440,7 +452,7 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
             # separate-provider dedupe model authenticates during warm-up too.
             deduper_extra = dedupe_extra_args(settings.dedupe)
             deduper_settings = ModelSettings(extra_args=deduper_extra or None)
-            await asyncio.wait_for(
+            response = await asyncio.wait_for(
                 deduper.get_response(
                     system_instructions="You are a helpful assistant.",
                     input="Reply with just 'OK'.",
@@ -455,6 +467,8 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
                 ),
                 timeout=llm.timeout,
             )
+            if usages is not None and getattr(response, "usage", None) is not None:
+                usages.append((dedupe_model, response.usage))
             logger.info("LLM warm-up succeeded for dedupe model %s", dedupe_model)
 
     except Exception as e:
@@ -966,13 +980,68 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     # releases, so the upstream version check would suggest the wrong package.
 
 
+def _normalize_digest(value: str) -> str:
+    """Return the bare hex digest, removing repo prefix and ``sha256:``."""
+    normalized = value.strip().lower()
+    if "@" in normalized:
+        normalized = normalized.rsplit("@", 1)[-1]
+    if normalized.startswith("sha256:"):
+        normalized = normalized[7:]
+    return normalized
+
+
+def _verify_image_digest(client: Any, image: str, expected_digest: str) -> None:
+    """Verify a pulled image matches an expected SHA256 digest if one is supplied."""
+    try:
+        pulled = client.images.get(image)
+    except ImageNotFound as e:
+        raise RuntimeError(
+            f"Pulled image {image} not found for digest verification"
+        ) from e
+
+    expected = _normalize_digest(expected_digest)
+    if not expected:
+        raise RuntimeError(
+            f"Image digest value for {image} is empty or malformed: {expected_digest!r}"
+        )
+
+    digests = cast("list[Any]", pulled.attrs.get("RepoDigests") or [])
+    for digest_ref in digests:
+        actual = _normalize_digest(str(digest_ref))
+        if actual and actual == expected:
+            logger.info("Image digest verified for %s", image)
+            return
+
+    raise RuntimeError(
+        f"Image digest verification failed for {image}: "
+        f"expected {expected_digest}, found {digests}"
+    )
+
+
 def pull_docker_image() -> None:
+    """Pull the configured sandbox image, optionally verifying ``STRIX_IMAGE_DIGEST``.
+
+    If ``STRIX_IMAGE_DIGEST`` is set, the pulled image's ``RepoDigests`` must
+    contain the expected value. The function exits on pull or verification failure.
+    """
     console = Console()
     client = check_docker_connection()
 
     image = load_settings().runtime.image
+    expected_digest = os.environ.get("STRIX_IMAGE_DIGEST", "").strip()
 
-    if image_exists(client, image):
+    needs_pull = not image_exists(client, image)
+    if not needs_pull and expected_digest:
+        try:
+            _verify_image_digest(client, image, expected_digest)
+        except RuntimeError:
+            logger.warning("Local image %s digest does not match; re-pulling", image)
+            needs_pull = True
+        else:
+            logger.debug("Docker image already present locally and digest verified: %s", image)
+            return
+
+    if not needs_pull:
         logger.debug("Docker image already present locally: %s", image)
         return
 
@@ -990,7 +1059,10 @@ def pull_docker_image() -> None:
             for line in client.api.pull(image, stream=True, decode=True):
                 last_update = process_pull_line(line, layers_info, status, last_update)
 
-        except DockerException as e:
+            if expected_digest:
+                _verify_image_digest(client, image, expected_digest)
+
+        except (DockerException, RuntimeError) as e:
             logger.exception("Failed to pull docker image %s", image)
             console.print()
             error_text = Text()
@@ -1054,8 +1126,10 @@ def main() -> None:
 
     # Non-interactive worker runs must not make an unmetered warm-up request or
     # persist provider credentials under the container home directory.
+    warm_up_usages: list[tuple[str, Any]] = []
+    args.warm_up_usages = warm_up_usages
     if not args.non_interactive:
-        asyncio.run(warm_up_llm(show_model_warning=False))
+        asyncio.run(warm_up_llm(show_model_warning=False, usages=warm_up_usages))
 
     args.run_name = args.resume or args.run_name or generate_run_name(args.targets_info)
 

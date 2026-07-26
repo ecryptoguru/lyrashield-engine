@@ -27,7 +27,7 @@ git log upstream/main..main --since='2026-07-13T16:00:00Z' --date=iso-strict --o
 
 LyraShield owns:
 
-- GPT-5.6 Sol, Terra, and Luna model acceptance and reasoning policy;
+- GPT-5.6 Terra and Luna model acceptance and reasoning policy;
 - context compaction, output/agent limits, and concurrent pre-request spend reservations;
 - non-interactive lifecycle, cancellation, cleanup, telemetry-off defaults, and target-safe errors;
 - deterministic finding identity, structured control/evidence metadata, and bounded artifacts;
@@ -44,7 +44,7 @@ Requirements:
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - Docker with the reviewed, pinned sandbox image available
-- an OpenAI- or Azure-compatible endpoint serving a GPT-5.6 Sol, Terra, or Luna deployment
+- an OpenAI- or Azure-compatible endpoint serving a GPT-5.6 Terra or Luna deployment
 
 ```bash
 uv sync --frozen
@@ -62,7 +62,7 @@ export LLM_API_BASE="https://<approved-endpoint>"
 uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
 ```
 
-Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Sol, Terra, or Luna. Anthropic, Bedrock, Vertex, OpenRouter, local models, Perplexity, and Parallel are not supported execution paths.
+Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Terra or Luna. Anthropic, Bedrock, Vertex, OpenRouter, local models, Perplexity, and Parallel are not supported execution paths.
 
 ### Provider capability gate
 
@@ -105,7 +105,9 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-thin-fork.sh
 ```
 
-The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, 329 tests, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
+The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, the full test suite (`pytest`), headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
+
+Budget enforcement now falls back to LiteLLM's `model_cost` table and then to conservative default rates for non-GPT-5.6 models, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-5.6 Terra/Luna deployments before scan start.
 
 These checks prove implementation compatibility, not detection accuracy. The inherited Strix v0.4 XBEN result is historical upstream evidence only. LyraShield must establish result quality with its own versioned evaluation corpus before making accuracy, coverage, or comparative claims; see [benchmarks/README.md](benchmarks/README.md).
 
