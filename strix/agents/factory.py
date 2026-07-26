@@ -12,10 +12,19 @@ from agents.agent import ToolsToFinalOutputResult
 from agents.sandbox import SandboxAgent
 from agents.sandbox.capabilities import Filesystem, Shell
 from agents.sandbox.errors import InvalidManifestPathError
-from agents.tool import CustomTool, FunctionTool, Tool
+from agents.tool import (
+    ApplyPatchTool,
+    CustomTool,
+    FunctionTool,
+    ProgrammaticToolCallingTool,
+    ShellTool,
+    Tool,
+    ToolCaller,
+)
 from pydantic import ValidationError
 
 from strix.agents.prompt import render_system_prompt
+from strix.config.models import model_supports_programmatic_tool_calling
 from strix.tools.agents_graph.tools import (
     agent_finish,
     create_agent,
@@ -68,6 +77,12 @@ _CUSTOM_TOOL_INPUT_FIELD_BY_NAME = {
     "apply_patch": "patch",
 }
 _DEFAULT_CUSTOM_TOOL_INPUT_FIELD = "input"
+
+# Allowed callers for tools when programmatic tool calling is enabled.
+_PROGRAMMATIC_ALLOWED_CALLERS: list[ToolCaller] = cast(
+    "list[ToolCaller]",
+    ["direct", "programmatic"],
+)
 
 
 def _custom_tool_input_field(tool: CustomTool) -> str:
@@ -159,12 +174,31 @@ def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
     )
 
 
-def _configure_chat_completions_filesystem_tools(toolset: Any) -> None:
+def _configure_filesystem_tools(
+    toolset: Any, *, chat_completions: bool, programmatic: bool
+) -> None:
     for name, tool in cast("dict[str, Any]", vars(toolset)).items():
-        if isinstance(tool, CustomTool):
-            setattr(toolset, name, _custom_tool_as_function_tool(tool))
-        elif isinstance(tool, FunctionTool):
-            setattr(toolset, name, _function_tool_with_error_result(tool))
+        wrapped = tool
+        if chat_completions and isinstance(tool, CustomTool):
+            wrapped = _custom_tool_as_function_tool(tool)
+        elif chat_completions and isinstance(tool, FunctionTool):
+            wrapped = _function_tool_with_error_result(tool)
+        if programmatic and isinstance(
+            wrapped, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)
+        ):
+            wrapped.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS
+        setattr(toolset, name, wrapped)
+
+
+def _make_filesystem_configurator(*, chat_completions: bool, programmatic: bool) -> Any:
+    def configure(toolset: Any) -> None:
+        _configure_filesystem_tools(
+            toolset,
+            chat_completions=chat_completions,
+            programmatic=programmatic,
+        )
+
+    return configure
 
 
 _CHARS_ESCAPE_RE = re.compile(r"\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0abtnvfr\\])")
@@ -255,7 +289,7 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
     return tool
 
 
-def _configure_shell_tools(toolset: Any, *, chat_completions: bool) -> None:
+def _configure_shell_tools(toolset: Any, *, chat_completions: bool, programmatic: bool) -> None:
     for name, tool in cast("dict[str, Any]", vars(toolset)).items():
         if not isinstance(tool, FunctionTool):
             continue
@@ -266,12 +300,18 @@ def _configure_shell_tools(toolset: Any, *, chat_completions: bool) -> None:
             wrapped = _wrap_write_stdin(wrapped)
         if chat_completions:
             wrapped = _function_tool_with_error_result(wrapped)
+        if programmatic:
+            wrapped.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS
         setattr(toolset, name, wrapped)
 
 
-def _make_shell_configurator(*, chat_completions: bool) -> Any:
+def _make_shell_configurator(*, chat_completions: bool, programmatic: bool) -> Any:
     def configure(toolset: Any) -> None:
-        _configure_shell_tools(toolset, chat_completions=chat_completions)
+        _configure_shell_tools(
+            toolset,
+            chat_completions=chat_completions,
+            programmatic=programmatic,
+        )
 
     return configure
 
@@ -331,6 +371,15 @@ def _finish_tool_use_behavior(
                 final_output=tool_result.output,
             )
     return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
+
+
+def _mark_tools_programmatic(tools: list[Tool]) -> None:
+    """Allow eligible tools to be called directly by the model or from generated programs."""
+    for tool in tools:
+        if isinstance(tool, ProgrammaticToolCallingTool):
+            continue
+        if isinstance(tool, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)):
+            tool.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS
 
 
 _BASE_TOOLS: tuple[Tool, ...] = (
@@ -465,16 +514,27 @@ def build_strix_agent(
         ]
     else:
         tools = [*_BASE_TOOLS, *agent_tools, agent_finish]
+
+    use_programmatic = (
+        not chat_completions_tools
+        and model is not None
+        and model_supports_programmatic_tool_calling(model)
+    )
+    if use_programmatic:
+        _mark_tools_programmatic(tools)
+        tools.append(ProgrammaticToolCallingTool())
+
     _ensure_unique_tool_names(tools)
 
     logger.info(
-        "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s)",
+        "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s, programmatic=%s)",
         "root" if is_root else "child",
         name,
         len(skills or []),
         len(tools),
         scan_mode,
         is_whitebox,
+        use_programmatic,
     )
 
     agent_model_options: dict[str, Any] = {}
@@ -491,13 +551,15 @@ def build_strix_agent(
         **agent_model_options,
         capabilities=[
             Filesystem(
-                configure_tools=(
-                    _configure_chat_completions_filesystem_tools if chat_completions_tools else None
+                configure_tools=_make_filesystem_configurator(
+                    chat_completions=chat_completions_tools,
+                    programmatic=use_programmatic,
                 ),
             ),
             Shell(
                 configure_tools=_make_shell_configurator(
                     chat_completions=chat_completions_tools,
+                    programmatic=use_programmatic,
                 ),
             ),
         ],

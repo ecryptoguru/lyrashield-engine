@@ -1037,6 +1037,12 @@ def main() -> None:
 
         sys.exit(run_auth(sys.argv[2:]))
 
+    # Provider checks are target-free deployment gates, not scans, so skip Docker.
+    if len(sys.argv) > 1 and sys.argv[1] == "provider-contract":
+        from strix.interface.provider_contract_cli import run_provider_contract
+
+        sys.exit(run_provider_contract(sys.argv[2:]))
+
     args = parse_arguments()
 
     if args.config:

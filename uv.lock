@@ -1169,8 +1169,8 @@ requires-dist = [
     { name = "docker", specifier = ">=7.1.0" },
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "litellm" },
-    { name = "openai", specifier = ">=2.26.0,<2.45" },
-    { name = "openai-agents", extras = ["litellm"], specifier = "==0.14.6" },
+    { name = "openai", specifier = ">=2.48.0,<2.49" },
+    { name = "openai-agents", extras = ["litellm"], git = "https://github.com/openai/openai-agents-python.git?rev=f663a06aea23c859be8e8555c005ac912bd58337" },
     { name = "pydantic", specifier = ">=2.11.3" },
     { name = "pydantic-settings", specifier = ">=2.13.0" },
     { name = "pypdf", marker = "extra == 'viewer'", specifier = ">=5.0" },
@@ -1495,7 +1495,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "2.44.0"
+version = "2.48.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1507,28 +1507,23 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/49/f5/7c7cb955305cb41f7f3c5fd7e0e38bf6bbf2658468863d4b7b868a5cb8df/openai-2.44.0.tar.gz", hash = "sha256:68a5a5ffad82b8ff7d451c437529fb64f7c3b8123aaf0c021966a882d9e3947d", size = 988753, upload-time = "2026-06-24T20:56:02.293Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/ae/d4d1835488c0350424009dac5095b9a3e173bee12fd2e421ee27e2142c42/openai-2.48.0.tar.gz", hash = "sha256:231b1e7661dda14574986c2f71451e9d584b7fe69e0ee6480e12ed090b48fc16", size = 1093427, upload-time = "2026-07-23T20:15:50.402Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/f4/561ed79fd94876160018a5e75254cfcb9b0e62d4dded9dcb20072e86d623/openai-2.44.0-py3-none-any.whl", hash = "sha256:0a2a3ab2e29aeda368700f662ff9ba0f9df17ba4c54577a64e08b8115a3cc0ad", size = 1366216, upload-time = "2026-06-24T20:55:58.882Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/2a/dcb891114e303c4379d4a498f10222e33eee540bcef4e1e493bd0af2b242/openai-2.48.0-py3-none-any.whl", hash = "sha256:c98df30aaaf93c51979f64d3e7c5b76464f8be0173368266229eb8fe6bd30f2c", size = 1648520, upload-time = "2026-07-23T20:15:48.052Z" },
 ]
 
 [[package]]
 name = "openai-agents"
-version = "0.14.6"
-source = { registry = "https://pypi.org/simple" }
+version = "0.18.3"
+source = { git = "https://github.com/openai/openai-agents-python.git?rev=f663a06aea23c859be8e8555c005ac912bd58337#f663a06aea23c859be8e8555c005ac912bd58337" }
 dependencies = [
     { name = "griffelib" },
     { name = "mcp" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "requests" },
-    { name = "types-requests" },
     { name = "typing-extensions" },
     { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/fe/4f859d13ba5eea5fe5a3166ffeed04bd04d478ccf3187da6acebb17ba2a7/openai_agents-0.14.6.tar.gz", hash = "sha256:e9d16b835f73be4c5e3798694f90d7a62efcade931e59416bc7462c850e15705", size = 5311175, upload-time = "2026-04-25T02:32:00.897Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4b/96/b49d04e860c79699814289c273e88066ce97a50686172b5733b7458da062/openai_agents-0.14.6-py3-none-any.whl", hash = "sha256:fdd3fb459892c8af5d0b522908b544e96f6217c7254ba55e966424493b43c1ed", size = 816112, upload-time = "2026-04-25T02:31:58.976Z" },
 ]
 
 [package.optional-dependencies]
@@ -2575,18 +2570,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/dd/84/da0e5038228fa34dfd77c5026b173ed035d2a3ba31f1077590c013de2bff/tqdm-4.69.1.tar.gz", hash = "sha256:2be21080a0ce17e902c2f1baeb6a74bf551b67bbdfa4bc0109fad471d0b4cb0d", size = 793046, upload-time = "2026-07-24T14:22:02.08Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/01/50/5817619a0fca56aff06383dbfde7ae017b3ca383915b3f1e4713164273cf/tqdm-4.69.1-py3-none-any.whl", hash = "sha256:0a654b96f7a2660cceb615b56f307ec2bef96c515409014a429a561981ab52b4", size = 675452, upload-time = "2026-07-24T14:22:00.048Z" },
-]
-
-[[package]]
-name = "types-requests"
-version = "2.33.0.20260712"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/db/51/703318f7b7be8bee126ec13bf615050f932d0179b8784420f3a0199cc769/types_requests-2.33.0.20260712.tar.gz", hash = "sha256:2141b67ab534a5c5cd2dac5034f2a35f42e699c5bf185eee608c5246a069d7fb", size = 25084, upload-time = "2026-07-12T05:14:20.455Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/e7/010c87f559e216d83f9dc51e939633fd0d0ead3377340181ab0e223cd3b5/types_requests-2.33.0.20260712-py3-none-any.whl", hash = "sha256:de027e28c171d3da529689cbfa023b0b4eab188c8dfa22fd834eebd2cee6e7bb", size = 21392, upload-time = "2026-07-12T05:14:19.616Z" },
 ]
 
 [[package]]

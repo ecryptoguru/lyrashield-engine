@@ -13,6 +13,7 @@ from strix.config.models import (
     is_gpt56_model,
     is_recommended_or_frontier_model,
     request_timeout_extra_args,
+    uses_chat_completions_tool_schema,
 )
 from strix.config.settings import LlmSettings, Settings
 
@@ -118,6 +119,31 @@ def test_azure_gpt56_route_fails_closed_without_endpoint() -> None:
 
     with pytest.raises(RuntimeError, match="requires LLM_API_BASE"):
         StrixProvider(settings=settings)
+
+
+def test_azure_gpt56_keeps_json_tools_without_programmatic_opt_in() -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="azure_ai/gpt-5.6-terra",
+            api_base="https://example.services.ai.azure.com",
+        )
+    )
+
+    assert uses_chat_completions_tool_schema("azure_ai/gpt-5.6-terra", settings)
+
+
+def test_azure_gpt56_uses_responses_tools_when_programmatic_is_opted_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "1")
+    settings = Settings(
+        llm=LlmSettings(
+            model="azure_ai/gpt-5.6-terra",
+            api_base="https://example.services.ai.azure.com",
+        )
+    )
+
+    assert not uses_chat_completions_tool_schema("azure_ai/gpt-5.6-terra", settings)
 
 
 @pytest.mark.parametrize(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING, Any, cast
 
 from agents.model_settings import ModelSettings
@@ -10,6 +11,7 @@ from openai.types.shared import Reasoning
 
 from strix.config.models import (
     DEFAULT_MODEL_RETRY,
+    is_gpt56_model,
     is_known_openai_bare_model,
     model_supports_reasoning,
     request_timeout_extra_args,
@@ -23,6 +25,25 @@ if TYPE_CHECKING:
 
 DEFAULT_MAX_TURNS = 500
 MAX_CHILD_INHERITED_HISTORY_BYTES = 24 * 1024
+
+# Opt-in/opt-out for explicit prompt-cache breakpoints. "auto" (default) enables
+# breakpoints for known GPT-5.6 deployments; "1"/"true" forces them on; "0"/"false"
+# forces them off. Provider support should be confirmed with a smoke scan.
+_PROMPT_CACHE_BREAKPOINT_ENV = "LYRASHIELD_PROMPT_CACHE_BREAKPOINTS"
+
+
+def _prompt_cache_breakpoints_enabled(model_name: str | None) -> bool:
+    """Return whether the model/provider pair should emit explicit cache breakpoints.
+
+    Defaults to the known GPT-5.6 allowlist (OpenAI/Azure AI) and can be overridden
+    with ``LYRASHIELD_PROMPT_CACHE_BREAKPOINTS``.
+    """
+    env = os.environ.get(_PROMPT_CACHE_BREAKPOINT_ENV, "").strip().lower()
+    if env in ("1", "true", "yes"):
+        return True
+    if env in ("0", "false", "no"):
+        return False
+    return is_gpt56_model(model_name)
 
 
 def _accepts_required_tool_choice(model_name: str | None) -> bool:
@@ -61,7 +82,8 @@ def _as_str_list_of_dicts(value: Any) -> list[dict[str, Any]]:
     return [cast("dict[str, Any]", item) for item in items if isinstance(item, dict)]
 
 
-def build_root_task(scan_config: dict[str, Any]) -> str:
+def _build_root_task_parts(scan_config: dict[str, Any]) -> tuple[list[str], str]:
+    """Return the raw task parts and any user instructions separately."""
     targets = _as_str_list_of_dicts(scan_config.get("targets", []))
     diff_scope = _as_str_dict(scan_config.get("diff_scope"))
     user_instructions = scan_config.get("user_instructions", "") or ""
@@ -118,10 +140,48 @@ def build_root_task(scan_config: dict[str, Any]) -> str:
             if deleted:
                 parts.append(f"- {label}: {deleted} deleted file(s) are context-only")
 
+    return parts, user_instructions
+
+
+def build_root_task(scan_config: dict[str, Any]) -> str:
+    """Return the root task as a single string, used for metadata and tests."""
+    parts, user_instructions = _build_root_task_parts(scan_config)
     task = " ".join(parts)
     if user_instructions:
         task = f"{task}\n\nSpecial instructions: {user_instructions}"
     return task
+
+
+def build_root_initial_input(
+    scan_config: dict[str, Any],
+    model_name: str | None = None,
+) -> str | list[dict[str, Any]]:
+    """Return the root agent's first user message.
+
+    For models that support explicit prompt-cache breakpoints, split the stable
+    target/scope prefix from the variable per-scan instructions and mark the
+    boundary. This lets the provider cache the prefix across turns.
+    """
+    parts, user_instructions = _build_root_task_parts(scan_config)
+    stable = " ".join(parts).strip()
+
+    if not _prompt_cache_breakpoints_enabled(model_name) or not user_instructions:
+        # No breakpoint needed when there is no variable suffix to separate.
+        return build_root_task(scan_config)
+
+    variable = f"Special instructions: {user_instructions}"
+    if not stable:
+        return variable
+
+    content: list[dict[str, Any]] = [
+        {
+            "type": "input_text",
+            "text": stable,
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        },
+        {"type": "input_text", "text": variable},
+    ]
+    return [{"role": "user", "content": content}]
 
 
 def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:

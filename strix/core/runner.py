@@ -34,6 +34,7 @@ from strix.core.execution import (
 from strix.core.hooks import BudgetExceededError, ReportUsageHooks, set_active_hooks
 from strix.core.inputs import (
     DEFAULT_MAX_TURNS,
+    build_root_initial_input,
     build_root_task,
     build_scope_context,
     make_model_settings,
@@ -420,7 +421,14 @@ async def run_strix_scan(
                 hooks=hooks,
             )
 
-        initial_input: Any = [] if is_resume else root_task
+        initial_input: Any = (
+            []
+            if is_resume
+            else build_root_initial_input(
+                scan_config,
+                model_name=resolved_model,
+            )
+        )
 
         # Resume + new ``--instruction``: SDK replay drives root from
         # agents.db with ``initial_input=[]``, so a brand-new instruction

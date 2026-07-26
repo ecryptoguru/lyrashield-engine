@@ -311,7 +311,7 @@ def _serialize_request_usage_entry(entry: Any) -> dict[str, Any]:
         "cached_tokens": _int_or_zero(input_details.get("cached_tokens")),
     }
     cache_write_tokens = input_details.get("cache_write_tokens")
-    if isinstance(cache_write_tokens, int) and cache_write_tokens >= 0:
+    if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
         details["cache_write_tokens"] = cache_write_tokens
     return {
         "input_tokens": input_tokens,

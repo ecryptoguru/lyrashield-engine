@@ -60,6 +60,31 @@ def is_gpt56_model(model_name: str | None) -> bool:
     return re.search(r"(?:^|[/.-])gpt-5\.6-(?:terra|luna)(?:$|[/.-])", normalized) is not None
 
 
+def model_supports_programmatic_tool_calling(model_name: str | None) -> bool:
+    """Return whether the resolved model is known to support programmatic tool calling.
+
+    The feature is enabled by default for OpenAI ``gpt-5.6-*`` deployments, which
+    currently support the ``programmatic_tool_calling`` Responses tool type. Azure AI
+    ``azure_ai/gpt-5.6-*`` requires a Trusted Access / Cyber-enabled deployment and is
+    only enabled when ``LYRASHIELD_PROGRAMMATIC_TOOL_CALLING=1`` is explicitly set.
+    Use ``LYRASHIELD_PROGRAMMATIC_TOOL_CALLING=0`` to force it off.
+    """
+    if not model_name:
+        return False
+    env = os.environ.get("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "").strip().lower()
+    if env in ("0", "false", "no"):
+        return False
+    name = model_name.strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    if env in ("1", "true", "yes"):
+        return is_gpt56_model(name)
+    # Default: only OpenAI direct deployments are known to support PTC today.
+    return name.startswith("openai/") and is_gpt56_model(name)
+
+
 def _retry_statusless_provider_errors(context: RetryPolicyContext) -> bool:
     """Retry statusless provider errors (e.g. mid-stream quota/billing), but not aborts."""
     normalized = context.normalized
@@ -430,6 +455,10 @@ def _configure_litellm_default(name: str, value: str) -> None:
 
 def uses_chat_completions_tool_schema(model_name: str, settings: Settings) -> bool:
     """Return whether the resolved SDK route can only receive JSON function tools."""
+    # ponytail: explicit operator opt-in is the provider capability assertion.
+    # Keep Azure on its proven JSON-tool path unless that assertion is present.
+    if model_supports_programmatic_tool_calling(model_name):
+        return False
     if codex.subscription_model(model_name):
         return False
     model = model_name.strip().lower()
