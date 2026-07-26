@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from strix.core.paths import run_record_path
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 _TERMINAL_STATUSES = {"completed", "stopped", "failed", "interrupted"}
 
-_KNOWN_SEVERITIES = ("critical", "high", "medium", "low")
+_KNOWN_SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "low")
 
 
 def severity_counts(vulns: list[Any]) -> dict[str, int]:
@@ -28,9 +28,12 @@ def severity_counts(vulns: list[Any]) -> dict[str, int]:
     ``informational``, ``unknown``, missing, ...) folds into ``low`` so the
     shared UI renders cleanly.
     """
-    counts = dict.fromkeys(_KNOWN_SEVERITIES, 0)
+    counts: dict[str, int] = dict.fromkeys(_KNOWN_SEVERITIES, 0)
     for vuln in vulns:
-        raw = vuln.get("severity") if isinstance(vuln, dict) else None
+        if not isinstance(vuln, dict):
+            continue
+        vuln = cast("dict[str, Any]", vuln)
+        raw = vuln.get("severity")
         severity = str(raw or "").lower().strip()
         if severity not in counts:
             severity = "low"
@@ -57,6 +60,7 @@ def read_run_summary(run_dir: Path) -> dict[str, Any]:
     record = _load_json(run_record_path(run_dir), default={})
     if not isinstance(record, dict):
         record = {}
+    record = cast("dict[str, Any]", record)
     status = record.get("status")
     finished = status in _TERMINAL_STATUSES and bool(record.get("end_time"))
     return {**record, "finished": finished}
@@ -65,19 +69,22 @@ def read_run_summary(run_dir: Path) -> dict[str, Any]:
 def primary_target(record: dict[str, Any]) -> str | None:
     """The first target's original string from a run record, or None."""
     targets = record.get("targets_info")
-    if isinstance(targets, list):
-        for entry in targets:
-            if isinstance(entry, dict):
-                original = entry.get("original")
-                if isinstance(original, str) and original:
-                    return original
+    if not isinstance(targets, list):
+        return None
+    for entry in cast("list[Any]", targets):
+        if not isinstance(entry, dict):
+            continue
+        entry = cast("dict[str, Any]", entry)
+        original = entry.get("original")
+        if isinstance(original, str) and original:
+            return original
     return None
 
 
 def read_vulnerabilities(run_dir: Path) -> list[Any]:
     """The ``vulnerabilities.json`` list (empty until a scan writes it)."""
     data = _load_json(run_dir / "vulnerabilities.json", default=[])
-    return data if isinstance(data, list) else []
+    return cast("list[Any]", data) if isinstance(data, list) else []
 
 
 def read_report_markdown(run_dir: Path) -> str:

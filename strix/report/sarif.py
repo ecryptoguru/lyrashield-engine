@@ -565,11 +565,13 @@ def _build_fixes(report: dict[str, Any]) -> list[dict[str, Any]] | None:
     raw_locations = report.get("code_locations")
     if not isinstance(raw_locations, list):
         return None
+    raw_locations = cast("list[Any]", raw_locations)
 
     artifact_changes: list[dict[str, Any]] = []
     for location in raw_locations:
         if not isinstance(location, dict):
             continue
+        location = cast("dict[str, Any]", location)
         file_path = _string_value(location.get("file"))
         fix_before = _string_value(location.get("fix_before"))
         fix_after = _string_value(location.get("fix_after"))
@@ -663,6 +665,7 @@ def _build_physical_locations(raw_locations: Any) -> tuple[list[dict[str, Any]],
     """Return SARIF physical locations and a count of dropped unsafe locations."""
     if not isinstance(raw_locations, list):
         return [], 0
+    raw_locations = cast("list[Any]", raw_locations)
 
     locations: list[dict[str, Any]] = []
     dropped_location_count = 0
@@ -670,6 +673,7 @@ def _build_physical_locations(raw_locations: Any) -> tuple[list[dict[str, Any]],
         if not isinstance(location, dict):
             dropped_location_count += 1
             continue
+        location = cast("dict[str, Any]", location)
 
         file_path = _string_value(location.get("file"))
         start_line = location.get("start_line")
@@ -850,11 +854,16 @@ def _primary_fingerprint(
     uri = ""
     start_line: int | None = None
     if primary_physical:
-        uri = (primary_physical.get("artifactLocation") or {}).get("uri", "") or ""
-        region = primary_physical.get("region") or {}
-        sl = region.get("startLine")
-        if isinstance(sl, int) and sl >= 1:
-            start_line = sl
+        artifact_location = primary_physical.get("artifactLocation")
+        if isinstance(artifact_location, dict):
+            artifact_location = cast("dict[str, Any]", artifact_location)
+            uri = _string_value(artifact_location.get("uri")) or ""
+        region = primary_physical.get("region")
+        if isinstance(region, dict):
+            region = cast("dict[str, Any]", region)
+            sl = region.get("startLine")
+            if isinstance(sl, int) and sl >= 1:
+                start_line = sl
 
     method = _string_value(report.get("method")) or ""
     endpoint = _string_value(report.get("endpoint")) or ""
@@ -894,7 +903,7 @@ def _first_physical_location(locations: list[dict[str, Any]]) -> dict[str, Any] 
     """Return the first location's physicalLocation payload, if any."""
     for location in locations:
         physical = location.get("physicalLocation")
-        if physical:
+        if isinstance(physical, dict):
             return cast("dict[str, Any]", physical)
     return None
 

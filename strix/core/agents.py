@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 Status = Literal["running", "waiting", "completed", "stopped", "crashed", "failed"]
 
+_ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
+
 
 @dataclass(slots=True)
 class AgentRuntime:
@@ -169,6 +171,13 @@ class AgentCoordinator:
             if target_agent_id not in self.statuses:
                 logger.debug("agent.send dropped unknown target=%s", target_agent_id)
                 return False
+            if self.statuses[target_agent_id] not in _ACTIVE_STATUSES:
+                logger.debug(
+                    "agent.send dropped target=%s because its status is %s",
+                    target_agent_id,
+                    self.statuses[target_agent_id],
+                )
+                return False
             runtime = self.runtimes.setdefault(target_agent_id, AgentRuntime())
             session = runtime.session
             stream = runtime.stream
@@ -236,7 +245,7 @@ class AgentCoordinator:
         await self._maybe_snapshot()
 
     async def cancel_descendants(self, agent_id: str) -> None:
-        tasks = []
+        tasks: list[asyncio.Task[Any]] = []
         async with self._lock:
             for aid in reversed(self._subtree_order_locked(agent_id)):
                 task = self.runtimes.get(aid, AgentRuntime()).task

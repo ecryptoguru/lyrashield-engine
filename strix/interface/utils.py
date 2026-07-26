@@ -12,7 +12,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -28,6 +28,14 @@ from strix.config import load_settings
 
 logger = logging.getLogger(__name__)
 _WILDCARD_IPV4_HOST = str(ipaddress.IPv4Address(0))
+
+
+def _as_str_dict(value: Any) -> dict[str, Any]:
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
+
+
+def _as_str_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def get_severity_color(severity: str) -> str:
@@ -112,10 +120,10 @@ def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR091
         text.append("CVE: ", style=field_style)
         text.append(cve)
 
-    cvss_breakdown = report.get("cvss_breakdown", {})
+    cvss_breakdown = _as_str_dict(report.get("cvss_breakdown"))
     if cvss_breakdown:
         text.append("\n\n")
-        cvss_parts = []
+        cvss_parts: list[str] = []
         if cvss_breakdown.get("attack_vector"):
             cvss_parts.append(f"AV:{cvss_breakdown['attack_vector']}")
         if cvss_breakdown.get("attack_complexity"):
@@ -222,7 +230,7 @@ def _build_vulnerability_stats(stats_text: Text, report_state: Any) -> None:
 
         stats_text.append("Vulnerabilities  ", style="bold red")
 
-        severity_parts = []
+        severity_parts: list[Text] = []
         for severity in ["critical", "high", "medium", "low", "info"]:
             count = severity_counts[severity]
             if count > 0:
@@ -251,9 +259,9 @@ def _build_vulnerability_stats(stats_text: Text, report_state: Any) -> None:
 def _llm_usage(report_state: Any) -> dict[str, Any]:
     if hasattr(report_state, "get_total_llm_usage"):
         usage = report_state.get_total_llm_usage()
-        return usage if isinstance(usage, dict) else {}
+        return _as_str_dict(usage)
     usage = getattr(report_state, "run_record", {}).get("llm_usage")
-    return usage if isinstance(usage, dict) else {}
+    return _as_str_dict(usage)
 
 
 def _is_subscription(report_state: Any) -> bool:
@@ -263,8 +271,10 @@ def _is_subscription(report_state: Any) -> bool:
     to current settings.
     """
     record = getattr(report_state, "run_record", None)
-    if isinstance(record, dict) and record.get("auth_mode"):
-        return record.get("auth_mode") == "subscription"
+    if isinstance(record, dict):
+        record = _as_str_dict(record)
+        if record.get("auth_mode"):
+            return record.get("auth_mode") == "subscription"
     from strix.config import codex
 
     return codex.auth_mode(load_settings().llm.model) == "subscription"
@@ -288,9 +298,14 @@ def _float_stat(usage: dict[str, Any], key: str) -> float:
 def _detail_value(usage: dict[str, Any], detail_key: str, value_key: str) -> int:
     details = usage.get(detail_key)
     if isinstance(details, list):
-        details = details[0] if details and isinstance(details[0], dict) else {}
+        details = (
+            _as_str_dict(details[0])
+            if details and isinstance(details[0], dict)
+            else {}
+        )
     if not isinstance(details, dict):
         return 0
+    details = _as_str_dict(details)
     return _int_stat(details, value_key)
 
 
@@ -380,7 +395,7 @@ def build_live_stats_text(report_state: Any) -> Text:
             if severity in severity_counts:
                 severity_counts[severity] += 1
 
-        severity_parts = []
+        severity_parts: list[Text] = []
         for severity in ["critical", "high", "medium", "low", "info"]:
             count = severity_counts[severity]
             if count > 0:
@@ -452,12 +467,12 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
         return "pentest"
 
     first = targets_info[0]
-    target_type = first.get("type")
-    details = first.get("details", {}) or {}
-    original = first.get("original", "") or ""
+    target_type = str(first.get("type") or "")
+    details = _as_str_dict(first.get("details"))
+    original = str(first.get("original", "") or "")
 
     if target_type == "web_application":
-        url = details.get("target_url", original)
+        url = str(details.get("target_url", original) or original)
         try:
             parsed = urlparse(url)
             return str(parsed.netloc or parsed.path or url)
@@ -465,7 +480,7 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
             return str(url)
 
     if target_type == "repository":
-        repo = details.get("target_repo", original)
+        repo = str(details.get("target_repo", original) or original)
         parsed = urlparse(repo)
         path = parsed.path or repo
         name = path.rstrip("/").split("/")[-1] or path
@@ -474,14 +489,15 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
         return str(name)
 
     if target_type == "local_code":
-        path_str = details.get("target_path", original)
+        path_str = str(details.get("target_path", original) or original)
         try:
             return str(Path(path_str).name or path_str)
         except Exception:
             return str(path_str)
 
     if target_type == "ip_address":
-        return str(details.get("target_ip", original) or original)
+        ip_value = str(details.get("target_ip", original) or original)
+        return ip_value or original or "pentest"
 
     return str(original or "pentest")
 
@@ -518,7 +534,7 @@ class RepoDiffScope:
     renamed_files: list[dict[str, Any]]
     deleted_files: list[str]
     analyzable_files: list[str]
-    truncated_sections: dict[str, bool] = field(default_factory=dict)
+    truncated_sections: dict[str, bool] = field(default_factory=dict[str, bool])
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -545,7 +561,7 @@ class DiffScopeResult:
     active: bool
     mode: str
     instruction_block: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict[str, Any])
 
 
 def _git_executable() -> str:
@@ -898,10 +914,10 @@ def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:
                 )
 
         if scope.renamed_files:
-            rename_lines = []
+            rename_lines: list[str] = []
             for rename in scope.renamed_files:
-                old_path = rename.get("old_path") or "unknown"
-                new_path = rename.get("new_path") or "unknown"
+                old_path = str(rename.get("old_path") or "unknown")
+                new_path = str(rename.get("new_path") or "unknown")
                 similarity = rename.get("similarity")
                 if isinstance(similarity, int):
                     rename_lines.append(f"- {old_path} -> {new_path} (similarity {similarity}%)")
@@ -1112,7 +1128,7 @@ def _is_http_git_repo(url: str) -> bool:
 
 
 def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
-    if not target or not isinstance(target, str):
+    if not target:
         raise ValueError("Target must be a non-empty string")
 
     target = target.strip()
@@ -1238,14 +1254,14 @@ def assign_workspace_subdirs(targets_info: list[dict[str, Any]]) -> None:
     name_counts: dict[str, int] = {}
 
     for target in targets_info:
-        target_type = target["type"]
-        details = target["details"]
+        target_type = str(target.get("type") or "")
+        details = _as_str_dict(target.get("details"))
 
         base_name: str | None = None
         if target_type == "repository":
-            base_name = derive_repo_base_name(details["target_repo"])
+            base_name = derive_repo_base_name(str(details.get("target_repo") or ""))
         elif target_type == "local_code":
-            base_name = derive_local_base_name(details.get("target_path", "local"))
+            base_name = derive_local_base_name(str(details.get("target_path") or "local"))
 
         if base_name is None:
             continue
@@ -1267,22 +1283,22 @@ def collect_local_sources(targets_info: list[dict[str, Any]]) -> list[dict[str, 
     local_sources: list[dict[str, Any]] = []
 
     for target_info in targets_info:
-        details = target_info["details"]
-        workspace_subdir = details.get("workspace_subdir")
+        details = _as_str_dict(target_info.get("details"))
+        workspace_subdir = _as_str_or_none(details.get("workspace_subdir"))
 
-        if target_info["type"] == "local_code" and "target_path" in details:
+        if target_info.get("type") == "local_code" and "target_path" in details:
             local_sources.append(
                 {
-                    "source_path": details["target_path"],
+                    "source_path": str(details["target_path"]),
                     "workspace_subdir": workspace_subdir,
                     "mount": bool(details.get("mount", False)),
                 }
             )
 
-        elif target_info["type"] == "repository" and "cloned_repo_path" in details:
+        elif target_info.get("type") == "repository" and "cloned_repo_path" in details:
             local_sources.append(
                 {
-                    "source_path": details["cloned_repo_path"],
+                    "source_path": str(details["cloned_repo_path"]),
                     "workspace_subdir": workspace_subdir,
                     "mount": False,
                 }
@@ -1334,10 +1350,10 @@ def find_oversized_local_targets(
     for target in targets_info:
         if target.get("type") != "local_code":
             continue
-        details = target.get("details") or {}
+        details = _as_str_dict(target.get("details"))
         if details.get("mount"):
             continue
-        target_path = details.get("target_path")
+        target_path = str(details.get("target_path") or "")
         if not target_path:
             continue
         size = directory_size_bytes(Path(target_path))
@@ -1390,8 +1406,8 @@ def dedupe_local_targets(targets_info: list[dict[str, Any]]) -> list[dict[str, A
     result: list[dict[str, Any]] = []
     index_by_path: dict[str, int] = {}
     for target in targets_info:
-        details = target.get("details") or {}
-        path = details.get("target_path")
+        details = _as_str_dict(target.get("details"))
+        path = str(details.get("target_path") or "")
         if target.get("type") != "local_code" or not path:
             result.append(target)
             continue
@@ -1399,7 +1415,9 @@ def dedupe_local_targets(targets_info: list[dict[str, Any]]) -> list[dict[str, A
         if existing is None:
             index_by_path[path] = len(result)
             result.append(target)
-        elif details.get("mount") and not (result[existing].get("details") or {}).get("mount"):
+        elif details.get("mount") and not _as_str_dict(
+            result[existing].get("details")
+        ).get("mount"):
             result[existing] = target  # bind mount supersedes the copied entry
     return result
 
@@ -1412,12 +1430,10 @@ def _is_localhost_host(host: str) -> bool:
 
     try:
         ip = ipaddress.ip_address(host_lower)
-        if isinstance(ip, ipaddress.IPv4Address):
-            return ip.is_loopback  # 127.0.0.0/8
-        if isinstance(ip, ipaddress.IPv6Address):
-            return ip.is_loopback  # ::1
     except ValueError:
         pass
+    else:
+        return ip.is_loopback
 
     return False
 
@@ -1426,11 +1442,11 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
     from yarl import URL
 
     for target_info in targets_info:
-        target_type = target_info.get("type")
-        details = target_info.get("details", {})
+        target_type = str(target_info.get("type") or "")
+        details = _as_str_dict(target_info.get("details"))
 
         if target_type == "web_application":
-            target_url = details.get("target_url", "")
+            target_url = str(details.get("target_url") or "")
             try:
                 url = URL(target_url)
             except (ValueError, TypeError):
@@ -1440,7 +1456,7 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
                 details["target_url"] = str(url.with_host(host_gateway))
 
         elif target_type == "ip_address":
-            target_ip = details.get("target_ip", "")
+            target_ip = str(details.get("target_ip") or "")
             if target_ip and _is_localhost_host(target_ip):
                 details["target_ip"] = host_gateway
 
@@ -1619,6 +1635,7 @@ def validate_config_file(config_path: str) -> Path:
     if not isinstance(data, dict):
         console.print("[bold red]Error:[/] Config file must contain a JSON object")
         sys.exit(1)
+    data = _as_str_dict(data)
 
     if "env" not in data or not isinstance(data.get("env"), dict):
         console.print("[bold red]Error:[/] Config file must have an 'env' object")

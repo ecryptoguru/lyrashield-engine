@@ -7,7 +7,7 @@ import json
 import logging
 import math
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from agents.model_settings import ModelSettings
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _dedupe_extra_args(dedupe: DedupeSettings) -> dict[str, str]:
+def dedupe_extra_args(dedupe: DedupeSettings) -> dict[str, str]:
     """Per-call credential + endpoint for the dedupe model.
 
     Provider env vars and the global base URL are process-wide, so a
@@ -60,7 +60,7 @@ def _dedupe_model_settings(
         force_required_tool_choice=False,
         request_timeout=request_timeout,
     )
-    extra = _dedupe_extra_args(dedupe)
+    extra = dedupe_extra_args(dedupe)
     if extra:
         settings = settings.resolve(ModelSettings(extra_args=extra))
     return settings
@@ -151,7 +151,7 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
         "dependency_metadata",
     ]
 
-    cleaned = {}
+    cleaned: dict[str, Any] = {}
     for field in relevant_fields:
         if report.get(field):
             value = report[field]
@@ -244,6 +244,8 @@ async def _request_dedupe_judgement(
                 model=model_name,
                 usage=response.usage if response is not None else None,
             )
+    if response is None:
+        raise RuntimeError("Dedupe model call did not return a response")
     return response
 
 
@@ -323,6 +325,7 @@ def _dependency_identity(report: dict[str, Any]) -> tuple[str, str, str] | None:
     metadata = report.get("dependency_metadata")
     if not isinstance(metadata, dict):
         return None
+    metadata = cast("dict[str, Any]", metadata)
 
     raw_cve = report.get("cve")
     raw_package = metadata.get("package_name")
@@ -433,7 +436,7 @@ def _dynamic_identity(report: dict[str, Any]) -> tuple[str, ...] | None:
     locations = report.get("code_locations")
     primary_location = ""
     if isinstance(locations, list) and locations and isinstance(locations[0], dict):
-        first = locations[0]
+        first = cast("dict[str, Any]", locations[0])
         primary_location = ":".join(
             [
                 _normalized_text(first.get("file")),

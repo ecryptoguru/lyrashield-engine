@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.model_settings import ModelSettings
 from openai.types.shared import Reasoning
@@ -50,9 +50,20 @@ def _supports_parallel_tool_calls_setting(model_name: str | None) -> bool:
     return not name.startswith("azure_ai/gpt-5.6-")
 
 
+def _as_str_dict(value: Any) -> dict[str, Any]:
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
+
+
+def _as_str_list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    items: list[Any] = cast("list[Any]", value)
+    return [cast("dict[str, Any]", item) for item in items if isinstance(item, dict)]
+
+
 def build_root_task(scan_config: dict[str, Any]) -> str:
-    targets = scan_config.get("targets", []) or []
-    diff_scope = scan_config.get("diff_scope") or {}
+    targets = _as_str_list_of_dicts(scan_config.get("targets", []))
+    diff_scope = _as_str_dict(scan_config.get("diff_scope"))
     user_instructions = scan_config.get("user_instructions", "") or ""
 
     sections: dict[str, list[str]] = {
@@ -63,25 +74,27 @@ def build_root_task(scan_config: dict[str, Any]) -> str:
     }
 
     for target in targets:
-        ttype = target.get("type")
-        details = target.get("details") or {}
-        workspace_subdir = details.get("workspace_subdir")
+        ttype = str(target.get("type") or "")
+        details = _as_str_dict(target.get("details"))
+        workspace_subdir_raw = details.get("workspace_subdir")
+        workspace_subdir = workspace_subdir_raw if isinstance(workspace_subdir_raw, str) else None
         workspace_path = f"/workspace/{workspace_subdir}" if workspace_subdir else "/workspace"
 
         if ttype == "repository":
-            url = details.get("target_repo", "")
-            cloned = details.get("cloned_repo_path")
+            url = str(details.get("target_repo") or "")
+            cloned_raw = details.get("cloned_repo_path")
+            cloned = cloned_raw if isinstance(cloned_raw, str) else None
             sections["Repositories"].append(
                 f"- {url} (available at: {workspace_path})" if cloned else f"- {url}",
             )
         elif ttype == "local_code":
-            path = details.get("target_path", "unknown")
+            path = str(details.get("target_path") or "unknown")
             suffix = ", read-only mount" if details.get("mount") else ""
             sections["Local Codebases"].append(f"- {path} (available at: {workspace_path}{suffix})")
         elif ttype == "web_application":
-            sections["URLs"].append(f"- {details.get('target_url', '')}")
+            sections["URLs"].append(f"- {(details.get('target_url') or '')!s}")
         elif ttype == "ip_address":
-            sections["IP Addresses"].append(f"- {details.get('target_ip', '')}")
+            sections["IP Addresses"].append(f"- {(details.get('target_ip') or '')!s}")
 
     parts: list[str] = []
     for label, items in sections.items():
@@ -95,12 +108,14 @@ def build_root_task(scan_config: dict[str, Any]) -> str:
             "- Pull request diff-scope mode is active. Prioritize changed files "
             "and use other files only for context.",
         )
-        for repo_scope in diff_scope.get("repos", []) or []:
-            label = (
-                repo_scope.get("workspace_subdir") or repo_scope.get("source_path") or "repository"
+        for repo_scope in _as_str_list_of_dicts(diff_scope.get("repos")):
+            label = str(
+                repo_scope.get("workspace_subdir")
+                or repo_scope.get("source_path")
+                or "repository"
             )
-            changed = repo_scope.get("analyzable_files_count", 0)
-            deleted = repo_scope.get("deleted_files_count", 0)
+            changed = int(repo_scope.get("analyzable_files_count") or 0)
+            deleted = int(repo_scope.get("deleted_files_count") or 0)
             parts.append(f"- {label}: {changed} changed file(s) in primary scope")
             if deleted:
                 parts.append(f"- {label}: {deleted} deleted file(s) are context-only")
@@ -119,13 +134,19 @@ def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
         "web_application": "target_url",
         "ip_address": "target_ip",
     }
-    for target in scan_config.get("targets", []) or []:
-        ttype = target.get("type", "unknown")
-        details = target.get("details") or {}
+    for target in _as_str_list_of_dicts(scan_config.get("targets", [])):
+        ttype = str(target.get("type") or "unknown")
+        details = _as_str_dict(target.get("details"))
         key = value_keys.get(ttype)
-        value = details.get(key, "") if key is not None else target.get("original", "")
+        raw_value = (
+            details.get(key, "") if key is not None else target.get("original", "")
+        )
+        value = str(raw_value or "")
 
-        workspace_subdir = details.get("workspace_subdir")
+        workspace_subdir_raw = details.get("workspace_subdir")
+        workspace_subdir = (
+            workspace_subdir_raw if isinstance(workspace_subdir_raw, str) else ""
+        )
         workspace_path = f"/workspace/{workspace_subdir}" if workspace_subdir else ""
         authorized.append(
             {"type": ttype, "value": value, "workspace_path": workspace_path},

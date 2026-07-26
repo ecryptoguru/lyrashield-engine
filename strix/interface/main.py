@@ -12,7 +12,7 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
@@ -431,14 +431,14 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
         logger.info("LLM warm-up succeeded for model %s", (llm.model or "").strip())
 
         if settings.dedupe.model:
-            from strix.report.dedupe import _dedupe_extra_args
+            from strix.report.dedupe import dedupe_extra_args
 
             dedupe_model = settings.dedupe.model.strip()
             raw_model = dedupe_model
             deduper = StrixProvider().get_model(dedupe_model)
             # Match the runtime path: send the dedupe key/endpoint per call so a
             # separate-provider dedupe model authenticates during warm-up too.
-            deduper_extra = _dedupe_extra_args(settings.dedupe)
+            deduper_extra = dedupe_extra_args(settings.dedupe)
             deduper_settings = ModelSettings(extra_args=deduper_extra or None)
             await asyncio.wait_for(
                 deduper.get_response(
@@ -755,9 +755,12 @@ Examples:
                 "the following arguments are required: -t/--target, --target-list, or --mount "
                 "(or use --resume <run_name> to continue a prior scan)"
             )
-        args.targets_info = []
-        targets = list(args.target or [])
-        for target_list_path in args.target_list or []:
+        target_strs: list[str] = cast("list[str]", args.target or [])
+        target_list_paths: list[str] = cast("list[str]", args.target_list or [])
+        mount_paths: list[str] = cast("list[str]", args.mount or [])
+        targets_info: list[dict[str, Any]] = []
+        targets: list[str] = list(target_strs)
+        for target_list_path in target_list_paths:
             try:
                 targets.extend(read_target_list_file(target_list_path))
             except ValueError as e:
@@ -772,25 +775,26 @@ Examples:
                 else:
                     display_target = target
 
-                args.targets_info.append(
+                targets_info.append(
                     {"type": target_type, "details": target_dict, "original": display_target}
                 )
             except ValueError:
                 parser.error(f"Invalid target '{target}'")
 
         try:
-            args.targets_info.extend(build_mount_targets_info(args.mount or []))
+            targets_info.extend(build_mount_targets_info(mount_paths))
         except ValueError as e:
             parser.error(str(e))
 
-        args.targets_info = dedupe_local_targets(args.targets_info)
+        targets_info = dedupe_local_targets(targets_info)
+        args.targets_info = targets_info
 
-        assign_workspace_subdirs(args.targets_info)
-        rewrite_localhost_targets(args.targets_info, HOST_GATEWAY_HOSTNAME)
+        assign_workspace_subdirs(targets_info)
+        rewrite_localhost_targets(targets_info, HOST_GATEWAY_HOSTNAME)
 
         max_local_copy_mb = load_settings().runtime.max_local_copy_mb
         max_copy_bytes = max_local_copy_mb * 1024 * 1024
-        oversized = find_oversized_local_targets(args.targets_info, max_copy_bytes)
+        oversized = find_oversized_local_targets(targets_info, max_copy_bytes)
         if oversized:
             details = "; ".join(
                 f"{path} ({size / (1024 * 1024):.0f} MB)" for path, size in oversized
@@ -841,18 +845,27 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
     except RuntimeError as exc:
         parser.error(f"--resume {args.resume}: run.json unreadable: {exc}")
 
-    args.targets_info = state.get("targets_info") or []
-    if not args.targets_info:
+    raw_targets_info: Any = state.get("targets_info") or []
+    if not isinstance(raw_targets_info, list):
+        parser.error(f"--resume {args.resume}: run.json targets_info is not a list")
+    raw_targets_info = cast("list[Any]", raw_targets_info)
+
+    targets_info: list[dict[str, Any]] = [
+        cast("dict[str, Any]", raw) for raw in raw_targets_info if isinstance(raw, dict)
+    ]
+
+    if not targets_info:
         parser.error(f"--resume {args.resume}: run.json has no targets_info")
 
-    for target in args.targets_info:
-        if not isinstance(target, dict):
-            continue
-        details = target.get("details") or {}
+    for target in targets_info:
+        details_raw: Any = target.get("details")
+        details: dict[str, Any] = (
+            cast("dict[str, Any]", details_raw) if isinstance(details_raw, dict) else {}
+        )
         if target.get("type") != "repository":
             continue
         cloned = details.get("cloned_repo_path")
-        if not cloned:
+        if not isinstance(cloned, str) or not cloned:
             continue
         if not Path(cloned).expanduser().exists():
             parser.error(
@@ -860,6 +873,8 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
                 f"It was deleted between runs. Pick a fresh --run-name to "
                 f"re-clone, or restore the directory before resuming."
             )
+
+    args.targets_info = targets_info
 
     if args.instruction is None:
         args.instruction = state.get("instruction")
