@@ -183,10 +183,8 @@ def _configure_filesystem_tools(
             wrapped = _custom_tool_as_function_tool(tool)
         elif chat_completions and isinstance(tool, FunctionTool):
             wrapped = _function_tool_with_error_result(tool)
-        if programmatic and isinstance(
-            wrapped, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)
-        ):
-            wrapped.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS
+        if isinstance(wrapped, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)):
+            wrapped.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS if programmatic else None
         setattr(toolset, name, wrapped)
 
 
@@ -300,8 +298,7 @@ def _configure_shell_tools(toolset: Any, *, chat_completions: bool, programmatic
             wrapped = _wrap_write_stdin(wrapped)
         if chat_completions:
             wrapped = _function_tool_with_error_result(wrapped)
-        if programmatic:
-            wrapped.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS
+        wrapped.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS if programmatic else None
         setattr(toolset, name, wrapped)
 
 
@@ -373,13 +370,13 @@ def _finish_tool_use_behavior(
     return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
 
 
-def _mark_tools_programmatic(tools: list[Tool]) -> None:
-    """Allow eligible tools to be called directly by the model or from generated programs."""
+def _set_tools_programmatic_callers(tools: list[Tool], *, enabled: bool) -> None:
+    """Set callers on shared tools without leaking a prior agent's policy."""
     for tool in tools:
         if isinstance(tool, ProgrammaticToolCallingTool):
             continue
         if isinstance(tool, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)):
-            tool.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS
+            tool.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS if enabled else None
 
 
 _BASE_TOOLS: tuple[Tool, ...] = (
@@ -520,8 +517,8 @@ def build_strix_agent(
         and model is not None
         and model_supports_programmatic_tool_calling(model)
     )
+    _set_tools_programmatic_callers(tools, enabled=use_programmatic)
     if use_programmatic:
-        _mark_tools_programmatic(tools)
         tools.append(ProgrammaticToolCallingTool())
 
     _ensure_unique_tool_names(tools)

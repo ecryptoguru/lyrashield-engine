@@ -37,7 +37,9 @@ When building the conversation input for a coordinator or delegate, split the pr
    - target-specific metadata
    - current date, scan mode, user instructions
 
-Use the OpenAI `prompt_cache_breakpoint` / `prompt_cache_options` fields (passed through `ModelSettings.extra_args`) to mark the boundary. Example shape:
+Use `prompt_cache_breakpoint` in the stable input-text content block to mark the
+boundary. Set `prompt_cache_options={"mode": "explicit", "ttl": "30m"}` on
+`ModelSettings` for that request; it is not an `extra_args` field. Example input shape:
 
 ```json
 {

@@ -171,7 +171,7 @@ def build_root_initial_input(
 
     variable = f"Special instructions: {user_instructions}"
     if not stable:
-        return variable
+        return build_root_task(scan_config)
 
     content: list[dict[str, Any]] = [
         {
@@ -222,6 +222,7 @@ def make_model_settings(
     request_timeout: float | None = None,
     max_output_tokens: int | None = None,
     prompt_cache_key: str | None = None,
+    prompt_cache_breakpoints: bool = False,
 ) -> ModelSettings:
     extra_args: dict[str, Any] = request_timeout_extra_args(request_timeout) or {}
     if prompt_cache_key:
@@ -232,6 +233,9 @@ def make_model_settings(
         include_usage=True,
         max_tokens=max_output_tokens,
         extra_args=extra_args or None,
+        prompt_cache_options=(
+            {"mode": "explicit", "ttl": "30m"} if prompt_cache_breakpoints else None
+        ),
     )
     if (
         reasoning_effort is not None

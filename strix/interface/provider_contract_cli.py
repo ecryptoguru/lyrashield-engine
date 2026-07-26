@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,13 +55,17 @@ def run_provider_contract(argv: Sequence[str]) -> int:
     args = build_parser().parse_args(list(argv))
     if args.config is not None:
         apply_config_override(validate_config_file(str(args.config)))
-    result = asyncio.run(
-        probe_provider_contract(
-            load_settings(),
-            max_output_tokens=args.max_output_tokens,
-            timeout_seconds=args.timeout_seconds,
+    try:
+        result = asyncio.run(
+            probe_provider_contract(
+                load_settings(),
+                max_output_tokens=args.max_output_tokens,
+                timeout_seconds=args.timeout_seconds,
+            )
         )
-    )
+    except (RuntimeError, ValueError) as exc:
+        print(f"provider-contract: {exc}", file=sys.stderr)  # noqa: T201
+        return 1
     print(json.dumps(result.as_dict(), sort_keys=True))  # noqa: T201
     return int(
         not result.meets_requirements(

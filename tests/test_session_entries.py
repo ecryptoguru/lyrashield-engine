@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+import pytest
 from agents.sandbox.entries import LocalDir
 
+from strix.runtime import session_manager
 from strix.runtime.session_manager import (
     build_sandbox_environment,
     build_session_entries,
@@ -34,7 +37,7 @@ def test_copied_source_becomes_localdir_entry(tmp_path: Path) -> None:
     assert any(g.path == str(tmp_path.resolve()) for g in grants)
 
 
-def test_host_gateway_is_not_advertised_by_default(monkeypatch) -> None:
+def test_host_gateway_is_not_advertised_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STRIX_SANDBOX_ALLOW_HOST_GATEWAY", raising=False)
 
     environment = build_sandbox_environment("http://127.0.0.1:48080")
@@ -42,7 +45,7 @@ def test_host_gateway_is_not_advertised_by_default(monkeypatch) -> None:
     assert "HOST_GATEWAY" not in environment
 
 
-def test_host_gateway_is_advertised_when_enabled(monkeypatch) -> None:
+def test_host_gateway_is_advertised_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STRIX_SANDBOX_ALLOW_HOST_GATEWAY", "1")
 
     environment = build_sandbox_environment("http://127.0.0.1:48080")
@@ -150,3 +153,44 @@ def test_symlink_tree_is_staged(tmp_path: Path) -> None:
     assert not (staged_dirs[0] / "link.txt").is_symlink()
     assert (staged_dirs[0] / "link.txt").read_text() == "content"
     assert any(g.path == str(staged_dirs[0]) for g in grants)
+
+
+@pytest.mark.asyncio
+async def test_create_or_reuse_passes_path_grants_to_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class Session:
+        async def resolve_exposed_port(self, _port: int) -> Any:
+            return SimpleNamespace(tls=False, host="127.0.0.1", port=48080)
+
+    async def backend(**kwargs: Any) -> tuple[Any, Any]:
+        captured.update(kwargs)
+        return SimpleNamespace(), Session()
+
+    async def no_caido(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    scan_id = "manifest-grants"
+    monkeypatch.setattr(
+        session_manager,
+        "load_settings",
+        lambda: SimpleNamespace(runtime=SimpleNamespace(backend="docker")),
+    )
+    monkeypatch.setattr(session_manager, "get_backend", lambda _name: backend)
+    monkeypatch.setattr(session_manager, "bootstrap_caido", no_caido)
+    session_manager._SESSION_CACHE.pop(scan_id, None)
+
+    try:
+        await session_manager.create_or_reuse(
+            scan_id,
+            image="test-image",
+            local_sources=[_source("repo", str(tmp_path))],
+        )
+    finally:
+        session_manager._SESSION_CACHE.pop(scan_id, None)
+
+    assert [grant.path for grant in captured["manifest"].extra_path_grants] == [
+        str(tmp_path.resolve())
+    ]

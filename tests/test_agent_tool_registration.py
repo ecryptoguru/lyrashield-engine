@@ -61,6 +61,20 @@ def test_per_call_extra_tools_stack_with_registry() -> None:
     assert names[-1] == "finish_scan"
 
 
+def test_programmatic_tool_callers_do_not_leak_to_a_later_direct_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "1")
+    tool = _tool("isolated")
+    factory.register_agent_tools(tool)
+
+    factory.build_strix_agent(is_root=True, model="azure_ai/gpt-5.6-terra")
+    assert tool.allowed_callers == ["direct", "programmatic"]
+
+    factory.build_strix_agent(is_root=True)
+    assert tool.allowed_callers is None
+
+
 def test_register_agent_tools_rejects_duplicate_names() -> None:
     factory.register_agent_tools(_tool("same_name"))
 

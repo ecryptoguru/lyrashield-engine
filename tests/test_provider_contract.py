@@ -9,6 +9,7 @@ import pytest
 
 from strix import provider_contract
 from strix.config.settings import LlmSettings, Settings
+from strix.interface import provider_contract_cli
 
 
 class _FakeModel:
@@ -103,3 +104,17 @@ async def test_probe_skips_dependents_when_baseline_fails(monkeypatch: pytest.Mo
     assert result.baseline.error == "RuntimeError"
     assert result.programmatic_tool_calling.error == "baseline_unavailable"
     assert result.previous_response_id.error == "baseline_unavailable"
+
+
+def test_cli_reports_configuration_errors_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(provider_contract_cli, "load_settings", _settings)
+
+    async def _raise(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("model configuration is missing")
+
+    monkeypatch.setattr(provider_contract_cli, "probe_provider_contract", _raise)
+
+    assert provider_contract_cli.run_provider_contract([]) == 1
+    assert capsys.readouterr().err == "provider-contract: model configuration is missing\n"
