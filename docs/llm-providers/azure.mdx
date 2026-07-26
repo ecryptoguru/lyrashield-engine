@@ -21,3 +21,13 @@ The settings layer also accepts these compatibility aliases:
 | API version | `LLM_API_VERSION`, `AZURE_API_VERSION`, `AZURE_OPENAI_API_VERSION` |
 
 Use one coherent route per deployment. Do not mix endpoints and credentials from different Azure resources. The application worker, not end-user input, selects Luna or Terra and the reasoning effort in production.
+
+## Capability gate
+
+The configured Azure AI Foundry GPT-5.6 endpoint supports baseline Responses requests and `previous_response_id`, but rejects the Responses `programmatic_tool_calling` tool type. Use direct JSON function tools in production. Keep `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` unset unless this bounded gate succeeds against the exact deployment:
+
+```bash
+uv run lyrashield provider-contract --require-programmatic-tool-calling
+```
+
+`previous_response_id` capability does not by itself enable persistent engine reasoning. The current engine uses SQLite sessions for resume and multi-turn state, and the Agents SDK rejects `previous_response_id` when a session is supplied.

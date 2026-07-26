@@ -59,6 +59,10 @@ Azure compatibility aliases:
 - endpoint: `AZURE_AI_API_BASE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_BASE`;
 - API version: `AZURE_API_VERSION`, `AZURE_OPENAI_API_VERSION`.
 
+<ParamField path="LYRASHIELD_PROGRAMMATIC_TOOL_CALLING" default="unset" type="boolean">
+  Optional programmatic-tool-calling optimization. Leave unset for Azure AI Foundry unless `lyrashield provider-contract --require-programmatic-tool-calling` passes for the exact deployment. The configured endpoint rejects this tool type, so production uses direct JSON function tools.
+</ParamField>
+
 ## Sandbox
 
 <ParamField path="LYRASHIELD_IMAGE" type="string">
