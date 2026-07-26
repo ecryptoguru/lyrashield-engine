@@ -110,9 +110,7 @@ def build_root_task(scan_config: dict[str, Any]) -> str:
         )
         for repo_scope in _as_str_list_of_dicts(diff_scope.get("repos")):
             label = str(
-                repo_scope.get("workspace_subdir")
-                or repo_scope.get("source_path")
-                or "repository"
+                repo_scope.get("workspace_subdir") or repo_scope.get("source_path") or "repository"
             )
             changed = int(repo_scope.get("analyzable_files_count") or 0)
             deleted = int(repo_scope.get("deleted_files_count") or 0)
@@ -138,15 +136,11 @@ def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
         ttype = str(target.get("type") or "unknown")
         details = _as_str_dict(target.get("details"))
         key = value_keys.get(ttype)
-        raw_value = (
-            details.get(key, "") if key is not None else target.get("original", "")
-        )
+        raw_value = details.get(key, "") if key is not None else target.get("original", "")
         value = str(raw_value or "")
 
         workspace_subdir_raw = details.get("workspace_subdir")
-        workspace_subdir = (
-            workspace_subdir_raw if isinstance(workspace_subdir_raw, str) else ""
-        )
+        workspace_subdir = workspace_subdir_raw if isinstance(workspace_subdir_raw, str) else ""
         workspace_path = f"/workspace/{workspace_subdir}" if workspace_subdir else ""
         authorized.append(
             {"type": ttype, "value": value, "workspace_path": workspace_path},

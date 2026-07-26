@@ -198,20 +198,20 @@ class ReportState:
         json_path = run_dir / "vulnerabilities.json"
         if json_path.exists():
             try:
-                data = json.loads(json_path.read_text(encoding="utf-8"))
+                vuln_data = json.loads(json_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise RuntimeError(
                     f"vulnerabilities.json at {json_path} is corrupt ({exc}); "
                     f"refusing to start fresh — that would overwrite prior "
                     f"vulnerability MDs on disk. Inspect or delete the run dir.",
                 ) from exc
-            if not isinstance(data, list):
+            if not isinstance(vuln_data, list):
                 raise RuntimeError(
                     f"vulnerabilities.json at {json_path} is not a list",
                 )
-            data = cast("list[Any]", data)
+            vuln_data = cast("list[Any]", vuln_data)
             self.vulnerability_reports = [
-                cast("dict[str, Any]", r) for r in data if isinstance(r, dict)
+                cast("dict[str, Any]", r) for r in vuln_data if isinstance(r, dict)
             ]
             for r in self.vulnerability_reports:
                 rid = r.get("id")

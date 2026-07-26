@@ -281,11 +281,7 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
         return _details_to_dict(details.model_dump())
     if not isinstance(details, dict):
         return {}
-    return {
-        str(k): v
-        for k, v in cast("dict[Any, Any]", details).items()
-        if v is not None
-    }
+    return {str(k): v for k, v in cast("dict[Any, Any]", details).items() if v is not None}
 
 
 def _serialize_request_usage_entries(

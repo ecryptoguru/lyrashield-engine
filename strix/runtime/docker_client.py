@@ -31,21 +31,21 @@ from typing import Any, cast
 
 from agents.sandbox.errors import ExposedPortUnavailableError
 from agents.sandbox.manifest import Manifest
-from agents.sandbox.sandboxes.docker import (  # type: ignore[reportPrivateImportUsage]
+from agents.sandbox.sandboxes.docker import (  # pyright: ignore[reportPrivateImportUsage]
     DockerSandboxClient,
     DockerSandboxSession,
-    _build_docker_volume_mounts,  # type: ignore[reportPrivateImportUsage]
-    _docker_port_key,  # type: ignore[reportPrivateImportUsage]
-    _manifest_requires_fuse,  # type: ignore[reportPrivateImportUsage]
-    _manifest_requires_sys_admin,  # type: ignore[reportPrivateImportUsage]
+    _build_docker_volume_mounts,
+    _docker_port_key,
+    _manifest_requires_fuse,
+    _manifest_requires_sys_admin,
 )
 from agents.sandbox.session.sandbox_session import SandboxSession
 from agents.sandbox.types import ExposedPortEndpoint
-from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
-from docker.models.containers import Container  # type: ignore[import-untyped, unused-ignore]
-from docker.types import LogConfig  # type: ignore[import-untyped, unused-ignore]
-from docker.types import Mount as DockerSDKMount  # type: ignore[import-untyped, unused-ignore]
-from docker.utils import parse_repository_tag  # type: ignore[import-untyped, unused-ignore]
+from docker import errors as docker_errors  # pyright: ignore[reportMissingTypeStubs]
+from docker.models.containers import Container  # pyright: ignore[reportMissingTypeStubs]
+from docker.types import LogConfig  # pyright: ignore[reportMissingTypeStubs]
+from docker.types import Mount as DockerSDKMount  # pyright: ignore[reportMissingTypeStubs]
+from docker.utils import parse_repository_tag  # pyright: ignore[reportMissingTypeStubs]
 from requests.exceptions import RequestException
 
 

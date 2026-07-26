@@ -38,8 +38,7 @@ def _output_has_image(item_dict: dict[str, Any]) -> bool:
         return False
     blocks = cast("list[Any]", output)
     return any(
-        isinstance(block, dict)
-        and cast("dict[str, Any]", block).get("type") == "input_image"
+        isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "input_image"
         for block in blocks
     )
 
@@ -47,18 +46,17 @@ def _output_has_image(item_dict: dict[str, Any]) -> bool:
 def _elided_output(item_dict: dict[str, Any], text: str) -> dict[str, Any]:
     # Replace only image blocks; sibling text blocks are preserved.
     output = item_dict.get("output")
-    if isinstance(output, list):
-        blocks = cast("list[Any]", output)
-    else:
-        blocks: list[Any] = []
+    blocks = cast("list[Any]", output) if isinstance(output, list) else []
     return {
         "type": "function_call_output",
         "call_id": item_dict.get("call_id"),
         "output": [
-            {"type": "input_text", "text": text}
-            if isinstance(block, dict)
-            and cast("dict[str, Any]", block).get("type") == "input_image"
-            else block
+            (
+                {"type": "input_text", "text": text}
+                if isinstance(block, dict)
+                and cast("dict[str, Any]", block).get("type") == "input_image"
+                else block
+            )
             for block in blocks
         ],
     }
@@ -133,9 +131,11 @@ async def enforce_image_budget(session: Session, max_images: int) -> bool:
             return items, False
         to_elide = set(image_indices[: len(image_indices) - max_images])
         rebuilt = [
-            _elided_output(cast("dict[str, Any]", item), _IMAGE_ELIDED_TEXT)
-            if i in to_elide
-            else item
+            (
+                _elided_output(cast("dict[str, Any]", item), _IMAGE_ELIDED_TEXT)
+                if i in to_elide
+                else item
+            )
             for i, item in enumerate(items)
         ]
         return rebuilt, True

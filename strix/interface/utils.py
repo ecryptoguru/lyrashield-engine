@@ -298,11 +298,7 @@ def _float_stat(usage: dict[str, Any], key: str) -> float:
 def _detail_value(usage: dict[str, Any], detail_key: str, value_key: str) -> int:
     details = usage.get(detail_key)
     if isinstance(details, list):
-        details = (
-            _as_str_dict(details[0])
-            if details and isinstance(details[0], dict)
-            else {}
-        )
+        details = _as_str_dict(details[0]) if details and isinstance(details[0], dict) else {}
     if not isinstance(details, dict):
         return 0
     details = _as_str_dict(details)
@@ -1415,9 +1411,9 @@ def dedupe_local_targets(targets_info: list[dict[str, Any]]) -> list[dict[str, A
         if existing is None:
             index_by_path[path] = len(result)
             result.append(target)
-        elif details.get("mount") and not _as_str_dict(
-            result[existing].get("details")
-        ).get("mount"):
+        elif details.get("mount") and not _as_str_dict(result[existing].get("details")).get(
+            "mount"
+        ):
             result[existing] = target  # bind mount supersedes the copied entry
     return result
 
