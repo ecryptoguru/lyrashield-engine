@@ -56,3 +56,7 @@ uv run lyrashield --target ./repository --scan-mode quick --scope-mode diff --di
 <Warning>
 CLI support for a target form is not the LyraShield application contract. URL targets bypass the engine in production and use the pinned deterministic URL scanner.
 </Warning>
+
+## Warm-up and usage accounting
+
+Interactive runs perform a lightweight warm-up call to the configured LLM (and dedicated dedupe model, if configured) before the scan starts. Tokens consumed during warm-up are recorded in the run ledger and included in `run.json`. `--non-interactive` skips this step and starts the scan immediately.

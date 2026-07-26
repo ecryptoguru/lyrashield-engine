@@ -47,7 +47,7 @@ from strix.telemetry.logging import set_scan_id, setup_scan_logging
 
 
 if TYPE_CHECKING:
-    from agents.memory import SQLiteSession
+    from agents.memory import Session
     from agents.result import RunResultBase
 
     from strix.config.settings import ReasoningEffort
@@ -264,7 +264,7 @@ async def run_strix_scan(
     )
     logger.info("Sandbox ready for scan %s", scan_id)
 
-    sessions_to_close: list[SQLiteSession] = []
+    sessions_to_close: list[Session] = []
 
     try:
         targets: list[Any] = list(scan_config.get("targets") or [])
@@ -386,6 +386,8 @@ async def run_strix_scan(
             model_settings=delegate_model_settings,
         )
 
+        server_conversation = getattr(settings.runtime, "server_conversation", False)
+
         async def spawn_child_agent(**kwargs: Any) -> dict[str, Any]:
             return await start_child_agent(
                 coordinator=coordinator,
@@ -397,6 +399,7 @@ async def run_strix_scan(
                 interactive=interactive,
                 event_sink=event_sink,
                 hooks=hooks,
+                server_conversation=server_conversation,
                 **kwargs,
             )
 
@@ -409,9 +412,15 @@ async def run_strix_scan(
             "interactive": interactive,
             "spawn_child_agent": spawn_child_agent,
             "max_context_images": settings.runtime.max_context_images,
+            "server_conversation": server_conversation,
         }
 
-        root_session = open_agent_session(root_id, agents_db)
+        root_session = open_agent_session(
+            root_id,
+            agents_db,
+            server_conversation=server_conversation,
+            conversation_id=coordinator.conversation_ids.get(root_id),
+        )
         sessions_to_close.append(root_session)
         await coordinator.attach_runtime(root_id, session=root_session)
 
@@ -426,6 +435,7 @@ async def run_strix_scan(
                 interactive=interactive,
                 parent_ctx=context,
                 root_id=root_id,
+                server_conversation=server_conversation,
                 event_sink=event_sink,
                 hooks=hooks,
             )
@@ -529,7 +539,9 @@ async def run_strix_scan(
         set_active_hooks(None)
         for s in sessions_to_close:
             with contextlib.suppress(Exception):
-                s.close()
+                close = getattr(s, "close", None)
+                if callable(close):
+                    await close()
         with contextlib.suppress(Exception):
             await coordinator.maybe_snapshot()
         if cleanup_on_exit:

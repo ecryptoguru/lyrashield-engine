@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from agents.items import TResponseInputItem
     from agents.lifecycle import RunHooks
-    from agents.memory import Session, SQLiteSession
+    from agents.memory import Session
     from agents.result import RunResultBase
 
     from strix.core.agents import AgentCoordinator, Status
@@ -135,7 +135,7 @@ async def spawn_child_agent(
     coordinator: AgentCoordinator,
     factory: Any,
     agents_db_path: Path,
-    sessions_to_close: list[SQLiteSession],
+    sessions_to_close: list[Session],
     run_config: RunConfig,
     max_turns: int,
     interactive: bool,
@@ -146,6 +146,7 @@ async def spawn_child_agent(
     parent_history: list[Any],
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
+    server_conversation: bool = False,
 ) -> dict[str, Any]:
     parent_id = parent_ctx.get("agent_id")
     if not isinstance(parent_id, str):
@@ -183,6 +184,7 @@ async def spawn_child_agent(
         ),
         event_sink=event_sink,
         hooks=hooks,
+        server_conversation=server_conversation,
     )
 
     return {
@@ -199,7 +201,7 @@ async def respawn_subagents(
     coordinator: AgentCoordinator,
     factory: Any,
     agents_db_path: Path,
-    sessions_to_close: list[SQLiteSession],
+    sessions_to_close: list[Session],
     run_config: RunConfig,
     max_turns: int,
     interactive: bool,
@@ -207,6 +209,7 @@ async def respawn_subagents(
     root_id: str,
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
+    server_conversation: bool = False,
 ) -> None:
     agents_snapshot = await coordinator.agents_with_metadata()
     candidates: list[tuple[str, str, str | None, dict[str, Any]]] = []
@@ -257,6 +260,7 @@ async def respawn_subagents(
                 start_parked=start_parked,
                 event_sink=event_sink,
                 hooks=hooks,
+                server_conversation=server_conversation,
             )
             logger.info(
                 "respawned %s (%s) parent=%s task_len=%d",
@@ -392,7 +396,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                     # mistaken for the LiteLLM "after shutdown" race below.
                     raise
                 except RuntimeError as stream_exc:
-                    if "after shutdown" not in str(stream_exc):
+                    if "after shutdown" not in str(stream_exc).strip().lower():
                         raise
                     logger.warning(
                         "Ignoring LiteLLM end-of-stream shutdown race for %s",
@@ -408,6 +412,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                     )
             finally:
                 await coordinator.detach_stream(agent_id, stream)
+                await coordinator.track_conversation_id(agent_id)
         except BudgetExceededError as exc:
             logger.info(
                 "agent %s reached the scan budget limit; stopping the scan: %s", agent_id, exc
@@ -540,7 +545,7 @@ async def _start_child_runner(
     parent_ctx: dict[str, Any],
     coordinator: AgentCoordinator,
     agents_db_path: Path,
-    sessions_to_close: list[SQLiteSession],
+    sessions_to_close: list[Session],
     run_config: RunConfig,
     max_turns: int,
     interactive: bool,
@@ -553,8 +558,14 @@ async def _start_child_runner(
     start_parked: bool = False,
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
+    server_conversation: bool = False,
 ) -> None:
-    session = open_agent_session(child_id, agents_db_path)
+    session = open_agent_session(
+        child_id,
+        agents_db_path,
+        server_conversation=server_conversation,
+        conversation_id=coordinator.conversation_ids.get(child_id),
+    )
     sessions_to_close.append(session)
     await coordinator.attach_runtime(child_id, session=session)
 

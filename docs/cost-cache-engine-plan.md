@@ -140,9 +140,15 @@ The fallback is fail-closed: the engine does not emit `ProgrammaticToolCallingTo
 
 #### P5 implementation status
 
-**Blocked by the current session architecture.** The `agents` SDK `Runner.run_streamed` rejects `previous_response_id` when a `session` is provided (`Session persistence cannot be combined with conversation_id, previous_response_id, or auto_previous_response_id`). The LyraShield engine relies on per-agent `SQLiteSession` persistence for resume and multi-turn state, so `previous_response_id` cannot be adopted without replacing local session persistence.
+**Implemented as an opt-in, fail-closed server-managed conversation mode.**
 
-A smoke test with only `Reasoning(context="all_turns")` added to `make_model_settings` produced a ~76% increase in total tokens and ~80% more requests versus the baseline (25 vs 21 requests, 999k vs 836k total tokens), because the SDK's session-based replay still re-sends prior context and the extra reasoning context made the model more verbose. That partial change was reverted; `Reasoning.context` should only be enabled together with `previous_response_id` or a confirmed server-managed conversation flow.
+- `strix/config/settings.py` adds `LYRASHIELD_SERVER_CONVERSATION` / `STRIX_SERVER_CONVERSATION` (default `False`).
+- `strix/core/sessions.py` now returns an `OpenAIConversationsSession` when the flag is on and a `conversation_id` can be reused or created, falling back to `SQLiteSession` on any construction error.
+- `strix/core/agents.py` persists `conversation_ids` in the coordinator snapshot so resuming a scan reconnects to the same provider conversation.
+- `strix/core/execution.py` and `strix/core/runner.py` propagate the flag, capture the provider conversation ID after each successful turn, and recreate child sessions with their restored IDs.
+- `apps/worker/src/engine/runner.ts` passes `LYRASHIELD_SERVER_CONVERSATION` through the engine environment allowlist.
+
+This replaces local `SQLiteSession` persistence with OpenAI server-managed `conversations` state, eliminating the `previous_response_id`/`session` incompatibility. Because the SDK handles `conversation_id` internally, the `Session` interface is preserved and inter-agent messaging, image budget enforcement, and resume all continue to work. The feature is off by default until a provider smoke test confirms the `conversations` endpoint is available (see P4 / endpoint enablement notes).
 
 ## 4. Testing and verification
 

@@ -159,6 +159,11 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     set_global_report_state(report_state)
 
+    for warm_model, warm_usage in getattr(args, "warm_up_usages", []) or []:
+        report_state.record_sdk_usage(
+            agent_id="warmup", agent_name="warmup", model=warm_model, usage=warm_usage
+        )
+
     def create_live_status() -> Panel:
         status_text = Text()
         status_text.append("Penetration test in progress", style="bold #22c55e")

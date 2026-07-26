@@ -68,7 +68,7 @@ async def test_persistent_rate_limit_stops_gracefully(
     monkeypatch.setattr(runner, "make_model_settings", lambda *_args, **_kwargs: ModelSettings())
     monkeypatch.setattr(runner, "build_strix_agent", lambda **_kwargs: object())
     monkeypatch.setattr(runner, "make_child_factory", lambda **_kwargs: lambda **_k: object())
-    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db: object())
+    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kw: object())
 
     async def _raise_rate_limit(*_args: Any, **_kwargs: Any) -> None:
         raise _make_rate_limit_error()

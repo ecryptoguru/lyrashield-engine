@@ -8,7 +8,7 @@ Production configuration is owned by the LyraShield worker. The `lyrashield` ada
 ## Model and endpoint
 
 <ParamField path="LYRASHIELD_LLM" type="string" required>
-  GPT-5.6 Sol, Terra, or Luna deployment name. Maps to internal `STRIX_LLM`. Other model families are rejected before sandbox setup.
+  GPT-5.6 Terra or Luna deployment name. Maps to internal `STRIX_LLM`. Other model families are rejected before sandbox setup.
 </ParamField>
 
 <ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">
@@ -37,6 +37,24 @@ Production configuration is owned by the LyraShield worker. The `lyrashield` ada
 
 <ParamField path="LLM_TIMEOUT" default="300" type="integer">
   Model request timeout in seconds.
+</ParamField>
+
+## Deduplication model
+
+<ParamField path="STRIX_DEDUPE_MODEL" type="string">
+  Optional dedicated model for vulnerability-report deduplication. When unset, the main model handles deduplication. LyraShield validates this as a GPT-5.6 Terra or Luna deployment.
+</ParamField>
+
+<ParamField path="STRIX_DEDUPE_REASONING_EFFORT" type="string">
+  Reasoning effort for the dedupe model, when one is configured.
+</ParamField>
+
+<ParamField path="DEDUPE_LLM_API_KEY" type="string">
+  API key for a dedicated dedupe endpoint. Sent per-request so it does not clobber the main model's credentials.
+</ParamField>
+
+<ParamField path="DEDUPE_LLM_API_BASE" type="string">
+  Base URL for a dedicated dedupe endpoint.
 </ParamField>
 
 ## Token limits
@@ -80,6 +98,18 @@ Azure compatibility aliases:
 <ParamField path="STRIX_SANDBOX_ALLOW_HOST_GATEWAY" default="0" type="boolean">
   Opt-in host-gateway access. Keep disabled unless an explicitly authorized local workflow requires it. This is not a substitute for deployment egress policy.
 </ParamField>
+
+<ParamField path="STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES" default="unset" type="boolean">
+  Set to `1`/`true`/`yes` to omit `NET_ADMIN` and `NET_RAW` from sandbox containers. Disable only when raw-socket tooling (e.g. `nmap`) is not needed.
+</ParamField>
+
+<ParamField path="STRIX_IMAGE_DIGEST" type="string">
+  Optional 64-character SHA-256 digest to verify after pulling the sandbox image (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. Combine with `LYRASHIELD_IMAGE` for a pinned deployment.
+</ParamField>
+
+## Budget and cost accounting
+
+The engine enforces per-scan budgets using explicit rates for GPT-5.6 Terra and Luna. If a configured model is not recognized as GPT-5.6, budget hooks look it up in LiteLLM's public `model_cost` map and fall back to conservative default rates ($5.00 per 1M input tokens, $15.00 per 1M output tokens, $0.50 per 1M cached tokens) so enforcement does not crash and errs on the side of overestimating spend. This fallback is intended for internal/testing paths; the LyraShield product gate still rejects non-GPT-5.6 deployments at startup.
 
 ## Telemetry and artifacts
 

@@ -200,7 +200,7 @@ async def test_request_is_rejected_before_call_when_bounded_cost_exceeds_budget(
     agent.tools = []
     agent.output_type = None
 
-    with pytest.raises(BudgetExceededError, match=r"Next bounded GPT-5\.6 request"):
+    with pytest.raises(BudgetExceededError, match=r"Next bounded request"):
         await hooks.on_llm_start(
             _make_context(), agent, "system", [{"role": "user", "content": "scan"}]
         )

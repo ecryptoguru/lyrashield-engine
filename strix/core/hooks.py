@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import math
@@ -47,6 +48,13 @@ _GPT56_CACHED_RATES = {
     "terra": 0.25,
     "luna": 0.1,
 }
+
+# Conservative defaults for models not explicitly priced. We deliberately
+# overestimate so budget enforcement errs on the side of protecting the
+# cap rather than silently overspending. Rates are dollars per 1M tokens.
+_DEFAULT_FALLBACK_INPUT_RATE = 5.0
+_DEFAULT_FALLBACK_OUTPUT_RATE = 15.0
+_DEFAULT_FALLBACK_CACHE_RATE = 0.5
 
 # Headroom kept between a compaction trigger and the long-context boundary, so a
 # request that trips the trigger still has room for its output allowance without
@@ -95,20 +103,95 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
     return trigger, target
 
 
+@functools.cache
 def _model_rates(model: str) -> tuple[float, float]:
     normalized = model.lower()
     for tier, rates in _GPT56_RATES.items():
         if tier in normalized:
             return rates
-    raise RuntimeError("Unsupported model for LyraShield budget enforcement")
+    return _fallback_model_rates(model)
 
 
+@functools.cache
 def _cached_input_rate(model: str) -> float:
     normalized = model.lower()
     for tier, rate in _GPT56_CACHED_RATES.items():
         if tier in normalized:
             return rate
-    raise RuntimeError("Unsupported model for LyraShield budget enforcement")
+    return _fallback_cached_input_rate(model)
+
+
+@functools.cache
+def _fallback_model_rates(model: str) -> tuple[float, float]:
+    """Return (input_rate, output_rate) in dollars per 1M tokens.
+
+    Prefer known GPT-5.6 rates (handled by callers); for other models try the
+    LiteLLM public cost map. If the model is unknown, use a conservative
+    default so budget enforcement does not crash and still overestimates cost.
+    """
+    cost_info = _lookup_litellm_cost(model)
+    if cost_info is not None:
+        input_cost = cost_info.get("input_cost_per_token")
+        output_cost = cost_info.get("output_cost_per_token")
+        if input_cost and output_cost:
+            try:
+                return float(input_cost) * 1_000_000, float(output_cost) * 1_000_000
+            except (TypeError, ValueError):
+                pass
+
+    logger.warning("No LiteLLM cost rates for model %s; using conservative fallback rates", model)
+    return _DEFAULT_FALLBACK_INPUT_RATE, _DEFAULT_FALLBACK_OUTPUT_RATE
+
+
+@functools.cache
+def _fallback_cached_input_rate(model: str) -> float:
+    """Return a cached-input rate in dollars per 1M tokens.
+
+    LiteLLM models often list a cache-read rate; otherwise fall back to a
+    fraction of the standard input rate. This is intentionally conservative.
+    """
+    cost_info = _lookup_litellm_cost(model)
+    if cost_info is not None:
+        cached_cost = cost_info.get("cache_read_input_token_cost")
+        if cached_cost:
+            try:
+                return float(cached_cost) * 1_000_000
+            except (TypeError, ValueError):
+                pass
+
+    input_rate, _ = _model_rates(model)
+    return max(input_rate * 0.1, _DEFAULT_FALLBACK_CACHE_RATE)
+
+
+def _lookup_litellm_cost(model: str) -> dict[str, Any] | None:
+    """Look up a LiteLLM model_cost entry using common alias normalisations."""
+    import litellm  # noqa: PLC0415
+
+    model_cost = cast("dict[str, Any]", getattr(litellm, "model_cost", {}))
+
+    normalized = model.strip().lower()
+    for prefix in ("litellm/", "any-llm/", "openai/"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :]
+
+    candidates: list[str] = [normalized, normalized.split("/", 1)[-1]]
+    seen: set[str] = set(candidates)
+    for name in list(candidates):
+        if not name:
+            continue
+        # litellm sometimes stores keys with dots instead of dashes.
+        dotted = name.replace("-", ".")
+        dashed = name.replace(".", "-")
+        for variant in (dotted, dashed):
+            if variant and variant not in seen:
+                candidates.append(variant)
+                seen.add(variant)
+
+    for name in candidates:
+        cost_info = model_cost.get(name)
+        if isinstance(cost_info, dict):
+            return cast("dict[str, Any]", cost_info)
+    return None
 
 
 def _usage_value(entry: Any, field: str) -> Any:
@@ -361,7 +444,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             reserved = sum(self._reservations.values())
             if committed + reserved + reservation > self._max_budget_usd:
                 raise BudgetExceededError(
-                    f"Next bounded GPT-5.6 request would exceed ${self._max_budget_usd:.2f}"
+                    f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
                 )
             self._reservations[key] = reservation
 
@@ -444,7 +527,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 reserved = sum(self._reservations.values())
                 if committed + reserved + reservation > self._max_budget_usd:
                     raise BudgetExceededError(
-                        f"Next bounded GPT-5.6 request would exceed ${self._max_budget_usd:.2f}"
+                        f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
                     )
                 self._reservations[agent_id] = reservation
 
