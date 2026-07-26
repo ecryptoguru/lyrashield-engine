@@ -9,6 +9,7 @@ import pytest
 
 from strix.core.inputs import (
     MAX_CHILD_INHERITED_HISTORY_BYTES,
+    build_root_initial_input,
     build_root_task,
     child_initial_input,
     make_model_settings,
@@ -109,6 +110,49 @@ def test_build_root_task_web_application_with_instructions() -> None:
     assert "Special instructions: Focus on auth." in task
 
 
+def test_root_input_preserves_fallback_when_no_stable_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_BREAKPOINTS", "1")
+    config = {"user_instructions": "Focus on auth."}
+
+    assert build_root_initial_input(config, "azure_ai/gpt-5.6-terra") == build_root_task(config)
+
+
+def test_root_input_marks_only_the_stable_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_BREAKPOINTS", "1")
+    config = {
+        "targets": [{"type": "web_application", "details": {"target_url": "https://example.com"}}],
+        "user_instructions": "Focus on auth.",
+    }
+
+    result = build_root_initial_input(config, "azure_ai/gpt-5.6-terra")
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "URLs: - https://example.com",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
+                {"type": "input_text", "text": "Special instructions: Focus on auth."},
+            ],
+        }
+    ]
+
+
+def test_root_input_respects_disabled_breakpoint_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_BREAKPOINTS", "0")
+    config = {
+        "targets": [{"type": "web_application", "details": {"target_url": "https://example.com"}}],
+        "user_instructions": "Focus on auth.",
+    }
+
+    assert build_root_initial_input(config, "azure_ai/gpt-5.6-terra") == build_root_task(config)
+
+
 def test_build_root_task_diff_scope() -> None:
     config = {
         "targets": [],
@@ -203,6 +247,16 @@ def test_make_model_settings_adds_stable_prompt_cache_key() -> None:
         "prompt_cache_key": "lyrashield:scan-1:coordinator",
     }
     assert settings.parallel_tool_calls is None
+
+
+def test_make_model_settings_enables_explicit_cache_only_with_a_breakpoint() -> None:
+    settings = make_model_settings(
+        "medium",
+        model_name="azure_ai/gpt-5.6-terra",
+        prompt_cache_breakpoints=True,
+    )
+
+    assert settings.prompt_cache_options == {"mode": "explicit", "ttl": "30m"}
 
 
 @pytest.mark.parametrize(

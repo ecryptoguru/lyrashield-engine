@@ -34,6 +34,7 @@ from strix.core.execution import (
 from strix.core.hooks import BudgetExceededError, ReportUsageHooks, set_active_hooks
 from strix.core.inputs import (
     DEFAULT_MAX_TURNS,
+    build_root_initial_input,
     build_root_task,
     build_scope_context,
     make_model_settings,
@@ -270,6 +271,14 @@ async def run_strix_scan(
         is_whitebox = any(t.get("type") == "local_code" for t in targets)
         skills = list(scan_config.get("skills") or [])
         root_task = build_root_task(scan_config)
+        initial_input: Any = (
+            []
+            if is_resume
+            else build_root_initial_input(
+                scan_config,
+                model_name=resolved_model,
+            )
+        )
         max_output_tokens = resolve_max_output_tokens(
             scan_mode,
             settings.llm.max_output_tokens,
@@ -281,6 +290,7 @@ async def run_strix_scan(
             request_timeout=settings.llm.timeout,
             max_output_tokens=max_output_tokens,
             prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
+            prompt_cache_breakpoints=isinstance(initial_input, list) and bool(initial_input),
         )
         delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
         delegate_model_settings = make_model_settings(
@@ -419,8 +429,6 @@ async def run_strix_scan(
                 event_sink=event_sink,
                 hooks=hooks,
             )
-
-        initial_input: Any = [] if is_resume else root_task
 
         # Resume + new ``--instruction``: SDK replay drives root from
         # agents.db with ``initial_input=[]``, so a brand-new instruction

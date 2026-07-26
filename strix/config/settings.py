@@ -121,7 +121,7 @@ class RuntimeSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
     image: str = Field(
-        default="ghcr.io/usestrix/strix-sandbox:1.0.0",
+        default="strix-sandbox:dev",
         validation_alias=_lyra("STRIX_IMAGE"),
     )
     backend: str = Field(

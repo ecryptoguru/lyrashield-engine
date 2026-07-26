@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from agents.sandbox.entries import BaseEntry, LocalDir
 from agents.sandbox.manifest import EnvEntry, Environment, EnvValue, Manifest
+from agents.sandbox.workspace_paths import SandboxPathGrant
 
 from strix.config import load_settings
 from strix.runtime.backends import get_backend
@@ -86,7 +87,9 @@ def get_sandbox_container_ip(client: Any, session: Any) -> str | None:
 
 def build_session_entries(
     local_sources: list[dict[str, Any]],
-) -> tuple[dict[str | Path, BaseEntry], list[dict[str, Any]], list[Path]]:
+) -> tuple[
+    dict[str | Path, BaseEntry], list[dict[str, Any]], list[Path], tuple[SandboxPathGrant, ...]
+]:
     """Split local sources into copied manifest entries and host bind mounts.
 
     Sources flagged ``mount`` are bind-mounted read-only at
@@ -96,10 +99,16 @@ def build_session_entries(
     symlinks (which the SDK's ``LocalDir`` walker refuses outright) are first
     staged into a symlink-safe temp copy; those temp dirs are returned so the
     caller can remove them once the upload completes.
+
+    ``extra_path_grants`` is a tuple of ``SandboxPathGrant`` objects that tell
+    the SDK's LocalDir walker which absolute host paths are allowed outside the
+    workspace root. This is required by openai-agents >= 0.18.0, which rejects
+    source paths not under the manifest base directory unless explicitly granted.
     """
     entries: dict[str | Path, BaseEntry] = {}
     bind_mounts: list[dict[str, Any]] = []
     staged_dirs: list[Path] = []
+    grants: set[str] = set()
     for src in local_sources:
         ws_subdir = src.get("workspace_subdir") or ""
         host_path = src.get("source_path") or ""
@@ -114,12 +123,15 @@ def build_session_entries(
                     "read_only": True,
                 }
             )
+            grants.add(str(resolved))
         else:
             upload_path, staged = stage_symlink_safe_dir(resolved)
             if staged is not None:
                 staged_dirs.append(staged)
             entries[ws_subdir] = LocalDir(src=upload_path)
-    return entries, bind_mounts, staged_dirs
+            grants.add(str(upload_path))
+    extra_path_grants = tuple(SandboxPathGrant(path=p) for p in sorted(grants))
+    return entries, bind_mounts, staged_dirs, extra_path_grants
 
 
 async def create_or_reuse(
@@ -139,7 +151,7 @@ async def create_or_reuse(
         logger.info("Reusing existing sandbox session for scan %s", scan_id)
         return cached
 
-    entries, bind_mounts, staged_dirs = build_session_entries(local_sources)
+    entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(local_sources)
 
     # Caido runs as an in-container sidecar; HTTP(S) traffic from any
     # process started via ``session.exec`` (the SDK's Shell tool, etc.)
@@ -150,6 +162,7 @@ async def create_or_reuse(
     manifest = Manifest(
         entries=entries,
         environment=Environment(value=build_sandbox_environment(container_caido_url)),
+        extra_path_grants=extra_path_grants,
     )
 
     backend_name = load_settings().runtime.backend

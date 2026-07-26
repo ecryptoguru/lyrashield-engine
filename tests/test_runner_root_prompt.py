@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
+from agents.model_settings import ModelSettings
 from openai import RateLimitError
 
 import strix.tools.notes.tools as notes_tools
@@ -75,7 +76,7 @@ def _patch_engine_scaffold(
 
     monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
     monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: scope_context)
-    monkeypatch.setattr(runner, "make_model_settings", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(runner, "make_model_settings", lambda *_args, **_kwargs: ModelSettings())
 
     captured: dict[str, Any] = {}
 

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -231,16 +232,57 @@ class AgentCoordinator:
         items = await session.get_items()
         return count, list(items[-count:])
 
-    async def request_stop(self, agent_id: str) -> None:
+    async def _notify_parent(
+        self,
+        agent_id: str,
+        status: str,
+        *,
+        content: str | None = None,
+    ) -> bool:
+        """Wake the parent with a terminal-status note for one of its children."""
+        if self.budget_stopped:
+            return False
+        if status not in {"crashed", "failed", "stopped", "completed"}:
+            return False
         async with self._lock:
-            if agent_id not in self.statuses:
+            parent_id = self.parent_of.get(agent_id)
+            agent_name = self.names.get(agent_id, agent_id)
+        if parent_id is None:
+            return False
+        if content is None:
+            content = (
+                f"[Agent {status}] {agent_name} ({agent_id}) is no longer active. "
+                "Stop waiting on this child unless you want to message it again."
+            )
+        return await self.send(
+            parent_id,
+            {
+                "id": f"notify_{uuid.uuid4().hex[:8]}",
+                "from": agent_id,
+                "type": status,
+                "priority": "high",
+                "content": content,
+            },
+        )
+
+    async def request_stop(self, agent_id: str) -> None:
+        parent_id: str | None = None
+        was_active = False
+        async with self._lock:
+            status = self.statuses.get(agent_id)
+            if status is None:
                 return
-            self.statuses[agent_id] = "stopped"
+            was_active = status in _ACTIVE_STATUSES
+            if was_active:
+                self.statuses[agent_id] = "stopped"
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.wake.set()
             stream = runtime.stream
+            parent_id = self.parent_of.get(agent_id)
         if stream is not None:
             stream.cancel(mode="after_turn")
+        if was_active and parent_id is not None:
+            await self._notify_parent(agent_id, "stopped")
         await self._maybe_snapshot()
 
     async def cancel_descendants(self, agent_id: str) -> None:

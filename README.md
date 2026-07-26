@@ -56,10 +56,33 @@ export LYRASHIELD_LLM="openai/gpt-5.6-luna"
 export LYRASHIELD_DELEGATE_LLM="openai/gpt-5.6-luna"
 export LLM_API_KEY="<credential>"
 export LLM_API_BASE="https://<approved-endpoint>"
+# Optional token caps (see docs/advanced/configuration.mdx for behavior):
+# export LYRASHIELD_MAX_OUTPUT_TOKENS=4096
+# export LYRASHIELD_MAX_INPUT_TOKENS=64000
 uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
 ```
 
 Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Sol, Terra, or Luna. Anthropic, Bedrock, Vertex, OpenRouter, local models, Perplexity, and Parallel are not supported execution paths.
+
+### Provider capability gate
+
+Run this bounded, static probe after a deployment change and before enabling an optional
+Responses feature. It sends no repository or scan data, caps each response at 64 output
+tokens, and prints only capability booleans plus safe error labels:
+
+```bash
+uv run lyrashield provider-contract --require-programmatic-tool-calling
+```
+
+Leave `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` unset unless this gate succeeds. The
+default Azure path remains JSON function tools. Test server-managed continuation separately:
+
+```bash
+uv run lyrashield provider-contract --require-previous-response-id
+```
+
+The continuation probe uses `store=True` with fixed capability text only; it never sends
+scan data. A successful probe does not authorize a future SQLite-to-server-state migration.
 
 Repository targets are the production worker boundary. The LyraShield application routes URL targets to its pinned deterministic URL scanner instead of this engine. Run only against targets you are authorized to test.
 
