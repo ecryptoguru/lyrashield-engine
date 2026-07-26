@@ -188,3 +188,53 @@ async def test_terminal_child_notifies_waiting_parent() -> None:
     await asyncio.wait_for(parent_wait, timeout=1.0)
     pending, _ = await coordinator.consume_pending("root")
     assert pending == 1
+
+
+@pytest.mark.asyncio
+async def test_request_stop_notifies_waiting_parent() -> None:
+    """A graceful stop (stop_agent / request_stop) must wake a waiting parent."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.attach_runtime("root", session=SQLiteSession(session_id="root"))
+
+    parent_wait = asyncio.create_task(coordinator.wait_for_message("root"))
+    await asyncio.sleep(0)  # let parent park
+    assert not parent_wait.done()
+
+    await coordinator.request_stop("child")
+
+    await asyncio.wait_for(parent_wait, timeout=1.0)
+    pending, items = await coordinator.consume_pending("root", include_items=True)
+    assert pending == 1
+    assert "stopped" in items[-1].get("content", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_request_stop_does_not_double_notify() -> None:
+    """Calling request_stop twice on the same child must only notify the parent once."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.attach_runtime("root", session=SQLiteSession(session_id="root"))
+
+    await coordinator.request_stop("child")
+    await coordinator.request_stop("child")
+
+    pending, _ = await coordinator.consume_pending("root")
+    assert pending == 1
+
+
+@pytest.mark.asyncio
+async def test_request_stop_does_not_notify_for_already_terminal_child() -> None:
+    """request_stop on a completed child must not send a redundant notification."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.attach_runtime("root", session=SQLiteSession(session_id="root"))
+    await coordinator.set_status("child", "completed")
+
+    await coordinator.request_stop("child")
+
+    pending, _ = await coordinator.consume_pending("root")
+    assert pending == 0
