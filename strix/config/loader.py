@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import AliasChoices, BaseModel
 
@@ -102,9 +102,13 @@ def _read_json_overrides(path: Path) -> dict[str, dict[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
-    env_block = data.get("env", {}) if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    data = cast("dict[str, Any]", data)
+    env_block = data.get("env", {})
     if not isinstance(env_block, dict):
         return {}
+    env_block = cast("dict[str, Any]", env_block)
 
     env_block_upper = {str(k).upper(): v for k, v in env_block.items()}
     env_present = {k.upper() for k in os.environ}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -84,8 +84,12 @@ def render_system_prompt(
             is_whitebox=is_whitebox,
             is_root=is_root,
         )
-        skill_content = load_skills(skills_to_load)
-        env.globals["get_skill"] = lambda name: skill_content.get(name, "")
+        skill_content: dict[str, str] = load_skills(skills_to_load)
+
+        def _get_skill(name: str) -> str:
+            return skill_content.get(name, "")
+
+        cast("dict[str, Any]", env.globals)["get_skill"] = _get_skill
 
         rendered = env.get_template("system_prompt.jinja").render(
             loaded_skill_names=list(skill_content.keys()),

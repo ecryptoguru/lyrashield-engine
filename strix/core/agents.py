@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 Status = Literal["running", "waiting", "completed", "stopped", "crashed", "failed"]
 
+_ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
+
 
 @dataclass(slots=True)
 class AgentRuntime:
@@ -139,7 +141,7 @@ class AgentCoordinator:
 
     async def mark_running(self, agent_id: str) -> None:
         async with self._lock:
-            if agent_id in self.statuses:
+            if agent_id in self.statuses and self.statuses[agent_id] in _ACTIVE_STATUSES:
                 self.statuses[agent_id] = "running"
                 self.errors.pop(agent_id, None)
         await self._maybe_snapshot()
@@ -169,28 +171,34 @@ class AgentCoordinator:
             if target_agent_id not in self.statuses:
                 logger.debug("agent.send dropped unknown target=%s", target_agent_id)
                 return False
+            if self.statuses[target_agent_id] not in _ACTIVE_STATUSES:
+                logger.debug(
+                    "agent.send dropped target=%s because its status is %s",
+                    target_agent_id,
+                    self.statuses[target_agent_id],
+                )
+                return False
             runtime = self.runtimes.setdefault(target_agent_id, AgentRuntime())
             session = runtime.session
             stream = runtime.stream
             interrupt = runtime.interrupt_on_message
-        if session is None:
-            logger.warning(
-                "agent.send dropped target=%s because its SDK session is not attached",
-                target_agent_id,
-            )
-            return False
-        try:
-            async with session_write_lock(session):
-                await session.add_items([self._message_to_session_item(message)])
-        except Exception:
-            logger.exception(
-                "agent.send failed to append to SDK session target=%s",
-                target_agent_id,
-            )
-            return False
-        async with self._lock:
+            if session is None:
+                logger.warning(
+                    "agent.send dropped target=%s because its SDK session is not attached",
+                    target_agent_id,
+                )
+                return False
+            try:
+                async with session_write_lock(session):
+                    await session.add_items([self._message_to_session_item(message)])
+            except Exception:
+                logger.exception(
+                    "agent.send failed to append to SDK session target=%s",
+                    target_agent_id,
+                )
+                return False
             self.pending_counts[target_agent_id] = self.pending_counts.get(target_agent_id, 0) + 1
-            self.runtimes.setdefault(target_agent_id, AgentRuntime()).wake.set()
+            runtime.wake.set()
         if stream is not None and interrupt:
             stream.cancel(mode="immediate")
         await self._maybe_snapshot()
@@ -236,7 +244,7 @@ class AgentCoordinator:
         await self._maybe_snapshot()
 
     async def cancel_descendants(self, agent_id: str) -> None:
-        tasks = []
+        tasks: list[asyncio.Task[Any]] = []
         async with self._lock:
             for aid in reversed(self._subtree_order_locked(agent_id)):
                 task = self.runtimes.get(aid, AgentRuntime()).task

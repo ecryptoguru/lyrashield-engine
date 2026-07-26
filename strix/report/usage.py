@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from agents.usage import Usage, deserialize_usage, serialize_usage
 
@@ -55,11 +55,15 @@ class LLMUsageLedger:
 
         return True
 
-    def record_observed_cost(self, cost: float) -> None:
+    def record_observed_cost(self, cost: Any) -> None:
         if self.zero_cost:
             return
-        if isinstance(cost, int | float) and cost > 0:
-            self._total_cost += float(cost)
+        try:
+            numeric_cost = float(cost)
+        except (TypeError, ValueError):
+            return
+        if numeric_cost > 0:
+            self._total_cost += numeric_cost
             self._has_cost = True
 
     @property
@@ -82,7 +86,7 @@ class LLMUsageLedger:
             record.pop("request_usage_entries", None)
         if self._has_cost or self.zero_cost:
             record["cost"] = _round_cost(self._total_cost)
-        record["agents"] = []
+        agents: list[dict[str, Any]] = []
 
         agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}
         total_tokens = sum(agent_tokens.values())
@@ -103,8 +107,9 @@ class LLMUsageLedger:
             )
             if self._has_cost:
                 agent_record["cost"] = _round_cost(agent_cost)
-            record["agents"].append(agent_record)
+            agents.append(agent_record)
 
+        record["agents"] = agents
         return record
 
     def hydrate(self, raw_usage: Any) -> None:
@@ -117,6 +122,7 @@ class LLMUsageLedger:
 
         if not isinstance(raw_usage, dict):
             return
+        raw_usage = cast("dict[str, Any]", raw_usage)
 
         try:
             self._total_usage = deserialize_usage(raw_usage)
@@ -131,26 +137,30 @@ class LLMUsageLedger:
             raw_usage.get("request_usage_entries")
         )
 
-        for raw_agent in raw_usage.get("agents") or []:
-            if not isinstance(raw_agent, dict):
-                continue
-            agent_id = str(raw_agent.get("agent_id") or "").strip()
-            if not agent_id:
-                continue
-            try:
-                self._agent_usage[agent_id] = deserialize_usage(raw_agent)
-            except Exception:
-                logger.exception("Failed to hydrate llm_usage for agent %s", agent_id)
-                self._agent_usage[agent_id] = Usage()
+        raw_agents = raw_usage.get("agents")
+        if isinstance(raw_agents, list):
+            raw_agents = cast("list[Any]", raw_agents)
+            for raw in raw_agents:
+                if not isinstance(raw, dict):
+                    continue
+                raw_agent = cast("dict[str, Any]", raw)
+                agent_id = str(raw_agent.get("agent_id") or "").strip()
+                if not agent_id:
+                    continue
+                try:
+                    self._agent_usage[agent_id] = deserialize_usage(raw_agent)
+                except Exception:
+                    logger.exception("Failed to hydrate llm_usage for agent %s", agent_id)
+                    self._agent_usage[agent_id] = Usage()
 
-            metadata: dict[str, str] = {}
-            agent_name = raw_agent.get("agent_name")
-            model = raw_agent.get("model")
-            if isinstance(agent_name, str) and agent_name:
-                metadata["agent_name"] = agent_name
-            if isinstance(model, str) and model:
-                metadata["model"] = model
-            self._agent_metadata[agent_id] = metadata
+                metadata: dict[str, str] = {}
+                agent_name = raw_agent.get("agent_name")
+                model = raw_agent.get("model")
+                if isinstance(agent_name, str) and agent_name:
+                    metadata["agent_name"] = agent_name
+                if isinstance(model, str) and model:
+                    metadata["model"] = model
+                self._agent_metadata[agent_id] = metadata
 
 
 def _resolve_total_tokens(usage: Usage) -> int:
@@ -262,7 +272,7 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
     if details is None:
         return {}
     if isinstance(details, list):
-        for item in details:
+        for item in cast("list[Any]", details):
             result = _details_to_dict(item)
             if result:
                 return result
@@ -271,7 +281,7 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
         return _details_to_dict(details.model_dump())
     if not isinstance(details, dict):
         return {}
-    return {str(k): v for k, v in details.items() if v is not None}
+    return {str(k): v for k, v in cast("dict[Any, Any]", details).items() if v is not None}
 
 
 def _serialize_request_usage_entries(
@@ -315,9 +325,10 @@ def _hydrate_request_usage_entries(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     entries: list[dict[str, Any]] = []
-    for entry in value:
+    for entry in cast("list[Any]", value):
         if not isinstance(entry, dict):
             continue
+        entry = cast("dict[str, Any]", entry)
         serialized = _serialize_request_usage_entry(_UsageEntryAdapter(entry))
         model = entry.get("model")
         if isinstance(model, str) and model:

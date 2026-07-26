@@ -31,7 +31,7 @@ from typing import Any, cast
 
 from agents.sandbox.errors import ExposedPortUnavailableError
 from agents.sandbox.manifest import Manifest
-from agents.sandbox.sandboxes.docker import (
+from agents.sandbox.sandboxes.docker import (  # pyright: ignore[reportPrivateImportUsage]
     DockerSandboxClient,
     DockerSandboxSession,
     _build_docker_volume_mounts,
@@ -41,11 +41,11 @@ from agents.sandbox.sandboxes.docker import (
 )
 from agents.sandbox.session.sandbox_session import SandboxSession
 from agents.sandbox.types import ExposedPortEndpoint
-from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
-from docker.models.containers import Container  # type: ignore[import-untyped, unused-ignore]
-from docker.types import LogConfig  # type: ignore[import-untyped, unused-ignore]
-from docker.types import Mount as DockerSDKMount  # type: ignore[import-untyped, unused-ignore]
-from docker.utils import parse_repository_tag  # type: ignore[import-untyped, unused-ignore]
+from docker import errors as docker_errors  # pyright: ignore[reportMissingTypeStubs]
+from docker.models.containers import Container  # pyright: ignore[reportMissingTypeStubs]
+from docker.types import LogConfig  # pyright: ignore[reportMissingTypeStubs]
+from docker.types import Mount as DockerSDKMount  # pyright: ignore[reportMissingTypeStubs]
+from docker.utils import parse_repository_tag  # pyright: ignore[reportMissingTypeStubs]
 from requests.exceptions import RequestException
 
 
@@ -139,9 +139,10 @@ class StrixDockerSandboxSession(DockerSandboxSession):
                 cause=e,
             ) from e
 
-        attrs = getattr(self._container, "attrs", {}) or {}
-        networks = attrs.get("NetworkSettings", {}).get("Networks", {})
-        endpoint = networks.get(self.sandbox_network) or {}
+        attrs = cast("dict[str, Any]", getattr(self._container, "attrs", {}) or {})
+        network_settings = cast("dict[str, Any]", attrs.get("NetworkSettings", {}) or {})
+        networks = cast("dict[str, Any]", network_settings.get("Networks", {}) or {})
+        endpoint = cast("dict[str, Any]", networks.get(self.sandbox_network) or {})
         ip = endpoint.get("IPAddress") or endpoint.get("GlobalIPv6Address")
         if not isinstance(ip, str) or not ip:
             raise ExposedPortUnavailableError(
@@ -222,10 +223,17 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         # ----- END VERBATIM COPY -----
 
         # Strix injections — append, don't overwrite, so FUSE/SYS_ADMIN survives.
-        cap_add = create_kwargs.setdefault("cap_add", [])
-        if not isinstance(cap_add, list):
-            cap_add = list(cap_add)
-            create_kwargs["cap_add"] = cap_add
+        cap_add_value: Any = create_kwargs.setdefault("cap_add", [])
+        if isinstance(cap_add_value, (list, tuple)):
+            cap_items: list[Any] | tuple[Any, ...] = cast(
+                "list[Any] | tuple[Any, ...]", cap_add_value
+            )
+            cap_add = [str(c) for c in cap_items]
+        elif cap_add_value:
+            cap_add = [str(cap_add_value)]
+        else:
+            cap_add = []
+        create_kwargs["cap_add"] = cap_add
         for cap in ("NET_ADMIN", "NET_RAW"):
             if cap not in cap_add:
                 cap_add.append(cap)
@@ -270,14 +278,15 @@ class StrixDockerSandboxClient(DockerSandboxClient):
     async def create(self, **kwargs: Any) -> SandboxSession:
         session = await super().create(**kwargs)
         network = _sandbox_network()
-        inner = session._inner
+        inner = getattr(session, "_inner")  # noqa: B009
         if network and isinstance(inner, DockerSandboxSession):
             inner.__class__ = StrixDockerSandboxSession
             cast("StrixDockerSandboxSession", inner).sandbox_network = network
         return session
 
     async def delete(self, session: SandboxSession) -> SandboxSession:
-        container_id = getattr(getattr(session._inner, "state", None), "container_id", None)
+        inner = getattr(session, "_inner")  # noqa: B009
+        container_id = getattr(getattr(inner, "state", None), "container_id", None)
         if container_id:
             # Best-effort kill: NotFound/APIError cover a gone or unhappy
             # container. RequestException covers a torn-down daemon socket —
@@ -289,5 +298,5 @@ class StrixDockerSandboxClient(DockerSandboxClient):
             with contextlib.suppress(
                 docker_errors.NotFound, docker_errors.APIError, RequestException
             ):
-                self.docker_client.containers.get(container_id).kill()
+                cast("Any", self.docker_client.containers.get(container_id)).kill()
         return await super().delete(session)

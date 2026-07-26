@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from agents.items import TResponseInputItem
     from agents.memory import Session
 
 
@@ -32,24 +31,32 @@ _INHERITED_IMAGE_TEXT = "[screenshot omitted from inherited context]"
 
 
 def _output_has_image(item_dict: dict[str, Any]) -> bool:
-    return (
-        item_dict.get("type") == "function_call_output"
-        and isinstance(item_dict.get("output"), list)
-        and any(isinstance(b, dict) and b.get("type") == "input_image" for b in item_dict["output"])
+    if item_dict.get("type") != "function_call_output":
+        return False
+    output = item_dict.get("output")
+    if not isinstance(output, list):
+        return False
+    blocks = cast("list[Any]", output)
+    return any(
+        isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "input_image"
+        for block in blocks
     )
 
 
 def _elided_output(item_dict: dict[str, Any], text: str) -> dict[str, Any]:
     # Replace only image blocks; sibling text blocks are preserved.
     output = item_dict.get("output")
-    blocks = output if isinstance(output, list) else []
+    blocks = cast("list[Any]", output) if isinstance(output, list) else []
     return {
         "type": "function_call_output",
         "call_id": item_dict.get("call_id"),
         "output": [
-            {"type": "input_text", "text": text}
-            if isinstance(block, dict) and block.get("type") == "input_image"
-            else block
+            (
+                {"type": "input_text", "text": text}
+                if isinstance(block, dict)
+                and cast("dict[str, Any]", block).get("type") == "input_image"
+                else block
+            )
             for block in blocks
         ],
     }
@@ -79,11 +86,10 @@ async def _rewrite_session(
         rebuilt, changed = transform(list(items))
         if not changed:
             return False
-        rebuilt_items = cast("list[TResponseInputItem]", rebuilt)
-        original_items = cast("list[TResponseInputItem]", list(items))
+        original_items = list(items)
         await session.clear_session()
         try:
-            await session.add_items(rebuilt_items)
+            await session.add_items(rebuilt)
         except Exception:
             logger.exception("session rewrite failed; restoring original items")
             await session.clear_session()
@@ -125,9 +131,11 @@ async def enforce_image_budget(session: Session, max_images: int) -> bool:
             return items, False
         to_elide = set(image_indices[: len(image_indices) - max_images])
         rebuilt = [
-            _elided_output(cast("dict[str, Any]", item), _IMAGE_ELIDED_TEXT)
-            if i in to_elide
-            else item
+            (
+                _elided_output(cast("dict[str, Any]", item), _IMAGE_ELIDED_TEXT)
+                if i in to_elide
+                else item
+            )
             for i, item in enumerate(items)
         ]
         return rebuilt, True
@@ -140,11 +148,13 @@ def scrub_images_from_items(items: list[Any]) -> list[Any]:
 
     def _scrub(obj: Any) -> Any:
         if isinstance(obj, dict):
-            if obj.get("type") == "input_image":
+            obj_dict = cast("dict[str, Any]", obj)
+            if obj_dict.get("type") == "input_image":
                 return {"type": "input_text", "text": _INHERITED_IMAGE_TEXT}
-            return {k: _scrub(v) for k, v in obj.items()}
+            return {k: _scrub(v) for k, v in obj_dict.items()}
         if isinstance(obj, list):
-            return [_scrub(v) for v in obj]
+            obj_list = cast("list[Any]", obj)
+            return [_scrub(v) for v in obj_list]
         return obj
 
     return [_scrub(item) for item in items]

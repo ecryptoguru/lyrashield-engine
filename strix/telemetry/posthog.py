@@ -2,18 +2,15 @@ import json
 import logging
 import urllib.request
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from strix.config import load_settings
 from strix.telemetry._common import (
     SESSION_ID,
+    ReportState,
     base_props,
     is_first_run,
 )
-
-
-if TYPE_CHECKING:
-    from strix.report.state import ReportState
 
 
 logger = logging.getLogger(__name__)
@@ -97,7 +94,7 @@ def skill_loaded(skill_name: str) -> None:
     )
 
 
-def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
+def end(report_state: ReportState, exit_reason: str = "completed") -> None:
     if report_state.posthog_scan_ended_sent:
         return
     if report_state.scan_ended_exit_reason is None:
@@ -120,14 +117,13 @@ def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
     llm_props: dict[str, int | float] = {}
     try:
         usage = report_state.get_total_llm_usage()
-        if isinstance(usage, dict):
-            llm_props = {
-                "llm_requests": int(usage.get("requests") or 0),
-                "llm_input_tokens": int(usage.get("input_tokens") or 0),
-                "llm_output_tokens": int(usage.get("output_tokens") or 0),
-                "llm_tokens": int(usage.get("total_tokens") or 0),
-                "llm_cost": float(usage.get("cost") or 0.0),
-            }
+        llm_props = {
+            "llm_requests": int(usage.get("requests") or 0),
+            "llm_input_tokens": int(usage.get("input_tokens") or 0),
+            "llm_output_tokens": int(usage.get("output_tokens") or 0),
+            "llm_tokens": int(usage.get("total_tokens") or 0),
+            "llm_cost": float(usage.get("cost") or 0.0),
+        }
     except (TypeError, ValueError, AttributeError):
         pass
 

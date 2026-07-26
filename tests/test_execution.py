@@ -6,10 +6,14 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from agents.memory import SQLiteSession
 
 from strix.core.agents import AgentCoordinator
-from strix.core.execution import _final_output_metadata
-from strix.core.runner import _coordinator_for_scan_mode
+from strix.core.execution import (
+    _final_output_metadata,  # pyright: ignore[reportPrivateUsage]
+    _notify_parent_on_crash,  # pyright: ignore[reportPrivateUsage]
+)
+from strix.core.runner import _coordinator_for_scan_mode  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.asyncio
@@ -82,3 +86,105 @@ async def test_overfull_caller_supplied_coordinator_is_rejected() -> None:
 
     with pytest.raises(RuntimeError, match=r"above the quick mode limit \(2\)"):
         _coordinator_for_scan_mode(coordinator, "quick")
+
+
+@pytest.mark.asyncio
+async def test_send_rejects_messages_to_terminal_agents() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.attach_runtime("root", session=SQLiteSession(session_id="root"))
+    await coordinator.attach_runtime("child", session=SQLiteSession(session_id="child"))
+
+    for terminal_status in ("completed", "stopped", "crashed", "failed"):
+        await coordinator.set_status("child", terminal_status)
+        delivered = await coordinator.send(
+            "child",
+            {
+                "from": "root",
+                "type": "instruction",
+                "priority": "normal",
+                "content": "are you done?",
+            },
+        )
+        assert not delivered, f"send should fail for status {terminal_status}"
+        pending, _ = await coordinator.consume_pending("child")
+        assert pending == 0, f"pending count should not grow for status {terminal_status}"
+
+
+@pytest.mark.asyncio
+async def test_send_delivers_to_waiting_agents() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.attach_runtime("child", session=SQLiteSession(session_id="child"))
+    await coordinator.set_status("child", "waiting")
+
+    delivered = await coordinator.send(
+        "child",
+        {
+            "from": "root",
+            "type": "instruction",
+            "priority": "normal",
+            "content": "wake up",
+        },
+    )
+    assert delivered
+    pending, _ = await coordinator.consume_pending("child")
+    assert pending == 1
+
+
+@pytest.mark.asyncio
+async def test_notify_parent_on_crash_wakes_parent_for_terminal_statuses() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.attach_runtime("root", session=SQLiteSession(session_id="root"))
+
+    for terminal_status in ("crashed", "failed", "stopped"):
+        await coordinator.set_status("child", "running")
+        # Reset parent inbox
+        await coordinator.consume_pending("root")
+        await _notify_parent_on_crash(coordinator, "child", terminal_status)
+
+        pending, items = await coordinator.consume_pending("root", include_items=True)
+        assert pending == 1, f"parent should be notified for {terminal_status}"
+        content = items[-1].get("content", "")
+        assert "crash" in content
+        assert "child" in content
+
+
+@pytest.mark.asyncio
+async def test_notify_parent_on_crash_ignores_completed_and_root() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+
+    await _notify_parent_on_crash(coordinator, "child", "completed")
+    pending, _ = await coordinator.consume_pending("root")
+    assert pending == 0
+
+    # Root has no parent, so nothing should happen.
+    await _notify_parent_on_crash(coordinator, "root", "crashed")
+    pending, _ = await coordinator.consume_pending("root")
+    assert pending == 0
+
+
+@pytest.mark.asyncio
+async def test_terminal_child_notifies_waiting_parent() -> None:
+    """A child that becomes terminal must wake a parent parked in wait_for_message."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.attach_runtime("root", session=SQLiteSession(session_id="root"))
+
+    parent_wait = asyncio.create_task(coordinator.wait_for_message("root"))
+    await asyncio.sleep(0)  # let parent park
+    assert not parent_wait.done()
+
+    await coordinator.set_status("child", "crashed")
+    await _notify_parent_on_crash(coordinator, "child", "crashed")
+
+    await asyncio.wait_for(parent_wait, timeout=1.0)
+    pending, _ = await coordinator.consume_pending("root")
+    assert pending == 1

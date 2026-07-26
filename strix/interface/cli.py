@@ -6,7 +6,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 from rich.console import Console
 from rich.live import Live
@@ -33,6 +33,7 @@ def _noninteractive_failure_label(exc: Exception) -> str:
     body = getattr(exc, "body", None)
     if not isinstance(body, dict):
         return label
+    body = cast("dict[str, Any]", body)
     for key in ("code", "type", "param"):
         component = body.get(key)
         if isinstance(component, str) and _SAFE_PROVIDER_ERROR_COMPONENT.fullmatch(component):

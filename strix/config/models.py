@@ -7,7 +7,7 @@ import contextlib
 import inspect
 import os
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agents import (
     set_default_openai_api,
@@ -92,7 +92,9 @@ class _CodexResponsesModel(OpenAIResponsesModel):
                 effort = "low"
             elif effort == "xhigh":
                 effort = "high"
-            overrides = overrides.resolve(ModelSettings(reasoning=Reasoning(effort=effort)))
+            overrides = overrides.resolve(
+                ModelSettings(reasoning=Reasoning(effort=cast("ReasoningEffort", effort)))
+            )
         return model_settings.resolve(overrides)
 
     async def _fetch_response(self, *args: Any, stream: bool = False, **kwargs: Any) -> Any:
@@ -142,7 +144,7 @@ class _CodexResponsesModel(OpenAIResponsesModel):
         aclose = getattr(events, "aclose", None)
         if callable(aclose):
             with contextlib.suppress(Exception):
-                await aclose()
+                await cast("Any", aclose())
             return
         close = getattr(events, "close", None)
         if callable(close):
@@ -327,12 +329,18 @@ def _mirror_api_key_to_provider_env(model_name: str | None, api_key: str) -> Non
             name = name[len(prefix) :]
             break
     try:
-        report = litellm.validate_environment(model=name.lower())
+        report = cast(
+            "dict[str, Any]",
+            litellm.validate_environment(model=name.lower()),  # pyright: ignore[reportUnknownMemberType]
+        )
     except Exception:  # noqa: BLE001
         return
-    for env_key in report.get("missing_keys") or []:
-        if env_key.endswith("_API_KEY"):
-            os.environ.setdefault(env_key, api_key)
+    missing_keys = report.get("missing_keys")
+    if isinstance(missing_keys, list):
+        missing_keys = cast("list[Any]", missing_keys)
+        for env_key in missing_keys:
+            if isinstance(env_key, str) and env_key.endswith("_API_KEY"):
+                os.environ.setdefault(env_key, api_key)
 
 
 def _mirror_azure_env(
@@ -385,7 +393,7 @@ _OPENROUTER_ATTRIBUTION_HEADERS = {
 def _configure_openrouter_attribution(model_name: str | None) -> None:
     import litellm
 
-    current: object = litellm.headers
+    current: dict[str, str] | None = getattr(litellm, "headers", None)
     existing: dict[str, str] = current if isinstance(current, dict) else {}
     if not model_name or "openrouter/" not in model_name.strip().lower():
         if any(key in existing for key in _OPENROUTER_ATTRIBUTION_HEADERS):
@@ -407,6 +415,7 @@ def _register_litellm_cost_callback() -> None:
         bucket = getattr(litellm, bucket_name, None)
         if not isinstance(bucket, list):
             continue
+        bucket = cast("list[Any]", bucket)
         if litellm_cost_callback in bucket:
             continue
         bucket.append(litellm_cost_callback)
@@ -431,6 +440,11 @@ def uses_chat_completions_tool_schema(model_name: str, settings: Settings) -> bo
     return not model_supports_reasoning(model_name)
 
 
+def _model_cost_entry(model_cost: dict[str, Any], name: str) -> dict[str, Any] | None:
+    entry: Any = model_cost.get(name)
+    return cast("dict[str, Any]", entry) if isinstance(entry, dict) else None
+
+
 def model_supports_reasoning(model_name: str) -> bool:
     import litellm
 
@@ -439,10 +453,11 @@ def model_supports_reasoning(model_name: str) -> bool:
         if name.startswith(prefix):
             name = name[len(prefix) :]
             break
-    entry = litellm.model_cost.get(name)
+    model_cost = cast("dict[str, Any]", litellm.model_cost)
+    entry = _model_cost_entry(model_cost, name)
     if entry is None and "/" in name:
-        entry = litellm.model_cost.get(name.rsplit("/", 1)[1])
-    return bool(entry and entry.get("supports_reasoning"))
+        entry = _model_cost_entry(model_cost, name.rsplit("/", 1)[1])
+    return bool(entry is not None and entry.get("supports_reasoning"))
 
 
 def is_recommended_or_frontier_model(model_name: str) -> bool:
@@ -523,5 +538,6 @@ def is_known_openai_bare_model(model_name: str) -> bool:
     name = model_name.strip().lower()
     if not name or "/" in name:
         return False
-    entry = litellm.model_cost.get(name)
-    return bool(entry and entry.get("litellm_provider") == "openai")
+    model_cost = cast("dict[str, Any]", litellm.model_cost)
+    entry = _model_cost_entry(model_cost, name)
+    return bool(entry is not None and entry.get("litellm_provider") == "openai")

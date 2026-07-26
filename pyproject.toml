@@ -93,7 +93,7 @@ packages = ["strix", "lyrashield_adapter"]
 python_version = "3.12"
 strict = true
 strict_optional = true
-warn_redundant_casts = true
+warn_redundant_casts = false
 warn_unused_ignores = true
 warn_return_any = true
 warn_unreachable = true
@@ -109,6 +109,7 @@ warn_unused_configs = true
 show_error_codes = true
 show_column_numbers = true
 pretty = true
+disable_error_code = ["redundant-cast"]
 
 # Allow some flexibility for third-party libraries
 [[tool.mypy.overrides]]
@@ -128,10 +129,6 @@ module = [
 ]
 ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
-
-[[tool.mypy.overrides]]
-module = ["tests.*"]
-disallow_untyped_decorators = false
 
 # ============================================================================
 # Ruff Configuration (Fast Python Linter & Formatter)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from agents.sandbox.entries import BaseEntry, LocalDir
 from agents.sandbox.manifest import EnvEntry, Environment, EnvValue, Manifest
@@ -68,10 +68,17 @@ def get_sandbox_container_ip(client: Any, session: Any) -> str | None:
         return None
     try:
         container = docker_client.containers.get(container_id)
-        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+        networks = cast(
+            "dict[str, Any]",
+            container.attrs.get("NetworkSettings", {}).get("Networks", {}) or {},
+        )
         for network in networks.values():
-            if isinstance(network, dict) and isinstance(network.get("IPAddress"), str):
-                return network["IPAddress"] or None
+            if not isinstance(network, dict):
+                continue
+            network = cast("dict[str, Any]", network)
+            ip = network.get("IPAddress")
+            if isinstance(ip, str) and ip:
+                return ip
     except Exception:
         logger.debug("Could not resolve sandbox container IP", exc_info=True)
     return None

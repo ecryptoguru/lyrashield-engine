@@ -7,7 +7,8 @@ import asyncio
 import json
 import logging
 import math
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.lifecycle import RunHooks
 
@@ -113,17 +114,17 @@ def _cached_input_rate(model: str) -> float:
 def _usage_value(entry: Any, field: str) -> Any:
     """Read a usage counter from either a dict or an object."""
     if isinstance(entry, dict):
+        entry = cast("dict[str, Any]", entry)
         return entry.get(field)
     return getattr(entry, field, None)
 
 
 def _cached_tokens_from_entry(entry: Any) -> int:
-    details = getattr(entry, "input_tokens_details", None)
-    if details is None and isinstance(entry, dict):
-        details = entry.get("input_tokens_details")
+    details = _usage_value(entry, "input_tokens_details")
     if not details:
         return 0
     if isinstance(details, dict):
+        details = cast("dict[str, Any]", details)
         return max(0, int(details.get("cached_tokens", 0) or 0))
     cached = getattr(details, "cached_tokens", None)
     return max(0, int(cached or 0))
@@ -165,6 +166,7 @@ def _compact_item(item: Any) -> dict[str, str]:
 
 def _item_type(item: Any) -> str:
     if isinstance(item, dict):
+        item = cast("dict[str, Any]", item)
         return str(item.get("type") or item.get("role") or "").lower()
     return str(getattr(item, "type", "") or getattr(item, "role", "")).lower()
 
@@ -217,7 +219,8 @@ def _estimate_input_tokens(
     )
     bare_model = model.strip().lower().split("/")[-1]
     try:
-        token_count = int(litellm.token_counter(model=bare_model, text=payload))
+        counter = cast(Callable[..., int], litellm.token_counter)  # noqa: TC006
+        token_count = int(counter(model=bare_model, text=payload))
     except Exception:  # noqa: BLE001
         # UTF-8 bytes are a conservative ceiling for BPE token count.
         token_count = len(payload.encode("utf-8"))
@@ -381,7 +384,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
 
     @staticmethod
     def _agent_id(context: RunContextWrapper[dict[str, Any]], agent: Agent[dict[str, Any]]) -> str:
-        ctx = context.context if isinstance(context.context, dict) else {}
+        ctx = context.context
         value = ctx.get("agent_id")
         if isinstance(value, str) and value:
             return value
@@ -401,7 +404,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
 
     async def on_llm_start(
         self,
-        _context: RunContextWrapper[dict[str, Any]],
+        context: RunContextWrapper[dict[str, Any]],
         agent: Agent[dict[str, Any]],
         system_prompt: str | None,
         input_items: list[Any],
@@ -430,7 +433,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 * output_rate
                 * (1.5 if multiplier > 1 else 1.0)
             ) / 1_000_000
-            agent_id = self._agent_id(_context, agent)
+            agent_id = self._agent_id(context, agent)
             async with self._reservation_lock:
                 # A repeated start for the same agent means the prior attempt did
                 # not complete; providers do not bill a response with no usage.
@@ -471,8 +474,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
 
         async with self._reservation_lock:
             self._reservations.pop(agent_id, None)
-            if response.usage is not None:
-                self._committed_cost_floor += _usage_cost_upper_bound(model, response.usage)
+            self._committed_cost_floor += _usage_cost_upper_bound(model, response.usage)
 
         if self._max_budget_usd is not None:
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0

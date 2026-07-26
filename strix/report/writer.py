@@ -10,9 +10,9 @@ import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from pygments.lexers import PythonLexer, get_lexer_by_name, guess_lexer
+from pygments.lexers import get_lexer_by_name, guess_lexer
 from pygments.lexers.special import TextLexer
 from pygments.util import ClassNotFound
 
@@ -74,10 +74,10 @@ def resolve_lexer(language: str | None, code: str) -> Lexer:
     try:
         lexer = guess_lexer(code)
     except ClassNotFound:
-        return PythonLexer()
+        return get_lexer_by_name("python")
     # ``guess_lexer`` returns the plain-text lexer when it can't detect anything.
     if isinstance(lexer, TextLexer):
-        return PythonLexer()
+        return get_lexer_by_name("python")
     return lexer
 
 
@@ -103,7 +103,7 @@ def read_run_record(run_dir: Path) -> dict[str, Any]:
         raise RuntimeError(f"run.json at {path} is unreadable: {exc}") from exc
     if not isinstance(data, dict):
         raise TypeError(f"run.json at {path} is not an object")
-    return data
+    return cast("dict[str, Any]", data)
 
 
 def write_run_record(run_dir: Path, run_record: dict[str, Any]) -> None:
@@ -198,7 +198,10 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:  # noqa: PLR0912, PL
         f"**Found:** {report.get('timestamp', 'unknown')}",
     ]
 
-    dep_meta = report.get("dependency_metadata") or {}
+    dep_meta_raw: Any = report.get("dependency_metadata") or {}
+    dep_meta: dict[str, Any] = (
+        cast("dict[str, Any]", dep_meta_raw) if isinstance(dep_meta_raw, dict) else {}
+    )
     metadata: list[tuple[str, Any]] = [
         ("Target", report.get("target")),
         ("Package", dep_meta.get("package_name")),

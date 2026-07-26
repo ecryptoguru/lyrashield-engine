@@ -189,6 +189,7 @@ class ReportState:
                 self.end_time = data["end_time"]
             scan_results = data.get("scan_results")
             if isinstance(scan_results, dict):
+                scan_results = cast("dict[str, Any]", scan_results)
                 self.scan_results = scan_results
                 self.final_scan_result = self._format_final_scan_result(scan_results)
             self._hydrate_llm_usage(data.get("llm_usage"))
@@ -197,18 +198,21 @@ class ReportState:
         json_path = run_dir / "vulnerabilities.json"
         if json_path.exists():
             try:
-                data = json.loads(json_path.read_text(encoding="utf-8"))
+                vuln_data = json.loads(json_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise RuntimeError(
                     f"vulnerabilities.json at {json_path} is corrupt ({exc}); "
                     f"refusing to start fresh — that would overwrite prior "
                     f"vulnerability MDs on disk. Inspect or delete the run dir.",
                 ) from exc
-            if not isinstance(data, list):
+            if not isinstance(vuln_data, list):
                 raise RuntimeError(
                     f"vulnerabilities.json at {json_path} is not a list",
                 )
-            self.vulnerability_reports = [r for r in data if isinstance(r, dict)]
+            vuln_data = cast("list[Any]", vuln_data)
+            self.vulnerability_reports = [
+                cast("dict[str, Any]", r) for r in vuln_data if isinstance(r, dict)
+            ]
             for r in self.vulnerability_reports:
                 rid = r.get("id")
                 if isinstance(rid, str):
@@ -472,23 +476,27 @@ class ReportState:
         return self._sarif_repo_ctx
 
     def _derive_repository_context(self) -> dict[str, Any] | None:
-        targets = self.run_record.get("targets_info") or []
+        targets = self.run_record.get("targets_info")
         if not isinstance(targets, list):
             return None
-        repo_targets = [
-            target
-            for target in targets
-            if isinstance(target, dict) and target.get("type") == "repository"
-        ]
-        # Provenance binds the whole run to one repo; with multiple repo targets
-        # that's ambiguous, so omit it rather than mis-attributing later repos'
-        # findings to the first repo's URI/commit.
+        targets = cast("list[Any]", targets)
+
+        repo_targets: list[dict[str, Any]] = []
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            target = cast("dict[str, Any]", target)
+            if target.get("type") == "repository":
+                repo_targets.append(target)
+
         if len(repo_targets) != 1:
             return None
         target = repo_targets[0]
-        details = target.get("details") or {}
+        details = target.get("details")
         if not isinstance(details, dict):
             return None
+        details = cast("dict[str, Any]", details)
+
         uri = details.get("target_repo")
         if not isinstance(uri, str) or not uri.strip():
             return None
@@ -518,6 +526,13 @@ class ReportState:
         self._sync_llm_usage_record()
 
 
+def _as_dict(obj: Any) -> dict[str, Any] | None:
+    """Return *obj* as a str-keyed dict, or None if it isn't a mapping."""
+    if isinstance(obj, dict):
+        return cast("dict[str, Any]", obj)
+    return None
+
+
 def litellm_cost_callback(
     kwargs: Any,
     completion_response: Any,
@@ -526,28 +541,28 @@ def litellm_cost_callback(
 ) -> None:
     """LiteLLM ``success_callback`` adapter; forwards observed cost to the active scan."""
     cost: float | None = None
-    raw = kwargs.get("response_cost") if isinstance(kwargs, dict) else None
-    if isinstance(raw, int | float) and raw > 0:
-        cost = float(raw)
+    kwargs_dict = _as_dict(kwargs)
+    if kwargs_dict is not None:
+        raw = kwargs_dict.get("response_cost")
+        if isinstance(raw, int | float) and raw > 0:
+            cost = float(raw)
 
     if cost is None:
-        hidden = getattr(completion_response, "_hidden_params", None) or {}
-        candidate = hidden.get("response_cost") if isinstance(hidden, dict) else None
-        if isinstance(candidate, int | float) and candidate > 0:
-            cost = float(candidate)
-        else:
-            headers = hidden.get("additional_headers") or {} if isinstance(hidden, dict) else {}
-            raw = (
-                headers.get("llm_provider-x-litellm-response-cost")
-                if isinstance(headers, dict)
-                else None
-            )
-            try:
-                value = float(raw) if raw is not None else None
-            except (TypeError, ValueError):
-                value = None
-            if value is not None and value > 0:
-                cost = value
+        hidden = _as_dict(getattr(completion_response, "_hidden_params", None))
+        if hidden is not None:
+            candidate = hidden.get("response_cost")
+            if isinstance(candidate, int | float) and candidate > 0:
+                cost = float(candidate)
+            else:
+                headers = _as_dict(hidden.get("additional_headers"))
+                if headers is not None:
+                    raw = headers.get("llm_provider-x-litellm-response-cost")
+                    try:
+                        value = float(raw) if raw is not None else None
+                    except (TypeError, ValueError):
+                        value = None
+                    if value is not None and value > 0:
+                        cost = value
 
     if cost is None:
         cost = _usage_reported_cost(completion_response)
@@ -607,19 +622,22 @@ def _estimate_response_cost(kwargs: Any, completion_response: Any) -> float | No
     """
     from litellm import completion_cost
 
-    model = kwargs.get("model") if isinstance(kwargs, dict) else None
+    kwargs_dict = _as_dict(kwargs)
+    model = kwargs_dict.get("model") if kwargs_dict is not None else None
     if not isinstance(model, str) or not model:
-        if isinstance(completion_response, dict):
-            model = cast("dict[str, Any]", completion_response).get("model")
+        completion_response_dict = _as_dict(completion_response)
+        if completion_response_dict is not None:
+            model = completion_response_dict.get("model")
         else:
             model = getattr(completion_response, "model", None)
     if not isinstance(model, str) or not model:
         return None
 
     provider = None
-    litellm_params = kwargs.get("litellm_params") if isinstance(kwargs, dict) else None
-    if isinstance(litellm_params, dict):
-        provider = litellm_params.get("custom_llm_provider")
+    if kwargs_dict is not None:
+        litellm_params = _as_dict(kwargs_dict.get("litellm_params"))
+        if litellm_params is not None:
+            provider = litellm_params.get("custom_llm_provider")
 
     usage_payload = _usage_payload(completion_response)
     if usage_payload is None:
@@ -638,10 +656,11 @@ def _estimate_response_cost(kwargs: Any, completion_response: Any) -> float | No
                 completion_response={"model": candidate, "usage": usage_payload},
                 model=candidate,
             )
+            numeric_value = float(value)
         except Exception:  # nosec B112  # noqa: BLE001, S112
             continue
-        if isinstance(value, int | float) and value > 0:
-            return float(value)
+        if numeric_value > 0:
+            return numeric_value
     return None
 
 

@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any, cast
 
 from agents import RunConfig, Runner
@@ -97,9 +97,17 @@ async def run_agent_loop(
         return result
 
     while True:
+        current_status = await coordinator.get_status(agent_id)
+        if current_status not in {"running", "waiting"}:
+            return result
+
         try:
             await coordinator.wait_for_message(agent_id)
         except asyncio.CancelledError:
+            return result
+
+        current_status = await coordinator.get_status(agent_id)
+        if current_status not in {"running", "waiting"}:
             return result
 
         if coordinator.budget_stopped:
@@ -281,6 +289,7 @@ async def _run_noninteractive_until_lifecycle(
     input_data: Any = initial_input
     invalid_final_outputs = 0
     invalid_final_output_limit = max(1, max_turns)
+    is_root = context.get("parent_id") is None
 
     while True:
         if coordinator.budget_stopped:
@@ -318,10 +327,12 @@ async def _run_noninteractive_until_lifecycle(
         if invalid_final_outputs >= invalid_final_output_limit:
             await coordinator.set_status(agent_id, "crashed")
             await _notify_parent_on_crash(coordinator, agent_id, "crashed")
-            raise MaxTurnsExceeded(
-                "Agent exhausted non-interactive recovery attempts without calling "
-                "finish_scan or agent_finish."
-            )
+            if is_root:
+                raise MaxTurnsExceeded(
+                    "Agent exhausted non-interactive recovery attempts without calling "
+                    "finish_scan or agent_finish."
+                )
+            return None
 
         input_data = await _append_noninteractive_tool_required_message(
             session=session,
@@ -424,8 +435,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                     )
                     input_data = []
                     continue
-            if not interactive:
-                raise
+            is_root = context.get("parent_id") is None
             if isinstance(exc, MaxTurnsExceeded):
                 status: Status = "stopped"
             elif isinstance(exc, UserError | AgentsException | APIError):
@@ -435,6 +445,8 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
             logger.exception("agent run failed for %s; parking as %s", agent_id, status)
             await coordinator.set_status(agent_id, status, error=str(exc) or type(exc).__name__)
             await _notify_parent_on_crash(coordinator, agent_id, status)
+            if not interactive and is_root:
+                raise
             return None
         else:
             await _settle_run_result(coordinator, agent_id, interactive)
@@ -461,14 +473,15 @@ async def _agent_status(coordinator: AgentCoordinator, agent_id: str) -> Status 
     return await coordinator.get_status(agent_id)
 
 
-def _final_output_metadata(result: RunResultBase | None) -> str:
+def _final_output_metadata(result: object) -> str:
     """Describe invalid model output without copying target-derived content to logs."""
-    final_output = getattr(result, "final_output", None)
+    final_output: object = getattr(result, "final_output", None)
     if final_output is None:
         return "type=NoneType"
+    output_type = type(final_output).__name__
     if isinstance(final_output, str | bytes | list | tuple | dict):
-        return f"type={type(final_output).__name__} length={len(final_output)}"
-    return f"type={type(final_output).__name__}"
+        return f"type={output_type} length={len(cast(Sized, final_output))}"  # noqa: TC006
+    return f"type={output_type}"
 
 
 async def _append_noninteractive_tool_required_message(
@@ -501,7 +514,9 @@ async def _notify_parent_on_crash(
     agent_id: str,
     status: str,
 ) -> None:
-    if status != "crashed":
+    if status not in {"crashed", "failed", "stopped"}:
+        return
+    if coordinator.budget_stopped:
         return
     parent, name = await coordinator.get_parent_and_name(agent_id)
     if parent is None:
