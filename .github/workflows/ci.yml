@@ -45,25 +45,6 @@ jobs:
       - name: Verify native release binary
         run: bash scripts/build.sh
 
-      - name: Build sandbox image
-        run: docker build -f containers/Dockerfile -t lyrashield-sandbox:ci .
-
-      - name: Smoke sandbox image
-        run: |
-          docker run --rm lyrashield-sandbox:ci sh -lc '
-            test "$(id -u)" != "0" &&
-            test "$(pwd)" = "/workspace" &&
-            test -f /app/certs/ca.p12 &&
-            test ! -S /var/run/docker.sock &&
-            test "$VIRTUAL_ENV" = "/app/.venv" &&
-            test "$HTTP_PROXY" = "http://127.0.0.1:48080" &&
-            caido-cli --version &&
-            command -v nmap >/dev/null &&
-            /app/.venv/bin/python -c "import caido_api" &&
-            status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
-            case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
-          '
-
       - name: Check out public LyraShield app contract
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -83,5 +64,51 @@ jobs:
           path: |
             dist/
             build/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker-smoke:
+    name: Build and smoke-test sandbox image
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.10.0
+
+      - name: Build sandbox image
+        run: |
+          docker build \
+            -f containers/Dockerfile \
+            -t lyrashield-sandbox:ci \
+            --progress=plain \
+            .
+
+      - name: Smoke sandbox image
+        run: |
+          docker run --rm --cap-add NET_ADMIN --cap-add NET_RAW lyrashield-sandbox:ci sh -lc '
+            test "$(id -u)" != "0" &&
+            test "$(pwd)" = "/workspace" &&
+            test -f /app/certs/ca.p12 &&
+            test ! -S /var/run/docker.sock &&
+            test "$VIRTUAL_ENV" = "/app/.venv" &&
+            test "$HTTP_PROXY" = "http://127.0.0.1:48080" &&
+            caido-cli --version &&
+            command -v nmap >/dev/null &&
+            nmap --version >/dev/null 2>&1 &&
+            /app/.venv/bin/python -c "import caido_api" &&
+            status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
+            case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
+          '
+
+      - name: Upload image diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docker-smoke-diagnostics-${{ github.run_id }}
+          path: containers/Dockerfile
           if-no-files-found: ignore
           retention-days: 7

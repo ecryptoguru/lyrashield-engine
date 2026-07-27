@@ -128,7 +128,14 @@ def model_supports_programmatic_tool_calling(model_name: str | None) -> bool:
     """
     if not model_name:
         return False
-    env = os.environ.get("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "").strip().lower()
+    env = (
+        (
+            os.environ.get("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "")
+            or os.environ.get("STRIX_PROGRAMMATIC_TOOL_CALLING", "")
+        )
+        .strip()
+        .lower()
+    )
     if env in ("0", "false", "no"):
         return False
     name = model_name.strip().lower()

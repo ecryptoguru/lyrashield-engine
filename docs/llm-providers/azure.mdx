@@ -6,13 +6,28 @@ description: "Configure GPT-5.6 through Azure AI or Azure OpenAI"
 Use an Azure deployment whose configured name identifies GPT-5.6 Terra or Luna. ChatGPT subscription-backed Azure routes are rejected.
 
 ```bash
-export LYRASHIELD_LLM="azure/gpt-5.6-luna"
+export LYRASHIELD_LLM="azure_ai/gpt-5.6-luna"
 export AZURE_AI_API_KEY="<credential>"
 export AZURE_AI_API_BASE="https://<approved-resource-endpoint>"
 export LLM_API_VERSION="<approved-api-version>"
 ```
 
-The settings layer also accepts these compatibility aliases:
+The same model name may also be written as `azure/gpt-5.6-luna` or `azure_ai/gpt-5.6-terra`.
+
+## Environment aliases
+
+Every `STRIX_*` variable accepted by the engine also answers to a `LYRASHIELD_*` alias. For Azure deployments the important product variables are:
+
+| Setting | `STRIX_*` | `LYRASHIELD_*` |
+| --- | --- | --- |
+| Main model | `STRIX_LLM` | `LYRASHIELD_LLM` |
+| Delegate model | `STRIX_DELEGATE_LLM` | `LYRASHIELD_DELEGATE_LLM` |
+| Dedupe model | `STRIX_DEDUPE_MODEL` | `LYRASHIELD_DEDUPE_MODEL` |
+| Reasoning effort | `STRIX_REASONING_EFFORT` | `LYRASHIELD_REASONING_EFFORT` |
+| Delegate reasoning | `STRIX_DELEGATE_REASONING_EFFORT` | `LYRASHIELD_DELEGATE_REASONING_EFFORT` |
+| Programmatic tools | `STRIX_PROGRAMMATIC_TOOL_CALLING` | `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` |
+
+The credential and endpoint variables accept the same compatibility aliases as before:
 
 | Purpose | Accepted variables |
 | --- | --- |
@@ -27,7 +42,11 @@ Use one coherent route per deployment. Do not mix endpoints and credentials from
 The configured Azure AI Foundry GPT-5.6 endpoint supports baseline Responses requests and `previous_response_id`, but rejects the Responses `programmatic_tool_calling` tool type. Use direct JSON function tools in production. Keep `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` unset unless this bounded gate succeeds against the exact deployment:
 
 ```bash
-uv run lyrashield provider-contract --require-programmatic-tool-calling
+# Verify baseline + previous_response_id support first
+uv run lyrashield provider-contract
+
+# Only enable programmatic tool calling if the gate above reports it supported
+export LYRASHIELD_PROGRAMMATIC_TOOL_CALLING=1
 ```
 
 `previous_response_id` capability does not by itself enable persistent engine reasoning. The current engine uses SQLite sessions for resume and multi-turn state, and the Agents SDK rejects `previous_response_id` when a session is supplied.

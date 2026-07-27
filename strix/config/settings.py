@@ -184,12 +184,31 @@ class DedupeSettings(BaseSettings):
         alias="STRIX_DEDUPE_REASONING_EFFORT",
         validation_alias=_lyra("STRIX_DEDUPE_REASONING_EFFORT"),
     )
-    api_key: str | None = Field(default=None, alias="DEDUPE_LLM_API_KEY")
-    api_base: str | None = Field(default=None, alias="DEDUPE_LLM_API_BASE")
+    api_key: str | None = Field(
+        default=None,
+        alias="DEDUPE_LLM_API_KEY",
+        validation_alias=AliasChoices(
+            "DEDUPE_LLM_API_KEY",
+            "LYRASHIELD_DEDUPE_LLM_API_KEY",
+        ),
+    )
+    api_base: str | None = Field(
+        default=None,
+        alias="DEDUPE_LLM_API_BASE",
+        validation_alias=AliasChoices(
+            "DEDUPE_LLM_API_BASE",
+            "LYRASHIELD_DEDUPE_LLM_API_BASE",
+        ),
+    )
     extra_headers: dict[str, str] | None = Field(
         default=None,
         alias="DEDUPE_LLM_EXTRA_HEADERS",
     )
+
+    @field_validator("api_base", "api_key", mode="before")
+    @classmethod
+    def _empty_env_to_none(cls, value: Any) -> Any:
+        return None if value == "" else value
 
 
 class ContextSettings(BaseSettings):
