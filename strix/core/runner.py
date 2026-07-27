@@ -38,6 +38,7 @@ from strix.core.inputs import (
     build_root_task,
     build_scope_context,
     make_model_settings,
+    prompt_cache_options_for_model,
 )
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
@@ -290,6 +291,7 @@ async def run_strix_scan(
             request_timeout=settings.llm.timeout,
             max_output_tokens=max_output_tokens,
             prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
+            prompt_cache_options=prompt_cache_options_for_model(resolved_model),
         )
         delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
         delegate_model_settings = make_model_settings(

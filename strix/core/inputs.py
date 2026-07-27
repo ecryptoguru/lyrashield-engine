@@ -26,24 +26,30 @@ if TYPE_CHECKING:
 DEFAULT_MAX_TURNS = 500
 MAX_CHILD_INHERITED_HISTORY_BYTES = 24 * 1024
 
-# Opt-in/opt-out for explicit prompt-cache breakpoints. "auto" (default) enables
-# breakpoints for known GPT-5.6 deployments; "1"/"true" forces them on; "0"/"false"
-# forces them off. Provider support should be confirmed with a smoke scan.
-_PROMPT_CACHE_BREAKPOINT_ENV = "LYRASHIELD_PROMPT_CACHE_BREAKPOINTS"
+# Gate for using explicit prompt-cache *options* together with breakpoints.
+# Enabling this tells the provider to honor ``prompt_cache_breakpoint`` content parts
+# and cache the prefix before each breakpoint. This is opt-in until a smoke scan proves
+# the target deployment supports it.
+_PROMPT_CACHE_EXPLICIT_ENV = "LYRASHIELD_PROMPT_CACHE_EXPLICIT"
 
 
-def _prompt_cache_breakpoints_enabled(model_name: str | None) -> bool:
-    """Return whether the model/provider pair should emit explicit cache breakpoints.
+def _prompt_cache_explicit_enabled(model_name: str | None) -> bool:
+    """Return whether to use ``prompt_cache_options: {mode: 'explicit'}``.
 
-    Defaults to the known GPT-5.6 allowlist (OpenAI/Azure AI) and can be overridden
-    with ``LYRASHIELD_PROMPT_CACHE_BREAKPOINTS``.
+    This is off by default regardless of model; turn it on by setting
+    ``LYRASHIELD_PROMPT_CACHE_EXPLICIT=1`` for the deployment being used.
     """
-    env = os.environ.get(_PROMPT_CACHE_BREAKPOINT_ENV, "").strip().lower()
-    if env in ("1", "true", "yes"):
-        return True
+    env = os.environ.get(_PROMPT_CACHE_EXPLICIT_ENV, "").strip().lower()
     if env in ("0", "false", "no"):
         return False
-    return is_gpt56_model(model_name)
+    return env in ("1", "true", "yes") and is_gpt56_model(model_name)
+
+
+def prompt_cache_options_for_model(model_name: str | None) -> dict[str, Any] | None:
+    """Return explicit prompt-cache options for a model, or None if disabled."""
+    if not _prompt_cache_explicit_enabled(model_name):
+        return None
+    return {"mode": "explicit", "ttl": "30m"}
 
 
 def _accepts_required_tool_choice(model_name: str | None) -> bool:
@@ -161,16 +167,16 @@ def build_root_initial_input(
     For models that support explicit prompt-cache breakpoints, split the stable
     target/scope prefix from the variable per-scan instructions and mark the
     boundary. This lets the provider cache the prefix across turns.
+
+    The explicit breakpoint path is gated by ``LYRASHIELD_PROMPT_CACHE_EXPLICIT``
+    because it must be paired with ``prompt_cache_options`` in ``ModelSettings``;
+    emitting breakpoints without that option disables caching.
     """
     parts, user_instructions = _build_root_task_parts(scan_config)
     stable = " ".join(parts).strip()
 
-    if not _prompt_cache_breakpoints_enabled(model_name) or not user_instructions:
-        # No breakpoint needed when there is no variable suffix to separate.
-        return build_root_task(scan_config)
-
-    variable = f"Special instructions: {user_instructions}"
-    if not stable:
+    if not _prompt_cache_explicit_enabled(model_name) or not stable:
+        # No breakpoint needed or explicit caching not enabled.
         return build_root_task(scan_config)
 
     content: list[dict[str, Any]] = [
@@ -178,9 +184,10 @@ def build_root_initial_input(
             "type": "input_text",
             "text": stable,
             "prompt_cache_breakpoint": {"mode": "explicit"},
-        },
-        {"type": "input_text", "text": variable},
+        }
     ]
+    if user_instructions:
+        content.append({"type": "input_text", "text": f"Special instructions: {user_instructions}"})
     return [{"role": "user", "content": content}]
 
 
@@ -222,6 +229,7 @@ def make_model_settings(
     request_timeout: float | None = None,
     max_output_tokens: int | None = None,
     prompt_cache_key: str | None = None,
+    prompt_cache_options: dict[str, Any] | None = None,
 ) -> ModelSettings:
     extra_args: dict[str, Any] = request_timeout_extra_args(request_timeout) or {}
     if prompt_cache_key:
@@ -232,6 +240,7 @@ def make_model_settings(
         include_usage=True,
         max_tokens=max_output_tokens,
         extra_args=extra_args or None,
+        prompt_cache_options=prompt_cache_options,
     )
     if (
         reasoning_effort is not None
