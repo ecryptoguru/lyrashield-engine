@@ -1099,7 +1099,7 @@ def main() -> None:
 
         load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
     except Exception:
-        pass
+        logger.debug("Could not load .env file; continuing without it", exc_info=True)
 
     configure_dependency_logging()
 

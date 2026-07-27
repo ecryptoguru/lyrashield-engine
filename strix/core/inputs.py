@@ -20,6 +20,8 @@ from strix.core.sessions import scrub_images_from_items
 
 
 if TYPE_CHECKING:
+    from openai.types.responses.response_create_params import PromptCacheOptions
+
     from strix.config.settings import ReasoningEffort
 
 
@@ -45,7 +47,7 @@ def _prompt_cache_explicit_enabled(model_name: str | None) -> bool:
     return env in ("1", "true", "yes") and is_gpt56_model(model_name)
 
 
-def prompt_cache_options_for_model(model_name: str | None) -> dict[str, Any] | None:
+def prompt_cache_options_for_model(model_name: str | None) -> PromptCacheOptions | None:
     """Return explicit prompt-cache options for a model, or None if disabled."""
     if not _prompt_cache_explicit_enabled(model_name):
         return None
@@ -229,7 +231,7 @@ def make_model_settings(
     request_timeout: float | None = None,
     max_output_tokens: int | None = None,
     prompt_cache_key: str | None = None,
-    prompt_cache_options: dict[str, Any] | None = None,
+    prompt_cache_options: PromptCacheOptions | None = None,
 ) -> ModelSettings:
     extra_args: dict[str, Any] = request_timeout_extra_args(request_timeout) or {}
     if prompt_cache_key:
