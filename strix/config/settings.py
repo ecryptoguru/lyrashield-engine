@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -103,6 +103,11 @@ class LlmSettings(BaseSettings):
         gt=0,
         validation_alias=_lyra("STRIX_MAX_INPUT_TOKENS"),
     )
+
+    @field_validator("api_base", "api_key", "api_version", mode="before")
+    @classmethod
+    def _empty_env_to_none(cls, value: Any) -> Any:
+        return None if value == "" else value
 
 
 class DedupeSettings(BaseSettings):
