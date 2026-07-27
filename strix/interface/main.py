@@ -1093,6 +1093,14 @@ def pull_docker_image() -> None:
 
 
 def main() -> None:
+    # Auto-load the engine .env if present; explicit shell exports still win.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
+    except Exception:
+        logger.debug("Could not load .env file; continuing without it", exc_info=True)
+
     configure_dependency_logging()
 
     if sys.platform == "win32":

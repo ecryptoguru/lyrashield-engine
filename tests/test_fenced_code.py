@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+
+import pytest
 from pygments.lexers import BashLexer, PythonLexer
 
 from strix.report.writer import (
@@ -10,7 +13,9 @@ from strix.report.writer import (
     resolve_lexer,
     safe_fence,
 )
-from strix.viewer.report_pdf import _strip_code_fence
+
+
+_viewer_extra_available = importlib.util.find_spec("pypdf") is not None
 
 
 def test_parse_fenced_code_extracts_language_and_body() -> None:
@@ -43,11 +48,23 @@ def test_parse_fenced_code_fence_without_language() -> None:
     assert code == "plain"
 
 
+@pytest.mark.skipif(
+    not _viewer_extra_available,
+    reason="requires the optional 'viewer' extra",
+)
 def test_strip_code_fence_removes_fence() -> None:
+    from strix.viewer.report_pdf import _strip_code_fence  # noqa: PLC0415
+
     assert _strip_code_fence("```python\nx = 1\n```") == "x = 1"
 
 
+@pytest.mark.skipif(
+    not _viewer_extra_available,
+    reason="requires the optional 'viewer' extra",
+)
 def test_strip_code_fence_passes_through_non_string_and_unfenced() -> None:
+    from strix.viewer.report_pdf import _strip_code_fence  # noqa: PLC0415
+
     assert _strip_code_fence(None) is None
     assert _strip_code_fence("x = 1") == "x = 1"
 

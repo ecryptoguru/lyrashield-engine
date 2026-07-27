@@ -5,7 +5,14 @@ from __future__ import annotations
 import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None  # type: ignore[assignment]
 
 
 if TYPE_CHECKING:
@@ -42,10 +49,18 @@ ENV_ALIASES = {
 }
 
 
+_STALE_EMPTY_ENV_VARS = ("LLM_API_KEY", "LLM_API_BASE", "LLM_API_VERSION")
+
+
 def prepare_environment(
     environ: MutableMapping[str, str] | None = None,
 ) -> MutableMapping[str, str]:
     env = environ if environ is not None else os.environ
+    # Remove stale empty generic LLM env vars that would shadow Azure-specific
+    # aliases via pydantic AliasChoices priority (first match wins, even if empty).
+    for name in _STALE_EMPTY_ENV_VARS:
+        if env.get(name, "").strip() == "":
+            env.pop(name, None)
     for product_name, upstream_name in ENV_ALIASES.items():
         if upstream_name not in env and product_name in env:
             env[upstream_name] = env[product_name]
@@ -86,6 +101,8 @@ def _run_upstream() -> None:
 
 
 def main() -> None:
+    if load_dotenv is not None:
+        load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
     prepare_environment()
     if sys.argv[1:] in (["--version"], ["-v"]):
         print(f"lyrashield {get_version()}")  # noqa: T201

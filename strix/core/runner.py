@@ -12,6 +12,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any, cast
 
 from agents import RunConfig
+from agents.exceptions import ModelBehaviorError
 from agents.sandbox import SandboxRunConfig
 from openai import RateLimitError
 
@@ -34,10 +35,12 @@ from strix.core.execution import (
 from strix.core.hooks import BudgetExceededError, ReportUsageHooks, set_active_hooks
 from strix.core.inputs import (
     DEFAULT_MAX_TURNS,
+    _prompt_cache_explicit_enabled,
     build_root_initial_input,
     build_root_task,
     build_scope_context,
     make_model_settings,
+    prompt_cache_options_for_model,
 )
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
@@ -290,6 +293,7 @@ async def run_strix_scan(
             request_timeout=settings.llm.timeout,
             max_output_tokens=max_output_tokens,
             prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
+            prompt_cache_options=prompt_cache_options_for_model(resolved_model),
         )
         delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
         delegate_model_settings = make_model_settings(
@@ -462,20 +466,68 @@ async def run_strix_scan(
 
         root_status = await coordinator.get_status(root_id)
 
-        result = await run_agent_loop(
-            agent=root_agent,
-            initial_input=initial_input,
-            run_config=run_config,
-            context=context,
-            max_turns=max_turns,
-            coordinator=coordinator,
-            agent_id=root_id,
-            interactive=interactive,
-            session=root_session,
-            start_parked=bool(interactive and is_resume and root_status != "running"),
-            event_sink=event_sink,
-            hooks=hooks,
-        )
+        try:
+            result = await run_agent_loop(
+                agent=root_agent,
+                initial_input=initial_input,
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                coordinator=coordinator,
+                agent_id=root_id,
+                interactive=interactive,
+                session=root_session,
+                start_parked=bool(interactive and is_resume and root_status != "running"),
+                event_sink=event_sink,
+                hooks=hooks,
+            )
+        except ModelBehaviorError as exc:
+            if "content_filter" not in str(exc) or not _prompt_cache_explicit_enabled(
+                resolved_model
+            ):
+                raise
+            logger.warning(
+                "Scan %s hit content_filter with explicit prompt caching; "
+                "falling back to implicit caching and retrying.",
+                scan_id,
+            )
+            initial_input = build_root_task(scan_config)
+            model_settings = make_model_settings(
+                settings.llm.reasoning_effort,
+                model_name=resolved_model,
+                force_required_tool_choice=settings.llm.force_required_tool_choice,
+                request_timeout=settings.llm.timeout,
+                max_output_tokens=max_output_tokens,
+                prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
+                prompt_cache_options=None,
+            )
+            root_agent = build_strix_agent(
+                name="Strix",
+                skills=skills,
+                is_root=True,
+                scan_mode=scan_mode,
+                is_whitebox=is_whitebox,
+                interactive=interactive,
+                chat_completions_tools=chat_completions_tools,
+                system_prompt_context=root_context,
+                instructions_override=root_instructions,
+                model=resolved_model,
+                model_settings=model_settings,
+            )
+            result = await run_agent_loop(
+                agent=root_agent,
+                initial_input=initial_input,
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                coordinator=coordinator,
+                agent_id=root_id,
+                interactive=interactive,
+                session=root_session,
+                start_parked=bool(interactive and is_resume and root_status != "running"),
+                event_sink=event_sink,
+                hooks=hooks,
+            )
         if not interactive and result is not None:
             final = getattr(result, "final_output", None)
             scan_completed = False

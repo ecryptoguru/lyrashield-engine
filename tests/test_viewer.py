@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import types
 import urllib.error
 import urllib.request
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from strix.core.paths import latest_run_dir, runs_base_dir
 from strix.viewer.server import serve
@@ -463,6 +465,43 @@ def test_report_send_rejects_live_run(tmp_path: Path, monkeypatch: pytest.Monkey
         status, _ = _post(url, "/api/report/send", {}, cookie=_session_cookie(url, token))
         assert status == 409
     finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_report_send_returns_501_when_pdf_extra_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # When the optional PDF libraries are absent, the report-send endpoint must
+    # surface a clear 501 so the client can tell the operator how to enable it.
+    run_dir = _make_run(tmp_path, "pdf501", status="completed", end_time="2026-01-01T00:00:00Z")
+    _bundle(tmp_path, monkeypatch)
+    monkeypatch.setattr("strix.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"})
+
+    real_report_pdf = sys.modules.get("strix.viewer.report_pdf")
+    fake_report_pdf = types.ModuleType("strix.viewer.report_pdf")
+
+    def _raise_import_error(name: str) -> Any:
+        raise ImportError(f"No module named 'reportlab' (looking for {name!r})")
+
+    fake_report_pdf.__getattr__ = _raise_import_error
+    sys.modules["strix.viewer.report_pdf"] = fake_report_pdf
+
+    httpd, url, token = serve(run_dir, open_browser=False)
+    try:
+        status, raw = _post(
+            url, "/api/report/send", {"run": "pdf501"}, cookie=_session_cookie(url, token)
+        )
+        assert status == 501
+        data = json.loads(raw)
+        assert data["error"] == "pdf_export_unavailable"
+        assert "pipx install" in data["detail"]
+        assert "strix-agent[viewer]" in data["detail"]
+    finally:
+        if real_report_pdf is not None:
+            sys.modules["strix.viewer.report_pdf"] = real_report_pdf
+        else:
+            sys.modules.pop("strix.viewer.report_pdf", None)
         httpd.shutdown()
         httpd.server_close()
 
