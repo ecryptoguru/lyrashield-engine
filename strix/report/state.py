@@ -17,7 +17,7 @@ from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for
 from strix.report.sarif import write_sarif
-from strix.report.usage import LLMUsageLedger
+from strix.report.usage import LLMUsageLedger, _int_or_zero
 from strix.report.writer import (
     read_run_record,
     write_executive_report,
@@ -135,12 +135,17 @@ class ReportState:
             "start_time": self.start_time,
             "end_time": None,
             "status": "running",
+            "phase": "setup",
             "auth_mode": auth_mode,
             "targets_info": [],
             "llm_usage": self._build_llm_usage_record(),
+            "seq": 0,
+            "turn_count": 0,
         }
         self._run_dir: Path | None = None
         self._saved_vuln_ids: set[str] = set()
+        self._save_seq = 0
+        self._turn_count = 0
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
@@ -193,6 +198,8 @@ class ReportState:
                 self.scan_results = scan_results
                 self.final_scan_result = self._format_final_scan_result(scan_results)
             self._hydrate_llm_usage(data.get("llm_usage"))
+            self._save_seq = max(self._save_seq, _int_or_zero(data.get("seq")))
+            self._turn_count = max(self._turn_count, _int_or_zero(data.get("turn_count")))
             logger.info("report state hydrated run.json from %s", run_dir)
 
         json_path = run_dir / "vulnerabilities.json"
@@ -313,6 +320,7 @@ class ReportState:
         if self.vulnerability_found_callback:
             self.vulnerability_found_callback(report)
 
+        self._set_phase("running")
         self.save_run_data()
         return report_id
 
@@ -334,6 +342,8 @@ class ReportState:
             model=model,
             usage=usage,
         ):
+            self._turn_count += 1
+            self._set_phase("running")
             self.save_run_data()
 
     def record_observed_llm_cost(self, cost: float) -> None:
@@ -367,6 +377,7 @@ class ReportState:
         self.run_record.pop("terminal_reason", None)
 
         logger.info("Updated scan final fields")
+        self._set_phase("finalizing")
         self.save_run_data(mark_complete=True)
         posthog.end(self, exit_reason="finished_by_tool")
         scarf.end(self, exit_reason="finished_by_tool")
@@ -392,12 +403,14 @@ class ReportState:
                 "diff_base": config.get("diff_base"),
             }
         )
+        self._set_phase("running")
 
     def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> None:
         if mark_complete:
             self.end_time = datetime.now(UTC).isoformat()
             self.run_record["end_time"] = self.end_time
             self.run_record["status"] = "completed"
+            self._set_phase("completed")
         elif status and self.run_record.get("status") != "completed":
             current_status = self.run_record.get("status")
             if status == "stopped" and current_status in {"failed", "interrupted"}:
@@ -406,7 +419,9 @@ class ReportState:
                 self.end_time = datetime.now(UTC).isoformat()
             self.run_record["end_time"] = self.end_time
             self.run_record["status"] = status
+            self._set_phase(status)
 
+        self._sync_progress()
         self._sync_llm_usage_record()
         self._save_artifacts()
 
@@ -517,6 +532,16 @@ class ReportState:
 
     def _sync_llm_usage_record(self) -> None:
         self.run_record["llm_usage"] = self._build_llm_usage_record()
+
+    def _set_phase(self, phase: str) -> None:
+        """Set a coarse, stable phase label on the run record."""
+        self.run_record["phase"] = phase
+
+    def _sync_progress(self) -> None:
+        """Advance the monotonic save sequence and copy live progress counters."""
+        self._save_seq += 1
+        self.run_record["seq"] = self._save_seq
+        self.run_record["turn_count"] = self._turn_count
 
     def _build_llm_usage_record(self) -> dict[str, Any]:
         return self._llm_usage.to_record()
