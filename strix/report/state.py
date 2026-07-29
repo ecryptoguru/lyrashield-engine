@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 _global_report_state: Optional["ReportState"] = None
 
+_ALLOWED_PHASES = frozenset({"setup", "running", "finalizing", "completed", "stopped"})
+
 
 def _strix_version() -> str | None:
     """Best-effort package version for the SARIF tool.driver.version field."""
@@ -200,6 +202,8 @@ class ReportState:
             self._hydrate_llm_usage(data.get("llm_usage"))
             self._save_seq = max(self._save_seq, _int_or_zero(data.get("seq")))
             self._turn_count = max(self._turn_count, _int_or_zero(data.get("turn_count")))
+            self.run_record["seq"] = self._save_seq
+            self.run_record["turn_count"] = self._turn_count
             logger.info("report state hydrated run.json from %s", run_dir)
 
         json_path = run_dir / "vulnerabilities.json"
@@ -336,15 +340,15 @@ class ReportState:
         model: str | None = None,
     ) -> None:
         """Record SDK-native token usage for one completed model run/cycle."""
-        if self._llm_usage.record(
+        self._llm_usage.record(
             agent_id=agent_id,
             agent_name=agent_name,
             model=model,
             usage=usage,
-        ):
-            self._turn_count += 1
-            self._set_phase("running")
-            self.save_run_data()
+        )
+        self._turn_count += 1
+        self._set_phase("running")
+        self.save_run_data()
 
     def record_observed_llm_cost(self, cost: float) -> None:
         self._llm_usage.record_observed_cost(cost)
@@ -378,6 +382,7 @@ class ReportState:
 
         logger.info("Updated scan final fields")
         self._set_phase("finalizing")
+        self.save_run_data()
         self.save_run_data(mark_complete=True)
         posthog.end(self, exit_reason="finished_by_tool")
         scarf.end(self, exit_reason="finished_by_tool")
@@ -535,6 +540,8 @@ class ReportState:
 
     def _set_phase(self, phase: str) -> None:
         """Set a coarse, stable phase label on the run record."""
+        if phase not in _ALLOWED_PHASES:
+            phase = "stopped"
         self.run_record["phase"] = phase
 
     def _sync_progress(self) -> None:
