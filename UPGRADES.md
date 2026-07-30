@@ -100,7 +100,7 @@ Hardened Azure GPT-5.6 execution and provider gates. Azure AI Foundry endpoints 
 
 ## LyraShield PR #35 (2026-07-27)
 
-Cost and cache optimization review fixes: corrected cache-read accounting, removed broken `prompt_cache_options` to restore implicit prompt caching (PR #36 follow-up), and aligned cost reconciliation paths.
+Cost and cache optimization review fixes: corrected cache-read accounting, removed broken `prompt_cache_options` to restore implicit prompt caching, and aligned cost reconciliation paths.
 
 ## LyraShield PR #36 (2026-07-27)
 
