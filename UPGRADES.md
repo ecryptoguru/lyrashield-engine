@@ -86,6 +86,34 @@ Merged from branch `codex/engine-v5`. This change set refined the GPT-5.6 cost a
 
 The existing worker artifact contract and `run.json`/`vulnerabilities.json` schema did not change.
 
+## LyraShield PR #22 (2026-07-25)
+
+Enforced token caps and made the compaction ceiling configurable. Sol model was retired; only GPT-5.6 Terra and Luna remain at the product boundary.
+
+## LyraShield PR #26 (2026-07-26)
+
+Synced upstream through `8157ccb` (root-agent rename to "Strix" plus five report fence-handling fixes) as a tree delta rather than a merge. Added dedupe spend reservation so out-of-band report deduplication calls reserve against `max_budget_usd`.
+
+## LyraShield PR #33 (2026-07-26)
+
+Hardened Azure GPT-5.6 execution and provider gates. Azure AI Foundry endpoints are normalized to their `/openai/v1/` base; deployment names must identify GPT-5.6 Terra or Luna.
+
+## LyraShield PR #35 (2026-07-27)
+
+Cost and cache optimization review fixes: corrected cache-read accounting, removed broken `prompt_cache_options` to restore implicit prompt caching, and aligned cost reconciliation paths.
+
+## LyraShield PR #36 (2026-07-27)
+
+Called session close synchronously to prevent async cleanup races during non-interactive execution.
+
+## LyraShield PR #39 (2026-07-28)
+
+Resolved all outstanding lint, type, and viewer extra issues. Moved `reportlab`/`pypdf` to an optional viewer extra (PR #28) so the core install remains lean.
+
+## LyraShield PR #40 (2026-07-29)
+
+Hardened `run.json` with `phase`, `seq`, and `turn_count` progress fields. The worker schema accepts these via `engineRunRecordSchema` for progress tracking without claiming streamed phase completion.
+
 ## Independence decision
 
 Continue maintaining the controlled derivative while the reviewed upstream
