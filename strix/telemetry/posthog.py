@@ -1,9 +1,9 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
-import json
 import logging
-import urllib.request
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
+
+import requests
 
 from strix.config import load_settings
 from strix.telemetry._common import (
@@ -35,14 +35,8 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
             "distinct_id": SESSION_ID,
             "properties": properties,
         }
-        req = urllib.request.Request(  # noqa: S310
-            f"{_POSTHOG_HOST}/capture/",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=10):  # noqa: S310  # nosec B310
-            pass
-    except Exception:
+        requests.post(f"{_POSTHOG_HOST}/capture/", json=cast("dict[str, Any]", payload), timeout=10)
+    except Exception:  # noqa: BLE001
         logger.debug("posthog send failed for event %s", event, exc_info=True)
         return False
     else:

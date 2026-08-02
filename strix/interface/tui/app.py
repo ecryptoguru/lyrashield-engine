@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 
 if TYPE_CHECKING:
+    from pygments.token import _TokenType
     from textual.timer import Timer
 
 from rich.align import Align
@@ -35,6 +36,7 @@ from textual.widgets.tree import TreeNode
 from strix.config import load_settings
 from strix.config.models import is_recommended_or_frontier_model
 from strix.core.hooks import BudgetExceededError
+from strix.core.inputs import DEFAULT_MAX_TURNS
 from strix.core.runner import run_strix_scan
 from strix.interface.tui.live_view import TuiLiveView
 from strix.interface.tui.messages import send_user_message_to_agent
@@ -352,7 +354,7 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
                 if not token_value:
                     continue
                 color = None
-                tt = token_type
+                tt: _TokenType | None = token_type
                 while tt:
                     if tt in colors:
                         color = colors[tt]
@@ -821,6 +823,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self._scan_completed = threading.Event()
         self._scan_error: BaseException | None = None
         self._error_noted_agents: set[str] = set()
+        self._budget_pause_notified = False
 
         self._spinner_frame_index: int = 0
         self._sweep_num_squares: int = 6
@@ -1045,14 +1048,15 @@ class StrixTUIApp(App):  # type: ignore[misc]
                             name=names.get(agent_id, agent_id),
                             parent_id=parent_of.get(agent_id),
                             status=status,
-                            error_message=error,
+                            error_message=error or "",
                         )
-                        if status in {"failed", "crashed"} and error:
+                        if error:
                             if agent_id not in self._error_noted_agents:
                                 self._error_noted_agents.add(agent_id)
                                 self.live_view.record_agent_error(agent_id, error)
                         else:
                             self._error_noted_agents.discard(agent_id)
+                    self._notify_budget_pause(statuses)
 
         if self._scan_loop is None or self._scan_loop.is_closed():
             return
@@ -1063,6 +1067,19 @@ class StrixTUIApp(App):  # type: ignore[misc]
             return await self.coordinator.graph_snapshot()
 
         self._agent_graph_sync_future = asyncio.run_coroutine_threadsafe(collect(), self._scan_loop)
+
+    def _notify_budget_pause(self, statuses: dict[str, Any]) -> None:
+        paused = any(status == "budget_paused" for status in statuses.values())
+        if paused and not self._budget_pause_notified:
+            self._budget_pause_notified = True
+            self.notify(
+                "Budget limit reached \u2014 agents paused. Send a message to continue "
+                "(this extends the budget), or ctrl-q to quit.",
+                severity="warning",
+                timeout=15,
+            )
+        elif not paused:
+            self._budget_pause_notified = False
 
     def _update_agent_node(self, agent_id: str, agent_data: dict[str, Any]) -> bool:
         if agent_id not in self.agent_nodes:
@@ -1076,6 +1093,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             status_indicators = {
                 "running": "⚪",
                 "waiting": "⏸",
+                "budget_paused": "⏸",
                 "completed": "🟢",
                 "failed": "🔴",
                 "crashed": "🔴",
@@ -1273,10 +1291,21 @@ class StrixTUIApp(App):  # type: ignore[misc]
             self._stop_dot_animation()
             return (text, Text(), False)
 
-        if status == "waiting":
+        if status in {"waiting", "budget_paused"}:
             text = Text()
-            text.append("Send message to resume", style="dim")
-            return (text, Text(), False)
+            keymap = Text()
+            if status == "budget_paused":
+                text.append("Budget limit reached", style="yellow")
+                text.append(" \u00b7 ", style="dim")
+                text.append("Send a message to continue", style="dim")
+                keymap = keymap_styled([("ctrl-q", "quit")])
+            else:
+                error_msg = agent_data.get("error_message") or ""
+                if error_msg:
+                    text.append(error_msg, style="red")
+                    text.append(" \u00b7 ", style="dim")
+                text.append("Send message to resume", style="dim")
+            return (text, keymap, False)
 
         if status == "running":
             if self._agent_has_real_activity(agent_id):
@@ -1501,6 +1530,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                                 coordinator=self.coordinator,
                                 interactive=True,
                                 max_budget_usd=getattr(self.args, "max_budget_usd", None),
+                                max_turns=getattr(self.args, "max_turns", DEFAULT_MAX_TURNS),
                                 event_sink=self._capture_sdk_event,
                             ),
                         )
@@ -1508,10 +1538,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 except (KeyboardInterrupt, asyncio.CancelledError):
                     logger.info("Scan interrupted by user")
                 except BudgetExceededError:
-                    # Defensive: the runner stops the scan cleanly on budget and
-                    # returns, so this normally never propagates. Treat it as a
-                    # graceful stop, not a scan error, if it ever does.
-                    logger.info("Scan stopped: --max-budget-usd limit reached")
+                    logger.info("Scan stopped: --max-budget limit reached")
                 except (ConnectionError, TimeoutError) as e:
                     logging.exception("Network error during scan")
                     self._scan_error = e
@@ -1566,6 +1593,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         status_indicators = {
             "running": "⚪",
             "waiting": "⏸",
+            "budget_paused": "⏸",
             "completed": "🟢",
             "failed": "🔴",
             "crashed": "🔴",
@@ -1612,6 +1640,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         status_indicators = {
             "running": "⚪",
             "waiting": "⏸",
+            "budget_paused": "⏸",
             "completed": "🟢",
             "failed": "🔴",
             "crashed": "🔴",
@@ -1736,7 +1765,10 @@ class StrixTUIApp(App):  # type: ignore[misc]
             message=message,
         )
         if not submitted:
-            self.notify("Scan loop is not ready; message was not sent", severity="warning")
+            if self._scan_completed.is_set():
+                self.notify("The scan has ended; message was not sent", severity="warning")
+            else:
+                self.notify("Scan loop is not ready; message was not sent", severity="warning")
             return
 
         self._displayed_events.clear()
@@ -1869,7 +1901,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 webbrowser.open(self._viewer_url)
             return
         try:
-            from strix.viewer.server import authorized_url, bundle_is_built, serve
+            from strix.interface.viewer.server import authorized_url, bundle_is_built, serve
 
             if not bundle_is_built():
                 self._set_viewer_cta("[#eab308]Viewer UI not built[/]")

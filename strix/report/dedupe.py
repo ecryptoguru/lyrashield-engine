@@ -26,7 +26,7 @@ from strix.report.state import get_global_report_state
 if TYPE_CHECKING:
     from agents.items import ModelResponse
 
-    from strix.config.settings import DedupeSettings
+    from strix.config.settings import DedupeSettings, Settings
 
 
 logger = logging.getLogger(__name__)
@@ -52,18 +52,27 @@ def dedupe_extra_args(dedupe: DedupeSettings) -> dict[str, str]:
 
 
 def _dedupe_model_settings(
-    dedupe: DedupeSettings, model_name: str, request_timeout: float | None
+    dedupe: DedupeSettings,
+    model_name: str,
+    request_timeout: float | None,
+    settings: Settings | None = None,
 ) -> ModelSettings:
-    settings = make_model_settings(
+    llm = settings.llm if settings is not None else load_settings().llm
+    model_settings = make_model_settings(
         dedupe.reasoning_effort,
         model_name=model_name,
         force_required_tool_choice=False,
         request_timeout=request_timeout,
+        # The main model's headers apply only when dedupe falls back to the main
+        # model; a dedicated dedupe model may route to another provider, which
+        # must never receive the main endpoint's credentials. A dedicated model
+        # gets its own DEDUPE_LLM_EXTRA_HEADERS instead.
+        extra_headers=dedupe.extra_headers if dedupe.model else llm.extra_headers,
     )
     extra = dedupe_extra_args(dedupe)
     if extra:
-        settings = settings.resolve(ModelSettings(extra_args=extra))
-    return settings
+        model_settings = model_settings.resolve(ModelSettings(extra_args=extra))
+    return model_settings
 
 
 DEDUPE_SYSTEM_PROMPT = """You are an expert vulnerability report deduplication judge.
@@ -611,9 +620,11 @@ async def check_duplicate(
 
         configure_sdk_model_defaults(settings)
         resolved_model = model_name.strip()
-        dedupe_settings = _dedupe_model_settings(dedupe, resolved_model, settings.llm.timeout)
+        dedupe_settings = _dedupe_model_settings(
+            dedupe, resolved_model, settings.llm.timeout, settings=settings
+        )
         response = await _request_dedupe_judgement(
-            model=StrixProvider().get_model(resolved_model),
+            model=StrixProvider(settings=settings).get_model(resolved_model),
             model_name=resolved_model,
             model_settings=dedupe_settings,
             user_msg=user_msg,

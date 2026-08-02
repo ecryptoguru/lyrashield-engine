@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -7,7 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from docker import errors as docker_errors
 
-from strix.runtime.docker_client import StrixDockerSandboxClient
+from strix.interface.utils import validate_run_name
+from strix.runtime.docker_client import StrixDockerSandboxClient, network_capabilities_enabled
 
 
 main_module = import_module("strix.interface.main")
@@ -92,4 +94,80 @@ def test_strix_version_reports_installed_lyrashield_distribution(
         main_module.main()
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out == "strix 1.1.0.post1\n"
+    assert capsys.readouterr().out == "strix 1.2.0\n"
+
+
+def test_network_capabilities_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NET_ADMIN/NET_RAW must be disabled by default."""
+    monkeypatch.delenv("STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES", raising=False)
+    monkeypatch.delenv("STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES", raising=False)
+    assert network_capabilities_enabled() is False
+
+
+def test_network_capabilities_enabled_via_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NET_ADMIN/NET_RAW must be enabled when STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1."""
+    monkeypatch.setenv("STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES", "1")
+    assert network_capabilities_enabled() is True
+
+
+def test_network_capabilities_disabled_via_legacy_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES=1 must disable capabilities."""
+    monkeypatch.delenv("STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES", raising=False)
+    monkeypatch.setenv("STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES", "1")
+    assert network_capabilities_enabled() is False
+
+
+def test_network_capabilities_enabled_when_legacy_disable_is_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES=0 must enable capabilities."""
+    monkeypatch.delenv("STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES", raising=False)
+    monkeypatch.setenv("STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES", "0")
+    assert network_capabilities_enabled() is True
+
+
+def test_validate_run_name_accepts_valid_name() -> None:
+    """Valid run names must be accepted."""
+    assert validate_run_name("my-scan-001") == "my-scan-001"
+    assert validate_run_name("a") == "a"
+    assert validate_run_name("Test.Run_Name-123") == "Test.Run_Name-123"
+
+
+def test_validate_run_name_rejects_empty() -> None:
+    """Empty run names must be rejected."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        validate_run_name("")
+
+
+def test_validate_run_name_rejects_path_traversal() -> None:
+    """Run names with .. must be rejected."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        validate_run_name("../etc/passwd")
+    with pytest.raises(argparse.ArgumentTypeError):
+        validate_run_name("foo/../bar")
+
+
+def test_validate_run_name_rejects_path_separators() -> None:
+    """Run names with path separators must be rejected."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        validate_run_name("foo/bar")
+    with pytest.raises(argparse.ArgumentTypeError):
+        validate_run_name("foo\\bar")
+
+
+def test_validate_run_name_rejects_dot_prefix() -> None:
+    """Run names starting with a dot must be rejected."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        validate_run_name(".hidden")
+
+
+def test_validate_run_name_rejects_too_long() -> None:
+    """Run names longer than 128 characters must be rejected."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        validate_run_name("a" * 129)

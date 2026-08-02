@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
+import re
 import time
 import urllib.request
 from typing import TYPE_CHECKING, Any, Literal
@@ -43,6 +45,20 @@ SitemapDepth = Literal["DIRECT", "ALL"]
 _SITEMAP_PAGE_SIZE = 30
 
 _DEFAULT_CAIDO_URL = "http://127.0.0.1:48080"
+
+# Replay egress blocklist. Link-local IPv4/IPv6 covers cloud metadata services
+# (AWS/GCP/Azure IMDS at 169.254.169.254). Host gateway and cloud metadata
+# hostnames are blocked unless the operator has explicitly opted in.
+_LINK_LOCAL_NETWORKS: tuple[ipaddress.IPv4Network, ipaddress.IPv6Network] = (
+    ipaddress.IPv4Network("169.254.0.0/16"),
+    ipaddress.IPv6Network("fe80::/10"),
+)
+_BLOCKED_METADATA_HOSTS = frozenset(
+    {"metadata.google.internal", "metadata.google.internal.", "metadata.google", "metadata.google."}
+)
+# Cloud metadata IPs not covered by link-local ranges.
+# Alibaba Cloud IMDS: 100.100.100.200 (not in 169.254.0.0/16).
+_BLOCKED_METADATA_IPS = frozenset({ipaddress.ip_address("100.100.100.200")})
 _CLIENT_CACHE: dict[str, Client] = {}
 _CLIENT_LOCK = asyncio.Lock()
 _REQ_FIELD_MAP: dict[SortBy, tuple[str, str]] = {
@@ -55,6 +71,41 @@ _REQ_FIELD_MAP: dict[SortBy, tuple[str, str]] = {
     "response_time": ("resp", "roundtrip"),
     "response_size": ("resp", "length"),
 }
+
+
+def _host_gateway_allowed() -> bool:
+    return os.environ.get("STRIX_SANDBOX_ALLOW_HOST_GATEWAY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _check_replay_url_host(url: str) -> str | None:
+    """Return a human-readable block reason, or None if the host is allowed."""
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return f"non-HTTP scheme {parsed.scheme!r}"
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return None
+    if hostname in _BLOCKED_METADATA_HOSTS:
+        return f"cloud metadata host {hostname!r}"
+    if not _host_gateway_allowed() and hostname in {
+        "host.docker.internal",
+        "host.docker.internal.",
+    }:
+        return "host.docker.internal (set STRIX_SANDBOX_ALLOW_HOST_GATEWAY=1 to allow)"
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return None
+    if ip in _BLOCKED_METADATA_IPS:
+        return f"cloud metadata IP {ip}"
+    for net in _LINK_LOCAL_NETWORKS:
+        if ip in net:
+            return f"link-local address {ip}"
+    return None
 
 
 def caido_url() -> str:
@@ -168,6 +219,7 @@ async def get_request_with_client(
 
 
 _FRAMING_HEADERS = frozenset({"content-length", "transfer-encoding"})
+_INVALID_HEADER_RE = re.compile(r"[\r\n\x00]")
 
 
 def build_raw_request(
@@ -180,6 +232,9 @@ def build_raw_request(
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         raise ValueError(f"Invalid URL: {url}")
+    block_reason = _check_replay_url_host(url)
+    if block_reason:
+        raise ValueError(f"URL is blocked ({block_reason}): {url}")
     is_tls = parsed.scheme.lower() == "https"
     host = parsed.hostname or ""
     port = parsed.port or (443 if is_tls else 80)
@@ -190,6 +245,9 @@ def build_raw_request(
     final_headers = {**headers}
     final_headers.setdefault("Host", parsed.netloc)
     final_headers.setdefault("User-Agent", "strix")
+    for k, v in final_headers.items():
+        if _INVALID_HEADER_RE.search(k) or _INVALID_HEADER_RE.search(v):
+            raise ValueError(f"Header contains forbidden characters: {k!r}: {v!r}")
     # Framing headers inherited from the captured request describe the ORIGINAL
     # body; once the body is modified for replay they are stale. We always send a
     # plain (non-chunked) body with an explicit Content-Length, so drop any

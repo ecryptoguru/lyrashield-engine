@@ -207,3 +207,158 @@ def test_ctx_client_returns_client_when_present() -> None:
 def test_ctx_client_returns_none_without_client() -> None:
     assert tools._ctx_client(cast("Any", _Ctx({}))) is None
     assert tools._ctx_client(cast("Any", _Ctx(None))) is None
+
+
+def test_build_raw_request_rejects_crlf_in_header_value() -> None:
+    """CRLF in a header value must not pass through to the raw request."""
+    with pytest.raises(ValueError, match="forbidden characters"):
+        caido_api.build_raw_request(
+            method="GET",
+            url="https://example.com/",
+            headers={"X-Evil": "value\r\nX-Injected: yes"},
+            body="",
+        )
+
+
+def test_build_raw_request_rejects_nul_in_header_name() -> None:
+    """NUL in a header name must not pass through to the raw request."""
+    with pytest.raises(ValueError, match="forbidden characters"):
+        caido_api.build_raw_request(
+            method="GET",
+            url="https://example.com/",
+            headers={"X-Evil\x00": "value"},
+            body="",
+        )
+
+
+def test_build_raw_request_accepts_clean_headers() -> None:
+    """Clean headers must still be accepted and produce a valid raw request."""
+    _conn, raw = caido_api.build_raw_request(
+        method="GET",
+        url="https://example.com/",
+        headers={"X-Clean": "value"},
+        body="",
+    )
+    assert b"X-Clean: value" in raw
+
+
+def test_check_replay_url_host_blocks_non_http_scheme() -> None:
+    """Non-HTTP schemes (file://, gopher://) must be blocked."""
+    assert caido_api._check_replay_url_host("file:///etc/passwd") is not None
+    assert caido_api._check_replay_url_host("gopher://example.com/") is not None
+
+
+def test_check_replay_url_host_blocks_google_metadata() -> None:
+    """Google cloud metadata hostname must be blocked."""
+    reason = caido_api._check_replay_url_host("http://metadata.google.internal/")
+    assert reason is not None
+    assert "metadata" in reason
+
+
+def test_check_replay_url_host_blocks_link_local_ipv4() -> None:
+    """Link-local IPv4 (AWS/Azure IMDS at 169.254.169.254) must be blocked."""
+    reason = caido_api._check_replay_url_host("http://169.254.169.254/")
+    assert reason is not None
+    assert "link-local" in reason
+
+
+def test_check_replay_url_host_blocks_link_local_ipv6() -> None:
+    """Link-local IPv6 must be blocked."""
+    reason = caido_api._check_replay_url_host("http://[fe80::1]/")
+    assert reason is not None
+    assert "link-local" in reason
+
+
+def test_check_replay_url_host_blocks_alibaba_metadata() -> None:
+    """Alibaba Cloud metadata IP (100.100.100.200) must be blocked."""
+    reason = caido_api._check_replay_url_host("http://100.100.100.200/")
+    assert reason is not None
+    assert "metadata" in reason
+
+
+def test_check_replay_url_host_blocks_host_gateway_by_default() -> None:
+    """host.docker.internal must be blocked unless explicitly opted in."""
+    reason = caido_api._check_replay_url_host("http://host.docker.internal/")
+    assert reason is not None
+    assert "host.docker.internal" in reason
+
+
+def test_check_replay_url_host_allows_normal_host() -> None:
+    """Normal external hosts must not be blocked."""
+    assert caido_api._check_replay_url_host("https://example.com/") is None
+
+
+def test_build_raw_request_rejects_non_http_scheme() -> None:
+    """build_raw_request must reject non-HTTP URL schemes."""
+    with pytest.raises(ValueError, match="non-HTTP scheme"):
+        caido_api.build_raw_request(
+            method="GET",
+            url="file://example.com/etc/passwd",
+            headers={},
+            body="",
+        )
+
+
+def test_build_raw_request_rejects_link_local_ip() -> None:
+    """build_raw_request must reject replay to link-local addresses."""
+    with pytest.raises(ValueError, match="link-local"):
+        caido_api.build_raw_request(
+            method="GET",
+            url="http://169.254.169.254/latest/meta-data/",
+            headers={},
+            body="",
+        )
+
+
+def test_build_raw_request_rejects_alibaba_metadata() -> None:
+    """build_raw_request must reject replay to Alibaba Cloud metadata IP."""
+    with pytest.raises(ValueError, match="metadata"):
+        caido_api.build_raw_request(
+            method="GET",
+            url="http://100.100.100.200/latest/meta-data/",
+            headers={},
+            body="",
+        )
+
+
+def test_validate_scope_allowlist_rejects_empty() -> None:
+    """Empty allowlist must be rejected (it allows all domains)."""
+    error = tools._validate_scope_allowlist(None)
+    assert error is not None
+    assert "at least one" in error
+
+    error = tools._validate_scope_allowlist([])
+    assert error is not None
+    assert "at least one" in error
+
+
+def test_validate_scope_allowlist_rejects_match_all() -> None:
+    """Match-all patterns like '*' must be rejected."""
+    error = tools._validate_scope_allowlist(["*"])
+    assert error is not None
+    assert "too broad" in error
+
+
+def test_validate_scope_allowlist_rejects_wildcard_only() -> None:
+    """Patterns with no literal host characters must be rejected."""
+    error = tools._validate_scope_allowlist(["*.?[]"])
+    assert error is not None
+    assert "too broad" in error
+
+
+def test_validate_scope_allowlist_accepts_valid_patterns() -> None:
+    """Valid patterns with literal host segments must be accepted."""
+    assert tools._validate_scope_allowlist(["*.example.com", "api.test.com"]) is None
+
+
+def test_is_match_all_pattern_detects_pure_wildcards() -> None:
+    """_is_match_all_pattern must return True for patterns with no alnum chars."""
+    assert tools._is_match_all_pattern("*") is True
+    assert tools._is_match_all_pattern("*.?") is True
+    assert tools._is_match_all_pattern("") is True
+
+
+def test_is_match_all_pattern_allows_literal_hosts() -> None:
+    """_is_match_all_pattern must return False for patterns with alnum chars."""
+    assert tools._is_match_all_pattern("*.example.com") is False
+    assert tools._is_match_all_pattern("api.test.com") is False

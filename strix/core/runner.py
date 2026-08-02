@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import io
 import json
 import logging
 import uuid
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from agents import RunConfig
@@ -33,7 +35,12 @@ from strix.core.execution import (
 from strix.core.execution import (
     spawn_child_agent as start_child_agent,
 )
-from strix.core.hooks import BudgetExceededError, ReportUsageHooks, set_active_hooks
+from strix.core.hooks import (
+    BudgetExceededError,
+    ReportUsageHooks,
+    recomputed_budget_flags,
+    set_active_hooks,
+)
 from strix.core.inputs import (
     DEFAULT_MAX_TURNS,
     _prompt_cache_explicit_enabled,
@@ -48,6 +55,10 @@ from strix.core.sessions import open_agent_session
 from strix.report.state import get_global_report_state
 from strix.runtime import session_manager
 from strix.telemetry.logging import set_scan_id, setup_scan_logging
+from strix.tools.output_store import (
+    WORKSPACE_SPILL_DIR,
+    configure_spill_writer,
+)
 
 
 if TYPE_CHECKING:
@@ -199,22 +210,23 @@ async def run_strix_scan(
 
     settings = load_settings()
     configure_sdk_model_defaults(settings)
-    resolved_model = (model or settings.llm.model or "").strip()
+    llm_settings = settings.llm
+    resolved_model = (model or llm_settings.model or "").strip()
     if not resolved_model:
         raise RuntimeError(
             "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
         )
     logger.info("LLM model resolved: %s", resolved_model)
-    delegate_model = str(getattr(settings.llm, "delegate_model", None) or resolved_model).strip()
+    delegate_model = str(getattr(llm_settings, "delegate_model", None) or resolved_model).strip()
     delegate_reasoning_effort: ReasoningEffort = getattr(
-        settings.llm,
+        llm_settings,
         "delegate_reasoning_effort",
-        settings.llm.reasoning_effort,
+        llm_settings.reasoning_effort,
     )
     logger.info(
         "LLM routing resolved: coordinator=%s/%s delegate=%s/%s",
         resolved_model,
-        settings.llm.reasoning_effort,
+        llm_settings.reasoning_effort,
         delegate_model,
         delegate_reasoning_effort,
     )
@@ -222,7 +234,8 @@ async def run_strix_scan(
     delegate_chat_completions_tools = uses_chat_completions_tool_schema(delegate_model, settings)
 
     scan_mode = str(scan_config.get("scan_mode") or "deep")
-    coordinator = _coordinator_for_scan_mode(coordinator, scan_mode)
+    if coordinator is None:
+        coordinator = AgentCoordinator()
     coordinator.set_snapshot_path(agents_path)
 
     from strix.tools.notes.tools import hydrate_notes_from_disk
@@ -233,6 +246,14 @@ async def run_strix_scan(
 
     root_id: str | None = None
     if is_resume:
+        if agents_path.is_symlink() or not agents_path.is_file():
+            raise RuntimeError(
+                f"Cannot resume scan {scan_id}: agents.json is not a regular file",
+            )
+        if agents_db.is_symlink() or not agents_db.is_file():
+            raise RuntimeError(
+                f"Cannot resume scan {scan_id}: agents.db is not a regular file",
+            )
         try:
             snap = json.loads(agents_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -244,6 +265,18 @@ async def run_strix_scan(
                 f"Cannot resume scan {scan_id}: missing SDK session database at {agents_db}",
             )
         await coordinator.restore(snap)
+        report_state = get_global_report_state()
+        if report_state is not None:
+            budget_stopped, reserve_stopped = recomputed_budget_flags(
+                report_state.get_total_llm_cost(),
+                max_budget_usd,
+                interactive=interactive,
+            )
+            await coordinator.reset_budget_stops(
+                budget_stopped=budget_stopped,
+                reserve_stopped=reserve_stopped,
+                budget_paused=interactive and coordinator.budget_paused,
+            )
         for aid, parent in coordinator.parent_of.items():
             if parent is None:
                 root_id = aid
@@ -260,6 +293,8 @@ async def run_strix_scan(
     else:
         root_id = uuid.uuid4().hex[:8]
 
+    coordinator = _coordinator_for_scan_mode(coordinator, scan_mode)
+
     logger.info("Bringing up sandbox session for scan %s", scan_id)
     bundle = await session_manager.create_or_reuse(
         scan_id,
@@ -267,6 +302,20 @@ async def run_strix_scan(
         local_sources=local_sources or [],
     )
     logger.info("Sandbox ready for scan %s", scan_id)
+
+    sandbox_session = bundle["session"]
+
+    async def _spill_to_workspace(output_id: str, text: str) -> str | None:
+        """Write an oversized tool result into the sandbox; return its path or None."""
+        path = f"{WORKSPACE_SPILL_DIR}/{output_id}.txt"
+        try:
+            await sandbox_session.write(Path(path), io.BytesIO(text.encode("utf-8")))
+        except Exception:
+            logger.exception("failed to spill tool output to sandbox workspace")
+            return None
+        return path
+
+    configure_spill_writer(_spill_to_workspace)
 
     sessions_to_close: list[Session] = []
 
@@ -285,25 +334,29 @@ async def run_strix_scan(
         )
         max_output_tokens = resolve_max_output_tokens(
             scan_mode,
-            settings.llm.max_output_tokens,
+            getattr(llm_settings, "max_output_tokens", None),
         )
         model_settings = make_model_settings(
-            settings.llm.reasoning_effort,
+            llm_settings.reasoning_effort,
             model_name=resolved_model,
-            force_required_tool_choice=settings.llm.force_required_tool_choice,
-            request_timeout=settings.llm.timeout,
+            force_required_tool_choice=llm_settings.force_required_tool_choice,
+            request_timeout=llm_settings.timeout,
             max_output_tokens=max_output_tokens,
             prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
             prompt_cache_options=prompt_cache_options_for_model(resolved_model),
+            prompt_cache=llm_settings.prompt_cache,
+            extra_headers=llm_settings.extra_headers,
         )
         delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
         delegate_model_settings = make_model_settings(
             delegate_reasoning_effort,
             model_name=delegate_model,
-            force_required_tool_choice=settings.llm.force_required_tool_choice,
-            request_timeout=settings.llm.timeout,
+            force_required_tool_choice=llm_settings.force_required_tool_choice,
+            request_timeout=llm_settings.timeout,
             max_output_tokens=delegate_max_output_tokens,
             prompt_cache_key=f"lyrashield:{scan_id}:delegates",
+            prompt_cache=llm_settings.prompt_cache,
+            extra_headers=llm_settings.extra_headers,
         )
         run_config = RunConfig(
             model=resolved_model,
@@ -316,12 +369,18 @@ async def run_strix_scan(
             model=resolved_model,
             max_budget_usd=max_budget_usd,
             max_output_tokens=max_output_tokens,
-            max_input_tokens=settings.llm.max_input_tokens,
+            max_input_tokens=getattr(llm_settings, "max_input_tokens", None),
+            max_turns=max_turns,
+            interactive=interactive,
         )
         # Lets metered calls made outside the agent run loop (deduplication)
         # reserve against this scan's budget. Cleared in the `finally` below so a
         # later scan can never reserve against a stale budget.
         set_active_hooks(hooks)
+        if interactive:
+            coordinator.set_budget_extender(hooks.extend_budget)
+            if is_resume and coordinator.budget_paused:
+                await coordinator.resume_from_budget_pause()
 
         scope_context = build_scope_context(scan_config)
         root_context = _merge_root_prompt_context(scope_context, extra_system_prompt_context)
@@ -342,7 +401,7 @@ async def run_strix_scan(
                         root_instructions.encode("utf-8")
                     ).hexdigest(),
                     "model": resolved_model,
-                    "reasoning_effort": settings.llm.reasoning_effort,
+                    "reasoning_effort": llm_settings.reasoning_effort,
                     "delegate_model": delegate_model,
                     "delegate_reasoning_effort": delegate_reasoning_effort,
                     "model_routing_policy": "coordinator-bounded-delegates-medium-v2",
@@ -494,10 +553,10 @@ async def run_strix_scan(
             )
             initial_input = build_root_task(scan_config)
             model_settings = make_model_settings(
-                settings.llm.reasoning_effort,
+                llm_settings.reasoning_effort,
                 model_name=resolved_model,
-                force_required_tool_choice=settings.llm.force_required_tool_choice,
-                request_timeout=settings.llm.timeout,
+                force_required_tool_choice=llm_settings.force_required_tool_choice,
+                request_timeout=llm_settings.timeout,
                 max_output_tokens=max_output_tokens,
                 prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
                 prompt_cache_options=None,
@@ -556,6 +615,13 @@ async def run_strix_scan(
                     scan_id,
                     final_type,
                 )
+        coordinator.mark_shutting_down()
+        with contextlib.suppress(Exception):
+            await coordinator.cancel_descendants(root_id)
+        with contextlib.suppress(Exception):
+            current_status = await coordinator.get_status(root_id)
+            if current_status in {"running", "waiting"}:
+                await coordinator.set_status(root_id, "completed")
         return result  # noqa: TRY300
     except BudgetExceededError as exc:
         logger.info("Scan %s stopped: %s", scan_id, exc)
@@ -589,6 +655,7 @@ async def run_strix_scan(
         raise
     finally:
         set_active_hooks(None)
+        configure_spill_writer(None)
         for s in sessions_to_close:
             with contextlib.suppress(Exception):
                 close = getattr(s, "close", None)

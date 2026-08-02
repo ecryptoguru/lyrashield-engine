@@ -12,6 +12,9 @@ from openai.types.shared import Reasoning
 
 from strix.config.models import (
     DEFAULT_MODEL_RETRY,
+    bedrock_route_supports_prompt_caching,
+    is_bedrock_route,
+    is_claude_model,
     is_gpt56_model,
     is_known_openai_bare_model,
     model_supports_reasoning,
@@ -233,6 +236,8 @@ def make_model_settings(
     max_output_tokens: int | None = None,
     prompt_cache_key: str | None = None,
     prompt_cache_options: PromptCacheOptions | None = None,
+    prompt_cache: bool = True,
+    extra_headers: dict[str, str] | None = None,
 ) -> ModelSettings:
     extra_args: dict[str, Any] = request_timeout_extra_args(request_timeout) or {}
     if prompt_cache_key:
@@ -244,6 +249,7 @@ def make_model_settings(
         max_tokens=max_output_tokens,
         extra_args=extra_args or None,
         prompt_cache_options=prompt_cache_options,
+        extra_headers=dict(extra_headers) if extra_headers else None,
     )
     if (
         reasoning_effort is not None
@@ -251,11 +257,56 @@ def make_model_settings(
         and model_supports_reasoning(model_name)
     ):
         model_settings = model_settings.resolve(
-            ModelSettings(reasoning=Reasoning(effort=reasoning_effort)),
+            _reasoning_settings(reasoning_effort, model_settings.extra_args),
         )
     if force_required_tool_choice and _accepts_required_tool_choice(model_name):
         model_settings = model_settings.resolve(ModelSettings(tool_choice="required"))
+
+    cache_extra_args = _prompt_cache_extra_args(model_name) if prompt_cache else None
+    if cache_extra_args:
+        model_settings = model_settings.resolve(
+            ModelSettings(
+                extra_args={**(model_settings.extra_args or {}), **cache_extra_args},
+            ),
+        )
     return model_settings
+
+
+def _reasoning_settings(
+    effort: ReasoningEffort,
+    extra_args: dict[str, Any] | None,
+) -> ModelSettings:
+    """``max`` is not in the OpenAI SDK's ``Reasoning.effort`` enum, so send it as
+    a raw body field instead — also keeping it clear of LiteLLM's DeepSeek mapping,
+    which collapses every ``reasoning_effort`` level to plain thinking-enabled.
+    Providers that don't support ``max`` reject the request.
+    """
+    if effort != "max":
+        return ModelSettings(reasoning=Reasoning(effort=effort))
+    return ModelSettings(
+        extra_args={**(extra_args or {}), "extra_body": {"reasoning_effort": "max"}},
+    )
+
+
+def _prompt_cache_extra_args(model_name: str) -> dict[str, Any] | None:
+    """LiteLLM ``cache_control_injection_points`` for Claude prompt caching.
+
+    System prompt + rolling last-message breakpoint everywhere; ``tool_config``
+    only on Bedrock Converse (the only route whose LiteLLM transform consumes
+    it — elsewhere it leaks onto the wire and native Anthropic 400s). Unmapped
+    Bedrock models get no points at all: Bedrock rejects the passed-through
+    field outright.
+    """
+    if not is_claude_model(model_name):
+        return None
+    if is_bedrock_route(model_name) and not bedrock_route_supports_prompt_caching(model_name):
+        return None
+
+    points: list[dict[str, Any]] = [{"location": "message", "role": "system"}]
+    if is_bedrock_route(model_name):
+        points.append({"location": "tool_config"})
+    points.append({"location": "message", "index": -1})
+    return {"cache_control_injection_points": points}
 
 
 def child_initial_input(

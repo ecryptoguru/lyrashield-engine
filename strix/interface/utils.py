@@ -1,5 +1,6 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 # Controlled subprocess boundary: all subprocess calls below resolve Git and use shell=False.
+import argparse
 import ipaddress
 import json
 import logging
@@ -13,11 +14,10 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 import docker
+import requests
 from docker.errors import DockerException, ImageNotFound
 from rich.console import Console
 from rich.panel import Panel
@@ -1116,13 +1116,12 @@ def resolve_diff_scope_context(
 def _is_http_git_repo(url: str) -> bool:
     check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
     try:
-        req = Request(check_url, headers={"User-Agent": "git/strix"})  # noqa: S310
-        with urlopen(req, timeout=10) as resp:  # noqa: S310  # nosec B310
-            return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
-    except HTTPError as e:
-        return e.code == 401
-    except (URLError, OSError, ValueError):
+        resp = requests.get(check_url, headers={"User-Agent": "git/strix"}, timeout=10)
+    except (requests.RequestException, ValueError):
         return False
+    if resp.status_code >= 400:
+        return resp.status_code == 401
+    return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
 
 
 def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
@@ -1221,7 +1220,21 @@ def read_target_list_file(path_str: str) -> list[str]:
 
 def sanitize_name(name: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9._-]", "-", name.strip())
-    return sanitized or "target"
+    if not sanitized or sanitized in {".", ".."}:
+        return "target"
+    return sanitized
+
+
+def validate_run_name(value: str) -> str:
+    if ".." in value or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value):
+        raise argparse.ArgumentTypeError("run name must be a safe 1-128 character identifier")
+    # Reject names that start with a dot to prevent confusion with hidden
+    # directories (e.g. .git, .ssh) in the runs folder. The regex above already
+    # requires the first character to be alphanumeric, so this is a belt-and-
+    # suspenders guard for clarity.
+    if value.startswith("."):
+        raise argparse.ArgumentTypeError("run name must not start with a dot")
+    return value
 
 
 def derive_repo_base_name(repo_url: str) -> str:
@@ -1459,19 +1472,43 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
                 details["target_ip"] = host_gateway
 
 
+def _print_clone_error(console: Console, message: str) -> None:
+    error_text = Text()
+    error_text.append("REPOSITORY CLONE FAILED", style="bold red")
+    error_text.append("\n\n", style="white")
+    error_text.append(f"{message}\n", style="white")
+    panel = Panel(
+        error_text,
+        title="[bold white]STRIX",
+        title_align="left",
+        border_style="red",
+        padding=(1, 2),
+    )
+    console.print("\n")
+    console.print(panel)
+    console.print()
+
+
 def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None) -> str:
     console = Console()
 
     git_executable = _git_executable()
-
-    temp_dir = Path(tempfile.gettempdir()) / "strix_repos" / run_name
-    temp_dir.mkdir(parents=True, exist_ok=True)
 
     if dest_name:
         repo_name = dest_name
     else:
         repo_name = Path(repo_url).stem if repo_url.endswith(".git") else Path(repo_url).name
 
+    if not repo_name or repo_name in {".", ".."} or "/" in repo_name or "\\" in repo_name:
+        _print_clone_error(
+            console,
+            f"The repository destination name {repo_name!r} is not a safe subdirectory.",
+        )
+        sys.exit(1)
+
+    base = Path(tempfile.gettempdir()) / "strix_repos"
+    base.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"repo_{run_name}_", dir=base))
     clone_path = temp_dir / repo_name
 
     if clone_path.exists():

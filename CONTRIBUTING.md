@@ -1,57 +1,134 @@
 # Contributing to LyraShield Engine
 
-LyraShield Engine is a controlled derivative with a strict worker compatibility boundary. Keep changes focused, preserve attribution on modified upstream files, and do not broaden the supported model/provider surface.
+LyraShield Engine is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.4.1, pinned at upstream base `2e70402` and modified under Apache-2.0. See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger. This guide covers changes to the engine itself; the [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai) owns product UX, worker, evidence state, and reporting.
 
 ## Development setup
 
-Requirements: Python 3.12+, Docker, [uv](https://docs.astral.sh/uv/), and Git.
+### Prerequisites
+
+- Python 3.12+
+- Docker (running)
+- [uv](https://docs.astral.sh/uv/) (dependency management)
+- Git
+- a reviewed sandbox image (see `docs/tools/sandbox.mdx`)
+
+### Local development
+
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/ecryptoguru/lyrashield-engine.git
+   cd lyrashield-engine
+   ```
+
+2. **Install dependencies**
+
+   ```bash
+   uv sync --frozen
+   uv run pre-commit install
+   ```
+
+3. **Configure an approved GPT-5.6 Terra or Luna endpoint**
+
+   ```bash
+   export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+   export LLM_API_KEY="<credential>"
+   export LLM_API_BASE="https://<approved-endpoint>"
+   ```
+
+   Only GPT-5.6 Terra and Luna deployments are accepted at the product boundary. Anthropic, Bedrock, Vertex, OpenRouter, Novita, local models, Perplexity, Parallel, and ChatGPT subscription-backed models are unsupported and rejected. See the [configuration reference](docs/advanced/configuration.mdx).
+
+4. **Run the engine against an authorized repository target**
+
+   ```bash
+   uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
+   ```
+
+   The production entry point is `lyrashield`, not the upstream `strix` executable. The adapter (`lyrashield_adapter`) forces telemetry off, disables the upstream self-update check, rejects `chatgpt/` subscription models, and sets `LYRASHIELD_PRODUCT_BOUNDARY` so configuration is re-validated after `--config` is applied.
+
+## Ownership boundary
+
+Preserve the reviewed boundary between LyraShield-owned product behavior and the retained upstream substrate.
+
+**LyraShield owns:** GPT-5.6 Terra/Luna acceptance and reasoning policy; context compaction, output/agent limits, and concurrent pre-request spend reservations; non-interactive lifecycle, cancellation, cleanup, telemetry-off defaults, and target-safe errors; deterministic finding identity, structured control/evidence metadata, and bounded artifacts; the worker-facing `run.json` and `vulnerabilities.json` contract.
+
+**Retained upstream substrate:** generic sandbox/session mechanics, security tools, agent-SDK integration, and the vulnerability skill library.
+
+New changes should keep that boundary: extract LyraShield policy behind explicit modules and versioned artifacts when useful, without rewriting stable upstream infrastructure.
+
+## Required workflow
+
+1. Branch from `main`; never push directly to `main`.
+2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.
+3. Put LyraShield model, budget, lifecycle, identity, evidence, and artifact behavior behind explicit reviewed boundaries.
+4. Preserve the one-line LyraShield modification banner on every changed `strix/` source file:
+
+   ```python
+   # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
+   ```
+
+5. Add tests and update `NOTICE`, `UPGRADES.md`, and operator docs when the contract changes.
+6. Run the verify gate and check for whitespace errors:
+
+   ```bash
+   bash scripts/verify-thin-fork.sh
+   git diff --check
+   ```
+
+   The gate runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It also diffs `strix/**` against the pinned upstream base and fails on any file that lacks both the attribution banner and a `UPGRADES.md` entry, preventing undocumented `strix/` drift.
+
+7. Require human approval and green Engine CI before merge.
+
+## Pull request guidelines
+
+- Create an issue first for non-trivial changes.
+- Keep PRs small and focused: one feature or fix per PR.
+- Follow existing code style: PEP 8 with a 100-character line limit, type hints on all functions, docstrings on public methods.
+- Include tests for new behavior and update documentation when the contract changes.
+- Link the PR to its issue and explain what changed and why.
+
+## Contributing skills
+
+Skills are structured knowledge packages that give engine agents task-specific vulnerability, technology, and testing context. The catalog lives under `strix/skills/` and is part of the controlled derivative. See [docs/advanced/skills.mdx](docs/advanced/skills.mdx) for the catalog and structure.
+
+When changing skills:
+
+- Keep the LyraShield modification banner on changed upstream skill files.
+- Add regression coverage if a skill affects agent behavior or tool selection.
+- Update `UPGRADES.md` and operator docs when the catalog or skill contract changes.
+- Do not add skills that re-enable telemetry, broaden provider support, or declare confidence equivalent to verification.
+
+## Local viewer SPA
+
+`lyrashield view` (inherited from upstream `strix view`) serves a prebuilt web UI whose source lives in `strix/interface/viewer/frontend/` (a Vite + React project) and whose built output is committed to `strix/interface/viewer/static/` and shipped in the package. End users never run a JS build. If you change anything under `strix/interface/viewer/frontend/`, rebuild and commit the output:
 
 ```bash
-git clone https://github.com/ecryptoguru/lyrashield-engine.git
-cd lyrashield-engine
-uv sync --frozen
-uv run lyrashield --version
-uv run lyrashield --help
+make viewer   # or: cd strix/interface/viewer/frontend && npm ci && npm run build
 ```
 
-For an authorized local scan, configure an approved GPT-5.6 deployment:
+Commit both the source change and the regenerated `strix/interface/viewer/static/`.
 
-```bash
-export LYRASHIELD_LLM="openai/gpt-5.6-luna"
-export LLM_API_KEY="<credential>"
-export LLM_API_BASE="https://<approved-endpoint>"
-uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
-```
+## Reporting issues
 
-Do not use paid model calls merely to verify documentation, packaging, or compatibility. The full deterministic gate does not require a paid scan.
+When reporting bugs, include:
 
-## Where changes belong
+- Python version and OS
+- LyraShield Engine version (`uv run lyrashield --version`)
+- The approved GPT-5.6 deployment and reasoning effort
+- Full error traceback
+- Steps to reproduce
+- Expected vs actual behavior
 
-- `lyrashield_adapter/`: public executable and `LYRASHIELD_*` compatibility aliases.
-- `strix/`: reviewed derivative changes required for LyraShield model policy, bounded execution, lifecycle, identity, evidence, or artifact behavior. Retain the LyraShield modification banner on changed upstream Python files.
-- `tests/`: regression coverage for every contract or behavior change.
-- `scripts/` and `.github/workflows/`: deterministic verification and review-only release imports.
-- Root documentation and `UPGRADES.md`: current ownership, operation, attribution, and divergence truth.
+Never include real credentials, target secrets, customer data, or unapproved proprietary repositories in an issue.
 
-Avoid mechanical Strix-to-LyraShield rewrites. Generic upstream sandbox, tool, SDK, and skill behavior should remain close to the pinned release unless a concrete compatibility, safety, or product requirement justifies divergence.
+## Constraints
 
-## Pull requests
+<Warning>
+Do not add providers or models outside GPT-5.6 Terra and Luna; re-enable telemetry; weaken budget reservations; persist raw model output; or make confidence equivalent to verification.
+</Warning>
 
-1. Branch from current `main`; use a focused `codex/` branch for Codex changes.
-2. Make the smallest complete change and add regression tests.
-3. Update `NOTICE`, `UPGRADES.md`, and user/operator docs when the supported contract or divergence changes.
-4. Run `bash scripts/verify-thin-fork.sh` and `git diff --check`. The verify gate diffs `strix/**` against the pinned upstream base, enforces attribution banners on changed upstream Python files, and checks the `UPGRADES.md` ledger.
-5. Open a PR; never push directly to `main`.
-6. Require human review and green Engine CI before merge.
+Artifact schema changes (`run.json`, `vulnerabilities.json`) require coordinated worker compatibility testing against `ecryptoguru/lyrashield-ai`.
 
-Artifact schema changes must also pass the public worker contract against `ecryptoguru/lyrashield-ai`. Do not remove or reinterpret existing fields without a coordinated compatibility release.
+## License
 
-## Skills and upstream imports
-
-Security skills live under `strix/skills/`. Changes must include practical, authorized test guidance and a method for distinguishing evidence from assumptions. A skill or prompt can improve behavior, but it is not proof of result quality; evaluation-corpus coverage is required for result claims.
-
-Stable upstream releases are imported through the workflow described in [UPGRADES.md](UPGRADES.md). The workflow may arm GitHub's squash auto-merge only after requesting owner review; branch protection still requires that human approval and green Engine CI. Never bypass those gates, force-push, execute unreviewed candidate code in a write-enabled preparation job, or invent automatic conflict resolution.
-
-## Issue reports
-
-Include the engine commit/version, Python and Docker versions, host OS, sanitized command/target type, model family and reasoning effort (never credentials), relevant bounded artifact fields, and reproduction steps. Remove repository content, secrets, raw prompts/responses, and provider payloads before sharing logs.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Upstream names and marks remain their owners' property.

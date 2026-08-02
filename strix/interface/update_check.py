@@ -148,7 +148,7 @@ def _read_cache() -> dict[str, object]:
             data = json.load(f)
         if isinstance(data, dict):
             return cast("dict[str, object]", data)
-    except Exception:  # noqa: BLE001, S110
+    except Exception:  # noqa: S110
         pass  # nosec B110
     return {}
 
@@ -159,7 +159,7 @@ def _write_cache(**fields: object) -> None:
         cache.update(fields)
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         _CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
-    except Exception:  # noqa: BLE001, S110
+    except Exception:  # noqa: S110
         pass  # nosec B110
 
 
@@ -271,7 +271,13 @@ def _release_target() -> str | None:
     if os_name is None:
         return None
     target = f"{os_name}-{arch}"
-    supported = {"linux-x86_64", "macos-x86_64", "macos-arm64", "windows-x86_64"}
+    supported = {
+        "linux-x86_64",
+        "linux-arm64",
+        "macos-x86_64",
+        "macos-arm64",
+        "windows-x86_64",
+    }
     return target if target in supported else None
 
 

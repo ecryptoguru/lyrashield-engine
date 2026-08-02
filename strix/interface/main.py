@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -35,7 +36,8 @@ from strix.config.models import (
     is_recommended_or_frontier_model,
 )
 from strix.config.settings import Settings
-from strix.core.paths import run_dir_for, runtime_state_dir
+from strix.core.inputs import DEFAULT_MAX_TURNS, make_model_settings
+from strix.core.paths import run_dir_for, runs_base_dir, runtime_state_dir
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
 from strix.interface.utils import (
@@ -56,6 +58,7 @@ from strix.interface.utils import (
     resolve_diff_scope_context,
     rewrite_localhost_targets,
     validate_config_file,
+    validate_run_name,
 )
 from strix.report.state import get_global_report_state
 from strix.report.writer import read_run_record, write_run_record
@@ -209,8 +212,8 @@ def validate_environment() -> None:
                         style="bold cyan",
                     )
                     error_text.append(
-                        " - Reasoning effort level: none, minimal, low, medium, high, xhigh "
-                        "(default: high)\n",
+                        " - Reasoning effort level: none, minimal, low, medium, high, xhigh, "
+                        "max (default: high)\n",
                         style="white",
                     )
 
@@ -247,7 +250,7 @@ def validate_environment() -> None:
             padding=(1, 2),
         )
 
-        logger.error("Missing required env vars: %s", missing_required_vars)
+        logger.debug("Missing required env vars: %s", missing_required_vars)
         console.print("\n")
         console.print(panel)
         console.print()
@@ -260,7 +263,7 @@ def validate_environment() -> None:
 
 def check_docker_installed() -> None:
     if shutil.which("docker") is None:
-        logger.error("Docker CLI not found in PATH")
+        logger.debug("Docker CLI not found in PATH")
         console = Console()
         error_text = Text()
         error_text.append("DOCKER NOT INSTALLED", style="bold red")
@@ -428,7 +431,13 @@ async def warm_up_llm(
             model.get_response(
                 system_instructions="You are a helpful assistant.",
                 input="Reply with just 'OK'.",
-                model_settings=ModelSettings(),
+                model_settings=make_model_settings(
+                    None,
+                    model_name=raw_model,
+                    request_timeout=llm.timeout,
+                    prompt_cache=False,
+                    extra_headers=llm.extra_headers,
+                ),
                 tools=[],
                 output_schema=None,
                 handoffs=[],
@@ -448,11 +457,23 @@ async def warm_up_llm(
 
             dedupe_model = settings.dedupe.model.strip()
             raw_model = dedupe_model
-            deduper = StrixProvider().get_model(dedupe_model)
+            deduper = StrixProvider(settings=settings).get_model(dedupe_model)
             # Match the runtime path: send the dedupe key/endpoint per call so a
             # separate-provider dedupe model authenticates during warm-up too.
             deduper_extra = dedupe_extra_args(settings.dedupe)
-            deduper_settings = ModelSettings(extra_args=deduper_extra or None)
+            # A dedicated dedupe model may route to another provider, which must
+            # never receive the main endpoint's headers; it has its own
+            # DEDUPE_LLM_EXTRA_HEADERS.
+            deduper_settings = make_model_settings(
+                None,
+                model_name=dedupe_model,
+                request_timeout=llm.timeout,
+                prompt_cache=False,
+                extra_headers=settings.dedupe.extra_headers,
+            )
+            if deduper_extra:
+                merged = {**(deduper_settings.extra_args or {}), **deduper_extra}
+                deduper_settings = deduper_settings.resolve(ModelSettings(extra_args=merged))
             response = await asyncio.wait_for(
                 deduper.get_response(
                     system_instructions="You are a helpful assistant.",
@@ -473,7 +494,7 @@ async def warm_up_llm(
             logger.info("LLM warm-up succeeded for dedupe model %s", dedupe_model)
 
     except Exception as e:
-        logger.exception("LLM warm-up failed")
+        logger.debug("LLM warm-up failed", exc_info=True)
         error_text = Text()
         sub_hint = _subscription_error_hint(e)
         if sub_hint is not None:
@@ -532,10 +553,14 @@ def _positive_budget(value: str) -> float:
     return budget
 
 
-def _safe_run_name(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) or ".." in value:
-        raise argparse.ArgumentTypeError("run name must be a safe 1-128 character identifier")
-    return value
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be an integer greater than 0")
+    return parsed
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -693,21 +718,39 @@ Examples:
     )
 
     parser.add_argument(
+        "--max-budget",
         "--max-budget-usd",
+        dest="max_budget_usd",
+        metavar="USD",
         type=_positive_budget,
         default=None,
-        help="Maximum LLM cost in USD (> 0). The scan stops cleanly when this limit is reached.",
+        help=(
+            "Maximum LLM cost in USD (> 0). The scan stops cleanly when this limit is reached. "
+            "Graduated wrap-up warnings are sent to all agents as it is approached."
+        ),
+    )
+
+    parser.add_argument(
+        "--max-turns",
+        dest="max_turns",
+        metavar="N",
+        type=_positive_int,
+        default=DEFAULT_MAX_TURNS,
+        help=(
+            "Maximum turns per agent (> 0, default %(default)s). Each agent is force-stopped "
+            "when it reaches this limit, with graduated wrap-up warnings as it is approached."
+        ),
     )
 
     parser.add_argument(
         "--run-name",
-        type=_safe_run_name,
+        type=validate_run_name,
         help="Stable run identifier supplied by an orchestrator.",
     )
 
     parser.add_argument(
         "--resume",
-        type=str,
+        type=validate_run_name,
         metavar="RUN_NAME",
         help=(
             "Resume a prior scan by its run name (the dir under ./strix_runs/). "
@@ -849,12 +892,22 @@ def _persist_run_record(args: argparse.Namespace) -> None:
 def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Populate ``args.targets_info`` and friends from a prior run's run.json."""
     run_dir = run_dir_for(args.resume)
+    resolved_run_dir = run_dir.resolve()
+    resolved_base = runs_base_dir().resolve()
+    if not resolved_run_dir.is_relative_to(resolved_base):
+        parser.error(
+            f"--resume {args.resume}: run directory resolves outside the runs base "
+            f"({resolved_base})"
+        )
     state_path = run_dir / "run.json"
-    if not state_path.exists():
+    if not state_path.is_file() or state_path.is_symlink():
         parser.error(
             f"--resume {args.resume}: no such run "
             f"(missing {state_path}; remove --resume for a fresh start)"
         )
+    for p in (run_dir / "agents.json", run_dir / "agents.db"):
+        if p.is_symlink() or (p.exists() and not p.is_file()):
+            parser.error(f"--resume {args.resume}: invalid snapshot file {p}")
     try:
         state = read_run_record(run_dir)
     except RuntimeError as exc:
@@ -882,7 +935,14 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
         cloned = details.get("cloned_repo_path")
         if not isinstance(cloned, str) or not cloned:
             continue
-        if not Path(cloned).expanduser().exists():
+        cloned_path = Path(cloned).expanduser().resolve()
+        repo_base = (Path(tempfile.gettempdir()) / "strix_repos").resolve()
+        if cloned_path.is_symlink() or not cloned_path.is_relative_to(repo_base):
+            parser.error(
+                f"--resume {args.resume}: cloned repo at {cloned} resolves outside "
+                f"the allowed cache directory."
+            )
+        if not cloned_path.exists():
             parser.error(
                 f"--resume {args.resume}: cloned repo at {cloned} is missing. "
                 f"It was deleted between runs. Pick a fresh --run-name to "
@@ -944,7 +1004,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     view_text = Text()
     view_text.append("\n")
     view_text.append("View", style="dim")
-    view_text.append("         ")
+    view_text.append("    ")
     view_text.append(f"strix view {args.run_name}", style="#22c55e")
     panel_parts.extend(["\n", view_text])
 
@@ -1009,9 +1069,9 @@ def _verify_image_digest(client: Any, image: str, expected_digest: str) -> None:
             f"SHA-256 hex string: {expected_digest!r}"
         )
 
-    digests = pulled.attrs.get("RepoDigests") or []
+    digests = cast("list[str]", pulled.attrs.get("RepoDigests") or [])
     for digest_ref in digests:
-        actual = _normalize_digest(str(digest_ref))
+        actual = _normalize_digest(digest_ref)
         if actual and actual == expected:
             logger.info("Image digest verified for %s", image)
             return
@@ -1108,7 +1168,7 @@ def main() -> None:
     # `strix view [<run>]` is a viewer-only subcommand, dispatched before the
     # scan argument parser (which requires a target) and before any scan setup.
     if len(sys.argv) > 1 and sys.argv[1] == "view":
-        from strix.viewer.cli import run_view
+        from strix.interface.viewer.cli import run_view
 
         run_view(sys.argv[2:])
         return

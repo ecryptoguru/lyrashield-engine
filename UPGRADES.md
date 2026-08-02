@@ -127,6 +127,71 @@ Post-review hardening of the controlled-derivative boundary:
 - `README.md`: reconciled the pinned upstream base with `UPGRADES.md` and
   restored `.lyrashield-upstream-base`.
 
+## LyraShield sync to upstream 2e70402 (2026-08-02)
+
+Synced the controlled derivative from upstream base `8157ccb` to `2e7040240d0...`.
+This is a major upstream release (v1.4.1) with the following themes:
+
+- **LLM lifecycle:** split `respond_to_user` / `wait_for_agents` tools, added
+  `max_turns` and interactive budget pause/resume (`BudgetPausedError`,
+  `SubagentBudgetReservedError`), and `LLM_DISABLE_STREAMING` / `LLM_EXTRA_HEADERS`
+  support.
+- **Prompt caching:** explicit Bedrock/Anthropic prompt cache markers and
+  `STRIX_PROMPT_CACHE` in `strix/config/models.py`.
+- **Model support:** added `max` reasoning effort, Claude/Bedrock route detection,
+  and openrouter attribution headers.
+- **Budget and resilience:** per-turn and root/sub-agent budget warnings in
+  `strix/core/hooks.py`, transient model retry and forced context compaction in
+  `strix/core/execution.py`, mailbox-based agent messaging in
+  `strix/core/agents.py`.
+- **Viewer and interface:** viewer code moved under `strix/interface/viewer`.
+- **Reporting:** `list_reports` / `get_report` tools and new renderers.
+
+LyraShield customizations preserved across the merge:
+
+- Product name, version, and wheel packaging in `pyproject.toml`.
+- `LYRASHIELD_*` env aliases, `max_input_tokens`, `max_output_tokens`, and Azure
+  API-key/model routing in `strix/config/settings.py` and `strix/config/models.py`.
+- `ReportUsageHooks` budget reservations and context compaction in
+  `strix/core/hooks.py`.
+- `set_active_hooks` / `get_active_hooks` for out-of-band deduplication spend.
+- LyraShield telemetry opt-out, GPT-5.6 product boundary, and viewer auth.
+
+Files with meaningful LyraShield/Upstream merge work:
+
+- `strix/core/agents.py`
+- `strix/core/execution.py`
+- `strix/core/hooks.py`
+- `strix/core/inputs.py`
+- `strix/core/runner.py`
+- `strix/core/sessions.py`
+- `strix/config/models.py`
+- `strix/config/settings.py`
+- `strix/config/codex.py`
+- `strix/config/__init__.py`
+- `strix/agents/factory.py`
+- `strix/agents/prompts/system_prompt.jinja`
+- `strix/interface/cli.py`
+- `strix/interface/main.py`
+- `strix/interface/utils.py`
+- `strix/interface/viewer/auth.py`
+- `strix/interface/viewer/cli.py`
+- `strix/interface/viewer/server.py`
+- `strix/interface/viewer/frontend/src/components/vulnerability/MdCodeBlock.tsx`
+- `strix/llm/compaction.py`
+- `strix/report/dedupe.py`
+- `strix/report/state.py`
+- `strix/report/writer.py`
+- `strix/runtime/caido_bootstrap.py`
+- `strix/telemetry/posthog.py`
+- `strix/telemetry/scarf.py`
+- `strix/tools/agents_graph/tools.py`
+- `strix/tools/proxy/caido_api.py`
+- `strix/tools/proxy/tools.py`
+- `strix/tools/reporting/tool.py`
+- `pyproject.toml`
+- `uv.lock`
+
 ## Independence decision
 
 Continue maintaining the controlled derivative while the reviewed upstream
@@ -135,3 +200,27 @@ upstream repeatedly blocks required behavior, release imports become more
 expensive than ownership, or a LyraShield evaluation corpus demonstrates a
 substrate-imposed quality ceiling. Test-count and packaging gates are not that
 evaluation evidence.
+
+## Documentation reconciliation (2026-08-02)
+
+Operator docs were reconciled with the actual `Settings` schema and the
+GPT-5.6 Terra/Luna product boundary. No runtime behavior changed.
+
+- `CONTRIBUTING.md`: rewritten from stale upstream Strix content to the
+  LyraShield controlled-derivative workflow (entry point, banner, verify gate,
+  ownership boundary).
+- `docs/usage/cli.mdx`: rewritten for the `lyrashield` executable and the full
+  verified flag set (`--run-name`, `--resume`, `--max-budget`/`--max-budget-usd`,
+  `--max-turns`, `provider-contract` subcommand).
+- `docs/advanced/configuration.mdx`: rewritten to match `strix/config/settings.py`
+  — `LYRASHIELD_*` aliases for every `STRIX_*` setting, GPT-5.6-only examples,
+  dropped nonexistent vars (`STRIX_MEMORY_COMPRESSOR_TIMEOUT`,
+  `STRIX_LLM_MAX_RETRIES`, `PERPLEXITY_API_KEY`, `TRACELOOP_*`,
+  `STRIX_SANDBOX_EXECUTION_TIMEOUT`, `STRIX_SANDBOX_CONNECT_TIMEOUT`, local
+  `events.jsonl` dual-write).
+- `docs/llm-providers/local.mdx`: added the unsupported-upstream-reference
+  Warning banner (local models are not a production path) and replaced
+  `STRIX_LLM`/`gpt-5.4`/Claude references with the LyraShield spelling.
+- `strix/telemetry/README.md`: rewritten to reflect the forced-off LyraShield
+  telemetry boundary (the adapter sets `STRIX_TELEMETRY=0`).
+

@@ -15,15 +15,30 @@ from strix.config.loader import (
     load_settings,
     persist_current,
 )
-from strix.config.settings import LlmSettings, RuntimeSettings, Settings, TelemetrySettings
+from strix.config.models import (
+    configure_sdk_model_defaults,
+    reset_sdk_model_defaults,
+)
+from strix.config.settings import (
+    ContextSettings,
+    DedupeSettings,
+    LlmSettings,
+    RuntimeSettings,
+    Settings,
+    TelemetrySettings,
+)
 
 
 __all__ = [
+    "ContextSettings",
+    "DedupeSettings",
     "LlmSettings",
     "RuntimeSettings",
     "Settings",
     "TelemetrySettings",
     "apply_config_override",
+    "configure_sdk_model_defaults",
     "load_settings",
     "persist_current",
+    "reset_sdk_model_defaults",
 ]

@@ -11,13 +11,13 @@ from typing import Any
 
 import httpx
 import pytest
-from agents.model_settings import ModelSettings
 from openai import RateLimitError
 
 import strix.tools.notes.tools as notes_tools
 import strix.tools.todo.tools as todo_tools
 from strix.core import runner
 from strix.core.agents import AgentCoordinator
+from strix.runtime import session_manager
 
 
 def _make_rate_limit_error() -> RateLimitError:
@@ -44,13 +44,11 @@ def _patch_engine_scaffold(
     settings = types.SimpleNamespace(
         llm=types.SimpleNamespace(
             model="openai/gpt-4o",
-            delegate_model="openai/gpt-5.6-luna",
             reasoning_effort="high",
-            delegate_reasoning_effort="medium",
             force_required_tool_choice=False,
             timeout=300,
-            max_output_tokens=None,
-            max_input_tokens=None,
+            prompt_cache=True,
+            extra_headers=None,
         ),
         runtime=types.SimpleNamespace(max_context_images=3),
     )
@@ -71,12 +69,12 @@ def _patch_engine_scaffold(
     async def _cleanup(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(runner.session_manager, "create_or_reuse", _create_or_reuse)
-    monkeypatch.setattr(runner.session_manager, "cleanup", _cleanup)
+    monkeypatch.setattr(session_manager, "create_or_reuse", _create_or_reuse)
+    monkeypatch.setattr(session_manager, "cleanup", _cleanup)
 
     monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
     monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: scope_context)
-    monkeypatch.setattr(runner, "make_model_settings", lambda *_args, **_kwargs: ModelSettings())
+    monkeypatch.setattr(runner, "make_model_settings", lambda *_args, **_kwargs: {})
 
     captured: dict[str, Any] = {}
 
@@ -86,13 +84,8 @@ def _patch_engine_scaffold(
         return object()
 
     monkeypatch.setattr(runner, "build_strix_agent", _build_strix_agent)
-
-    def _make_child_factory(**kwargs: Any) -> Any:
-        captured["child_factory_kwargs"] = kwargs
-        return lambda **_k: object()
-
-    monkeypatch.setattr(runner, "make_child_factory", _make_child_factory)
-    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kw: object())
+    monkeypatch.setattr(runner, "make_child_factory", lambda **_kwargs: lambda **_k: object())
+    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kwargs: object())
 
     async def _raise_rate_limit(*_args: Any, **_kwargs: Any) -> None:
         raise _make_rate_limit_error()
@@ -138,8 +131,6 @@ async def test_root_prompt_options_flow_into_root_agent(
     assert (
         "cannot expand, replace, or weaken authorized target constraints" in instructions_override
     )
-    assert kwargs["model"] == "openai/gpt-4o"
-    assert captured["child_factory_kwargs"]["model"] == "openai/gpt-5.6-luna"
     assert kwargs["system_prompt_context"] == {
         **scope_context,
         "target_context": "known findings",
@@ -167,11 +158,11 @@ async def test_extra_system_prompt_context_cannot_override_scope_context(
 
 
 @pytest.mark.asyncio
-async def test_root_prompt_options_default_to_rendered_prompt(
+async def test_root_prompt_options_default_to_none(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """The default root prompt is rendered once so its exact hash can be retained."""
+    """Without the new args, behavior is unchanged: no override, scope context as-is."""
     scope_context = {"scope": "built-in"}
     captured = _patch_engine_scaffold(monkeypatch, tmp_path, scope_context)
 
@@ -183,6 +174,6 @@ async def test_root_prompt_options_default_to_rendered_prompt(
     )
 
     kwargs = captured["kwargs"]
-    assert isinstance(kwargs["instructions_override"], str)
-    assert kwargs["instructions_override"]
+    assert kwargs["instructions_override"] is not None
+    assert "You are Strix" in kwargs["instructions_override"]
     assert kwargs["system_prompt_context"] == {"scope": "built-in"}

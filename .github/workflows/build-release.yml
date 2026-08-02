@@ -21,6 +21,8 @@ jobs:
             target: macos-x86_64
           - os: ubuntu-22.04
             target: linux-x86_64
+          - os: ubuntu-22.04-arm
+            target: linux-arm64
           - os: windows-latest
             target: windows-x86_64
 
@@ -44,6 +46,20 @@ jobs:
           # runtime).
           uv sync --frozen --extra viewer
           uv run pyinstaller strix.spec --noconfirm
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            dist/strix.exe --version
+          else
+            dist/strix --version
+          fi
+
+          if [[ "${{ matrix.target }}" == "linux-arm64" ]]; then
+            file dist/strix
+            file dist/strix | grep -q "ARM aarch64" || {
+              echo "::error::linux-arm64 artifact is not an ARM aarch64 binary"
+              exit 1
+            }
+          fi
 
           VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           mkdir -p dist/release
