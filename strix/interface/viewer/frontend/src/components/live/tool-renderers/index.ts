@@ -12,6 +12,7 @@ import FileEditRenderer from "./FileEditRenderer";
 import ApplyPatchRenderer from "./ApplyPatchRenderer";
 import ViewImageRenderer from "./ViewImageRenderer";
 import VulnReportRenderer from "./VulnReportRenderer";
+import ReportListRenderer from "./ReportListRenderer";
 import ProxyRenderer from "./ProxyRenderer";
 import ThinkRenderer from "./ThinkRenderer";
 import AgentCommsRenderer from "./AgentCommsRenderer";
@@ -23,6 +24,7 @@ import NotesRenderer from "./NotesRenderer";
 import TodoRenderer from "./TodoRenderer";
 import FallbackRenderer from "./FallbackRenderer";
 import LoadSkillRenderer from "./LoadSkillRenderer";
+import RespondRenderer from "./RespondRenderer";
 
 /**
  * Tool-renderer mapping — data-driven, keyed by the engine's tool *family*.
@@ -101,12 +103,12 @@ const CATEGORY_TOOLS: Record<ToolCategory, readonly string[]> = {
   filesystem: ["apply_patch", "view_image", "str_replace_editor", "list_files", "search_files"],
   // Caido proxy tools (legacy: send_request)
   proxy: ["list_requests", "view_request", "repeat_request", "list_sitemap", "view_sitemap_entry", "scope_rules", "send_request"],
-  reporting: ["create_vulnerability_report"],
+  reporting: ["create_vulnerability_report", "list_reports", "get_report"],
   thinking: ["think"],
-  agents: ["create_agent", "agent_finish", "send_message_to_agent", "wait_for_message", "view_agent_graph", "stop_agent"],
+  agents: ["create_agent", "agent_finish", "send_message_to_agent", "wait_for_agents", "view_agent_graph", "stop_agent"],
   search: ["web_search"],
   // scan_start_info / subagent_start_info are strix-app synthetic events; finish_scan is the engine's
-  lifecycle: ["scan_start_info", "subagent_start_info", "finish_scan"],
+  lifecycle: ["scan_start_info", "subagent_start_info", "finish_scan", "respond_to_user"],
   notes: ["create_note", "delete_note", "update_note", "list_notes", "get_note"],
   skills: ["load_skill"],
   todos: ["create_todo", "list_todos", "update_todo", "mark_todo_done", "mark_todo_pending", "delete_todo"],
@@ -126,8 +128,11 @@ const TOOL_CATEGORY: Record<string, ToolCategory> = Object.fromEntries(
  */
 const RENDERER_OVERRIDES: Partial<Record<string, ComponentType<ToolRendererProps>>> = {
   finish_scan: FinishRenderer,
+  respond_to_user: RespondRenderer,
   apply_patch: ApplyPatchRenderer,
   view_image: ViewImageRenderer,
+  list_reports: ReportListRenderer,
+  get_report: ReportListRenderer,
 };
 
 /**
@@ -137,7 +142,8 @@ const RENDERER_OVERRIDES: Partial<Record<string, ComponentType<ToolRendererProps
 const ICON_OVERRIDES: Partial<Record<string, ToolIconMeta>> = {
   agent_finish: { icon: Flag, color: "text-cyan-400" },
   send_message_to_agent: { icon: MessageCircle, color: "text-cyan-400" },
-  wait_for_message: { icon: MessageCircle, color: "text-cyan-400" },
+  wait_for_agents: { icon: MessageCircle, color: "text-cyan-400" },
+  respond_to_user: { icon: MessageCircle, color: "text-emerald-400" },
   view_agent_graph: { icon: Eye, color: "text-cyan-400" },
   stop_agent: { icon: Ban, color: "text-red-400" },
   scan_start_info: { icon: Crosshair, color: "text-emerald-400" },

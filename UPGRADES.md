@@ -127,6 +127,65 @@ Post-review hardening of the controlled-derivative boundary:
 - `README.md`: reconciled the pinned upstream base with `UPGRADES.md` and
   restored `.lyrashield-upstream-base`.
 
+## LyraShield sync to upstream 2e70402 (2026-08-02)
+
+Synced the controlled derivative from upstream base `8157ccb` to `2e7040240d0...`.
+This is a major upstream release (v1.4.1) with the following themes:
+
+- **LLM lifecycle:** split `respond_to_user` / `wait_for_agents` tools, added
+  `max_turns` and interactive budget pause/resume (`BudgetPausedError`,
+  `SubagentBudgetReservedError`), and `LLM_DISABLE_STREAMING` / `LLM_EXTRA_HEADERS`
+  support.
+- **Prompt caching:** explicit Bedrock/Anthropic prompt cache markers and
+  `STRIX_PROMPT_CACHE` in `strix/config/models.py`.
+- **Model support:** added `max` reasoning effort, Claude/Bedrock route detection,
+  and openrouter attribution headers.
+- **Budget and resilience:** per-turn and root/sub-agent budget warnings in
+  `strix/core/hooks.py`, transient model retry and forced context compaction in
+  `strix/core/execution.py`, mailbox-based agent messaging in
+  `strix/core/agents.py`.
+- **Viewer and interface:** viewer code moved under `strix/interface/viewer`.
+- **Reporting:** `list_reports` / `get_report` tools and new renderers.
+
+LyraShield customizations preserved across the merge:
+
+- Product name, version, and wheel packaging in `pyproject.toml`.
+- `LYRASHIELD_*` env aliases, `max_input_tokens`, `max_output_tokens`, and Azure
+  API-key/model routing in `strix/config/settings.py` and `strix/config/models.py`.
+- `ReportUsageHooks` budget reservations and context compaction in
+  `strix/core/hooks.py`.
+- `set_active_hooks` / `get_active_hooks` for out-of-band deduplication spend.
+- LyraShield telemetry opt-out, GPT-5.6 product boundary, and viewer auth.
+
+Files with meaningful LyraShield/Upstream merge work:
+
+- `strix/core/agents.py`
+- `strix/core/execution.py`
+- `strix/core/hooks.py`
+- `strix/core/inputs.py`
+- `strix/core/runner.py`
+- `strix/core/sessions.py`
+- `strix/config/models.py`
+- `strix/config/settings.py`
+- `strix/config/codex.py`
+- `strix/config/__init__.py`
+- `strix/agents/factory.py`
+- `strix/agents/prompts/system_prompt.jinja`
+- `strix/interface/cli.py`
+- `strix/interface/main.py`
+- `strix/interface/utils.py`
+- `strix/interface/viewer/auth.py`
+- `strix/interface/viewer/server.py`
+- `strix/report/dedupe.py`
+- `strix/report/state.py`
+- `strix/report/writer.py`
+- `strix/telemetry/posthog.py`
+- `strix/telemetry/scarf.py`
+- `strix/tools/agents_graph/tools.py`
+- `strix/tools/reporting/tool.py`
+- `pyproject.toml`
+- `uv.lock`
+
 ## Independence decision
 
 Continue maintaining the controlled derivative while the reviewed upstream

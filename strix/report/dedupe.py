@@ -54,11 +54,17 @@ def dedupe_extra_args(dedupe: DedupeSettings) -> dict[str, str]:
 def _dedupe_model_settings(
     dedupe: DedupeSettings, model_name: str, request_timeout: float | None
 ) -> ModelSettings:
+    llm = load_settings().llm
     settings = make_model_settings(
         dedupe.reasoning_effort,
         model_name=model_name,
         force_required_tool_choice=False,
         request_timeout=request_timeout,
+        # The main model's headers apply only when dedupe falls back to the main
+        # model; a dedicated dedupe model may route to another provider, which
+        # must never receive the main endpoint's credentials. A dedicated model
+        # gets its own DEDUPE_LLM_EXTRA_HEADERS instead.
+        extra_headers=dedupe.extra_headers if dedupe.model else llm.extra_headers,
     )
     extra = dedupe_extra_args(dedupe)
     if extra:

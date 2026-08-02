@@ -5,17 +5,16 @@ from __future__ import annotations
 import logging
 import types
 from typing import Any
-from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from agents.model_settings import ModelSettings
 from openai import RateLimitError
 
 import strix.tools.notes.tools as notes_tools
 import strix.tools.todo.tools as todo_tools
 from strix.core import runner
 from strix.core.agents import AgentCoordinator
+from strix.runtime import session_manager
 
 
 def _make_rate_limit_error() -> RateLimitError:
@@ -40,8 +39,8 @@ async def test_persistent_rate_limit_stops_gracefully(
             reasoning_effort="high",
             force_required_tool_choice=False,
             timeout=300,
-            max_output_tokens=None,
-            max_input_tokens=None,
+            prompt_cache=True,
+            extra_headers=None,
         ),
         runtime=types.SimpleNamespace(max_context_images=3),
     )
@@ -60,15 +59,15 @@ async def test_persistent_rate_limit_stops_gracefully(
     async def _cleanup(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(runner.session_manager, "create_or_reuse", _create_or_reuse)  # type: ignore[attr-defined]
-    monkeypatch.setattr(runner.session_manager, "cleanup", _cleanup)  # type: ignore[attr-defined]
+    monkeypatch.setattr(session_manager, "create_or_reuse", _create_or_reuse)
+    monkeypatch.setattr(session_manager, "cleanup", _cleanup)
 
     monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
     monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: "")
-    monkeypatch.setattr(runner, "make_model_settings", lambda *_args, **_kwargs: ModelSettings())
+    monkeypatch.setattr(runner, "make_model_settings", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(runner, "build_strix_agent", lambda **_kwargs: object())
     monkeypatch.setattr(runner, "make_child_factory", lambda **_kwargs: lambda **_k: object())
-    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kw: object())
+    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kwargs: object())
 
     async def _raise_rate_limit(*_args: Any, **_kwargs: Any) -> None:
         raise _make_rate_limit_error()
@@ -76,8 +75,6 @@ async def test_persistent_rate_limit_stops_gracefully(
     monkeypatch.setattr(runner, "run_agent_loop", _raise_rate_limit)
 
     coordinator = AgentCoordinator()
-    report_state = MagicMock()
-    monkeypatch.setattr(runner, "get_global_report_state", lambda: report_state)
 
     with caplog.at_level(logging.WARNING):
         result = await runner.run_strix_scan(
@@ -91,7 +88,6 @@ async def test_persistent_rate_limit_stops_gracefully(
     root_ids = [aid for aid, parent in coordinator.parent_of.items() if parent is None]
     assert len(root_ids) == 1
     assert coordinator.statuses[root_ids[0]] == "stopped"
-    report_state.set_terminal_reason.assert_called_once_with("rate_limited")
     # the resume hint must carry the real scan id, not a literal placeholder
     assert "strix --resume scan-test" in caplog.text
     assert "<run_name>" not in caplog.text

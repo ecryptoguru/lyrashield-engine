@@ -2,26 +2,22 @@
 
 from __future__ import annotations
 
-import logging
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from strix.core.hooks import (
-    _GPT56_LONG_CONTEXT_TOKENS,
-    MODEL_INPUT_COMPACTION_TARGET_TOKENS,
-    MODEL_INPUT_COMPACTION_TRIGGER_TOKENS,
     BudgetExceededError,
+    BudgetPausedError,
     ReportUsageHooks,
-    _estimate_input_tokens,
-    _usage_cost_upper_bound,
-    resolve_compaction_thresholds,
+    SubagentBudgetReservedError,
+    recomputed_budget_flags,
 )
 
 
 def _make_hooks(max_budget: float | None) -> ReportUsageHooks:
-    return ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=max_budget)
+    return ReportUsageHooks(model="test-model", max_budget_usd=max_budget)
 
 
 def _make_report_state(cost: float) -> MagicMock:
@@ -31,9 +27,22 @@ def _make_report_state(cost: float) -> MagicMock:
     return state
 
 
-def _make_context(agent_id: str = "test-agent") -> MagicMock:
+def _make_context(agent_id: str = "test-agent", parent_id: str | None = None) -> MagicMock:
     ctx: MagicMock = MagicMock()
-    ctx.context = {"agent_id": agent_id}
+    ctx.context = {"agent_id": agent_id, "parent_id": parent_id}
+    return ctx
+
+
+def _make_warn_context(
+    *,
+    requests: int,
+    parent_id: str | None = None,
+    agent_id: str = "test-agent",
+) -> MagicMock:
+    ctx: MagicMock = MagicMock()
+    ctx.context = {"agent_id": agent_id, "parent_id": parent_id}
+    ctx.usage = MagicMock()
+    ctx.usage.requests = requests
     return ctx
 
 
@@ -101,6 +110,127 @@ async def test_error_message_includes_amounts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_subagent_stops_at_reserve() -> None:
+    hooks = _make_hooks(10.0)
+    state = _make_report_state(9.0)
+    with (
+        patch("strix.core.hooks.get_global_report_state", return_value=state),
+        pytest.raises(SubagentBudgetReservedError),
+    ):
+        await hooks.on_llm_end(_make_context(parent_id="root-1"), MagicMock(), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_subagent_below_reserve_does_not_raise() -> None:
+    hooks = _make_hooks(10.0)
+    state = _make_report_state(8.99)
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_end(_make_context(parent_id="root-1"), MagicMock(), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_subagent_overshoot_to_full_budget_triggers_scan_wide_stop() -> None:
+    hooks = _make_hooks(10.0)
+    state = _make_report_state(10.5)
+    with (
+        patch("strix.core.hooks.get_global_report_state", return_value=state),
+        pytest.raises(BudgetExceededError),
+    ):
+        await hooks.on_llm_end(_make_context(parent_id="root-1"), MagicMock(), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_root_keeps_running_inside_reserve() -> None:
+    hooks = _make_hooks(10.0)
+    state = _make_report_state(9.5)
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_end(_make_context(parent_id=None), MagicMock(), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_root_hard_stop_stays_at_full_budget() -> None:
+    hooks = _make_hooks(10.0)
+    state = _make_report_state(10.0)
+    with (
+        patch("strix.core.hooks.get_global_report_state", return_value=state),
+        pytest.raises(BudgetExceededError),
+    ):
+        await hooks.on_llm_end(_make_context(parent_id=None), MagicMock(), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_budget_warning_mentions_reserve() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_budget_usd=10.0)
+    state = _make_report_state(7.5)
+    root_items: list[Any] = []
+    sub_items: list[Any] = []
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_start(
+            _make_warn_context(requests=0, parent_id=None), MagicMock(), None, root_items
+        )
+        await hooks.on_llm_start(
+            _make_warn_context(requests=0, parent_id="root-1"), MagicMock(), None, sub_items
+        )
+    assert "stopped at 90%" in root_items[0]["content"]
+    assert "stopped at 90%" in sub_items[0]["content"]
+    assert "root agent's final report" in sub_items[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_critical_budget_warning_reachable_before_reserve() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_budget_usd=10.0)
+    state = _make_report_state(8.6)
+    sub_items: list[Any] = []
+    root_items: list[Any] = []
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_start(
+            _make_warn_context(requests=0, parent_id="root-1"), MagicMock(), None, sub_items
+        )
+        await hooks.on_llm_start(
+            _make_warn_context(requests=0, parent_id=None), MagicMock(), None, root_items
+        )
+    assert "[CRITICAL]" in sub_items[0]["content"]
+    assert "[URGENT]" in root_items[0]["content"]
+
+
+@pytest.mark.parametrize(
+    ("parent_id", "cost", "expected"),
+    [
+        ("root-1", 0.0, None),
+        ("root-1", 8.9999, None),
+        ("root-1", 9.0, SubagentBudgetReservedError),
+        ("root-1", 9.0001, SubagentBudgetReservedError),
+        ("root-1", 9.5, SubagentBudgetReservedError),
+        ("root-1", 9.9999, SubagentBudgetReservedError),
+        ("root-1", 10.0, BudgetExceededError),
+        ("root-1", 10.0001, BudgetExceededError),
+        ("root-1", 25.0, BudgetExceededError),
+        (None, 0.0, None),
+        (None, 8.9999, None),
+        (None, 9.0, None),
+        (None, 9.5, None),
+        (None, 9.9999, None),
+        (None, 10.0, BudgetExceededError),
+        (None, 10.0001, BudgetExceededError),
+        (None, 25.0, BudgetExceededError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_budget_enforcement_decision_table(
+    parent_id: str | None, cost: float, expected: type[Exception] | None
+) -> None:
+    hooks = _make_hooks(10.0)
+    state = _make_report_state(cost)
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        if expected is None:
+            await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), MagicMock())
+        else:
+            with pytest.raises(expected):
+                await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), MagicMock())
+    state.record_sdk_usage.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_no_raise_when_report_state_none() -> None:
     hooks = _make_hooks(1.0)
     with patch("strix.core.hooks.get_global_report_state", return_value=None):
@@ -119,293 +249,245 @@ def test_budget_exceeded_error_is_runtime_error() -> None:
     assert isinstance(err, RuntimeError)
 
 
-def test_usage_upper_bound_honors_provider_reported_cache_reads() -> None:
-    usage = SimpleNamespace(
-        input_tokens=1_000,
-        output_tokens=100,
-        input_tokens_details=SimpleNamespace(cached_tokens=800),
-        request_usage_entries=None,
-    )
-
-    assert _usage_cost_upper_bound("azure_ai/gpt-5.6-luna", usage) == pytest.approx(
-        (200 * 1.0 + 800 * 0.1 + 100 * 6) / 1_000_000
-    )
+def test_non_positive_max_turns_rejected() -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        ReportUsageHooks(model="test-model", max_turns=0)
 
 
 @pytest.mark.asyncio
-async def test_large_context_is_compacted_before_the_model_request() -> None:
-    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
-    agent = MagicMock()
-    agent.tools = []
-    agent.output_type = None
-    items = [
-        {"role": "user", "content": "original scan task"},
-        *[
-            {
-                "role": "assistant",
-                "content": f"evidence-{index}-" + ("alpha beta gamma delta " * 5_000),
-            }
-            for index in range(60)
-        ],
-    ]
-
-    await hooks.on_llm_start(_make_context(), agent, "system", items)
-
-    assert len(items) < 61
-    assert _estimate_input_tokens(hooks._model, "system", items, agent) < 272_000
-    assert MODEL_INPUT_COMPACTION_TRIGGER_TOKENS < 272_000
+async def test_no_turn_warning_below_first_band() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_turns=100)
+    items: list[Any] = []
+    await hooks.on_llm_start(_make_warn_context(requests=68), MagicMock(), None, items)
+    assert items == []
 
 
 @pytest.mark.asyncio
-async def test_medium_context_is_compacted_to_the_budget_safe_target() -> None:
-    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
-    agent = MagicMock()
-    agent.tools = []
-    agent.output_type = None
-    items = [
-        {"role": "user", "content": "original scan task"},
-        {"role": "assistant", "content": "evidence " * 40_000},
-    ]
-
-    await hooks.on_llm_start(_make_context(), agent, "system", items)
-
-    assert _estimate_input_tokens(hooks._model, "system", items, agent) <= (
-        MODEL_INPUT_COMPACTION_TARGET_TOKENS
-    )
+async def test_turn_warning_notice_band() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_turns=100)
+    items: list[Any] = []
+    await hooks.on_llm_start(_make_warn_context(requests=69), MagicMock(), None, items)
+    assert len(items) == 1
+    content = items[0]["content"]
+    assert "[NOTICE]" in content
+    assert "finish_scan" in content
 
 
 @pytest.mark.asyncio
-async def test_single_oversized_item_is_compacted_without_blocking() -> None:
-    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
-    agent = MagicMock()
-    agent.tools = []
-    agent.output_type = None
-    items = [{"role": "user", "content": "large task " * 300_000}]
-
-    await hooks.on_llm_start(_make_context(), agent, "system", items)
-
-    assert len(items) == 2
-    assert _estimate_input_tokens(hooks._model, "system", items, agent) < 272_000
-
-
-@pytest.mark.asyncio
-async def test_request_is_rejected_before_call_when_bounded_cost_exceeds_budget() -> None:
-    hooks = ReportUsageHooks(
-        model="azure_ai/gpt-5.6-luna",
-        max_budget_usd=0.001,
-        max_output_tokens=4_096,
-    )
-    agent = MagicMock()
-    agent.name = "root"
-    agent.tools = []
-    agent.output_type = None
-
-    with pytest.raises(BudgetExceededError, match=r"Next bounded request"):
-        await hooks.on_llm_start(
-            _make_context(), agent, "system", [{"role": "user", "content": "scan"}]
-        )
-
-
-@pytest.mark.asyncio
-async def test_delegate_request_reservation_uses_delegate_model_rate() -> None:
-    hooks = ReportUsageHooks(
-        model="azure_ai/gpt-5.6-terra",
-        max_budget_usd=0.08,
-        max_output_tokens=16_384,
-    )
-    agent = MagicMock()
-    agent.name = "specialist"
-    agent.model = "azure_ai/gpt-5.6-luna"
-    agent.model_settings.max_tokens = 8_192
-    agent.tools = []
-    agent.output_type = None
-
+async def test_turn_warning_escalates_and_names_subagent_tool() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_turns=100)
+    items: list[Any] = []
     await hooks.on_llm_start(
-        _make_context(), agent, "system", [{"role": "user", "content": "focused scan"}]
+        _make_warn_context(requests=95, parent_id="root-1"), MagicMock(), None, items
     )
+    assert len(items) == 1
+    content = items[0]["content"]
+    assert "[CRITICAL]" in content
+    assert "agent_finish" in content
 
 
 @pytest.mark.asyncio
-async def test_tool_call_and_output_remain_grouped_after_compaction() -> None:
-    hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
-    agent = MagicMock()
-    agent.tools = []
-    agent.output_type = None
-    items = [
-        {"role": "user", "content": "original task"},
-        {"role": "assistant", "content": "old context " * 300_000},
-        {"type": "function_call", "call_id": "call-1", "name": "shell"},
-        {"type": "function_call_output", "call_id": "call-1", "output": "result"},
-    ]
+async def test_turn_warning_root_directive_distinct_from_subagent() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_turns=100)
 
-    await hooks.on_llm_start(_make_context(), agent, "system", items)
+    root_items: list[Any] = []
+    await hooks.on_llm_start(
+        _make_warn_context(requests=85, parent_id=None), MagicMock(), None, root_items
+    )
+    root = root_items[0]["content"]
 
-    retained_types = [item.get("type") for item in items if isinstance(item, dict)]
-    assert ("function_call" in retained_types) == ("function_call_output" in retained_types)
+    sub_items: list[Any] = []
+    await hooks.on_llm_start(
+        _make_warn_context(requests=85, parent_id="root-1"), MagicMock(), None, sub_items
+    )
+    sub = sub_items[0]["content"]
+
+    assert root != sub
+    assert "root agent" in root
+    assert "finish_scan" in root
+    assert "agent_finish" not in root
+    assert "whole scan" in root
+    assert "sub-agent" in sub
+    assert "agent_finish" in sub
+    assert "finish_scan" not in sub
+    assert "confirmed" in sub
 
 
-class TestCompactionThresholdResolution:
-    """LYRASHIELD_MAX_INPUT_TOKENS is a compaction ceiling, never a hard reject."""
+@pytest.mark.asyncio
+async def test_budget_warning_root_directive_distinct_from_subagent() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_budget_usd=10.0)
+    state = _make_report_state(8.6)
 
-    def test_unset_preserves_the_module_defaults(self) -> None:
-        assert resolve_compaction_thresholds(None) == (
-            MODEL_INPUT_COMPACTION_TRIGGER_TOKENS,
-            MODEL_INPUT_COMPACTION_TARGET_TOKENS,
+    root_items: list[Any] = []
+    sub_items: list[Any] = []
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_start(
+            _make_warn_context(requests=0, parent_id=None), MagicMock(), None, root_items
+        )
+        await hooks.on_llm_start(
+            _make_warn_context(requests=0, parent_id="root-1"), MagicMock(), None, sub_items
         )
 
-    def test_lower_ceiling_compacts_earlier_and_keeps_the_default_ratio(self) -> None:
-        trigger, target = resolve_compaction_thresholds(48_000)
+    root = root_items[0]["content"]
+    sub = sub_items[0]["content"]
+    assert "finish_scan" in root and "agent_finish" not in root
+    assert "agent_finish" in sub and "finish_scan" not in sub
+    assert "confirmed" in sub
 
-        assert trigger == 48_000
-        assert trigger < MODEL_INPUT_COMPACTION_TRIGGER_TOKENS
-        assert target < trigger
-        # 2:3 target:trigger ratio carried over from the defaults (64k / 96k).
-        assert target == int(
-            48_000 * (MODEL_INPUT_COMPACTION_TARGET_TOKENS / MODEL_INPUT_COMPACTION_TRIGGER_TOKENS)
+
+@pytest.mark.parametrize("parent_id", [None, "root-1"])
+@pytest.mark.asyncio
+async def test_turn_warning_directive_escalates_per_stage(parent_id: str | None) -> None:
+    hooks = ReportUsageHooks(model="test-model", max_turns=100)
+    contents: dict[str, str] = {}
+    for label, requests in (("notice", 69), ("urgent", 85), ("critical", 95)):
+        items: list[Any] = []
+        await hooks.on_llm_start(
+            _make_warn_context(requests=requests, parent_id=parent_id), MagicMock(), None, items
         )
+        contents[label] = items[0]["content"]
 
-    def test_ceiling_above_the_long_context_boundary_is_clamped_and_warned(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        with caplog.at_level(logging.WARNING):
-            trigger, target = resolve_compaction_thresholds(500_000)
-
-        # Compaction exists to stay out of 2x input billing; a ceiling above that
-        # boundary would defeat the protection this knob is meant to provide.
-        assert trigger < _GPT56_LONG_CONTEXT_TOKENS
-        assert target <= trigger
-        assert any("clamping" in record.message for record in caplog.records)
-
-    def test_documented_clamp_boundary_is_exact(self) -> None:
-        # docs/advanced/configuration.mdx promises values above 240_000 are clamped
-        # to 240_000 (272k boundary minus the 32k output margin). Pin it so the
-        # documented number and the implementation cannot drift apart.
-        assert resolve_compaction_thresholds(240_000)[0] == 240_000
-        assert resolve_compaction_thresholds(240_001)[0] == 240_000
-        assert resolve_compaction_thresholds(250_000)[0] == 240_000
-
-    @pytest.mark.parametrize("ceiling", [1, 1_000, 50_000, 100_000, 271_999, 10_000_000])
-    def test_resolved_trigger_never_reaches_the_long_context_boundary(self, ceiling: int) -> None:
-        trigger, target = resolve_compaction_thresholds(ceiling)
-
-        assert trigger < _GPT56_LONG_CONTEXT_TOKENS
-        assert 0 < target <= trigger
-
-    def test_pathologically_low_ceiling_still_yields_a_usable_target(self) -> None:
-        trigger, target = resolve_compaction_thresholds(500)
-
-        # Must not collapse to zero or exceed the trigger, or compaction could
-        # never report progress and would loop or emit an empty request.
-        assert trigger == 500
-        assert 0 < target <= trigger
+    assert len({contents["notice"], contents["urgent"], contents["critical"]}) == 3
+    assert "[NOTICE]" in contents["notice"] and "begin planning" in contents["notice"]
+    assert "[URGENT]" in contents["urgent"] and "prioritize" in contents["urgent"]
+    assert "[CRITICAL]" in contents["critical"] and "STOP" in contents["critical"]
 
 
 @pytest.mark.asyncio
-async def test_custom_input_ceiling_compacts_a_context_the_default_would_allow() -> None:
-    agent = MagicMock()
-    agent.tools = []
-    agent.output_type = None
-
-    def _items() -> list[dict[str, str]]:
-        return [
-            {"role": "user", "content": "original scan task"},
-            *[{"role": "assistant", "content": "evidence " * 500} for _ in range(20)],
-        ]
-
-    default_items = _items()
-    await ReportUsageHooks(model="azure_ai/gpt-5.6-luna").on_llm_start(
-        _make_context(), agent, "system", default_items
-    )
-
-    capped_items = _items()
-    capped_hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna", max_input_tokens=6_000)
-    await capped_hooks.on_llm_start(_make_context(), agent, "system", capped_items)
-
-    # Below the 96k default this context passes untouched; the custom ceiling
-    # brings compaction into play.
-    assert len(default_items) == 21
-    assert len(capped_items) < 21
-    assert (
-        _estimate_input_tokens(capped_hooks._model, "system", capped_items, agent)
-        <= capped_hooks.compaction_trigger_tokens
-    )
-
-
-def test_applied_thresholds_are_exposed_for_the_run_record() -> None:
-    default_hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna")
-    assert default_hooks.compaction_trigger_tokens == MODEL_INPUT_COMPACTION_TRIGGER_TOKENS
-    assert default_hooks.compaction_target_tokens == MODEL_INPUT_COMPACTION_TARGET_TOKENS
-
-    # Post-clamp values, so the run record reflects what was actually enforced.
-    clamped_hooks = ReportUsageHooks(model="azure_ai/gpt-5.6-luna", max_input_tokens=999_999)
-    assert clamped_hooks.compaction_trigger_tokens < _GPT56_LONG_CONTEXT_TOKENS
+async def test_no_turn_warning_when_max_turns_unset() -> None:
+    hooks = ReportUsageHooks(model="test-model")
+    items: list[Any] = []
+    await hooks.on_llm_start(_make_warn_context(requests=999), MagicMock(), None, items)
+    assert items == []
 
 
 @pytest.mark.asyncio
-async def test_out_of_band_reservation_blocks_a_request_over_budget() -> None:
-    """Dedupe calls must be refused when they would breach the scan budget."""
-    hooks = _make_hooks(0.01)
+async def test_no_budget_warning_below_first_band() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_budget_usd=10.0)
+    state = _make_report_state(6.9)
+    items: list[Any] = []
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_start(_make_warn_context(requests=0), MagicMock(), None, items)
+    assert items == []
+
+
+@pytest.mark.asyncio
+async def test_budget_warning_broadcast_content() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_budget_usd=10.0)
+    state = _make_report_state(9.6)
+    items: list[Any] = []
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_start(_make_warn_context(requests=0), MagicMock(), None, items)
+    assert len(items) == 1
+    content = items[0]["content"]
+    assert "[CRITICAL]" in content
+    assert "shared across every agent" in content
+
+
+@pytest.mark.asyncio
+async def test_turn_and_budget_warnings_stack() -> None:
+    hooks = ReportUsageHooks(model="test-model", max_budget_usd=10.0, max_turns=100)
+    state = _make_report_state(8.6)
+    items: list[Any] = []
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_start(_make_warn_context(requests=89), MagicMock(), None, items)
+    assert len(items) == 2
+    joined = " ".join(i["content"] for i in items)
+    assert "Turn budget" in joined
+    assert "cost budget" in joined
+
+
+def _make_interactive_hooks(max_budget: float | None) -> ReportUsageHooks:
+    return ReportUsageHooks(model="test-model", max_budget_usd=max_budget, interactive=True)
+
+
+@pytest.mark.asyncio
+async def test_interactive_at_budget_pauses_instead_of_stopping() -> None:
+    hooks = _make_interactive_hooks(10.0)
+    state = _make_report_state(10.0)
     with (
-        patch("strix.core.hooks.get_global_report_state", return_value=_make_report_state(0.0)),
-        pytest.raises(BudgetExceededError),
+        patch("strix.core.hooks.get_global_report_state", return_value=state),
+        pytest.raises(BudgetPausedError),
     ):
-        await hooks.reserve_out_of_band_request(
-            key="dedupe:1",
-            model="gpt-5.6-luna",
-            input_tokens=10_000_000,
-            max_output_tokens=512,
-        )
+        await hooks.on_llm_end(_make_context(parent_id=None), MagicMock(), MagicMock())
 
 
 @pytest.mark.asyncio
-async def test_out_of_band_reservation_counts_against_concurrent_requests() -> None:
-    """A held reservation must shrink the headroom seen by the next request."""
-    hooks = _make_hooks(0.05)
-    with patch("strix.core.hooks.get_global_report_state", return_value=_make_report_state(0.0)):
-        # ~0.04 of the 0.05 budget.
-        await hooks.reserve_out_of_band_request(
-            key="dedupe:a",
-            model="gpt-5.6-luna",
-            input_tokens=40_000,
-            max_output_tokens=0,
-        )
-        with pytest.raises(BudgetExceededError):
-            await hooks.reserve_out_of_band_request(
-                key="dedupe:b",
-                model="gpt-5.6-luna",
-                input_tokens=40_000,
-                max_output_tokens=0,
-            )
+async def test_interactive_subagent_has_no_reserve() -> None:
+    hooks = _make_interactive_hooks(10.0)
+    state = _make_report_state(9.5)
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_end(_make_context(parent_id="root-1"), MagicMock(), MagicMock())
 
 
 @pytest.mark.asyncio
-async def test_releasing_an_out_of_band_reservation_frees_headroom() -> None:
-    """A failed or finished call must not strand its reservation for the whole scan."""
-    hooks = _make_hooks(0.05)
-    with patch("strix.core.hooks.get_global_report_state", return_value=_make_report_state(0.0)):
-        await hooks.reserve_out_of_band_request(
-            key="dedupe:a",
-            model="gpt-5.6-luna",
-            input_tokens=40_000,
-            max_output_tokens=0,
-        )
-        # usage=None mirrors a request that raised before returning a response.
-        await hooks.release_out_of_band_request(key="dedupe:a", model="gpt-5.6-luna", usage=None)
-        await hooks.reserve_out_of_band_request(
-            key="dedupe:b",
-            model="gpt-5.6-luna",
-            input_tokens=40_000,
-            max_output_tokens=0,
-        )
+async def test_interactive_subagent_pauses_at_full_budget() -> None:
+    hooks = _make_interactive_hooks(10.0)
+    state = _make_report_state(10.5)
+    with (
+        patch("strix.core.hooks.get_global_report_state", return_value=state),
+        pytest.raises(BudgetPausedError),
+    ):
+        await hooks.on_llm_end(_make_context(parent_id="root-1"), MagicMock(), MagicMock())
 
 
 @pytest.mark.asyncio
-async def test_out_of_band_reservation_is_a_noop_without_a_budget() -> None:
-    hooks = _make_hooks(None)
-    await hooks.reserve_out_of_band_request(
-        key="dedupe:1",
-        model="gpt-5.6-luna",
-        input_tokens=10_000_000,
-        max_output_tokens=512,
-    )
-    await hooks.release_out_of_band_request(key="dedupe:1", model="gpt-5.6-luna", usage=None)
+async def test_extend_budget_lifts_the_pause() -> None:
+    hooks = _make_interactive_hooks(10.0)
+    state = _make_report_state(10.5)
+    hooks.extend_budget()
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_end(_make_context(parent_id=None), MagicMock(), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_extend_budget_adds_original_amount_each_time() -> None:
+    hooks = _make_interactive_hooks(10.0)
+    hooks.extend_budget()
+    hooks.extend_budget()
+    state = _make_report_state(29.9)
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_end(_make_context(parent_id=None), MagicMock(), MagicMock())
+    state = _make_report_state(30.0)
+    with (
+        patch("strix.core.hooks.get_global_report_state", return_value=state),
+        pytest.raises(BudgetPausedError),
+    ):
+        await hooks.on_llm_end(_make_context(parent_id=None), MagicMock(), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_interactive_subagent_uses_root_warning_bands() -> None:
+    hooks = _make_interactive_hooks(10.0)
+    state = _make_report_state(7.4)
+    items: list[Any] = []
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_start(
+            _make_warn_context(requests=0, parent_id="root-1"), MagicMock(), None, items
+        )
+    assert len(items) == 1
+    content = items[0]["content"]
+    assert "[NOTICE]" in content
+    assert "paused until the user chooses to continue" in content
+    assert "reserve" not in content.lower()
+
+
+@pytest.mark.parametrize(
+    ("cost", "max_budget", "interactive", "expected"),
+    [
+        (0.0, None, False, (False, False)),
+        (100.0, None, False, (False, False)),
+        (5.0, 10.0, False, (False, False)),
+        (9.0, 10.0, False, (False, True)),
+        (10.0, 10.0, False, (True, True)),
+        (10.0, 20.0, False, (False, False)),
+        (10.0, 10.0, True, (False, False)),
+    ],
+)
+def test_recomputed_budget_flags(
+    cost: float,
+    max_budget: float | None,
+    interactive: bool,
+    expected: tuple[bool, bool],
+) -> None:
+    assert recomputed_budget_flags(cost, max_budget, interactive=interactive) == expected

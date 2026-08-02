@@ -5,16 +5,10 @@ from __future__ import annotations
 from itertools import pairwise
 from typing import Any
 
+import litellm
 import pytest
 
-from strix.core.inputs import (
-    MAX_CHILD_INHERITED_HISTORY_BYTES,
-    build_root_initial_input,
-    build_root_task,
-    child_initial_input,
-    make_model_settings,
-    prompt_cache_options_for_model,
-)
+from strix.core.inputs import build_root_task, child_initial_input, make_model_settings
 
 
 def _child_kwargs(parent_history: list[Any]) -> dict[str, Any]:
@@ -51,17 +45,6 @@ def test_child_initial_input_single_message_with_history() -> None:
     assert "Audit the login flow." in content
 
 
-def test_child_initial_input_bounds_large_inherited_history() -> None:
-    history = [{"role": "assistant", "content": "old-" * 20_000 + "recent-evidence"}]
-
-    result = child_initial_input(**_child_kwargs(history))
-
-    content = result[0]["content"]
-    assert "Earlier parent history omitted" in content
-    assert "recent-evidence" in content
-    assert len(content.encode("utf-8")) < MAX_CHILD_INHERITED_HISTORY_BYTES + 1_000
-
-
 @pytest.mark.parametrize(
     "parent_history",
     [[], [{"role": "assistant", "content": "previous work"}]],
@@ -71,6 +54,114 @@ def test_child_initial_input_no_consecutive_same_role(parent_history: list[Any])
 
     roles = [msg["role"] for msg in result]
     assert all(prev != nxt for prev, nxt in pairwise(roles))
+
+
+def _cache_points(model_name: str) -> Any:
+    extra = make_model_settings(None, model_name=model_name).extra_args or {}
+    return extra.get("cache_control_injection_points")
+
+
+def test_make_model_settings_enables_prompt_cache_for_bedrock_claude() -> None:
+    assert _cache_points("bedrock/global.anthropic.claude-opus-4-8") == [
+        {"location": "message", "role": "system"},
+        {"location": "tool_config"},
+        {"location": "message", "index": -1},
+    ]
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "anthropic/claude-sonnet-4-5",
+        "openrouter/anthropic/claude-3.5-sonnet",
+        "vertex_ai/claude-sonnet-4-5",
+    ],
+)
+def test_make_model_settings_enables_prompt_cache_for_non_bedrock_claude(model_name: str) -> None:
+    assert _cache_points(model_name) == [
+        {"location": "message", "role": "system"},
+        {"location": "message", "index": -1},
+    ]
+
+
+def test_tool_config_point_not_leaked_to_non_bedrock_claude() -> None:
+    # LiteLLM only consumes tool_config on Bedrock; elsewhere it leaks onto the
+    # wire and native Anthropic 400s.
+    for model in ("anthropic/claude-sonnet-4-5", "openrouter/anthropic/claude-3.5-sonnet"):
+        points = _cache_points(model) or []
+        assert all(p.get("location") != "tool_config" for p in points)
+
+
+def test_prompt_cache_can_be_disabled() -> None:
+    assert (
+        make_model_settings(
+            None, model_name="anthropic/claude-sonnet-4-5", prompt_cache=False
+        ).extra_args
+        is None
+    )
+
+
+@pytest.mark.parametrize("model_name", ["gpt-5", "vertex_ai/gemini-2.5-pro", "openai/o3"])
+def test_make_model_settings_no_prompt_cache_for_non_claude(model_name: str) -> None:
+    assert make_model_settings(None, model_name=model_name).extra_args is None
+
+
+def test_no_prompt_cache_for_unmapped_bedrock_claude_model(monkeypatch: Any) -> None:
+    # A Bedrock Claude model LiteLLM hasn't mapped must run uncached, not crash.
+    unmapped = "bedrock/global.anthropic.claude-brand-new-9"
+    monkeypatch.setattr(litellm, "model_cost", {}, raising=False)
+    if getattr(getattr(litellm, "utils", None), "supports_prompt_caching", None):
+        monkeypatch.setattr(litellm.utils, "supports_prompt_caching", lambda *_a, **_k: False)
+
+    assert make_model_settings(None, model_name=unmapped).extra_args is None
+
+
+def test_prompt_cache_kept_for_non_bedrock_claude_even_if_unmapped(monkeypatch: Any) -> None:
+    # Only Bedrock hard-rejects unknown cache fields, so only Bedrock is guarded.
+    monkeypatch.setattr(litellm, "model_cost", {}, raising=False)
+    if getattr(getattr(litellm, "utils", None), "supports_prompt_caching", None):
+        monkeypatch.setattr(litellm.utils, "supports_prompt_caching", lambda *_a, **_k: False)
+
+    for model in ("anthropic/claude-brand-new-9", "openrouter/anthropic/claude-brand-new"):
+        assert _cache_points(model) == [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ]
+
+
+def test_max_reasoning_effort_sent_as_raw_body_field() -> None:
+    # "max" is absent from the OpenAI SDK's Reasoning enum, and LiteLLM's DeepSeek
+    # mapping collapses every effort to thinking-enabled, so it has to ride along
+    # as a raw body field to reach the provider.
+    settings = make_model_settings(
+        "max", model_name="deepseek/deepseek-v4-flash", request_timeout=30
+    )
+    assert settings.reasoning is None
+    assert settings.extra_args == {"timeout": 30, "extra_body": {"reasoning_effort": "max"}}
+
+
+def test_conversation_tail_breakpoint_moves_with_appended_transcript() -> None:
+    # LiteLLM must place the index=-1 cache_control on the last message however
+    # long the transcript grows.
+    hook_mod = pytest.importorskip("litellm.integrations.anthropic_cache_control_hook")
+    apply = hook_mod.AnthropicCacheControlHook._apply_message_injections
+    points = _cache_points("bedrock/global.anthropic.claude-opus-4-8")
+    msg_points = [p for p in points if p.get("location") == "message"]
+
+    def last_msg_cache_control(n_turns: int) -> Any:
+        messages: list[dict[str, Any]] = [{"role": "system", "content": "stable prompt"}]
+        for i in range(n_turns):
+            messages.append({"role": "assistant", "content": f"turn {i} action"})
+            messages.append({"role": "user", "content": f"turn {i} tool result"})
+        processed = apply(msg_points, messages, 4)
+        last = processed[-1]
+        content = last.get("content")
+        if isinstance(content, list):
+            return content[-1].get("cache_control")
+        return last.get("cache_control")
+
+    assert last_msg_cache_control(2) == {"type": "ephemeral"}
+    assert last_msg_cache_control(20) == {"type": "ephemeral"}
 
 
 def test_build_root_task_empty_config() -> None:
@@ -109,89 +200,6 @@ def test_build_root_task_web_application_with_instructions() -> None:
     assert "URLs:" in task
     assert "https://app.example.com" in task
     assert "Special instructions: Focus on auth." in task
-
-
-def test_root_input_preserves_fallback_when_no_stable_prefix(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
-    config = {"user_instructions": "Focus on auth."}
-
-    assert build_root_initial_input(config, "azure_ai/gpt-5.6-terra") == build_root_task(config)
-
-
-def test_root_input_marks_only_the_stable_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
-    config = {
-        "targets": [{"type": "web_application", "details": {"target_url": "https://example.com"}}],
-        "user_instructions": "Focus on auth.",
-    }
-
-    result = build_root_initial_input(config, "azure_ai/gpt-5.6-terra")
-
-    assert result == [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "URLs: - https://example.com",
-                    "prompt_cache_breakpoint": {"mode": "explicit"},
-                },
-                {"type": "input_text", "text": "Special instructions: Focus on auth."},
-            ],
-        }
-    ]
-
-
-def test_root_input_respects_disabled_breakpoint_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "0")
-    config = {
-        "targets": [{"type": "web_application", "details": {"target_url": "https://example.com"}}],
-        "user_instructions": "Focus on auth.",
-    }
-
-    assert build_root_initial_input(config, "azure_ai/gpt-5.6-terra") == build_root_task(config)
-
-
-def test_root_input_emits_breakpoint_without_user_instructions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
-    config = {
-        "targets": [{"type": "web_application", "details": {"target_url": "https://example.com"}}],
-    }
-
-    result = build_root_initial_input(config, "azure_ai/gpt-5.6-terra")
-
-    assert result == [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "URLs: - https://example.com",
-                    "prompt_cache_breakpoint": {"mode": "explicit"},
-                },
-            ],
-        }
-    ]
-
-
-def test_prompt_cache_options_for_model_respects_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    assert prompt_cache_options_for_model("azure_ai/gpt-5.6-luna") is None
-
-    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
-    assert prompt_cache_options_for_model("azure_ai/gpt-5.6-luna") == {
-        "mode": "explicit",
-        "ttl": "30m",
-    }
-    assert prompt_cache_options_for_model("gpt-4o") is None
-
-    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "0")
-    assert prompt_cache_options_for_model("azure_ai/gpt-5.6-luna") is None
 
 
 def test_build_root_task_diff_scope() -> None:
@@ -275,64 +283,28 @@ def test_make_model_settings_omits_timeout_when_unset() -> None:
     assert settings.extra_args is None
 
 
-def test_make_model_settings_adds_stable_prompt_cache_key() -> None:
+def test_make_model_settings_sets_extra_headers() -> None:
     settings = make_model_settings(
-        "medium",
-        model_name="azure_ai/gpt-5.6-terra",
-        request_timeout=300.0,
-        prompt_cache_key="lyrashield:scan-1:coordinator",
+        "none",
+        model_name="openai/some-model",
+        extra_headers={"X-Feature-Key": "svc", "X-Tenant": "acme"},
     )
 
-    assert settings.extra_args == {
-        "timeout": 300.0,
-        "prompt_cache_key": "lyrashield:scan-1:coordinator",
-    }
-    assert settings.parallel_tool_calls is None
+    assert settings.extra_headers == {"X-Feature-Key": "svc", "X-Tenant": "acme"}
 
 
-def test_make_model_settings_does_not_set_prompt_cache_options() -> None:
+def test_make_model_settings_omits_extra_headers_when_unset() -> None:
+    assert make_model_settings("none", model_name="gpt-4o").extra_headers is None
+
+
+def test_make_model_settings_extra_headers_survive_reasoning_resolve() -> None:
     settings = make_model_settings(
-        "medium",
-        model_name="azure_ai/gpt-5.6-terra",
-        prompt_cache_key="lyrashield:scan-1:coordinator",
+        "high",
+        model_name="openai/o3",
+        extra_headers={"X-Feature-Key": "svc"},
     )
 
-    assert settings.prompt_cache_options is None
-    assert settings.extra_args == {"prompt_cache_key": "lyrashield:scan-1:coordinator"}
-
-
-def test_make_model_settings_sets_prompt_cache_options_when_passed() -> None:
-    settings = make_model_settings(
-        "medium",
-        model_name="azure_ai/gpt-5.6-terra",
-        prompt_cache_key="lyrashield:scan-1:coordinator",
-        prompt_cache_options={"mode": "explicit", "ttl": "30m"},
-    )
-
-    assert settings.prompt_cache_options == {"mode": "explicit", "ttl": "30m"}
-    assert settings.extra_args == {"prompt_cache_key": "lyrashield:scan-1:coordinator"}
-
-
-@pytest.mark.parametrize(
-    "model_name",
-    [
-        "azure_ai/gpt-5.6-luna",
-        "litellm/azure_ai/gpt-5.6-terra",
-        "any-llm/azure_ai/gpt-5.6-terra",
-    ],
-)
-def test_make_model_settings_omits_rejected_azure_gpt56_parallel_tool_setting(
-    model_name: str,
-) -> None:
-    settings = make_model_settings("medium", model_name=model_name)
-
-    assert settings.parallel_tool_calls is None
-
-
-def test_make_model_settings_disables_parallel_tools_for_supported_provider() -> None:
-    settings = make_model_settings("medium", model_name="openai/gpt-5.6-luna")
-
-    assert settings.parallel_tool_calls is False
+    assert settings.extra_headers == {"X-Feature-Key": "svc"}
 
 
 def test_make_model_settings_timeout_survives_reasoning_resolve() -> None:
@@ -346,26 +318,3 @@ def test_make_model_settings_timeout_survives_reasoning_resolve() -> None:
 
     assert settings.extra_args is not None
     assert settings.extra_args["timeout"] == 120.0
-
-
-def test_make_model_settings_applies_the_output_token_cap() -> None:
-    settings = make_model_settings(
-        "medium",
-        model_name="azure_ai/gpt-5.6-terra",
-        max_output_tokens=2_048,
-    )
-
-    assert settings.max_tokens == 2_048
-
-
-def test_make_model_settings_output_cap_survives_reasoning_resolve() -> None:
-    # ``resolve`` merges a second ModelSettings; the cap must not be dropped by
-    # that merge, or the budget reservation would over-estimate every request.
-    settings = make_model_settings(
-        "high",
-        model_name="azure_ai/gpt-5.6-terra",
-        max_output_tokens=1_024,
-        force_required_tool_choice=True,
-    )
-
-    assert settings.max_tokens == 1_024

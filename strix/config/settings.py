@@ -15,7 +15,7 @@ def _lyra(upstream: str) -> AliasChoices:
     return AliasChoices(upstream, product)
 
 
-ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 _BASE_CONFIG = SettingsConfigDict(
     case_sensitive=False,
@@ -69,6 +69,10 @@ class LlmSettings(BaseSettings):
             "AZURE_OPENAI_API_VERSION",
         ),
     )
+    extra_headers: dict[str, str] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LLM_EXTRA_HEADERS", "LYRASHIELD_EXTRA_HEADERS"),
+    )
     reasoning_effort: ReasoningEffort = Field(
         default="medium",
         validation_alias=_lyra("STRIX_REASONING_EFFORT"),
@@ -76,6 +80,14 @@ class LlmSettings(BaseSettings):
     delegate_reasoning_effort: ReasoningEffort = Field(
         default="medium",
         validation_alias=_lyra("STRIX_DELEGATE_REASONING_EFFORT"),
+    )
+    prompt_cache: bool = Field(
+        default=True,
+        validation_alias=_lyra("STRIX_PROMPT_CACHE"),
+    )
+    disable_streaming: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LLM_DISABLE_STREAMING", "LYRASHIELD_DISABLE_STREAMING"),
     )
     force_required_tool_choice: bool = Field(
         default=False,
@@ -125,6 +137,30 @@ class DedupeSettings(BaseSettings):
     )
     api_key: str | None = Field(default=None, alias="DEDUPE_LLM_API_KEY")
     api_base: str | None = Field(default=None, alias="DEDUPE_LLM_API_BASE")
+    extra_headers: dict[str, str] | None = Field(
+        default=None,
+        alias="DEDUPE_LLM_EXTRA_HEADERS",
+    )
+
+
+class ContextSettings(BaseSettings):
+    """Context-window management: per-tool-output caps and history compaction."""
+
+    model_config = _BASE_CONFIG
+
+    auto_compact: bool = Field(default=True, alias="STRIX_CONTEXT_AUTO_COMPACT")
+    compact_buffer_tokens: int = Field(default=20_000, gt=0, alias="STRIX_CONTEXT_BUFFER_TOKENS")
+    keep_tokens: int = Field(default=8_000, gt=0, alias="STRIX_CONTEXT_KEEP_TOKENS")
+    fallback_context_tokens: int = Field(
+        default=200_000, gt=0, alias="STRIX_CONTEXT_FALLBACK_TOKENS"
+    )
+    summary_max_tokens: int = Field(default=4_096, gt=0, alias="STRIX_CONTEXT_SUMMARY_TOKENS")
+    tool_output_max_tokens: int = Field(default=8_000, gt=0, alias="STRIX_TOOL_OUTPUT_MAX_TOKENS")
+    tool_output_max_lines: int = Field(default=2_000, gt=0, alias="STRIX_TOOL_OUTPUT_MAX_LINES")
+    # Floor above the truncation-notice size so a preview always fits.
+    tool_output_max_bytes: int = Field(
+        default=50 * 1024, ge=1024, alias="STRIX_TOOL_OUTPUT_MAX_BYTES"
+    )
 
 
 class RuntimeSettings(BaseSettings):
@@ -189,5 +225,6 @@ class Settings(BaseSettings):
     llm: LlmSettings = Field(default_factory=LlmSettings)
     dedupe: DedupeSettings = Field(default_factory=DedupeSettings)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
+    context: ContextSettings = Field(default_factory=ContextSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     viewer: ViewerSettings = Field(default_factory=ViewerSettings)
