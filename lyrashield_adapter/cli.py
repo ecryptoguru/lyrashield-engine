@@ -6,7 +6,15 @@ import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args, get_origin
+
+
+if TYPE_CHECKING:
+    from collections.abc import MutableMapping
+
+from pydantic import AliasChoices, BaseModel
+
+from strix.config.settings import Settings
 
 
 try:
@@ -15,16 +23,64 @@ except ImportError:
     load_dotenv = None  # type: ignore[assignment]
 
 
-if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-
-
 # ``chatgpt/<model>`` routes inference through a ChatGPT subscription
 # (``strix/config/codex.py``), which bypasses the Terra/Luna deployment gate and
 # records the run with zero metered cost. LyraShield scans are metered per token,
 # so the product entry point refuses subscription-backed models outright.
 _SUBSCRIPTION_PREFIX = "chatgpt/"
-_MODEL_ENV_VARS = ("STRIX_LLM", "STRIX_DELEGATE_LLM", "STRIX_DEDUPE_MODEL")
+
+
+def _build_env_aliases() -> dict[str, str]:
+    """Derive LYRASHIELD_* -> upstream env mappings from the Settings schema.
+
+    This keeps the adapter in sync with the ``_lyra()`` pydantic aliasing in
+    ``strix.config.settings`` instead of maintaining a parallel hard-coded list.
+    """
+    aliases: dict[str, str] = {}
+
+    def _walk(model: type[BaseModel]) -> None:
+        for finfo in model.model_fields.values():
+            ann = finfo.annotation
+            origin = get_origin(ann)
+            if origin is not None:
+                for arg in get_args(ann):
+                    if isinstance(arg, type) and issubclass(arg, BaseModel):
+                        _walk(arg)
+            elif isinstance(ann, type) and issubclass(ann, BaseModel):
+                _walk(ann)
+
+            va = finfo.validation_alias
+            if not isinstance(va, AliasChoices):
+                continue
+            choices = [c for c in va.choices if isinstance(c, str)]
+            if not choices:
+                continue
+            product: str | None = None
+            upstream: str | None = None
+            for c in choices:
+                if c.upper().startswith("LYRASHIELD_"):
+                    product = c
+                elif upstream is None:
+                    upstream = c
+            if product and upstream:
+                aliases[product] = upstream
+
+    _walk(Settings)
+    return aliases
+
+
+ENV_ALIASES = _build_env_aliases()
+
+
+_STALE_EMPTY_ENV_VARS = ("LLM_API_KEY", "LLM_API_BASE", "LLM_API_VERSION")
+
+
+_MODEL_ENV_VARS_UPSTREAM = ("STRIX_LLM", "STRIX_DELEGATE_LLM", "STRIX_DEDUPE_MODEL")
+_MODEL_ENV_VARS_PRODUCT = tuple(
+    product for product, upstream in ENV_ALIASES.items() if upstream in _MODEL_ENV_VARS_UPSTREAM
+)
+_MODEL_ENV_VARS = _MODEL_ENV_VARS_UPSTREAM + _MODEL_ENV_VARS_PRODUCT
+
 
 # Marks the process as running behind the product entry point. ``--config`` is
 # applied after this module hands off to the upstream CLI and can set a model
@@ -32,24 +88,6 @@ _MODEL_ENV_VARS = ("STRIX_LLM", "STRIX_DELEGATE_LLM", "STRIX_DEDUPE_MODEL")
 # resolved settings when this flag is present. The bare ``strix`` dev CLI does
 # not set it and keeps upstream behavior. Imported lazily in
 # ``prepare_environment`` to keep ``--version`` free of the strix import cost.
-
-
-ENV_ALIASES = {
-    "LYRASHIELD_LLM": "STRIX_LLM",
-    "LYRASHIELD_DELEGATE_LLM": "STRIX_DELEGATE_LLM",
-    "LYRASHIELD_IMAGE": "STRIX_IMAGE",
-    "LYRASHIELD_RUNTIME_BACKEND": "STRIX_RUNTIME_BACKEND",
-    "LYRASHIELD_MAX_LOCAL_COPY_MB": "STRIX_MAX_LOCAL_COPY_MB",
-    "LYRASHIELD_MAX_CONTEXT_IMAGES": "STRIX_MAX_CONTEXT_IMAGES",
-    "LYRASHIELD_REASONING_EFFORT": "STRIX_REASONING_EFFORT",
-    "LYRASHIELD_DELEGATE_REASONING_EFFORT": "STRIX_DELEGATE_REASONING_EFFORT",
-    "LYRASHIELD_FORCE_REQUIRED_TOOL_CHOICE": "STRIX_FORCE_REQUIRED_TOOL_CHOICE",
-    "LYRASHIELD_LLM_TIMEOUT": "LLM_TIMEOUT",
-    "LYRASHIELD_TELEMETRY": "STRIX_TELEMETRY",
-}
-
-
-_STALE_EMPTY_ENV_VARS = ("LLM_API_KEY", "LLM_API_BASE", "LLM_API_VERSION")
 
 
 def prepare_environment(
@@ -102,7 +140,8 @@ def _run_upstream() -> None:
 
 def main() -> None:
     if load_dotenv is not None:
-        load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
+        # Caller-supplied env vars must win over a local .env file.
+        load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
     prepare_environment()
     if sys.argv[1:] in (["--version"], ["-v"]):
         print(f"lyrashield {get_version()}")  # noqa: T201

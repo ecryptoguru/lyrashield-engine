@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Build the JSON payloads the viewer SPA consumes from a run directory."""
 
 from __future__ import annotations
@@ -71,7 +72,7 @@ def primary_target(record: dict[str, Any]) -> str | None:
     targets = record.get("targets_info")
     if not isinstance(targets, list):
         return None
-    for entry in cast("list[Any]", targets):
+    for entry in targets:
         if not isinstance(entry, dict):
             continue
         entry = cast("dict[str, Any]", entry)
@@ -84,7 +85,7 @@ def primary_target(record: dict[str, Any]) -> str | None:
 def read_vulnerabilities(run_dir: Path) -> list[Any]:
     """The ``vulnerabilities.json`` list (empty until a scan writes it)."""
     data = _load_json(run_dir / "vulnerabilities.json", default=[])
-    return cast("list[Any]", data) if isinstance(data, list) else []
+    return data if isinstance(data, list) else []
 
 
 def read_report_markdown(run_dir: Path) -> str:

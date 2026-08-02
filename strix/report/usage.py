@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """SDK-native LLM usage aggregation for scan reports."""
 
 from __future__ import annotations
@@ -139,7 +140,6 @@ class LLMUsageLedger:
 
         raw_agents = raw_usage.get("agents")
         if isinstance(raw_agents, list):
-            raw_agents = cast("list[Any]", raw_agents)
             for raw in raw_agents:
                 if not isinstance(raw, dict):
                     continue
@@ -272,7 +272,7 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
     if details is None:
         return {}
     if isinstance(details, list):
-        for item in cast("list[Any]", details):
+        for item in details:
             result = _details_to_dict(item)
             if result:
                 return result
@@ -281,7 +281,7 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
         return _details_to_dict(details.model_dump())
     if not isinstance(details, dict):
         return {}
-    return {str(k): v for k, v in cast("dict[Any, Any]", details).items() if v is not None}
+    return {str(k): v for k, v in details.items() if v is not None}
 
 
 def _serialize_request_usage_entries(
@@ -325,7 +325,7 @@ def _hydrate_request_usage_entries(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     entries: list[dict[str, Any]] = []
-    for entry in cast("list[Any]", value):
+    for entry in value:
         if not isinstance(entry, dict):
             continue
         entry = cast("dict[str, Any]", entry)

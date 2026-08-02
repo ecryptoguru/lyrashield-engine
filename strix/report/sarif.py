@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """SARIF 2.1.0 output for Strix vulnerability reports.
 
 Builds a GitHub code-scanning compatible SARIF document from Strix findings
@@ -565,7 +566,6 @@ def _build_fixes(report: dict[str, Any]) -> list[dict[str, Any]] | None:
     raw_locations = report.get("code_locations")
     if not isinstance(raw_locations, list):
         return None
-    raw_locations = cast("list[Any]", raw_locations)
 
     artifact_changes: list[dict[str, Any]] = []
     for location in raw_locations:
@@ -665,7 +665,6 @@ def _build_physical_locations(raw_locations: Any) -> tuple[list[dict[str, Any]],
     """Return SARIF physical locations and a count of dropped unsafe locations."""
     if not isinstance(raw_locations, list):
         return [], 0
-    raw_locations = cast("list[Any]", raw_locations)
 
     locations: list[dict[str, Any]] = []
     dropped_location_count = 0

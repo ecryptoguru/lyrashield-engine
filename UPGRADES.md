@@ -114,6 +114,19 @@ Resolved all outstanding lint, type, and viewer extra issues. Moved `reportlab`/
 
 Hardened `run.json` with `phase`, `seq`, and `turn_count` progress fields. The worker schema accepts these via `engineRunRecordSchema` for progress tracking without claiming streamed phase completion.
 
+## LyraShield deep code review v11 (2026-08-02)
+
+Post-review hardening of the controlled-derivative boundary:
+
+- `strix/core/runner.py`: added the missing 2026 LyraShield attribution banner.
+- `strix/core/inputs.py`: added the missing 2026 LyraShield attribution banner.
+- `strix/interface/cli.py`: added the missing 2026 LyraShield attribution banner.
+- `scripts/verify-thin-fork.sh`: now diffs `strix/**` against the pinned upstream
+  base and fails on any file that lacks both the attribution banner and a
+  `UPGRADES.md` entry, preventing future undocumented `strix/` drift.
+- `README.md`: reconciled the pinned upstream base with `UPGRADES.md` and
+  restored `.lyrashield-upstream-base`.
+
 ## Independence decision
 
 Continue maintaining the controlled derivative while the reviewed upstream

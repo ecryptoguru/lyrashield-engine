@@ -576,6 +576,7 @@ def _run_git_command(
         capture_output=True,
         text=True,
         check=check,
+        timeout=5,
     )
 
 
@@ -587,6 +588,7 @@ def _run_git_command_raw(
         [_git_executable(), "-C", str(repo_path), *args],
         capture_output=True,
         check=check,
+        timeout=5,
     )
 
 

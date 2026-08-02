@@ -226,9 +226,7 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         # Strix injections — append, don't overwrite, so FUSE/SYS_ADMIN survives.
         cap_add_value: Any = create_kwargs.setdefault("cap_add", [])
         if isinstance(cap_add_value, (list, tuple)):
-            cap_items: list[Any] | tuple[Any, ...] = cast(
-                "list[Any] | tuple[Any, ...]", cap_add_value
-            )
+            cap_items: list[Any] | tuple[Any, ...] = cap_add_value
             cap_add = [str(c) for c in cap_items]
         elif cap_add_value:
             cap_add = [str(cap_add_value)]

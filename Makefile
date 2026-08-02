@@ -41,7 +41,7 @@ lint:
 
 type-check:
 	@echo "🔍 Type checking with mypy..."
-	uv run mypy --exclude 'strix/interface/tui' strix lyrashield_adapter
+	uv run mypy strix lyrashield_adapter
 	@echo "✅ Type checking complete!"
 
 security:

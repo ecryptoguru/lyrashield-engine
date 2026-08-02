@@ -9,7 +9,7 @@ export LLM_API_KEY="<credential>"
 export LLM_API_BASE="https://<approved-endpoint>"
 ```
 
-`LLM_API_BASE` may be omitted when the approved client default is correct. A compatible API shape is not sufficient by itself: the model/deployment name must identify GPT-5.6 Terra or Luna.
+`LLM_API_BASE` may be omitted when the approved client default is correct. A compatible API shape is not sufficient by itself: the model/deployment name must identify GPT-5.6 Terra or Luna. ChatGPT subscription models are rejected.
 
 Use `LYRASHIELD_REASONING_EFFORT` only for operator-controlled local execution. The application worker owns reasoning selection in production.
 

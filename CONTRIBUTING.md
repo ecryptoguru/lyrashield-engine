@@ -40,7 +40,7 @@ Avoid mechanical Strix-to-LyraShield rewrites. Generic upstream sandbox, tool, S
 1. Branch from current `main`; use a focused `codex/` branch for Codex changes.
 2. Make the smallest complete change and add regression tests.
 3. Update `NOTICE`, `UPGRADES.md`, and user/operator docs when the supported contract or divergence changes.
-4. Run `bash scripts/verify-thin-fork.sh` and `git diff --check`.
+4. Run `bash scripts/verify-thin-fork.sh` and `git diff --check`. The verify gate diffs `strix/**` against the pinned upstream base, enforces attribution banners on changed upstream Python files, and checks the `UPGRADES.md` ledger.
 5. Open a PR; never push directly to `main`.
 6. Require human review and green Engine CI before merge.
 

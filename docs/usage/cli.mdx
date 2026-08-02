@@ -60,3 +60,5 @@ CLI support for a target form is not the LyraShield application contract. URL ta
 ## Warm-up and usage accounting
 
 Interactive runs perform a lightweight warm-up call to the configured LLM (and dedicated dedupe model, if configured) before the scan starts. Tokens consumed during warm-up are recorded in the run ledger and included in `run.json`. `--non-interactive` skips this step and starts the scan immediately.
+
+A dedicated dedupe model is configured through `LYRASHIELD_DEDUPE_MODEL` and `LYRASHIELD_DEDUPE_REASONING_EFFORT`. See [Configuration](/advanced/configuration) for details.

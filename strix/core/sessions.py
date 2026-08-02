@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """SDK session helpers for Strix agents."""
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def _output_has_image(item_dict: dict[str, Any]) -> bool:
     output = item_dict.get("output")
     if not isinstance(output, list):
         return False
-    blocks = cast("list[Any]", output)
+    blocks = output
     return any(
         isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "input_image"
         for block in blocks
@@ -65,7 +66,7 @@ def _output_has_image(item_dict: dict[str, Any]) -> bool:
 def _elided_output(item_dict: dict[str, Any], text: str) -> dict[str, Any]:
     # Replace only image blocks; sibling text blocks are preserved.
     output = item_dict.get("output")
-    blocks = cast("list[Any]", output) if isinstance(output, list) else []
+    blocks = output if isinstance(output, list) else []
     return {
         "type": "function_call_output",
         "call_id": item_dict.get("call_id"),
@@ -172,7 +173,7 @@ def scrub_images_from_items(items: list[Any]) -> list[Any]:
                 return {"type": "input_text", "text": _INHERITED_IMAGE_TEXT}
             return {k: _scrub(v) for k, v in obj_dict.items()}
         if isinstance(obj, list):
-            obj_list = cast("list[Any]", obj)
+            obj_list = obj
             return [_scrub(v) for v in obj_list]
         return obj
 
