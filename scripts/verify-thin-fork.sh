@@ -20,12 +20,24 @@ if [[ -z "$BASE" ]]; then
   exit 1
 fi
 
+if ! git remote get-url upstream >/dev/null 2>&1; then
+  echo "info: adding upstream remote for strix" >&2
+  git remote add upstream https://github.com/usestrix/strix.git
+fi
+
 if ! git cat-file -t "$BASE" >/dev/null 2>&1; then
-  echo "info: upstream base $BASE not present locally; fetching from upstream remote" >&2
-  git fetch --depth=1 upstream "$BASE" || {
-    echo "error: could not fetch upstream base $BASE" >&2
+  echo "info: upstream base $BASE not present locally; fetching" >&2
+  if ! git fetch --depth=1 upstream "$BASE"; then
+    echo "info: shallow fetch by SHA failed; fetching upstream/main" >&2
+    git fetch upstream main || {
+      echo "error: could not fetch upstream base $BASE" >&2
+      exit 1
+    }
+  fi
+  if ! git cat-file -t "$BASE" >/dev/null 2>&1; then
+    echo "error: upstream base $BASE not found after fetch" >&2
     exit 1
-  }
+  fi
 fi
 
 # Find the fork commit that imported this upstream base into strix/.
