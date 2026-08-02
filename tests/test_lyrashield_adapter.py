@@ -142,10 +142,10 @@ def test_config_file_cannot_smuggle_a_subscription_model(
     assert excinfo.value.code == 1
 
 
-def test_config_subscription_model_still_allowed_for_the_dev_cli(
+def test_config_subscription_model_rejected_for_all_entry_points(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Without the product-boundary flag, upstream subscription support is untouched."""
+    """Subscription-backed models are rejected regardless of product-boundary flag."""
     monkeypatch.setattr(loader, "_override", None, raising=False)
     monkeypatch.setattr(loader, "_cached", None, raising=False)
 
@@ -157,4 +157,6 @@ def test_config_subscription_model_still_allowed_for_the_dev_cli(
     monkeypatch.delenv(PRODUCT_BOUNDARY_ENV_VAR, raising=False)
     monkeypatch.setattr(strix_main.codex, "is_authenticated", lambda: True)
     apply_config_override(config)
-    strix_main.validate_environment()
+    with pytest.raises(SystemExit) as excinfo:
+        strix_main.validate_environment()
+    assert excinfo.value.code == 1

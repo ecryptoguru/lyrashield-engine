@@ -220,7 +220,6 @@ class ReportState:
                 raise RuntimeError(
                     f"vulnerabilities.json at {json_path} is not a list",
                 )
-            vuln_data = cast("list[Any]", vuln_data)
             self.vulnerability_reports = [
                 cast("dict[str, Any]", r) for r in vuln_data if isinstance(r, dict)
             ]
@@ -499,7 +498,6 @@ class ReportState:
         targets = self.run_record.get("targets_info")
         if not isinstance(targets, list):
             return None
-        targets = cast("list[Any]", targets)
 
         repo_targets: list[dict[str, Any]] = []
         for target in targets:

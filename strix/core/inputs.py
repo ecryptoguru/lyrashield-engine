@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Pure input builders for Strix scan runs."""
 
 from __future__ import annotations
@@ -86,7 +87,7 @@ def _as_str_dict(value: Any) -> dict[str, Any]:
 def _as_str_list_of_dicts(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    items: list[Any] = cast("list[Any]", value)
+    items: list[Any] = value
     return [cast("dict[str, Any]", item) for item in items if isinstance(item, dict)]
 
 

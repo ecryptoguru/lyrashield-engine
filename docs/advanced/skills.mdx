@@ -138,11 +138,13 @@ How to bypass common protections.
 How to confirm findings and avoid false positives.
 ```
 
-## Contributing Skills
+## Adding or changing skills
 
-Community contributions are welcome. Create a `.md` file in the appropriate category with YAML frontmatter (`name` and `description` fields). Good skills include:
+The skill catalog lives under `strix/skills/` and is part of the controlled derivative. Any change must follow the same review boundary as other upstream files:
 
-1. **Real-world techniques** — Methods that work in practice
-2. **Practical payloads** — Working examples with variations
-3. **Validation steps** — How to confirm without false positives
-4. **Context awareness** — Version/environment-specific behavior
+- Keep the LyraShield modification banner on changed upstream skill files.
+- Add regression coverage if a skill affects agent behavior or tool selection.
+- Update `UPGRADES.md` and operator docs when the catalog or skill contract changes.
+- Do not add skills that re-enable telemetry, broaden provider support, or declare confidence equivalent to verification.
+
+Good skill contributions include real-world techniques, practical payloads with variations, clear validation steps, and context-aware guidance for specific versions and environments.

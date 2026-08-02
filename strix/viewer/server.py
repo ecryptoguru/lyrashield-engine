@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Local HTTP server that serves the viewer SPA and a run's data from disk.
 
 Design notes:

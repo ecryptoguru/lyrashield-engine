@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Per-scan sandbox session lifecycle."""
 
 from __future__ import annotations

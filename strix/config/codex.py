@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """ChatGPT (Codex) subscription auth: OAuth login, token refresh, and the OpenAI
 client that routes inference through the ChatGPT backend.
 

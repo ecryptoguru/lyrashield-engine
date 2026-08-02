@@ -1,6 +1,6 @@
 # LyraShield Engine
 
-LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.1.0, pinned at `7d5a67d234bd3faef34d22be8c6f5a9607de41a3` and modified under Apache-2.0. It is not a thin wrapper: LyraShield intentionally owns product-critical policy inside the derivative while retaining reviewed upstream sandbox, tool, and agent-SDK plumbing.
+LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.1.0, pinned at `8157ccba276c8fdd5eaa07a1a9d8d686315f6bd1` and modified under Apache-2.0. It is not a thin wrapper: LyraShield intentionally owns product-critical policy inside the derivative while retaining reviewed upstream sandbox, tool, and agent-SDK plumbing.
 
 See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
 
@@ -37,7 +37,7 @@ The pinned upstream tree remains the substrate for generic sandbox/session mecha
 
 ## Supported execution
 
-Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases and always disables inherited telemetry.
+Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, rejects ChatGPT subscription-backed models before sandbox setup, and always disables inherited telemetry.
 
 Requirements:
 

@@ -12,7 +12,7 @@ The root [CONTRIBUTING.md](https://github.com/ecryptoguru/lyrashield-engine/blob
 3. Put LyraShield model, budget, lifecycle, identity, evidence, and artifact behavior behind explicit reviewed boundaries.
 4. Preserve the LyraShield modification banner on changed upstream Python files.
 5. Add tests and update `NOTICE`, `UPGRADES.md`, and operator docs when the contract changes.
-6. Run `bash scripts/verify-thin-fork.sh` and `git diff --check`.
+6. Run `bash scripts/verify-thin-fork.sh` and `git diff --check`. The verify gate diffs `strix/**` against the pinned upstream base, enforces attribution banners on changed upstream Python files, and checks the `UPGRADES.md` ledger.
 7. Require human approval and green Engine CI.
 
 <Warning>

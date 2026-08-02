@@ -41,12 +41,20 @@ Production configuration is owned by the LyraShield worker. The `lyrashield` ada
 
 ## Deduplication model
 
+<ParamField path="LYRASHIELD_DEDUPE_MODEL" type="string">
+  Optional dedicated model for vulnerability-report deduplication. Maps to `STRIX_DEDUPE_MODEL`. When unset, the main model handles deduplication. LyraShield validates this as a GPT-5.6 Terra or Luna deployment.
+</ParamField>
+
+<ParamField path="LYRASHIELD_DEDUPE_REASONING_EFFORT" type="string">
+  Reasoning effort for the dedupe model, when one is configured. Maps to `STRIX_DEDUPE_REASONING_EFFORT`.
+</ParamField>
+
 <ParamField path="STRIX_DEDUPE_MODEL" type="string">
-  Optional dedicated model for vulnerability-report deduplication. When unset, the main model handles deduplication. LyraShield validates this as a GPT-5.6 Terra or Luna deployment.
+  Inherited upstream name for `LYRASHIELD_DEDUPE_MODEL`.
 </ParamField>
 
 <ParamField path="STRIX_DEDUPE_REASONING_EFFORT" type="string">
-  Reasoning effort for the dedupe model, when one is configured.
+  Inherited upstream name for `LYRASHIELD_DEDUPE_REASONING_EFFORT`.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_API_KEY" type="string">
@@ -115,11 +123,17 @@ The engine enforces per-scan budgets using explicit rates for GPT-5.6 Terra and 
 
 `LYRASHIELD_TELEMETRY` is accepted only as a compatibility alias; the adapter unconditionally sets inherited `STRIX_TELEMETRY=0`. Do not configure remote Traceloop/PostHog/Scarf export for production scans.
 
+<ParamField path="LYRASHIELD_APP_URL" default="https://app.strix.ai" type="string">
+  Base URL the local viewer proxies to for relay operations. Maps to `STRIX_APP_URL`.
+</ParamField>
+
 Bounded local artifacts are written to `strix_runs/<run-name>/`. The application worker consumes `run.json` and `vulnerabilities.json`, does not persist raw stdout/stderr, and owns evidence storage outside the engine work directory.
 
 ## Config file
 
 The inherited CLI supports `--config <path>` for a JSON environment override. Production should prefer explicit worker-owned environment variables so model, credential, sandbox, and limit provenance remains auditable.
+
+A `.env` file in the work directory is loaded, but it does **not** override environment variables already exported in the shell. Worker-provided environment always wins.
 
 <Warning>
 Do not place credentials, repository secrets, raw provider payloads, or user-controlled endpoints in committed config files. Configuration compatibility does not authorize a target or a paid scan.

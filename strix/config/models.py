@@ -343,7 +343,6 @@ def _mirror_api_key_to_provider_env(model_name: str | None, api_key: str) -> Non
         return
     missing_keys = report.get("missing_keys")
     if isinstance(missing_keys, list):
-        missing_keys = cast("list[Any]", missing_keys)
         for env_key in missing_keys:
             if isinstance(env_key, str) and env_key.endswith("_API_KEY"):
                 os.environ.setdefault(env_key, api_key)
@@ -421,7 +420,6 @@ def _register_litellm_cost_callback() -> None:
         bucket = getattr(litellm, bucket_name, None)
         if not isinstance(bucket, list):
             continue
-        bucket = cast("list[Any]", bucket)
         if litellm_cost_callback in bucket:
             continue
         bucket.append(litellm_cost_callback)
