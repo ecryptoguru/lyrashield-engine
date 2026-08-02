@@ -723,6 +723,7 @@ Examples:
 
     parser.add_argument(
         "--max-budget",
+        "--max-budget-usd",
         dest="max_budget_usd",
         metavar="USD",
         type=_positive_budget,
@@ -1055,9 +1056,9 @@ def _verify_image_digest(client: Any, image: str, expected_digest: str) -> None:
             f"SHA-256 hex string: {expected_digest!r}"
         )
 
-    digests = pulled.attrs.get("RepoDigests") or []
+    digests = cast("list[str]", pulled.attrs.get("RepoDigests") or [])
     for digest_ref in digests:
-        actual = _normalize_digest(str(digest_ref))
+        actual = _normalize_digest(digest_ref)
         if actual and actual == expected:
             logger.info("Image digest verified for %s", image)
             return
