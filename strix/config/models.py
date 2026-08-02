@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import os
 import re
+import threading
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -138,6 +139,8 @@ class _CodexResponsesModel(OpenAIResponsesModel):
     async def _fetch_response(self, *args: Any, stream: bool = False, **kwargs: Any) -> Any:
         if len(args) >= 3:  # model_settings is positional arg 2
             args = (*args[:2], self._codex_settings(args[2]), *args[3:])
+        if "model_settings" in kwargs:
+            kwargs["model_settings"] = self._codex_settings(kwargs["model_settings"])
         try:
             events = await super()._fetch_response(*args, stream=True, **kwargs)  # type: ignore[call-overload]
         except Exception as exc:
@@ -317,6 +320,7 @@ class StrixProvider(MultiProvider):
     """
 
     def __init__(self, *, settings: Settings | None = None) -> None:
+        self._settings = settings
         llm = settings.llm if settings is not None else None
         configured_models = (
             (getattr(llm, "model", None), getattr(llm, "delegate_model", None))
@@ -361,7 +365,9 @@ class StrixProvider(MultiProvider):
         return self._get_fallback_provider("litellm"), original_model_name
 
     def get_model(self, model_name: str | None) -> Model:
-        llm = load_settings().llm
+        if self._settings is None:
+            self._settings = load_settings()
+        llm = self._settings.llm
         slug = codex.subscription_model(model_name)
         if slug:
             # The ChatGPT subscription backend is always streamed; it has no
@@ -424,31 +430,59 @@ FRONTIER_MODEL_FAMILIES = (
 )
 
 
+_sdk_config_lock = threading.Lock()
+_last_sdk_settings: Any | None = None
+
+
+def reset_sdk_model_defaults() -> None:
+    """Clear SDK-wide defaults so a fresh :func:`configure_sdk_model_defaults` can re-apply them.
+
+    Useful in tests and at process startup to avoid stale configuration from a
+    previous scan or another test case.
+    """
+    import litellm
+
+    codex._subscription_client = None
+    litellm.api_key = None
+    litellm.api_base = None
+    litellm.api_version = None
+    litellm.headers = None
+    set_default_openai_key("", use_for_tracing=False)
+    set_default_openai_api("responses")
+
+
 def configure_sdk_model_defaults(settings: Settings) -> None:
     """Apply Strix config to SDK-native defaults."""
-    llm = settings.llm
-    set_tracing_disabled(True)
-    if codex.subscription_model(llm.model):
-        return
-    _configure_litellm_compatibility()
-    _configure_openrouter_attribution(llm.model)
-    if llm.api_key:
-        set_default_openai_key(llm.api_key, use_for_tracing=False)
-        _configure_litellm_default("api_key", llm.api_key)
-        _mirror_api_key_to_provider_env(llm.model, llm.api_key)
-    if llm.api_base:
-        _configure_litellm_default("api_base", llm.api_base)
-        if not _is_azure_model(llm.model):
-            os.environ["OPENAI_BASE_URL"] = llm.api_base
-            set_default_openai_api("chat_completions")
+    global _last_sdk_settings  # noqa: PLW0603
+    with _sdk_config_lock:
+        if _last_sdk_settings is settings:
+            return
+        reset_sdk_model_defaults()
+        _last_sdk_settings = settings
+
+        llm = settings.llm
+        set_tracing_disabled(True)
+        if codex.subscription_model(llm.model):
+            return
+        _configure_litellm_compatibility()
+        _configure_openrouter_attribution(llm.model)
+        if llm.api_key:
+            set_default_openai_key(llm.api_key, use_for_tracing=False)
+            _configure_litellm_default("api_key", llm.api_key)
+            _mirror_api_key_to_provider_env(llm.model, llm.api_key)
+        if llm.api_base:
+            _configure_litellm_default("api_base", llm.api_base)
+            if not _is_azure_model(llm.model):
+                os.environ["OPENAI_BASE_URL"] = llm.api_base
+                set_default_openai_api("chat_completions")
+            else:
+                set_default_openai_api("responses")
         else:
             set_default_openai_api("responses")
-    else:
-        set_default_openai_api("responses")
-    if llm.api_version:
-        _configure_litellm_default("api_version", llm.api_version)
-    _mirror_azure_env(llm.model, llm.api_base, llm.api_version)
-    _configure_extra_headers(llm)
+        if llm.api_version:
+            _configure_litellm_default("api_version", llm.api_version)
+        _mirror_azure_env(llm.model, llm.api_base, llm.api_version)
+        _configure_extra_headers(llm)
 
 
 def _is_azure_model(model_name: str | None) -> bool:

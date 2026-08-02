@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -36,7 +37,7 @@ from strix.config.models import (
 )
 from strix.config.settings import Settings
 from strix.core.inputs import DEFAULT_MAX_TURNS, make_model_settings
-from strix.core.paths import run_dir_for, runtime_state_dir
+from strix.core.paths import run_dir_for, runs_base_dir, runtime_state_dir
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
 from strix.interface.utils import (
@@ -57,6 +58,7 @@ from strix.interface.utils import (
     resolve_diff_scope_context,
     rewrite_localhost_targets,
     validate_config_file,
+    validate_run_name,
 )
 from strix.report.state import get_global_report_state
 from strix.report.writer import read_run_record, write_run_record
@@ -455,7 +457,7 @@ async def warm_up_llm(
 
             dedupe_model = settings.dedupe.model.strip()
             raw_model = dedupe_model
-            deduper = StrixProvider().get_model(dedupe_model)
+            deduper = StrixProvider(settings=settings).get_model(dedupe_model)
             # Match the runtime path: send the dedupe key/endpoint per call so a
             # separate-provider dedupe model authenticates during warm-up too.
             deduper_extra = dedupe_extra_args(settings.dedupe)
@@ -549,12 +551,6 @@ def _positive_budget(value: str) -> float:
     if not math.isfinite(budget) or budget <= 0:
         raise argparse.ArgumentTypeError("must be a finite number greater than 0")
     return budget
-
-
-def _safe_run_name(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) or ".." in value:
-        raise argparse.ArgumentTypeError("run name must be a safe 1-128 character identifier")
-    return value
 
 
 def _positive_int(value: str) -> int:
@@ -748,13 +744,13 @@ Examples:
 
     parser.add_argument(
         "--run-name",
-        type=_safe_run_name,
+        type=validate_run_name,
         help="Stable run identifier supplied by an orchestrator.",
     )
 
     parser.add_argument(
         "--resume",
-        type=str,
+        type=validate_run_name,
         metavar="RUN_NAME",
         help=(
             "Resume a prior scan by its run name (the dir under ./strix_runs/). "
@@ -896,12 +892,22 @@ def _persist_run_record(args: argparse.Namespace) -> None:
 def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Populate ``args.targets_info`` and friends from a prior run's run.json."""
     run_dir = run_dir_for(args.resume)
+    resolved_run_dir = run_dir.resolve()
+    resolved_base = runs_base_dir().resolve()
+    if not resolved_run_dir.is_relative_to(resolved_base):
+        parser.error(
+            f"--resume {args.resume}: run directory resolves outside the runs base "
+            f"({resolved_base})"
+        )
     state_path = run_dir / "run.json"
-    if not state_path.exists():
+    if not state_path.is_file() or state_path.is_symlink():
         parser.error(
             f"--resume {args.resume}: no such run "
             f"(missing {state_path}; remove --resume for a fresh start)"
         )
+    for p in (run_dir / "agents.json", run_dir / "agents.db"):
+        if p.is_symlink() or (p.exists() and not p.is_file()):
+            parser.error(f"--resume {args.resume}: invalid snapshot file {p}")
     try:
         state = read_run_record(run_dir)
     except RuntimeError as exc:
@@ -929,7 +935,14 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
         cloned = details.get("cloned_repo_path")
         if not isinstance(cloned, str) or not cloned:
             continue
-        if not Path(cloned).expanduser().exists():
+        cloned_path = Path(cloned).expanduser().resolve()
+        repo_base = (Path(tempfile.gettempdir()) / "strix_repos").resolve()
+        if cloned_path.is_symlink() or not cloned_path.is_relative_to(repo_base):
+            parser.error(
+                f"--resume {args.resume}: cloned repo at {cloned} resolves outside "
+                f"the allowed cache directory."
+            )
+        if not cloned_path.exists():
             parser.error(
                 f"--resume {args.resume}: cloned repo at {cloned} is missing. "
                 f"It was deleted between runs. Pick a fresh --run-name to "

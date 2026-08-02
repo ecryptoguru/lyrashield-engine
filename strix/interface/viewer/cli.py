@@ -16,6 +16,7 @@ from strix.core.paths import (
     run_record_path,
     runs_base_dir,
 )
+from strix.interface.utils import validate_run_name
 from strix.interface.viewer.server import authorized_url, bundle_is_built, serve
 from strix.interface.viewer.transcript import read_run_summary
 
@@ -105,9 +106,19 @@ def run_view(argv: list[str]) -> None:
 
 def _resolve_run_dir(run: str | None, console: Console) -> Path:
     if run:
+        try:
+            validate_run_name(run)
+        except argparse.ArgumentTypeError as exc:
+            console.print(f"[bold red]Invalid run name:[/] {exc}")
+            raise SystemExit(1) from None
         run_dir = run_dir_for(run)
         if not run_record_path(run_dir).is_file():
             _fail_no_run(console, requested=run)
+        if not run_dir.resolve().is_relative_to(runs_base_dir().resolve()):
+            console.print(
+                f"[bold red]Invalid run name:[/] {run!r} resolves outside the runs directory"
+            )
+            raise SystemExit(1)
         return run_dir
 
     latest = latest_run_dir()

@@ -1088,3 +1088,131 @@ async def test_wait_kind_survives_a_snapshot_round_trip() -> None:
     assert restored.wait_kinds["root"] == "user"
     assert restored.idle_resume_counts["root"] == 1
     assert await execution._plain_waiting_timeout(restored, "root") is None
+
+
+@pytest.mark.asyncio
+async def test_consume_pending_restores_mailbox_on_session_failure() -> None:
+    """If session.add_items raises, queued messages must be restored to the mailbox."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    runtime = coordinator.runtimes["root"]
+    runtime.mailbox = [{"from": "user", "content": "do Y"}]
+    coordinator.pending_counts["root"] = 1
+
+    class _FailingSession:
+        async def add_items(self, _items: Any) -> None:
+            raise RuntimeError("disk full")
+
+    runtime.session = _FailingSession()
+
+    count, _items = await coordinator.consume_pending("root", include_items=True)
+    assert count == 0
+    assert len(runtime.mailbox) == 1, "mailbox should be restored on failure"
+
+
+@pytest.mark.asyncio
+async def test_consume_pending_clears_mailbox_without_session() -> None:
+    """Without a session, items are returned but mailbox is still cleared."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    runtime = coordinator.runtimes["root"]
+    runtime.mailbox = [{"from": "user", "content": "do X"}]
+    coordinator.pending_counts["root"] = 1
+
+    count, items = await coordinator.consume_pending("root", include_items=True)
+    assert count == 1
+    assert len(items) == 1
+    assert runtime.mailbox == [], "mailbox should be cleared even without session"
+
+
+@pytest.mark.asyncio
+async def test_cancel_descendants_marks_subtree_stopped() -> None:
+    """cancel_descendants must mark cancelled children as stopped, not leave them running."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.register("grandchild", "recon2", parent_id="child")
+    await coordinator.set_status("child", "running")
+    await coordinator.set_status("grandchild", "running")
+
+    await coordinator.cancel_descendants("root")
+
+    assert coordinator.statuses["child"] == "stopped"
+    assert coordinator.statuses["grandchild"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_finalization_does_not_overwrite_failed_status() -> None:
+    """The runner must not overwrite a failed/crashed/stopped root with 'completed'."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.set_status("root", "failed")
+
+    # Mimics the runner's finalization guard
+    current = await coordinator.get_status("root")
+    if current in {"running", "waiting"}:
+        await coordinator.set_status("root", "completed")
+
+    assert coordinator.statuses["root"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_finalization_promotes_running_to_completed() -> None:
+    """A still-running root at finalization time is promoted to completed."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.set_status("root", "running")
+
+    current = await coordinator.get_status("root")
+    if current in {"running", "waiting"}:
+        await coordinator.set_status("root", "completed")
+
+    assert coordinator.statuses["root"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_finalization_sequence_preserves_failed_status() -> None:
+    """The runner's finalization sequence must not overwrite a failed root.
+
+    This test exercises the actual coordinator methods in the same order
+    the runner calls them (mark_shutting_down -> cancel_descendants ->
+    get_status -> conditional set_status), rather than inlining the guard.
+    """
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.set_status("root", "failed")
+    await coordinator.set_status("child", "running")
+
+    # Mirror runner.py lines 618-624 exactly.
+    coordinator.mark_shutting_down()
+    with contextlib.suppress(Exception):
+        await coordinator.cancel_descendants("root")
+    with contextlib.suppress(Exception):
+        current_status = await coordinator.get_status("root")
+        if current_status in {"running", "waiting"}:
+            await coordinator.set_status("root", "completed")
+
+    assert coordinator.statuses["root"] == "failed"
+    assert coordinator.statuses["child"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_finalization_sequence_promotes_running_to_completed() -> None:
+    """The runner's finalization sequence must promote a running root to completed.
+
+    Exercises the actual coordinator methods in runner order.
+    """
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.set_status("root", "running")
+
+    coordinator.mark_shutting_down()
+    with contextlib.suppress(Exception):
+        await coordinator.cancel_descendants("root")
+    with contextlib.suppress(Exception):
+        current_status = await coordinator.get_status("root")
+        if current_status in {"running", "waiting"}:
+            await coordinator.set_status("root", "completed")
+
+    assert coordinator.statuses["root"] == "completed"

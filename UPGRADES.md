@@ -194,3 +194,27 @@ upstream repeatedly blocks required behavior, release imports become more
 expensive than ownership, or a LyraShield evaluation corpus demonstrates a
 substrate-imposed quality ceiling. Test-count and packaging gates are not that
 evaluation evidence.
+
+## Documentation reconciliation (2026-08-02)
+
+Operator docs were reconciled with the actual `Settings` schema and the
+GPT-5.6 Terra/Luna product boundary. No runtime behavior changed.
+
+- `CONTRIBUTING.md`: rewritten from stale upstream Strix content to the
+  LyraShield controlled-derivative workflow (entry point, banner, verify gate,
+  ownership boundary).
+- `docs/usage/cli.mdx`: rewritten for the `lyrashield` executable and the full
+  verified flag set (`--run-name`, `--resume`, `--max-budget`/`--max-budget-usd`,
+  `--max-turns`, `provider-contract` subcommand).
+- `docs/advanced/configuration.mdx`: rewritten to match `strix/config/settings.py`
+  — `LYRASHIELD_*` aliases for every `STRIX_*` setting, GPT-5.6-only examples,
+  dropped nonexistent vars (`STRIX_MEMORY_COMPRESSOR_TIMEOUT`,
+  `STRIX_LLM_MAX_RETRIES`, `PERPLEXITY_API_KEY`, `TRACELOOP_*`,
+  `STRIX_SANDBOX_EXECUTION_TIMEOUT`, `STRIX_SANDBOX_CONNECT_TIMEOUT`, local
+  `events.jsonl` dual-write).
+- `docs/llm-providers/local.mdx`: added the unsupported-upstream-reference
+  Warning banner (local models are not a production path) and replaced
+  `STRIX_LLM`/`gpt-5.4`/Claude references with the LyraShield spelling.
+- `strix/telemetry/README.md`: rewritten to reflect the forced-off LyraShield
+  telemetry boundary (the adapter sets `STRIX_TELEMETRY=0`).
+

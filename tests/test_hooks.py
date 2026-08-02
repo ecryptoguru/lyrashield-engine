@@ -12,6 +12,7 @@ from strix.core.hooks import (
     BudgetPausedError,
     ReportUsageHooks,
     SubagentBudgetReservedError,
+    _compact_item,
     recomputed_budget_flags,
 )
 
@@ -491,3 +492,22 @@ def test_recomputed_budget_flags(
     expected: tuple[bool, bool],
 ) -> None:
     assert recomputed_budget_flags(cost, max_budget, interactive=interactive) == expected
+
+
+def test_compact_item_keeps_whole_multibyte_characters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A 4-byte emoji repeated enough to exceed the byte budget.
+    payload = "😀" * 500
+    item = {"role": "assistant", "content": payload}
+    monkeypatch.setattr("strix.core.hooks._COMPACTED_ITEM_MAX_BYTES", 200)
+
+    compacted = _compact_item(item)
+    content = compacted["content"]
+
+    assert "...[older item compacted]..." in content
+    assert "\ufffd" not in content
+    # Both head and tail should contain at least one intact emoji.
+    head, _, tail = content.partition("...[older item compacted]...")
+    assert "😀" in head
+    assert "😀" in tail

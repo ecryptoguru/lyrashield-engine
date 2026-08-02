@@ -11,7 +11,7 @@ from agents.models import _openai_shared
 
 from strix.config import loader
 from strix.config.loader import load_settings
-from strix.config.models import configure_sdk_model_defaults
+from strix.config.models import configure_sdk_model_defaults, reset_sdk_model_defaults
 
 
 if TYPE_CHECKING:
@@ -22,7 +22,7 @@ _ENV_KEYS = ["STRIX_LLM", "LLM_API_KEY", "LLM_API_BASE", "LLM_EXTRA_HEADERS"]
 
 
 @pytest.fixture(autouse=True)
-def _reset(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _reset(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
     for key in _ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(loader, "_cached", None)
@@ -95,3 +95,17 @@ def test_no_extra_headers_leaves_litellm_headers_untouched(monkeypatch: pytest.M
     configure_sdk_model_defaults(load_settings())
 
     assert litellm.headers is None
+
+
+def test_reset_sdk_model_defaults_clears_litellm_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STRIX_LLM", "openai/some-model")
+    monkeypatch.setenv("LLM_API_BASE", "https://gateway.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "token")
+    monkeypatch.setenv("LLM_EXTRA_HEADERS", json.dumps({"X-Feature-Key": "svc"}))
+
+    configure_sdk_model_defaults(load_settings())
+    reset_sdk_model_defaults()
+
+    assert litellm.headers is None
+    assert litellm.api_key is None
+    assert litellm.api_base is None

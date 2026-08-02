@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import tempfile
@@ -33,6 +34,20 @@ WaitKind = Literal["user", "agents", "stalled"]
 
 _ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
 
+_SNAPSHOT_SCHEMA: dict[str, type] = {
+    "statuses": dict,
+    "parent_of": dict,
+    "names": dict,
+    "metadata": dict,
+    "pending_counts": dict,
+    "recovery_counts": dict,
+    "idle_resume_counts": dict,
+    "wait_kinds": dict,
+    "mailboxes": dict,
+    "errors": dict,
+    "conversation_ids": dict,
+}
+
 
 @dataclass(slots=True)
 class AgentRuntime:
@@ -61,6 +76,7 @@ class AgentCoordinator:
         self.wait_kinds: dict[str, WaitKind] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
         self._lock = asyncio.Lock()
+        self._snapshot_lock = asyncio.Lock()
         self._snapshot_path: Path | None = None
         self.is_shutting_down = False
         self._budget_stopped = False
@@ -279,13 +295,11 @@ class AgentCoordinator:
                 return
         await self._maybe_snapshot()
 
-    async def set_status(
-        self, agent_id: str, status: Status | str, *, error: str | None = None
-    ) -> None:
+    async def set_status(self, agent_id: str, status: Status, *, error: str | None = None) -> None:
         async with self._lock:
             if agent_id not in self.statuses:
                 return
-            self.statuses[agent_id] = status  # type: ignore[assignment]
+            self.statuses[agent_id] = status
             if error is not None:
                 self.errors[agent_id] = error
             elif status == "running":
@@ -357,24 +371,38 @@ class AgentCoordinator:
             session = runtime.session
         if count <= 0:
             return 0, []
-        items = [self._message_to_session_item(m) for m in queued]
-        if items:
-            if session is None:
-                logger.warning(
-                    "agent %s has no SDK session attached; %d queued messages were not persisted",
-                    agent_id,
-                    len(items),
-                )
-            else:
-                try:
-                    async with session_write_lock(session):
-                        await session.add_items(items)
-                except Exception:
-                    logger.exception(
-                        "failed to append %d queued messages to the session of %s",
-                        len(items),
-                        agent_id,
-                    )
+        try:
+            items = [self._message_to_session_item(m) for m in queued]
+        except Exception:
+            async with self._lock:
+                runtime.mailbox[:0] = queued
+            logger.exception("failed to convert queued messages for %s", agent_id)
+            return 0, []
+        if not items:
+            return 0, []
+        if session is None:
+            logger.debug(
+                "agent %s has no SDK session attached; "
+                "%d queued messages returned to caller without persistence",
+                agent_id,
+                len(items),
+            )
+            await self._maybe_snapshot()
+            if not include_items:
+                return count, []
+            return count, items
+        try:
+            async with session_write_lock(session):
+                await session.add_items(items)
+        except Exception:
+            async with self._lock:
+                runtime.mailbox[:0] = queued
+            logger.exception(
+                "failed to append %d queued messages to the session of %s",
+                len(items),
+                agent_id,
+            )
+            return 0, []
         await self._maybe_snapshot()
         if not include_items:
             return count, []
@@ -435,8 +463,12 @@ class AgentCoordinator:
 
     async def cancel_descendants(self, agent_id: str) -> None:
         tasks: list[asyncio.Task[Any]] = []
+        order: list[str] = []
         async with self._lock:
-            for aid in reversed(self._subtree_order_locked(agent_id)):
+            order = list(reversed(self._subtree_order_locked(agent_id)))
+            for aid in order:
+                if aid == agent_id:
+                    continue
                 task = self.runtimes.get(aid, AgentRuntime()).task
                 if task is not None and not task.done():
                     tasks.append(task)
@@ -444,6 +476,16 @@ class AgentCoordinator:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        async with self._lock:
+            for aid in order:
+                if aid == agent_id:
+                    continue
+                if self.statuses.get(aid) in _ACTIVE_STATUSES:
+                    self.statuses[aid] = "stopped"
+                    parent_id = self.parent_of.get(aid)
+                    if parent_id is not None:
+                        self.runtimes.setdefault(parent_id, AgentRuntime()).wake.set()
+        await self._maybe_snapshot()
 
     async def cancel_descendants_graceful(self, agent_id: str) -> None:
         async with self._lock:
@@ -565,6 +607,14 @@ class AgentCoordinator:
             }
 
     async def restore(self, snap: dict[str, Any]) -> None:
+        if not isinstance(snap, dict):
+            raise TypeError("agent snapshot must be a mapping")
+        for key, expected in _SNAPSHOT_SCHEMA.items():
+            value = snap.get(key)
+            if value is not None and not isinstance(value, expected):
+                got = type(value).__name__
+                raise TypeError(f"agent snapshot {key!r} must be a {expected.__name__}, got {got}")
+
         async with self._lock:
             self.statuses = dict(snap.get("statuses", {}))
             self.parent_of = dict(snap.get("parent_of", {}))
@@ -593,20 +643,25 @@ class AgentCoordinator:
         if path is None:
             return
         try:
-            data = await self.snapshot()
-            payload = json.dumps(data, ensure_ascii=False, default=str)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=str(path.parent),
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as tmp:
-                tmp.write(payload)
-                tmp_path = Path(tmp.name)
-            tmp_path.replace(path)
+            async with self._snapshot_lock:
+                data = await self.snapshot()
+                payload = json.dumps(data, ensure_ascii=False, default=str)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=str(path.parent),
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as tmp:
+                    tmp.write(payload)
+                    tmp_path = Path(tmp.name)
+                try:
+                    tmp_path.replace(path)
+                finally:
+                    with contextlib.suppress(OSError):
+                        tmp_path.unlink(missing_ok=True)
         except Exception:
             logger.exception("coordinator snapshot to %s failed", path)
 

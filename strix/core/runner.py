@@ -234,7 +234,8 @@ async def run_strix_scan(
     delegate_chat_completions_tools = uses_chat_completions_tool_schema(delegate_model, settings)
 
     scan_mode = str(scan_config.get("scan_mode") or "deep")
-    coordinator = _coordinator_for_scan_mode(coordinator, scan_mode)
+    if coordinator is None:
+        coordinator = AgentCoordinator()
     coordinator.set_snapshot_path(agents_path)
 
     from strix.tools.notes.tools import hydrate_notes_from_disk
@@ -245,6 +246,14 @@ async def run_strix_scan(
 
     root_id: str | None = None
     if is_resume:
+        if agents_path.is_symlink() or not agents_path.is_file():
+            raise RuntimeError(
+                f"Cannot resume scan {scan_id}: agents.json is not a regular file",
+            )
+        if agents_db.is_symlink() or not agents_db.is_file():
+            raise RuntimeError(
+                f"Cannot resume scan {scan_id}: agents.db is not a regular file",
+            )
         try:
             snap = json.loads(agents_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -283,6 +292,8 @@ async def run_strix_scan(
         )
     else:
         root_id = uuid.uuid4().hex[:8]
+
+    coordinator = _coordinator_for_scan_mode(coordinator, scan_mode)
 
     logger.info("Bringing up sandbox session for scan %s", scan_id)
     bundle = await session_manager.create_or_reuse(
@@ -368,6 +379,8 @@ async def run_strix_scan(
         set_active_hooks(hooks)
         if interactive:
             coordinator.set_budget_extender(hooks.extend_budget)
+            if is_resume and coordinator.budget_paused:
+                await coordinator.resume_from_budget_pause()
 
         scope_context = build_scope_context(scan_config)
         root_context = _merge_root_prompt_context(scope_context, extra_system_prompt_context)
@@ -602,6 +615,13 @@ async def run_strix_scan(
                     scan_id,
                     final_type,
                 )
+        coordinator.mark_shutting_down()
+        with contextlib.suppress(Exception):
+            await coordinator.cancel_descendants(root_id)
+        with contextlib.suppress(Exception):
+            current_status = await coordinator.get_status(root_id)
+            if current_status in {"running", "waiting"}:
+                await coordinator.set_status(root_id, "completed")
         return result  # noqa: TRY300
     except BudgetExceededError as exc:
         logger.info("Scan %s stopped: %s", scan_id, exc)

@@ -1,37 +1,30 @@
 ### Overview
 
-To help make Strix better for everyone, we collect anonymized data that helps us understand how to better improve our AI security agent for our users, guide the addition of new features, and fix common errors and bugs. This feedback loop is crucial for improving Strix's capabilities and user experience.
+LyraShield Engine is a controlled derivative of upstream Strix. The inherited telemetry stack (PostHog and Scarf clients in `posthog.py` / `scarf.py`) is **forced off** by the `lyrashield` product entry point (`lyrashield_adapter`), which sets `STRIX_TELEMETRY=0` before the upstream CLI runs. No remote analytics are sent in production. The code is retained only so the upstream substrate remains reviewable and so the bare `strix` dev CLI keeps its upstream behavior.
 
-We use [PostHog](https://posthog.com), an open-source analytics platform, for data collection and analysis, along with [Scarf](https://scarf.sh). Our telemetry implementation is fully transparent - you can review the source code ([posthog.py](https://github.com/usestrix/strix/blob/main/strix/telemetry/posthog.py), [scarf.py](https://github.com/usestrix/strix/blob/main/strix/telemetry/scarf.py)) to see exactly what we track.
+### What the adapter does
 
-### Telemetry Policy
+`lyrashield_adapter.cli.prepare_environment` unconditionally sets:
 
-Privacy is our priority. All collected data is anonymized by default. Each session gets a random UUID that is not persisted or tied to you. Your code, scan targets, vulnerability details, and findings always remain private and are never collected.
+- `STRIX_TELEMETRY=0` — disables PostHog and Scarf event emission.
+- `STRIX_NO_UPDATE_CHECK=1` — disables the upstream self-update network check.
+- `LYRASHIELD_PRODUCT_BOUNDARY=1` — marks the process as running behind the product boundary so configuration is re-validated after `--config` is applied.
 
-### What We Track
+It also rejects `chatgpt/` subscription-backed models, which would bypass the GPT-5.6 Terra/Luna deployment gate and record runs with zero metered cost.
 
-We collect only very **basic** usage data including:
+### Inherited clients (disabled in production)
 
-**Session Errors:** Duration and error types (not messages or stack traces)\
-**System Context:** OS type, architecture, Strix version\
-**Scan Context:** Scan mode (quick/standard/deep), scan type (whitebox/blackbox)\
-**Model Usage:** Which LLM model is being used and whether it runs via an API key or a model subscription (not prompts or responses)\
-**Feature Usage:** Which built-in skills are loaded\
-**Aggregate Metrics:** Vulnerability counts by severity and weakness category (CWE)
+The retained clients are [PostHog](https://posthog.com) and [Scarf](https://scarf.sh). Their source is reviewable here: [`posthog.py`](posthog.py), [`scarf.py`](scarf.py). When telemetry is disabled (the LyraShield default and forced state), each client logs a debug message and sends nothing.
 
-### What We **Never** Collect
+### What is never collected
 
-- Usernames, or any identifying information
+Even when the inherited clients were active upstream, they never collected:
+
+- Usernames or identifying information
 - Scan targets, file paths, target URLs, or domains
 - Vulnerability details, descriptions, or code
 - LLM requests and responses
 
-### How to Opt Out
+### Local operator override (non-production)
 
-Telemetry in Strix is entirely **optional**:
-
-```bash
-export STRIX_TELEMETRY=0
-```
-
-You can set this environment variable before running Strix to disable **all** telemetry.
+The bare upstream `strix` dev CLI (not shipped in this distribution) honors `STRIX_TELEMETRY=0` to opt out. The `lyrashield` entry point sets this for you; there is no supported way to re-enable remote telemetry through the product boundary, and re-enabling it would violate the LyraShield production contract.

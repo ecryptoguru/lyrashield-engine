@@ -1,23 +1,25 @@
 ---
-title: "Local Models"
-description: "Run Strix with self-hosted LLMs for privacy and air-gapped testing"
+title: "Local Models (unsupported upstream reference)"
+description: "Local models are not a supported LyraShield production path"
 ---
 
-Running Strix with local models allows for completely offline, privacy-first security assessments. Data never leaves your machine, making this ideal for sensitive internal networks or air-gapped environments.
+<Warning>
+Local models are not supported by LyraShield Engine. Production accepts only approved GPT-5.6 Terra or Luna deployments through the documented OpenAI/Azure-compatible boundary. This unlinked page is retained only as operator reference for offline experimentation and to make the inherited upstream documentation history explicit. Do not configure local-model endpoints in the worker or forward local-model credentials to production.
+</Warning>
+
+The upstream-derived engine can be pointed at a self-hosted LLM for completely offline, privacy-first experimentation. Data never leaves your machine, which can be useful for sensitive internal networks or air-gapped operator testing. This is not a production path: most local models lack the agentic reliability the GPT-5.6 Terra/Luna contract requires, and the LyraShield product entry point rejects non-GPT-5.6 deployments before scan start.
 
 ## Privacy vs Performance
 
-| Feature | Local Models | Cloud Models (GPT-5/Claude 4.5) |
-|---------|--------------|--------------------------------|
-| **Privacy** | 🔒 Data stays local | Data sent to provider |
+| Feature | Local Models | GPT-5.6 Terra/Luna |
+|---------|--------------|--------------------|
+| **Privacy** | Data stays local | Data sent to provider |
 | **Cost** | Free (hardware only) | Pay-per-token |
 | **Reasoning** | Lower (struggles with agents) | State-of-the-art |
 | **Setup** | Complex (GPU required) | Instant |
 
 <Warning>
-**Compatibility Note**: Strix relies on advanced agentic capabilities (tool use, multi-step planning, self-correction). Most local models, especially those under 70B parameters, struggle with these complex tasks.
-
-For critical assessments, we strongly recommend using state-of-the-art cloud models like **Claude 4.5 Sonnet** or **GPT-5**. Use local models only when privacy is the absolute priority.
+**Compatibility Note**: The engine relies on advanced agentic capabilities (tool use, multi-step planning, self-correction). Most local models, especially those under 70B parameters, struggle with these complex tasks. Use local models only for offline operator experimentation, never for production scans.
 </Warning>
 
 ## Ollama
@@ -31,9 +33,9 @@ For critical assessments, we strongly recommend using state-of-the-art cloud mod
    ```bash
    ollama pull qwen3-vl
    ```
-3. Configure Strix:
+3. Configure the engine (operator-only, not a production path):
    ```bash
-   export STRIX_LLM="ollama/qwen3-vl"
+   export LYRASHIELD_LLM="ollama/qwen3-vl"
    export LLM_API_BASE="http://localhost:11434"
    ```
 
@@ -51,7 +53,7 @@ We recommend these models for the best balance of reasoning and tool use:
 If you use LM Studio, vLLM, or other runners:
 
 ```bash
-export STRIX_LLM="openai/local-model"
+export LYRASHIELD_LLM="openai/local-model"
 export LLM_API_BASE="http://localhost:1234/v1"  # Adjust port as needed
 ```
 
@@ -62,21 +64,21 @@ tenant routing) alongside the bearer token. Set them with `LLM_EXTRA_HEADERS` as
 a JSON object — they are sent on every request:
 
 ```bash
-export STRIX_LLM="openai/your-model"
+export LYRASHIELD_LLM="openai/your-model"
 export LLM_API_BASE="https://your-gateway.example/v1"
 export LLM_API_KEY="your-bearer-token"          # sent as Authorization: Bearer ...
 export LLM_EXTRA_HEADERS='{"X-Feature-Key":"value","X-Tenant":"acme"}'
 ```
 
-For endpoints behind a private CA, point Strix at your certificate bundle with
+For endpoints behind a private CA, point the engine at your certificate bundle with
 the standard `SSL_CERT_FILE=/path/to/ca-bundle.pem` — never disable TLS
 verification against a real endpoint.
 
 ## Tool calling must return structured `tool_calls`
 
-Strix is entirely tool-driven: every working turn must be a **native** function/tool call. If your inference server returns the tool call as plain assistant text instead of a structured `tool_calls` field, Strix never sees a call it can execute, so the agent makes no real progress — it re-prompts the model for a tool call and gives up once its recovery attempts are exhausted.
+The engine is entirely tool-driven: every working turn must be a **native** function/tool call. If your inference server returns the tool call as plain assistant text instead of a structured `tool_calls` field, the engine never sees a call it can execute, so the agent makes no real progress — it re-prompts the model for a tool call and gives up once its recovery attempts are exhausted.
 
-This is almost always an **inference-server configuration** problem, not a model or Strix problem. Common symptoms are the model printing a call as text such as:
+This is almost always an **inference-server configuration** problem, not a model or engine problem. Common symptoms are the model printing a call as text such as:
 
 ```text
 <tool_call>{"name": "exec_command", "arguments": {"cmd": "nmap ..."}}</tool_call>
@@ -96,7 +98,7 @@ The fix belongs on the inference server: it must be configured to parse the mode
 **Ollama**
 - Use a recent Ollama and a model whose template wires tools. Modern Ollama refuses tools (`tools param requires --jinja flag`) if the template lacks tool support.
 - For reasoning models (e.g. qwen3), disable the model's **thinking** mode — thinking left on frequently pushes the tool call into the text `content` instead of the structured `tool_calls` field. Turn it off on the Ollama side (a non-thinking model variant, or `think: false` in the model's parameters / `Modelfile`).
-- Raise **`num_ctx`** to at least 16k–32k. Strix sends a large system prompt plus many tool schemas; at Ollama's small default context the tool definitions are truncated out of the prompt and the model stops emitting valid calls. A short test prompt can look fine while a real scan fails, so set this explicitly rather than inferring it from a quick check.
+- Raise **`num_ctx`** to at least 16k–32k. The engine sends a large system prompt plus many tool schemas; at Ollama's small default context the tool definitions are truncated out of the prompt and the model stops emitting valid calls. A short test prompt can look fine while a real scan fails, so set this explicitly rather than inferring it from a quick check.
 
 **vLLM**
 - Start with `--enable-auto-tool-choice`, a matching `--tool-call-parser` (`hermes`, `qwen3_xml`, or `llama3_json`), and a matching `--reasoning-parser` for reasoning models.

@@ -33,6 +33,7 @@ from strix.core.sessions import (
     open_agent_session,
     replace_session_items,
     seed_initial_input,
+    session_write_lock,
     strip_all_images_from_session,
 )
 from strix.llm.compaction import is_context_overflow, maybe_compact
@@ -99,12 +100,16 @@ async def _compact_session(
     model = _run_config_model(run_config)
     if session is None or model is None:
         return False
+    model_provider = getattr(run_config, "model_provider", None)
+    settings = getattr(model_provider, "_settings", None) if model_provider is not None else None
     return await maybe_compact(
         session,
         model=model,
         instructions=_agent_instructions(agent),
         tools_text=_agent_tools_text(agent),
         force=force,
+        model_provider=model_provider,
+        settings=settings,
     )
 
 
@@ -154,7 +159,7 @@ async def _salvage_stream_to_session(
     if len(desired) <= len(pre_run_items):
         return
     try:
-        await replace_session_items(session, desired)
+        await replace_session_items(session, desired, expected_len=len(pre_run_items))
     except Exception:
         logger.exception("salvaging crashed run history failed for %s", agent_id)
 
@@ -209,6 +214,7 @@ async def run_agent_loop(
         await coordinator.send(agent_id, _reserve_notice())
 
     if not (start_parked and interactive):
+        await coordinator.consume_pending(agent_id)
         with contextlib.suppress(BudgetPausedError):
             result = await _run_until_lifecycle(
                 agent,
@@ -868,7 +874,8 @@ async def _append_tool_required_message(
     if session is None:
         return [item]
 
-    await session.add_items([cast("TResponseInputItem", item)])
+    async with session_write_lock(session):
+        await session.add_items([cast("TResponseInputItem", item)])
     return []
 
 
@@ -1026,6 +1033,10 @@ async def _start_child_runner(
             logger.info("child %s stopped after reaching the scan budget limit", child_id)
         except SubagentBudgetReservedError:
             logger.info("child %s stopped at the sub-agent budget reserve", child_id)
+        except asyncio.CancelledError:
+            logger.info("child %s cancelled during shutdown", child_id)
+            with contextlib.suppress(Exception):
+                await coordinator.request_stop(child_id)
 
     task_handle = asyncio.create_task(_child_loop(), name=f"agent-{name}-{child_id}")
     await coordinator.attach_runtime(child_id, task=task_handle)

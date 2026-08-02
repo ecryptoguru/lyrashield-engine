@@ -13,8 +13,10 @@ deltas:
    starts inside the container and ``bootstrap_caido`` retries against a
    dead port.
 2. Append NET_ADMIN/NET_RAW to ``cap_add`` (required by ``nmap -sS`` and
-   other raw-socket tools). Operators can disable this by setting
-   ``STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES=1``.
+   other raw-socket tools) only when the operator has opted in by setting
+   ``STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1``. The legacy
+   ``STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES`` is still honored if the new
+   variable is not set.
 3. Optionally add ``host.docker.internal`` → host-gateway to ``extra_hosts``
    when ``STRIX_SANDBOX_ALLOW_HOST_GATEWAY`` is explicitly enabled.
 
@@ -63,6 +65,22 @@ def host_gateway_enabled() -> bool:
         "true",
         "yes",
     }
+
+
+def network_capabilities_enabled() -> bool:
+    """Return whether NET_ADMIN/NET_RAW should be added to the sandbox.
+
+    Network capabilities are now opt-in via ``STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES``.
+    The legacy ``STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES`` is still honored when the
+    new variable is not set, so explicit existing overrides continue to work.
+    """
+    new = os.environ.get("STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES", "").strip().lower()
+    if new:
+        return new in {"1", "true", "yes"}
+    old = os.environ.get("STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES", "").strip().lower()
+    if old in {"1", "true", "yes"}:
+        return False
+    return old in {"0", "false", "no", "off"}
 
 
 def _sandbox_network() -> str | None:
@@ -158,19 +176,20 @@ class StrixDockerSandboxSession(DockerSandboxSession):
         networks = cast("dict[str, Any]", network_settings.get("Networks", {}) or {})
         endpoint = cast("dict[str, Any]", networks.get(self.sandbox_network) or {})
         ip = endpoint.get("IPAddress") or endpoint.get("GlobalIPv6Address")
-        if not isinstance(ip, str) or not ip:
-            raise ExposedPortUnavailableError(
-                port=port,
-                exposed_ports=self.state.exposed_ports,
-                reason="backend_unavailable",
-                context={
-                    "backend": "docker",
-                    "detail": "container_not_on_network",
-                    "network": self.sandbox_network,
-                },
-            )
-        host = f"[{ip}]" if ":" in ip else ip
-        return ExposedPortEndpoint(host=host, port=port, tls=False)
+        if isinstance(ip, str) and ip:
+            host = f"[{ip}]" if ":" in ip else ip
+            return ExposedPortEndpoint(host=host, port=port, tls=False)
+
+        # Custom-network lookup failed; the container may not have joined the
+        # configured network, or ports were published to the host. Fall back to
+        # the SDK's default host-port resolver before giving up.
+        logger.debug(
+            "Custom-network IP lookup failed for port %s on network %s; "
+            "falling back to SDK default resolver",
+            port,
+            self.sandbox_network,
+        )
+        return await super()._resolve_exposed_port(port)
 
 
 class StrixDockerSandboxClient(DockerSandboxClient):
@@ -193,6 +212,12 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         # ----- BEGIN VERBATIM COPY of DockerSandboxClient._create_container -----
         # SDK ref: src/agents/sandbox/sandboxes/docker.py:1434-1477 (v0.14.6).
         if not self.image_exists(image):
+            if os.environ.get("STRIX_IMAGE_DIGEST", "").strip():
+                raise RuntimeError(
+                    f"Sandbox image {image} is not present locally and "
+                    "STRIX_IMAGE_DIGEST is set. Pre-pull the image with the verified digest "
+                    "before starting the scan."
+                )
             repo, tag = parse_repository_tag(image)
             self.docker_client.images.pull(repo, tag=tag or None, all_tags=False)
 
@@ -246,16 +271,16 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         else:
             cap_add = []
         create_kwargs["cap_add"] = cap_add
-        if os.environ.get("STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES", "").strip().lower() not in {
-            "1",
-            "true",
-            "yes",
-        }:
+        if network_capabilities_enabled():
             for cap in ("NET_ADMIN", "NET_RAW"):
                 if cap not in cap_add:
                     cap_add.append(cap)
+            logger.info("Network capabilities enabled for sandbox")
         else:
-            logger.info("Network capabilities disabled for sandbox by environment setting")
+            logger.info(
+                "Network capabilities disabled for sandbox "
+                "(default; set STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1 to enable)"
+            )
 
         if host_gateway_enabled():
             extra_hosts = create_kwargs.setdefault("extra_hosts", {})
@@ -319,4 +344,12 @@ class StrixDockerSandboxClient(DockerSandboxClient):
                 docker_errors.NotFound, docker_errors.APIError, RequestException
             ):
                 cast("Any", self.docker_client.containers.get(container_id)).kill()
-        return await super().delete(session)
+        try:
+            return await super().delete(session)
+        except (docker_errors.APIError, RequestException, OSError) as exc:
+            logger.warning(
+                "docker delete raised for container %s; it may need manual reaping: %s",
+                container_id,
+                exc,
+            )
+            return session

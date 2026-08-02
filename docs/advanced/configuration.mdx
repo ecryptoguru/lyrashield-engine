@@ -1,57 +1,84 @@
 ---
 title: "Configuration"
-description: "Environment variables for Strix"
+description: "Environment variables and config file for LyraShield Engine"
 ---
 
-Configure Strix using environment variables or a config file.
+Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and rejects `chatgpt/` subscription-backed models before sandbox setup.
 
-## LLM Configuration
+<Warning>
+Only approved GPT-5.6 Terra or Luna deployments are accepted. Anthropic, Bedrock, Vertex, OpenRouter, Novita, local models, Perplexity, Parallel, and ChatGPT subscription-backed models are unsupported and rejected or outside the production contract.
+</Warning>
 
-<ParamField path="STRIX_LLM" type="string" required>
-  Model name in LiteLLM format (e.g., `openai/gpt-5.4`, `anthropic/claude-sonnet-4-6`).
+## LLM configuration
+
+<ParamField path="LYRASHIELD_LLM" type="string" required>
+  Primary model in LiteLLM format. Must identify a GPT-5.6 Terra or Luna deployment (e.g. `openai/gpt-5.6-luna`, `azure/gpt-5.6-terra`). Alias of `STRIX_LLM`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">
+  Bounded specialist tier model for Deep scans. The Terra/medium root owns coordination and cross-file judgment; Luna/medium child specialists handle focused tasks. Alias of `STRIX_DELEGATE_LLM`.
 </ParamField>
 
 <ParamField path="LLM_API_KEY" type="string">
-  API key for your LLM provider. Not required for local models or cloud provider auth (Vertex AI, AWS Bedrock).
+  API key for the LLM provider. Also accepted: `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_AI_API_KEY`. Not required when the approved endpoint supplies authentication by another controlled mechanism.
 </ParamField>
 
 <ParamField path="LLM_API_BASE" type="string">
-  Custom API base URL. Also accepts `OPENAI_API_BASE`, `LITELLM_BASE_URL`, or `OLLAMA_API_BASE`.
+  Custom API base URL. Also accepted: `OPENAI_API_BASE`, `OPENAI_BASE_URL`, `LITELLM_BASE_URL`, `OLLAMA_API_BASE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_BASE`, `AZURE_AI_API_BASE`. Azure AI Foundry endpoints are normalized to their `/openai/v1/` base.
+</ParamField>
+
+<ParamField path="LLM_API_VERSION" type="string">
+  Azure API version. Also accepted: `AZURE_API_VERSION`, `AZURE_OPENAI_API_VERSION`.
 </ParamField>
 
 <ParamField path="LLM_EXTRA_HEADERS" type="string">
-  Extra HTTP headers sent on every LLM request, as a JSON object (e.g.
-  `{"X-Feature-Key":"value","X-Tenant":"acme"}`). Useful for OpenAI-compatible
-  gateways that require attribution or routing headers in addition to the bearer
-  token. The bearer token itself still comes from `LLM_API_KEY`. Applies to both
-  the LiteLLM and native OpenAI routing paths.
+  Extra HTTP headers sent on every LLM request, as a JSON object (e.g. `{"X-Feature-Key":"value","X-Tenant":"acme"}`). Useful for OpenAI-compatible gateways that require attribution or routing headers in addition to the bearer token. The bearer token still comes from `LLM_API_KEY`. Alias: `LYRASHIELD_EXTRA_HEADERS`. Applies to both the LiteLLM and native OpenAI routing paths.
 </ParamField>
 
 <ParamField path="LLM_TIMEOUT" default="300" type="integer">
-  Request timeout in seconds for LLM calls.
+  Request timeout in seconds for LLM calls. Alias: `LYRASHIELD_LLM_TIMEOUT`.
 </ParamField>
 
-<ParamField path="STRIX_LLM_MAX_RETRIES" default="5" type="integer">
-  Maximum number of retries for LLM API calls on transient failures.
+<ParamField path="LYRASHIELD_REASONING_EFFORT" default="medium" type="string">
+  Control thinking effort for reasoning models. Valid values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The application worker owns reasoning selection in production; use this only for operator-controlled local execution. Alias of `STRIX_REASONING_EFFORT`.
 </ParamField>
 
-<ParamField path="STRIX_REASONING_EFFORT" default="high" type="string">
-  Control thinking effort for reasoning models. Valid values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Defaults to `medium` for quick scan mode.
+<ParamField path="LYRASHIELD_DELEGATE_REASONING_EFFORT" default="medium" type="string">
+  Reasoning effort for the bounded specialist tier. Same valid values as above. Alias of `STRIX_DELEGATE_REASONING_EFFORT`.
 </ParamField>
 
-<ParamField path="STRIX_MEMORY_COMPRESSOR_TIMEOUT" default="30" type="integer">
-  Timeout in seconds for memory compression operations (context summarization).
+<ParamField path="LYRASHIELD_PROMPT_CACHE" default="true" type="boolean">
+  Enable implicit prompt caching. Defaults to on. Alias of `STRIX_PROMPT_CACHE`.
 </ParamField>
 
-### Dedicated deduplication model
+<ParamField path="LLM_DISABLE_STREAMING" default="false" type="boolean">
+  Disable streaming on LLM calls. Alias: `LYRASHIELD_DISABLE_STREAMING`.
+</ParamField>
 
-Finding deduplication is a cheap, structured classification task. By default it
-runs on the main model, but you can route it to a smaller/cheaper model without
-affecting the agents that do the actual testing.
+<ParamField path="LYRASHIELD_FORCE_REQUIRED_TOOL_CHOICE" default="false" type="boolean">
+  Force required tool choice on model requests. Alias of `STRIX_FORCE_REQUIRED_TOOL_CHOICE`.
+</ParamField>
 
-<ParamField path="STRIX_DEDUPE_MODEL" type="string">
-  Model used to judge whether a candidate finding duplicates an existing report.
-  Falls back to `STRIX_LLM` when unset.
+<ParamField path="LYRASHIELD_MAX_OUTPUT_TOKENS" type="integer">
+  Hard cap on tokens generated per request. Unset keeps the per-scan-mode default chosen by the runner; when set it replaces that default for every agent (delegates stay separately clamped). Also tightens the pre-request budget reservation. Alias of `STRIX_MAX_OUTPUT_TOKENS`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_MAX_INPUT_TOKENS" type="integer">
+  Ceiling that history compaction keeps a request's input under. This is not a hard reject: exceeding it compacts older history rather than failing the request. Clamped below the GPT-5.6 long-context boundary, above which input is billed at 2x — the clamp is what stops this knob from raising cost. Alias of `STRIX_MAX_INPUT_TOKENS`.
+</ParamField>
+
+### Programmatic tool calling (opt-in gate)
+
+<ParamField path="LYRASHIELD_PROGRAMMATIC_TOOL_CALLING" type="string">
+  Leave unset unless the capability gate succeeds against the exact deployment. The configured Azure AI Foundry GPT-5.6 endpoint supports baseline Responses requests and `previous_response_id`, but rejects the Responses `programmatic_tool_calling` tool type. Use direct JSON function tools in production. Set to `1` only after `uv run lyrashield provider-contract --require-programmatic-tool-calling` passes; set to `0` to force it off.
+</ParamField>
+
+## Dedicated deduplication model
+
+Finding deduplication is a cheap, structured classification task. By default it runs on the main model, but you can route it to a smaller/cheaper model without affecting the agents that do the actual testing.
+
+<ParamField path="LYRASHIELD_DEDUPE_MODEL" type="string">
+  Model used to judge whether a candidate finding duplicates an existing report. Falls back to `LYRASHIELD_LLM` when unset. Alias of `STRIX_DEDUPE_MODEL`.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_API_KEY" type="string">
@@ -59,111 +86,140 @@ affecting the agents that do the actual testing.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_API_BASE" type="string">
-  Optional custom API base URL for the deduplication model. Use when the dedupe
-  model runs on a different endpoint than the main model.
+  Optional custom API base URL for the deduplication model. Use when the dedupe model runs on a different endpoint than the main model.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_EXTRA_HEADERS" type="string">
-  Optional JSON object of extra HTTP headers sent on every deduplication-model
-  request, e.g. `{"X-Feature-Key":"value"}`. A dedicated dedupe model never
-  inherits `LLM_EXTRA_HEADERS`; set this when its endpoint needs custom headers.
+  Optional JSON object of extra HTTP headers sent on every deduplication-model request, e.g. `{"X-Feature-Key":"value"}`. A dedicated dedupe model never inherits `LLM_EXTRA_HEADERS`; set this when its endpoint needs custom headers.
 </ParamField>
 
-<ParamField path="STRIX_DEDUPE_REASONING_EFFORT" type="string">
-  Reasoning effort for the deduplication model. Defaults to the model's own
-  baseline when unset.
+<ParamField path="LYRASHIELD_DEDUPE_REASONING_EFFORT" type="string">
+  Reasoning effort for the deduplication model. Defaults to the model's own baseline when unset. Same valid values as `LYRASHIELD_REASONING_EFFORT`. Alias of `STRIX_DEDUPE_REASONING_EFFORT`.
 </ParamField>
 
-## Optional Features
+## Context-window management
 
-<ParamField path="PERPLEXITY_API_KEY" type="string">
-  API key for Perplexity AI. Enables real-time web search during scans for OSINT and vulnerability research.
+<ParamField path="LYRASHIELD_CONTEXT_AUTO_COMPACT" default="true" type="boolean">
+  Enable automatic history compaction. Alias of `STRIX_CONTEXT_AUTO_COMPACT`.
 </ParamField>
 
-<ParamField path="STRIX_TELEMETRY" default="1" type="string">
-  Telemetry toggle. Set to `0`, `false`, `no`, or `off` to disable telemetry (PostHog, Scarf, OTEL).
+<ParamField path="LYRASHIELD_CONTEXT_BUFFER_TOKENS" default="20000" type="integer">
+  Buffer tokens retained during compaction. Alias of `STRIX_CONTEXT_BUFFER_TOKENS`.
 </ParamField>
 
-<ParamField path="TRACELOOP_BASE_URL" type="string">
-  OTLP/Traceloop base URL for remote OpenTelemetry export. If unset, Strix keeps traces local only.
+<ParamField path="LYRASHIELD_CONTEXT_KEEP_TOKENS" default="8000" type="integer">
+  Tokens kept verbatim at the head of compacted history. Alias of `STRIX_CONTEXT_KEEP_TOKENS`.
 </ParamField>
 
-<ParamField path="TRACELOOP_API_KEY" type="string">
-  API key used for remote trace export. Remote export is enabled only when both `TRACELOOP_BASE_URL` and `TRACELOOP_API_KEY` are set.
+<ParamField path="LYRASHIELD_CONTEXT_FALLBACK_TOKENS" default="200000" type="integer">
+  Fallback context-window size when the model's reported window is unavailable. Alias of `STRIX_CONTEXT_FALLBACK_TOKENS`.
 </ParamField>
 
-<ParamField path="TRACELOOP_HEADERS" type="string">
-  Optional custom OTEL headers (JSON object or `key=value,key2=value2`). Useful for Langfuse or custom/self-hosted OTLP gateways.
+<ParamField path="LYRASHIELD_CONTEXT_SUMMARY_TOKENS" default="4096" type="integer">
+  Maximum tokens for a compaction summary. Alias of `STRIX_CONTEXT_SUMMARY_TOKENS`.
 </ParamField>
 
-When remote OTEL vars are not set, Strix still writes complete run telemetry locally to:
+<ParamField path="LYRASHIELD_TOOL_OUTPUT_MAX_TOKENS" default="8000" type="integer">
+  Per-tool-output token cap. Alias of `STRIX_TOOL_OUTPUT_MAX_TOKENS`.
+</ParamField>
 
-```bash
-strix_runs/<run_name>/events.jsonl
-```
+<ParamField path="LYRASHIELD_TOOL_OUTPUT_MAX_LINES" default="2000" type="integer">
+  Per-tool-output line cap. Alias of `STRIX_TOOL_OUTPUT_MAX_LINES`.
+</ParamField>
 
-When remote vars are set, Strix dual-writes telemetry to both local JSONL and the remote OTEL endpoint.
+<ParamField path="LYRASHIELD_TOOL_OUTPUT_MAX_BYTES" default="51200" type="integer">
+  Per-tool-output byte cap (floor above the truncation-notice size so a preview always fits). Alias of `STRIX_TOOL_OUTPUT_MAX_BYTES`.
+</ParamField>
 
-## Docker Configuration
+## Runtime and sandbox
 
-<ParamField path="STRIX_IMAGE" default="ghcr.io/usestrix/strix-sandbox:1.0.0" type="string">
-  Docker image to use for the sandbox container.
+<ParamField path="LYRASHIELD_IMAGE" default="strix-sandbox:dev" type="string">
+  Docker image to use for the sandbox container. Alias of `STRIX_IMAGE`. Combine with `STRIX_IMAGE_DIGEST` for a pinned, auditable deployment.
+</ParamField>
+
+<ParamField path="LYRASHIELD_RUNTIME_BACKEND" default="docker" type="string">
+  Runtime backend for the sandbox environment. Alias of `STRIX_RUNTIME_BACKEND`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_MAX_LOCAL_COPY_MB" default="1024" type="integer">
+  Maximum size (in MB) of a local directory target that the engine will copy into the sandbox file-by-file. Larger targets exit early with a suggestion to use `--mount` instead. Set to `0` to disable the check. Alias of `STRIX_MAX_LOCAL_COPY_MB`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_MAX_CONTEXT_IMAGES" default="3" type="integer">
+  Max screenshot/image tool outputs kept live per agent context (`0` = none). Alias of `STRIX_MAX_CONTEXT_IMAGES`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_SERVER_CONVERSATION" default="false" type="boolean">
+  Use OpenAI server-managed conversations (`OpenAIConversationsSession`) instead of the local `SQLiteSession`. Requires an endpoint that supports the conversations API and is off by default until endpoint capability is proven. Alias of `STRIX_SERVER_CONVERSATION`.
 </ParamField>
 
 <ParamField path="DOCKER_HOST" type="string">
   Docker daemon socket path. Use for remote Docker hosts or custom configurations.
 </ParamField>
 
-<ParamField path="STRIX_RUNTIME_BACKEND" default="docker" type="string">
-  Runtime backend for the sandbox environment.
+### Sandbox capabilities and image pinning
+
+The engine starts the sandbox with `NET_ADMIN` and `NET_RAW` capabilities so tools such as `nmap` can perform raw-socket work. Drop them when not needed.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES` | unset | Set to `1`/`true`/`yes` to omit `NET_ADMIN`/`NET_RAW` from new containers. |
+| `STRIX_IMAGE_DIGEST` | unset | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |
+| `STRIX_SANDBOX_ALLOW_HOST_GATEWAY` | unset | Opt-in `host.docker.internal` access. Do not enable unless an explicitly authorized local workflow requires it. |
+
+## Telemetry
+
+<ParamField path="LYRASHIELD_TELEMETRY" default="false" type="boolean">
+  Telemetry toggle. The `lyrashield` adapter forces `STRIX_TELEMETRY=0`, so telemetry is off in production regardless of this setting. The inherited PostHog and Scarf clients are disabled; no remote analytics are sent. Alias of `STRIX_TELEMETRY`.
 </ParamField>
 
-<ParamField path="STRIX_MAX_LOCAL_COPY_MB" default="1024" type="integer">
-  Maximum size (in MB) of a local directory target that Strix will copy into the sandbox file-by-file. Larger targets exit early with a suggestion to use `--mount` instead. Set to `0` to disable the check.
+## Viewer
+
+<ParamField path="LYRASHIELD_APP_URL" default="https://app.strix.ai" type="string">
+  Base URL of the relay the local viewer proxies to for email verification and encrypted report delivery. The browser never talks to the relay directly; the local server is the only caller. Alias of `STRIX_APP_URL`.
 </ParamField>
 
-## Sandbox Configuration
+## Config file
 
-<ParamField path="STRIX_SANDBOX_EXECUTION_TIMEOUT" default="120" type="integer">
-  Maximum execution time in seconds for sandbox operations.
-</ParamField>
-
-<ParamField path="STRIX_SANDBOX_CONNECT_TIMEOUT" default="10" type="integer">
-  Timeout in seconds for connecting to the sandbox container.
-</ParamField>
-
-## Config File
-
-Strix stores configuration in `~/.strix/cli-config.json`. You can also specify a custom config file:
+The engine stores configuration in `~/.strix/cli-config.json`. Specify a custom config file with `--config`:
 
 ```bash
-strix --target ./app --config /path/to/config.json
+uv run lyrashield --target ./app --config /path/to/config.json
 ```
+
+Configuration is re-validated after the config file is applied because `LYRASHIELD_PRODUCT_BOUNDARY` is set by the adapter — a `--config` that swaps in an unsupported model is rejected.
 
 **Config file format:**
 
 ```json
 {
   "env": {
-    "STRIX_LLM": "openai/gpt-5.4",
+    "LYRASHIELD_LLM": "openai/gpt-5.6-luna",
     "LLM_API_KEY": "sk-...",
-    "STRIX_REASONING_EFFORT": "high"
+    "LYRASHIELD_REASONING_EFFORT": "medium"
   }
 }
 ```
 
-## Example Setup
+## Example setup
 
 ```bash
-# Required
-export STRIX_LLM="openai/gpt-5.4"
-export LLM_API_KEY="sk-..."
+# Required: approved GPT-5.6 Terra or Luna deployment
+export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+export LLM_API_KEY="<credential>"
+export LLM_API_BASE="https://<approved-endpoint>"
 
-# Optional: Enable web search
-export PERPLEXITY_API_KEY="pplx-..."
+# Optional: Deep scans use Terra to coordinate, Luna for focused specialists
+export LYRASHIELD_DELEGATE_LLM="openai/gpt-5.6-luna"
 
-# Optional: Custom timeouts
+# Optional: operator-controlled local execution only (worker owns this in production)
+export LYRASHIELD_REASONING_EFFORT="medium"
+
+# Optional: token caps (see field docs above for behavior)
+export LYRASHIELD_MAX_OUTPUT_TOKENS=4096
+export LYRASHIELD_MAX_INPUT_TOKENS=64000
+
+# Optional: custom timeouts / extra headers
 export LLM_TIMEOUT="600"
-export STRIX_SANDBOX_EXECUTION_TIMEOUT="300"
-
+export LLM_EXTRA_HEADERS='{"X-Tenant":"acme"}'
 ```

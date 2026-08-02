@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import shutil
 from pathlib import Path
@@ -27,6 +29,7 @@ _CONTAINER_CAIDO_PORT = 48080
 
 
 _SESSION_CACHE: dict[str, dict[str, Any]] = {}
+_CACHE_LOCK = asyncio.Lock()
 
 # Manifest root inside the container; entry keys hang off this path.
 _WORKSPACE_ROOT = "/workspace"
@@ -147,10 +150,11 @@ async def create_or_reuse(
     ``/workspace/<workspace_subdir>`` inside the container — copied in, or
     bind-mounted read-only when the entry is flagged ``mount``.
     """
-    cached = _SESSION_CACHE.get(scan_id)
-    if cached is not None:
-        logger.info("Reusing existing sandbox session for scan %s", scan_id)
-        return cached
+    async with _CACHE_LOCK:
+        cached = _SESSION_CACHE.get(scan_id)
+        if cached is not None:
+            logger.info("Reusing existing sandbox session for scan %s", scan_id)
+            return cached
 
     entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(local_sources)
 
@@ -175,6 +179,9 @@ async def create_or_reuse(
         backend_name,
         image,
     )
+    client: Any | None = None
+    session: Any | None = None
+    caido_client: Any | None = None
     try:
         client, session = await backend(
             image=image,
@@ -182,32 +189,47 @@ async def create_or_reuse(
             exposed_ports=(_CONTAINER_CAIDO_PORT,),
             bind_mounts=bind_mounts,
         )
+
+        caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
+        scheme = "https" if caido_endpoint.tls else "http"
+        sandbox_host, sandbox_port = resolve_sandbox_endpoint(
+            caido_endpoint.host,
+            caido_endpoint.port,
+            container_ip=get_sandbox_container_ip(client, session),
+        )
+        host_caido_url = f"{scheme}://{sandbox_host}:{sandbox_port}"
+        logger.debug("Caido host endpoint resolved: %s", host_caido_url)
+
+        caido_client = await bootstrap_caido(
+            session,
+            scan_id=scan_id,
+            host_url=host_caido_url,
+            container_url=container_caido_url,
+        )
+    except Exception:
+        if caido_client is not None:
+            with contextlib.suppress(Exception):
+                await caido_client.aclose()
+        if client is not None and session is not None:
+            with contextlib.suppress(Exception):
+                await client.delete(session)
+        if client is not None:
+            with contextlib.suppress(Exception):
+                docker_client = getattr(client, "docker_client", None)
+                if docker_client is not None:
+                    docker_client.close()
+        raise
     finally:
         for staged in staged_dirs:
             shutil.rmtree(staged, ignore_errors=True)
-
-    caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
-    scheme = "https" if caido_endpoint.tls else "http"
-    sandbox_host, sandbox_port = resolve_sandbox_endpoint(
-        caido_endpoint.host,
-        caido_endpoint.port,
-        container_ip=get_sandbox_container_ip(client, session),
-    )
-    host_caido_url = f"{scheme}://{sandbox_host}:{sandbox_port}"
-    logger.debug("Caido host endpoint resolved: %s", host_caido_url)
-
-    caido_client = await bootstrap_caido(
-        session,
-        host_url=host_caido_url,
-        container_url=container_caido_url,
-    )
 
     bundle = {
         "client": client,
         "session": session,
         "caido_client": caido_client,
     }
-    _SESSION_CACHE[scan_id] = bundle
+    async with _CACHE_LOCK:
+        _SESSION_CACHE[scan_id] = bundle
     logger.info("Sandbox session for scan %s ready and cached", scan_id)
     return bundle
 
@@ -220,7 +242,8 @@ async def cleanup(scan_id: str) -> None:
     scan from starting; the worst case is a stranded container that
     Docker's normal reaping will catch on next ``docker prune``.
     """
-    bundle = _SESSION_CACHE.pop(scan_id, None)
+    async with _CACHE_LOCK:
+        bundle = _SESSION_CACHE.pop(scan_id, None)
     if bundle is None:
         logger.debug("cleanup(%s): no cached session", scan_id)
         return

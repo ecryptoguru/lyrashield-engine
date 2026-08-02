@@ -27,6 +27,9 @@ from strix.llm.context_budget import context_window, count_tokens, output_limit
 if TYPE_CHECKING:
     from agents.items import ModelResponse
     from agents.memory import Session
+    from agents.models.interface import ModelProvider
+
+    from strix.config.settings import Settings
 
 
 logger = logging.getLogger(__name__)
@@ -164,7 +167,11 @@ def _serialize_item(item: Any) -> str:
         text = output if isinstance(output, str) else _content_text(output)
         return f"[tool_result] {_truncate(text, _TOOL_OUTPUT_MAX_CHARS)}"
     if item_type == "reasoning":
-        return ""
+        summary = item.get("summary")
+        text = _content_text(summary) if summary else _content_text(item.get("text"))
+        if text:
+            return f"[reasoning] {_truncate(text, _TOOL_OUTPUT_MAX_CHARS)}"
+        return "[reasoning]"
     if role or item_type == "message":
         return f"[{role or 'assistant'}] {_content_text(item.get('content'))}".strip()
     return ""
@@ -205,6 +212,10 @@ def _select_split(model: str, items: list[Any], keep_tokens: int) -> int:
     open_calls = _open_calls_at(items)
     while split > 0 and open_calls[split] != 0:
         split -= 1
+    # Any leading orphan tool outputs at the split would create an invalid
+    # provider input (an output with no preceding call), so fold them into head.
+    while split < len(items) and _is_tool_output(items[split]):
+        split += 1
     return split
 
 
@@ -233,18 +244,21 @@ def _fit_to_tokens(model: str, text: str, max_tokens: int) -> str:
     return candidate
 
 
-def _summary_output_tokens(model: str) -> int:
+def _summary_output_tokens(model: str, settings: Settings | None = None) -> int:
     """Summary output allowance, capped at the model's own output limit."""
-    return min(load_settings().context.summary_max_tokens, output_limit(model))
+    context = settings.context if settings is not None else load_settings().context
+    return min(context.summary_max_tokens, output_limit(model))
 
 
-def _summary_input_budget(model: str, previous: str | None) -> int:
+def _summary_input_budget(
+    model: str, previous: str | None, settings: Settings | None = None
+) -> int:
     """Token room left for the head after instructions and the summary output."""
     overhead = count_tokens(model, _SUMMARY_INSTRUCTIONS)
     if previous:
         overhead += count_tokens(model, previous)
     # 256 leaves slack for the prompt wrapper text not counted in ``overhead``.
-    room = context_window(model) - _summary_output_tokens(model) - overhead - 256
+    room = context_window(model) - _summary_output_tokens(model, settings=settings) - overhead - 256
     return max(0, room)
 
 
@@ -286,8 +300,19 @@ def _extract_text(response: ModelResponse) -> str:
     return "".join(parts)
 
 
-async def _summarize(model: str, prompt: str, max_tokens: int) -> str | None:
-    llm = load_settings().llm
+async def _summarize(
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    *,
+    model_provider: ModelProvider | None = None,
+    settings: Settings | None = None,
+) -> str | None:
+    if settings is None:
+        settings = load_settings()
+    if model_provider is None:
+        model_provider = StrixProvider()
+    llm = settings.llm
     model_settings = make_model_settings(
         None,
         model_name=model,
@@ -296,21 +321,17 @@ async def _summarize(model: str, prompt: str, max_tokens: int) -> str | None:
         extra_headers=llm.extra_headers,
     ).resolve(ModelSettings(max_tokens=max_tokens))
     try:
-        response = (
-            await StrixProvider()
-            .get_model(model)
-            .get_response(
-                system_instructions=None,
-                input=prompt,
-                model_settings=model_settings,
-                tools=[],
-                output_schema=None,
-                handoffs=[],
-                tracing=ModelTracing.DISABLED,
-                previous_response_id=None,
-                conversation_id=None,
-                prompt=None,
-            )
+        response = await model_provider.get_model(model).get_response(
+            system_instructions=None,
+            input=prompt,
+            model_settings=model_settings,
+            tools=[],
+            output_schema=None,
+            handoffs=[],
+            tracing=ModelTracing.DISABLED,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
         )
     except Exception:
         logger.exception("compaction summary call failed for model %s", model)
@@ -329,13 +350,17 @@ async def maybe_compact(
     instructions: str = "",
     tools_text: str = "",
     force: bool = False,
+    model_provider: ModelProvider | None = None,
+    settings: Settings | None = None,
 ) -> bool:
     """Compact ``session`` if it is near the model's context window.
 
     Returns ``True`` when the session was rewritten. ``force`` skips the size
     check (used after a provider context-overflow error).
     """
-    context = load_settings().context
+    if settings is None:
+        settings = load_settings()
+    context = settings.context
     if not context.auto_compact and not force:
         return False
 
@@ -354,7 +379,7 @@ async def maybe_compact(
     split = _select_split(model, items, context.keep_tokens)
     head, recent = items[:split], items[split:]
     previous = _previous_summary(head)
-    input_budget = _summary_input_budget(model, previous)
+    input_budget = _summary_input_budget(model, previous, settings=settings)
     if not head or input_budget <= 0:
         # Nothing to summarise, or no room for even the summary request itself.
         if head:
@@ -367,7 +392,9 @@ async def maybe_compact(
     summary = await _summarize(
         model,
         _build_summary_prompt(serialized_head, previous),
-        _summary_output_tokens(model),
+        _summary_output_tokens(model, settings=settings),
+        model_provider=model_provider,
+        settings=settings,
     )
     if summary is None:
         return False

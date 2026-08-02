@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.lifecycle import RunHooks
 
 from strix.report.state import get_global_report_state
+from strix.tools.output_store import _take_prefix, _take_suffix
 
 
 if TYPE_CHECKING:
@@ -234,12 +235,11 @@ def _usage_cost_upper_bound(model: str, usage: Any) -> float:
 
 def _compact_item(item: Any) -> dict[str, str]:
     serialized = json.dumps(item, default=str, ensure_ascii=False, separators=(",", ":"))
-    encoded = serialized.encode("utf-8")
-    if len(encoded) > _COMPACTED_ITEM_MAX_BYTES:
+    if len(serialized.encode("utf-8")) > _COMPACTED_ITEM_MAX_BYTES:
         head_size = (_COMPACTED_ITEM_MAX_BYTES * 2) // 3
         tail_size = _COMPACTED_ITEM_MAX_BYTES - head_size
-        head = encoded[:head_size].decode("utf-8", errors="ignore")
-        tail = encoded[-tail_size:].decode("utf-8", errors="ignore")
+        head = _take_prefix(serialized, head_size)
+        tail = _take_suffix(serialized, tail_size)
         serialized = f"{head}\n...[older item compacted]...\n{tail}"
     return {
         "role": "user",
