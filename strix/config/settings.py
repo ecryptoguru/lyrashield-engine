@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+import os
+from typing import TYPE_CHECKING, Any, Literal
+
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,6 +34,50 @@ _BASE_CONFIG = SettingsConfigDict(
 # to the bare upstream ``strix`` dev CLI check for it. Lives here so the adapter
 # and the CLI share one definition without ``strix`` importing the adapter.
 PRODUCT_BOUNDARY_ENV_VAR = "LYRASHIELD_PRODUCT_BOUNDARY"
+
+
+def is_lyrashield_product() -> bool:
+    """Return whether the process is running behind the LyraShield product boundary."""
+    return os.environ.get(PRODUCT_BOUNDARY_ENV_VAR, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def is_chatgpt_subscription_allowed(environ: Mapping[str, str] | None = None) -> bool:
+    """Return whether the ChatGPT subscription path is enabled.
+
+    Enabled by default. Set ``LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0``
+    (or ``false`` / ``no`` / ``off``) to disable it.
+    """
+    env = environ or os.environ
+
+    def _lookup(*names: str) -> str | None:
+        for name in names:
+            name_upper = name.upper()
+            for key, value in env.items():
+                if key.upper() == name_upper:
+                    return value
+        return None
+
+    raw = (
+        (
+            _lookup(
+                "LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION",
+                "STRIX_ALLOW_CHATGPT_SUBSCRIPTION",
+            )
+            or "1"
+        )
+        .strip()
+        .lower()
+    )
+    return raw not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 class LlmSettings(BaseSettings):
@@ -246,6 +295,93 @@ class ViewerSettings(BaseSettings):
     )
 
 
+class WebSearchSettings(BaseSettings):
+    """Optional live web search via Parallel Search for real-time OSINT."""
+
+    model_config = _BASE_CONFIG
+
+    enabled: bool = Field(
+        default=False,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_ENABLED"),
+    )
+    provider: Literal["parallel"] = Field(
+        default="parallel",
+        validation_alias=_lyra("STRIX_WEB_SEARCH_PROVIDER"),
+    )
+    api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "LYRASHIELD_WEB_SEARCH_API_KEY",
+            "PARALLEL_API_KEY",
+            "STRIX_WEB_SEARCH_API_KEY",
+        ),
+    )
+    api_base: str | None = Field(
+        default=None,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_API_BASE"),
+    )
+    mode: Literal["turbo", "basic", "advanced"] = Field(
+        default="turbo",
+        validation_alias=_lyra("STRIX_WEB_SEARCH_MODE"),
+    )
+    max_results: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_MAX_RESULTS"),
+    )
+    max_chars_total: int = Field(
+        default=4000,
+        ge=1000,
+        le=20000,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_MAX_CHARS_TOTAL"),
+    )
+    max_calls_per_scan: int = Field(
+        default=50,
+        ge=0,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_MAX_CALLS_PER_SCAN"),
+    )
+    budget_usd: float = Field(
+        default=1.0,
+        ge=0.0,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_BUDGET_USD"),
+    )
+    turbo_cost_per_call: float = Field(
+        default=0.001,
+        ge=0.0,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_TURBO_COST"),
+    )
+    basic_cost_per_call: float = Field(
+        default=0.005,
+        ge=0.0,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_BASIC_COST"),
+    )
+    advanced_cost_per_call: float = Field(
+        default=0.005,
+        ge=0.0,
+        validation_alias=_lyra("STRIX_WEB_SEARCH_ADVANCED_COST"),
+    )
+
+    @field_validator("api_base", "api_key", mode="before")
+    @classmethod
+    def _empty_env_to_none(cls, value: Any) -> Any:
+        return None if value == "" else value
+
+
+class ProductSettings(BaseSettings):
+    """LyraShield product-behavior switches with no upstream equivalent."""
+
+    model_config = _BASE_CONFIG
+
+    allow_chatgpt_subscription: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION",
+            "STRIX_ALLOW_CHATGPT_SUBSCRIPTION",
+        ),
+    )
+
+
 class Settings(BaseSettings):
     model_config = _BASE_CONFIG
 
@@ -255,3 +391,5 @@ class Settings(BaseSettings):
     context: ContextSettings = Field(default_factory=ContextSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     viewer: ViewerSettings = Field(default_factory=ViewerSettings)
+    product: ProductSettings = Field(default_factory=ProductSettings)
+    web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)

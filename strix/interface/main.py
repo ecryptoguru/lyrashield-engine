@@ -31,11 +31,15 @@ from strix.config.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     configure_sdk_model_defaults,
-    is_gpt56_model,
+    is_gpt56_supported_provider,
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
 )
-from strix.config.settings import Settings
+from strix.config.settings import (
+    Settings,
+    is_chatgpt_subscription_allowed,
+    is_lyrashield_product,
+)
 from strix.core.inputs import DEFAULT_MAX_TURNS, make_model_settings
 from strix.core.paths import run_dir_for, runs_base_dir, runtime_state_dir
 from strix.interface.cli import run_cli
@@ -92,6 +96,9 @@ def _reject_resolved_subscription_models(settings: Settings, console: Console) -
     at the environment level, but `--config` is applied afterwards. A
     subscription route bypasses the Terra/Luna gate and zeroes the metered cost
     ledger, so the worker would bill nothing for a real scan.
+
+    When ``LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION`` is set, the main LLM may use
+    a ChatGPT subscription; delegate and dedupe models must still be Terra/Luna.
     """
     configured = {
         "STRIX_LLM": settings.llm.model,
@@ -99,13 +106,16 @@ def _reject_resolved_subscription_models(settings: Settings, console: Console) -
         "STRIX_DEDUPE_MODEL": getattr(settings, "dedupe", None) and settings.dedupe.model,
     }
     for name, value in configured.items():
-        if codex.subscription_model(value):
-            console.print(
-                f"[bold red]{name}={value} routes through a ChatGPT subscription, "
-                "which is not supported for LyraShield scans.[/] Configure a GPT-5.6 "
-                "Terra or Luna API deployment instead."
-            )
-            sys.exit(1)
+        if not codex.subscription_model(value):
+            continue
+        if name == "STRIX_LLM" and settings.product.allow_chatgpt_subscription:
+            continue
+        console.print(
+            f"[bold red]{name}={value} routes through a ChatGPT subscription, "
+            "which is not supported for LyraShield scans.[/] Configure a GPT-5.6 "
+            "Terra or Luna API deployment instead."
+        )
+        sys.exit(1)
 
 
 def validate_environment() -> None:
@@ -124,10 +134,18 @@ def validate_environment() -> None:
     _reject_resolved_subscription_models(settings, console)
 
     if codex.subscription_model(settings.llm.model):
+        if not settings.product.allow_chatgpt_subscription:
+            console.print(
+                f"[bold red]STRIX_LLM={settings.llm.model} routes through a ChatGPT "
+                "subscription, which is not supported for LyraShield scans.[/] "
+                "Set LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=1 or configure a GPT-5.6 "
+                "Terra or Luna API deployment instead."
+            )
+            sys.exit(1)
         if not codex.is_authenticated():
             console.print(
                 f"[red]STRIX_LLM={settings.llm.model} uses your ChatGPT subscription, "
-                "but you're not signed in.[/] Run [cyan]strix auth login chatgpt[/] first."
+                "but you're not signed in.[/] Run [cyan]lyrashield auth login chatgpt[/] first."
             )
             sys.exit(1)
         logger.info("Environment OK (ChatGPT subscription)")
@@ -136,12 +154,15 @@ def validate_environment() -> None:
     if not settings.llm.model:
         missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
     elif (
-        not is_gpt56_model(settings.llm.model)
-        or (settings.llm.delegate_model and not is_gpt56_model(settings.llm.delegate_model))
-        or (settings.dedupe.model and not is_gpt56_model(settings.dedupe.model))
+        not is_gpt56_supported_provider(settings.llm.model)
+        or (
+            settings.llm.delegate_model
+            and not is_gpt56_supported_provider(settings.llm.delegate_model)
+        )
+        or (settings.dedupe.model and not is_gpt56_supported_provider(settings.dedupe.model))
     ):
         error_text = Text(
-            "LyraShield scans require a GPT-5.6 Terra or Luna deployment",
+            "LyraShield scans require a GPT-5.6 Terra or Luna deployment from a supported provider",
             style="bold red",
         )
         console.print("\n")
@@ -1174,8 +1195,14 @@ def main() -> None:
         return
 
     # `strix auth …` manages model-subscription sign-in and exits; it needs no
-    # target, Docker, or scan setup.
+    # target, Docker, or scan setup. LyraShield disables this by default, but
+    # enables it when `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION` is set.
     if len(sys.argv) > 1 and sys.argv[1] == "auth":
+        if is_lyrashield_product() and not is_chatgpt_subscription_allowed():
+            Console().print(
+                "[bold red]LyraShield does not support ChatGPT subscription authentication.[/]"
+            )
+            sys.exit(1)
         from strix.interface.auth_cli import run_auth
 
         sys.exit(run_auth(sys.argv[2:]))

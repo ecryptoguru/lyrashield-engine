@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 from . import (
     agents_graph_renderer,
     filesystem_renderer,
@@ -10,6 +11,7 @@ from . import (
     shell_renderer,
     thinking_renderer,
     todo_renderer,
+    web_search_renderer,
 )
 from .registry import render_tool_widget
 
@@ -27,4 +29,5 @@ __all__ = [
     "shell_renderer",
     "thinking_renderer",
     "todo_renderer",
+    "web_search_renderer",
 ]

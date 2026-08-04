@@ -37,7 +37,7 @@ The pinned upstream tree remains the substrate for generic sandbox/session mecha
 
 ## Supported execution
 
-Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, rejects ChatGPT subscription-backed models before sandbox setup, and always disables inherited telemetry.
+Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, allows GPT-5.6 Terra or Luna deployments through the LiteLLM/Strix-supported providers that carry them (currently OpenAI, Azure/Azure AI, and Bedrock Mantle), supports ChatGPT subscription-backed models by default, and always disables inherited telemetry.
 
 Requirements:
 
@@ -62,7 +62,9 @@ export LLM_API_BASE="https://<approved-endpoint>"
 uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
 ```
 
-Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Terra or Luna. Anthropic, Bedrock, Vertex, OpenRouter, local models, Perplexity, and Parallel are not supported execution paths.
+Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Terra or Luna.
+
+Supported execution paths are GPT-5.6 Terra or Luna deployments from the LiteLLM/Strix providers that currently carry them: `openai`, `azure`, `azure_ai`, and `bedrock_mantle`, e.g. `openai/gpt-5.6-luna`, `azure/eu/gpt-5.6-terra`, `azure_ai/gpt-5.6-luna`, or `bedrock_mantle/openai.gpt-5.6-luna`. ChatGPT subscription models are also supported by default: run `lyrashield auth login chatgpt` and set `LYRASHIELD_LLM=chatgpt/<model>`. Subscription runs are tracked with `auth_mode: "subscription"` and `llm_usage.cost: 0` in `run.json`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported until LiteLLM's cost map lists `gpt-5.6` for their provider markers.
 
 ### Provider capability gate
 

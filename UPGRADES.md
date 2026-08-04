@@ -8,9 +8,16 @@ syncing releases.
 
 ## LyraShield-owned contract
 
-- GPT-5.6 Terra and Luna acceptance (Sol retired in PR #22); OpenAI/Azure
-  API-key credential routing; no Perplexity, Parallel, non-OpenAI, or
-  ChatGPT-subscription model path at the product boundary.
+- GPT-5.6 Terra and Luna acceptance (Sol retired in PR #22); only
+  LiteLLM/Strix-supported providers whose cost map lists `gpt-5.6-*` are allowed
+  (currently OpenAI, Azure/Azure AI, and Bedrock Mantle); OpenAI/Azure remain
+  the primary reference paths; ChatGPT-subscription model path is allowed by
+  default and can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`;
+  no OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, or
+  local/self-hosted endpoint as the main model at the product boundary.
+- Parallel Search is available as an optional, redacted `web_search` agent tool
+  when `LYRASHIELD_WEB_SEARCH_ENABLED=1` and a Parallel API key is configured.
+  It is not an LLM endpoint and does not replace GPT-5.6 Terra/Luna.
 - Context compaction, bounded output and agent count, and concurrent
   pre-request spend reservations.
 - Non-interactive lifecycle, cancellation, cleanup, target-safe errors, and
@@ -21,12 +28,15 @@ syncing releases.
 ## Compatibility patches retained across imports
 
 - `lyrashield_adapter`: compatibility adapter for LyraShield invocation. It
-  forces telemetry off, disables the upstream update check, and rejects
-  `chatgpt/` subscription-backed models (which bypass the Terra/Luna gate and
-  zero out metered cost accounting). It also sets
-  `LYRASHIELD_PRODUCT_BOUNDARY`, which `validate_environment` uses to re-check
-  the resolved model after `--config` is applied; the bare upstream `strix` CLI
-  does not set it and keeps upstream subscription support.
+  forces telemetry off, disables the upstream update check, and supports
+  `chatgpt/` subscription-backed models by default (which bypass the Terra/Luna
+  gate and zero out metered cost accounting). Set
+  `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable the subscription path.
+  Subscription runs are recorded with `auth_mode: "subscription"` and
+  `llm_usage.cost: 0` in `run.json`. It also sets `LYRASHIELD_PRODUCT_BOUNDARY`,
+  which `validate_environment` uses to re-check the resolved model after
+  `--config` is applied; the bare upstream `strix` CLI does not set it and keeps
+  upstream subscription support.
 - Out-of-band budget reservations: metered calls made outside the agent run
   loop (report deduplication) reserve against `max_budget_usd` through
   `ReportUsageHooks.reserve_out_of_band_request`, registered per scan via
@@ -224,3 +234,21 @@ GPT-5.6 Terra/Luna product boundary. No runtime behavior changed.
 - `strix/telemetry/README.md`: rewritten to reflect the forced-off LyraShield
   telemetry boundary (the adapter sets `STRIX_TELEMETRY=0`).
 
+## Parallel Search web_search tool (2026-08-04)
+
+Added an optional, redacted `web_search` agent tool backed by Parallel Search.
+It is not an LLM endpoint and does not alter the GPT-5.6 product boundary.
+
+- `strix/tools/web_search/tool.py`: new tool with redaction, call/budget caps,
+  and `reserve_web_search_call` / `release_web_search_call` hook integration.
+- `strix/config/settings.py`: new `WebSearchSettings` with `LYRASHIELD_*` env
+  aliases and `PARALLEL_API_KEY` fallback.
+- `strix/agents/factory.py`: registers `web_search` in the base tool set.
+- `strix/interface/tui/renderers/web_search_renderer.py`: TUI rendering for
+  search tool events.
+- `strix/core/hooks.py`: `reserve_web_search_call` and `release_web_search_call`
+  on `ReportUsageHooks` for per-call budget reservations.
+- `strix/report/state.py`: records web search cost and usage in `run.json`.
+- `docs/advanced/configuration.mdx` and `docs/llm-providers/overview.mdx`:
+  updated to clarify that Parallel is not an LLM endpoint but may be used as a
+  web search tool when explicitly enabled.

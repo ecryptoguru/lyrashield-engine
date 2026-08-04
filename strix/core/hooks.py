@@ -552,6 +552,42 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             if usage is not None:
                 self._committed_cost_floor += _usage_cost_upper_bound(model, usage)
 
+    async def reserve_web_search_call(
+        self,
+        *,
+        key: str,
+        estimated_cost: float,
+    ) -> None:
+        """Reserve budget for a Parallel Search web_search call.
+
+        Web search is charged per call, not per token, so this bypasses the
+        token-rate math and reserves a fixed cost directly against the scan
+        budget. Callers must pair this with ``release_web_search_call``.
+        """
+        if self._max_budget_usd is None:
+            return
+        if not math.isfinite(estimated_cost) or estimated_cost < 0:
+            estimated_cost = 0.0
+        async with self._reservation_lock:
+            self._reservations.pop(key, None)
+            report_state = get_global_report_state()
+            observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
+            committed = max(observed, self._committed_cost_floor)
+            reserved = sum(self._reservations.values())
+            if committed + reserved + estimated_cost > self._max_budget_usd:
+                raise BudgetExceededError(
+                    f"Next web search would exceed ${self._max_budget_usd:.2f}"
+                )
+            self._reservations[key] = estimated_cost
+
+    async def release_web_search_call(self, *, key: str, actual_cost: float) -> None:
+        """Drop a web search reservation and commit the observed per-call cost."""
+        if not math.isfinite(actual_cost) or actual_cost < 0:
+            actual_cost = 0.0
+        async with self._reservation_lock:
+            self._reservations.pop(key, None)
+            self._committed_cost_floor += actual_cost
+
     @property
     def compaction_trigger_tokens(self) -> int:
         """Input-token threshold above which history is compacted (post-clamp)."""

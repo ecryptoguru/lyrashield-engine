@@ -11,6 +11,7 @@ from strix.config.models import (
     StrixProvider,
     _azure_responses_base_url,
     is_gpt56_model,
+    is_gpt56_supported_provider,
     is_recommended_or_frontier_model,
     request_timeout_extra_args,
     uses_chat_completions_tool_schema,
@@ -20,6 +21,22 @@ from strix.config.settings import LlmSettings, Settings
 
 @pytest.mark.parametrize("model_name", RECOMMENDED_MODEL_NAMES)
 def test_recommended_models_are_accepted(model_name: str) -> None:
+    assert is_recommended_or_frontier_model(model_name)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "openai/gpt-5.6-luna",
+        "azure/eu/gpt-5.6-terra",
+        "azure_ai/gpt-5.6-luna",
+        "bedrock_mantle/openai.gpt-5.6-luna",
+        "chatgpt/gpt-5.6-luna",
+    ],
+)
+def test_gpt56_supported_providers_are_accepted(model_name: str) -> None:
+    assert is_gpt56_model(model_name)
+    assert is_gpt56_supported_provider(model_name)
     assert is_recommended_or_frontier_model(model_name)
 
 
@@ -46,10 +63,18 @@ def test_recommended_models_are_matched_case_insensitively() -> None:
 
 @pytest.mark.parametrize(
     "model_name",
-    ["gpt-5.6-luna", "azure_ai/gpt-5.6-terra", "openai/gpt-5.6-terra", "prod-gpt-5.6-luna"],
+    [
+        "gpt-5.6-luna",
+        "azure_ai/gpt-5.6-terra",
+        "openai/gpt-5.6-terra",
+        "prod-gpt-5.6-luna",
+        "azure/eu/gpt-5.6-luna",
+        "bedrock_mantle/openai.gpt-5.6-luna",
+    ],
 )
 def test_gpt56_deployment_names_are_accepted(model_name: str) -> None:
     assert is_gpt56_model(model_name)
+    assert is_gpt56_supported_provider(model_name)
 
 
 @pytest.mark.parametrize(
@@ -107,6 +132,23 @@ def test_azure_gpt56_routes_through_responses_with_stripped_deployment_name() ->
     assert isinstance(model, OpenAIResponsesModel)
     assert model.model == "gpt-5.6-luna"
     assert str(model._client.base_url) == "https://example.services.ai.azure.com/openai/v1/"
+
+
+def test_azure_multi_segment_name_uses_final_deployment() -> None:
+    """``azure/<region>/<deployment>`` must resolve to just the deployment slug."""
+    settings = Settings(
+        llm=LlmSettings(
+            model="azure/eu/gpt-5.6-terra",
+            api_key="test-key",
+            api_base="https://example.openai.azure.com",
+        )
+    )
+
+    model = StrixProvider(settings=settings).get_model("azure/eu/gpt-5.6-terra")
+
+    assert isinstance(model, OpenAIResponsesModel)
+    assert model.model == "gpt-5.6-terra"
+    assert str(model._client.base_url) == "https://example.openai.azure.com/openai/v1/"
 
 
 def test_azure_gpt56_route_fails_closed_without_endpoint() -> None:
@@ -192,9 +234,27 @@ def test_frontier_model_families_are_accepted(model_name: str) -> None:
         "custom-provider/claude-opus-4-local",
         "xai/grok-4.5",
         "openrouter/x-ai/grok-4",
+        "openrouter/gpt-5.6-luna",
+        "bedrock/gpt-5.6-terra",
+        "vertex_ai/gpt-5.6-luna",
+        "novita/gpt-5.6-luna",
         "mistral/mistral-medium-3-5",
         "mistral/magistral-medium-latest",
     ],
 )
 def test_non_frontier_models_are_rejected(model_name: str) -> None:
     assert not is_recommended_or_frontier_model(model_name)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "openrouter/gpt-5.6-luna",
+        "bedrock/gpt-5.6-terra",
+        "vertex_ai/gpt-5.6-luna",
+        "novita/gpt-5.6-luna",
+    ],
+)
+def test_gpt56_unsupported_providers_are_rejected(model_name: str) -> None:
+    assert is_gpt56_model(model_name)
+    assert not is_gpt56_supported_provider(model_name)

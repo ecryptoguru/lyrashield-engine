@@ -83,7 +83,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["strix", "lyrashield_adapter"]
+packages = ["strix", "lyrashield_adapter", "lyrashield"]
 # The prebuilt viewer bundle under strix/interface/viewer/static/ ships automatically
 # (hatchling includes non-.py files under the package). The Vite SOURCE lives
 # under the package dir too (strix/interface/viewer/frontend/) but must never ship in the wheel.
@@ -248,6 +248,7 @@ ignore = [
 "strix/tools/**/*.py" = [
     "ARG001", # Unused function argument (tools may have unused args for interface consistency)
 ]
+"strix/tools/web_search/tool.py" = ["PLC0415"]
 # Custom Docker subclass duplicates parent body; some imports are for annotations.
 # Backend factories import their backend's deps lazily so deployments
 # that pick a different backend don't need every backend's libs installed.

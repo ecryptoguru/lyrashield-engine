@@ -3,20 +3,22 @@ title: "Configuration"
 description: "Environment variables and config file for LyraShield Engine"
 ---
 
-Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and rejects `chatgpt/` subscription-backed models before sandbox setup.
+Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and only allows GPT-5.6 Terra or Luna deployments from LiteLLM/Strix-supported providers that currently carry them (OpenAI, Azure/Azure AI, and Bedrock Mantle).
 
 <Warning>
-Only approved GPT-5.6 Terra or Luna deployments are accepted. Anthropic, Bedrock, Vertex, OpenRouter, Novita, local models, Perplexity, Parallel, and ChatGPT subscription-backed models are unsupported and rejected or outside the production contract.
+Only approved GPT-5.6 Terra or Luna deployments from supported LiteLLM/Strix providers are accepted as the main model. The current allow-list is OpenAI, Azure/Azure AI, and Bedrock Mantle. ChatGPT subscription-backed models are supported by default; run `lyrashield auth login chatgpt` and use `chatgpt/<model>` for `LYRASHIELD_LLM`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported as LLM endpoints until LiteLLM's cost map lists `gpt-5.6` for their provider markers.
+
+Parallel Search may be used as an optional `web_search` tool when explicitly enabled with `LYRASHIELD_WEB_SEARCH_ENABLED=1` and `PARALLEL_API_KEY` or `LYRASHIELD_WEB_SEARCH_API_KEY`. It is not a model route and never replaces the GPT-5.6 main model.
 </Warning>
 
 ## LLM configuration
 
 <ParamField path="LYRASHIELD_LLM" type="string" required>
-  Primary model in LiteLLM format. Must identify a GPT-5.6 Terra or Luna deployment (e.g. `openai/gpt-5.6-luna`, `azure/gpt-5.6-terra`). Alias of `STRIX_LLM`.
+  Primary model in LiteLLM format. Must identify a GPT-5.6 Terra or Luna deployment from a supported provider: `openai` (e.g. `openai/gpt-5.6-luna`), `azure` or `azure_ai` (e.g. `azure/eu/gpt-5.6-terra`, `azure_ai/gpt-5.6-luna`), `bedrock_mantle` (e.g. `bedrock_mantle/openai.gpt-5.6-luna`), or `chatgpt` with an authenticated subscription (e.g. `chatgpt/gpt-4o`). Alias of `STRIX_LLM`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">
-  Bounded specialist tier model for Deep scans. The Terra/medium root owns coordination and cross-file judgment; Luna/medium child specialists handle focused tasks. Alias of `STRIX_DELEGATE_LLM`.
+  Bounded specialist tier model for Deep scans. The Terra/medium root owns coordination and cross-file judgment; Luna/medium child specialists handle focused tasks. Must identify a GPT-5.6 Terra or Luna deployment. Alias of `STRIX_DELEGATE_LLM`.
 </ParamField>
 
 <ParamField path="LLM_API_KEY" type="string">
@@ -29,6 +31,10 @@ Only approved GPT-5.6 Terra or Luna deployments are accepted. Anthropic, Bedrock
 
 <ParamField path="LLM_API_VERSION" type="string">
   Azure API version. Also accepted: `AZURE_API_VERSION`, `AZURE_OPENAI_API_VERSION`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION" default="true" type="boolean">
+  Controls `chatgpt/<model>` subscription-backed scans. Enabled by default; set to `0`/`false`/`no` to disable. When enabled, `lyrashield auth login chatgpt` is available and the scan is recorded with `auth_mode: "subscription"` and `llm_usage.cost: 0`. Also accepted: `STRIX_ALLOW_CHATGPT_SUBSCRIPTION`.
 </ParamField>
 
 <ParamField path="LLM_EXTRA_HEADERS" type="string">
@@ -95,6 +101,34 @@ Finding deduplication is a cheap, structured classification task. By default it 
 
 <ParamField path="LYRASHIELD_DEDUPE_REASONING_EFFORT" type="string">
   Reasoning effort for the deduplication model. Defaults to the model's own baseline when unset. Same valid values as `LYRASHIELD_REASONING_EFFORT`. Alias of `STRIX_DEDUPE_REASONING_EFFORT`.
+</ParamField>
+
+## Web search (optional)
+
+The optional `web_search` tool queries Parallel Search for real-time public security information. It does not replace the main LLM; it is a research tool available to agents during reconnaissance and validation.
+
+<ParamField path="LYRASHIELD_WEB_SEARCH_ENABLED" default="false" type="boolean">
+  Enable the `web_search` tool. When disabled, agents cannot invoke the tool. Alias of `STRIX_WEB_SEARCH_ENABLED`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_WEB_SEARCH_API_KEY" type="string">
+  Parallel Search API key. Also accepted as `PARALLEL_API_KEY` or `STRIX_WEB_SEARCH_API_KEY`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_WEB_SEARCH_MODE" default="turbo" type="string">
+  Default Parallel Search mode. Valid values: `turbo` (fastest/cheapest), `basic` (deeper context), `advanced` (multi-hop). Alias of `STRIX_WEB_SEARCH_MODE`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_WEB_SEARCH_MAX_RESULTS" default="5" type="integer">
+  Maximum results returned per search. Alias of `STRIX_WEB_SEARCH_MAX_RESULTS`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_WEB_SEARCH_MAX_CALLS_PER_SCAN" default="50" type="integer">
+  Hard cap on `web_search` calls per scan. Set to `0` to disable. Alias of `STRIX_WEB_SEARCH_MAX_CALLS_PER_SCAN`.
+</ParamField>
+
+<ParamField path="LYRASHIELD_WEB_SEARCH_BUDGET_USD" default="1.0" type="float">
+  Separate per-scan web search budget in USD. Alias of `STRIX_WEB_SEARCH_BUDGET_USD`.
 </ParamField>
 
 ## Context-window management
@@ -218,6 +252,14 @@ export LYRASHIELD_REASONING_EFFORT="medium"
 # Optional: token caps (see field docs above for behavior)
 export LYRASHIELD_MAX_OUTPUT_TOKENS=4096
 export LYRASHIELD_MAX_INPUT_TOKENS=64000
+
+# Optional: ChatGPT subscription-backed model (requires `lyrashield auth login chatgpt` first)
+# export LYRASHIELD_LLM="chatgpt/gpt-4o"
+
+# Optional: Bedrock Mantle GPT-5.6 (set AWS credentials in the standard env vars)
+# export LYRASHIELD_LLM="bedrock_mantle/openai.gpt-5.6-luna"
+
+# export LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0  # to explicitly disable subscription auth
 
 # Optional: custom timeouts / extra headers
 export LLM_TIMEOUT="600"

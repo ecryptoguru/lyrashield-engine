@@ -30,6 +30,7 @@ import requests
 from rich.console import Console
 from rich.prompt import Prompt
 
+from strix.config.settings import is_lyrashield_product
 from strix.telemetry._common import get_version
 
 
@@ -46,9 +47,13 @@ _background_thread: threading.Thread | None = None
 
 
 def _is_disabled() -> bool:
-    return bool(os.environ.get("STRIX_NO_UPDATE_CHECK")) or any(
-        os.environ.get(key)
-        for key in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL", "BUILDKITE", "CIRCLECI")
+    return (
+        bool(os.environ.get("STRIX_NO_UPDATE_CHECK"))
+        or is_lyrashield_product()
+        or any(
+            os.environ.get(key)
+            for key in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL", "BUILDKITE", "CIRCLECI")
+        )
     )
 
 
