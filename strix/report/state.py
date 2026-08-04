@@ -18,7 +18,7 @@ from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for
 from strix.report.sarif import write_sarif
-from strix.report.usage import LLMUsageLedger, _int_or_zero
+from strix.report.usage import LLMUsageLedger, _int_or_zero, _round_cost
 from strix.report.writer import (
     read_run_record,
     write_executive_report,
@@ -103,7 +103,7 @@ def get_global_report_state() -> Optional["ReportState"]:
     return _global_report_state
 
 
-def set_global_report_state(report_state: "ReportState") -> None:
+def set_global_report_state(report_state: Optional["ReportState"]) -> None:
     global _global_report_state  # noqa: PLW0603
     _global_report_state = report_state
     # New run: drop any streamed-cost entries a prior run left unconsumed.
@@ -361,6 +361,35 @@ class ReportState:
     def get_total_llm_cost(self) -> float:
         """Live accumulated LLM cost, independent of the persisted run-record snapshot."""
         return self._llm_usage.total_cost
+
+    def record_web_search_cost(
+        self,
+        cost: float,
+        *,
+        query: str,
+        mode: str,
+        provider: str = "parallel",
+    ) -> None:
+        """Record a web search call's cost and append it to the run record."""
+        if cost > 0:
+            self._llm_usage.record_observed_cost(cost)
+        entry: dict[str, Any] = {
+            "provider": provider,
+            "mode": mode,
+            "query": query,
+            "cost": _round_cost(cost),
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        self.run_record.setdefault("web_search_usage", []).append(entry)
+        self.save_run_data()
+
+    def get_web_search_stats(self) -> tuple[int, float]:
+        """Return (call_count, total_cost) for web search in this run."""
+        entries = self.run_record.get("web_search_usage", [])
+        if not isinstance(entries, list):
+            return 0, 0.0
+        total_cost = sum(float(e.get("cost", 0.0)) for e in entries)
+        return len(entries), total_cost
 
     def update_scan_final_fields(
         self,

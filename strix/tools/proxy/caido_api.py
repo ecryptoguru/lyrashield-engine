@@ -7,9 +7,10 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import time
 import urllib.request
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from caido_sdk_client import Client, TokenAuthOptions
@@ -112,11 +113,64 @@ def caido_url() -> str:
     return os.environ.get("STRIX_CAIDO_URL", _DEFAULT_CAIDO_URL).rstrip("/")
 
 
+def _resolve_hostname_ips(hostname: str) -> list[str]:
+    """Return the IP address(es) for a hostname, or the literal IP if one is given."""
+    try:
+        return [str(ipaddress.ip_address(hostname))]
+    except ValueError:
+        pass
+    try:
+        addrs = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return []
+    ips: list[str] = []
+    for family, *_rest, sockaddr in addrs:
+        raw = cast("str", sockaddr[0])
+        ips.append(_strip_ipv6_scope(raw, family))
+    return ips
+
+
+def _strip_ipv6_scope(raw_ip: str, family: int) -> str:
+    if family == socket.AF_INET6 and "%" in raw_ip:
+        return raw_ip.split("%", 1)[0]
+    return raw_ip
+
+
+def _check_ip_against_blocklist(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
+    if ip in _BLOCKED_METADATA_IPS:
+        raise ValueError(f"Caido URL points to cloud metadata IP: {ip}")
+    if any(ip in net for net in _LINK_LOCAL_NETWORKS):
+        raise ValueError(f"Caido URL points to link-local address: {ip}")
+
+
+def _validate_caido_url_host(url: str) -> None:
+    """Block cloud-metadata and link-local hosts for the Caido GraphQL URL.
+
+    Resolves hostnames before checking IPs so DNS-based metadata aliases (e.g.
+    ``xip.io`` hosts pointing to ``169.254.169.254``) are caught as well.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError(f"Invalid Caido URL scheme: {parsed.scheme!r}")
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError(f"Invalid Caido URL, missing hostname: {url}")
+    if hostname in _BLOCKED_METADATA_HOSTS:
+        raise ValueError(f"Caido URL points to cloud metadata host: {hostname!r}")
+    for raw in _resolve_hostname_ips(hostname):
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        _check_ip_against_blocklist(ip)
+
+
 def _graphql_url() -> str:
     base_url = caido_url()
     parsed = urlparse(base_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"Invalid Caido URL: {base_url}")
+    _validate_caido_url_host(base_url)
     return f"{base_url}/graphql"
 
 
@@ -198,7 +252,10 @@ async def list_requests_with_client(
     if scope_id:
         builder = builder.scope(scope_id)
     target, field = _REQ_FIELD_MAP[sort_by]
-    builder = (builder.descending if sort_order == "desc" else builder.ascending)(target, field)
+    # The SDK overloads expect literal ``target``/``field`` pairs; the map is
+    # already validated at runtime, so getattr avoids an unresolvable overload.
+    sort_method = getattr(builder, "descending" if sort_order == "desc" else "ascending")
+    builder = sort_method(target, field)
     return await builder.execute()
 
 

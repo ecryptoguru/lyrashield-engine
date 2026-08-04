@@ -23,6 +23,10 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import codex, load_settings
+from strix.config.settings import (
+    is_chatgpt_subscription_allowed,
+    is_lyrashield_product,
+)
 
 
 if TYPE_CHECKING:
@@ -45,6 +49,11 @@ _USAGE = "Usage:\n  strix auth login chatgpt [--manual]\n  strix auth status\n  
 def run_auth(argv: list[str]) -> int:
     """Entry point for ``strix auth …``. Returns a process exit code."""
     console = Console()
+    if is_lyrashield_product() and not is_chatgpt_subscription_allowed():
+        console.print(
+            "[bold red]LyraShield does not support ChatGPT subscription authentication.[/]"
+        )
+        return 1
     # Bare `strix auth` (no subcommand) defaults to login.
     subcommand = argv[0] if argv else "login"
     rest = argv[1:]

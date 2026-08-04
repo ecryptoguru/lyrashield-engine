@@ -16,6 +16,7 @@ def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(update_check, "_CACHE_PATH", tmp_path / "update-check.json")
     monkeypatch.setattr(update_check, "_background_thread", None)
     monkeypatch.delenv("STRIX_NO_UPDATE_CHECK", raising=False)
+    monkeypatch.delenv("LYRASHIELD_PRODUCT_BOUNDARY", raising=False)
     for key in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL", "BUILDKITE", "CIRCLECI"):
         monkeypatch.delenv(key, raising=False)
 

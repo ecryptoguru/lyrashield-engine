@@ -69,6 +69,7 @@ from strix.tools.todo.tools import (
     mark_todo_pending,
     update_todo,
 )
+from strix.tools.web_search.tool import web_search
 
 
 if TYPE_CHECKING:
@@ -448,6 +449,7 @@ def _set_tools_programmatic_callers(tools: list[Tool], *, enabled: bool) -> None
 
 _BASE_TOOLS: tuple[Tool, ...] = (
     think,
+    web_search,
     load_skill,
     create_todo,
     list_todos,

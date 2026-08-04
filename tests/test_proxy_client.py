@@ -9,6 +9,7 @@ call at a time against the shared client.
 from __future__ import annotations
 
 import asyncio
+import socket
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -362,3 +363,73 @@ def test_is_match_all_pattern_allows_literal_hosts() -> None:
     """_is_match_all_pattern must return False for patterns with alnum chars."""
     assert tools._is_match_all_pattern("*.example.com") is False
     assert tools._is_match_all_pattern("api.test.com") is False
+
+
+def test_validate_caido_url_host_allows_localhost() -> None:
+    caido_api._validate_caido_url_host("http://127.0.0.1:48080")
+
+
+def test_validate_caido_url_host_allows_case_insensitive_scheme() -> None:
+    caido_api._validate_caido_url_host("HTTP://127.0.0.1:48080")
+
+
+def test_validate_caido_url_host_blocks_link_local_ip() -> None:
+    with pytest.raises(ValueError, match="link-local"):
+        caido_api._validate_caido_url_host("http://169.254.169.254:48080")
+
+
+def test_validate_caido_url_host_blocks_metadata_ip() -> None:
+    with pytest.raises(ValueError, match="metadata"):
+        caido_api._validate_caido_url_host("http://100.100.100.200:48080")
+
+
+def test_validate_caido_url_host_blocks_metadata_host() -> None:
+    with pytest.raises(ValueError, match="metadata"):
+        caido_api._validate_caido_url_host("http://metadata.google.internal:48080")
+
+
+def test_validate_caido_url_host_blocks_resolved_link_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_getaddrinfo(
+        _host: str,
+        _port: Any,
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("169.254.169.254", 0),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+    with pytest.raises(ValueError, match="link-local"):
+        caido_api._validate_caido_url_host("http://metadata-spoof.example.com:48080")
+
+
+def test_validate_caido_url_host_allows_resolved_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_getaddrinfo(
+        _host: str,
+        _port: Any,
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("127.0.0.1", 0),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+    caido_api._validate_caido_url_host("http://caido.example.com:48080")

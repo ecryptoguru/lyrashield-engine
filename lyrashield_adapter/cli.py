@@ -14,7 +14,11 @@ if TYPE_CHECKING:
 
 from pydantic import AliasChoices, BaseModel
 
-from strix.config.settings import Settings
+from strix.config.settings import (
+    PRODUCT_BOUNDARY_ENV_VAR,
+    Settings,
+    is_chatgpt_subscription_allowed,
+)
 
 
 try:
@@ -106,14 +110,15 @@ def prepare_environment(
     # Self-update would replace this controlled derivative with the upstream
     # distribution; the update check also makes network calls during scans.
     env["STRIX_NO_UPDATE_CHECK"] = "1"
-    from strix.config.settings import PRODUCT_BOUNDARY_ENV_VAR  # noqa: PLC0415
-
     env[PRODUCT_BOUNDARY_ENV_VAR] = "1"
     _reject_subscription_models(env)
+    _reject_unsupported_gpt56_providers(env)
     return env
 
 
 def _reject_subscription_models(env: MutableMapping[str, str]) -> None:
+    if is_chatgpt_subscription_allowed(env):
+        return
     for name in _MODEL_ENV_VARS:
         value = env.get(name, "").strip()
         if value.lower().startswith(_SUBSCRIPTION_PREFIX):
@@ -121,6 +126,34 @@ def _reject_subscription_models(env: MutableMapping[str, str]) -> None:
                 f"{name}={value} routes through a ChatGPT subscription, which is "
                 "not supported for LyraShield scans. Configure a GPT-5.6 Terra or "
                 "Luna API deployment instead."
+            )
+            raise SystemExit(msg)
+
+
+def _reject_unsupported_gpt56_providers(env: MutableMapping[str, str]) -> None:
+    """Fail fast if a model env var names a GPT-5.6 deployment from an unsupported provider.
+
+    LiteLLM's cost map currently only lists ``openai``, ``azure``, and
+    ``bedrock_mantle`` for ``gpt-5.6-*``. The Azure alias ``azure_ai`` and the
+    ChatGPT subscription route ``chatgpt/`` are also allowed.
+    """
+    from strix.config.models import (  # noqa: PLC0415
+        is_gpt56_model,
+        is_gpt56_supported_provider,
+    )
+
+    for name in _MODEL_ENV_VARS:
+        value = env.get(name, "").strip()
+        if not value:
+            continue
+        if is_gpt56_supported_provider(value):
+            continue
+        if is_gpt56_model(value):
+            msg = (
+                f"{name}={value} is a GPT-5.6 Terra/Luna deployment, but its "
+                "provider is not currently supported by LyraShield. Supported "
+                "providers are openai, azure, azure_ai, bedrock_mantle, and "
+                "chatgpt (with `lyrashield auth login chatgpt`)."
             )
             raise SystemExit(msg)
 
@@ -139,13 +172,13 @@ def _run_upstream() -> None:
 
 
 def main() -> None:
+    if sys.argv[1:] in (["--version"], ["-v"]):
+        print(f"lyrashield {get_version()}")  # noqa: T201
+        return
     if load_dotenv is not None:
         # Caller-supplied env vars must win over a local .env file.
         load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
     prepare_environment()
-    if sys.argv[1:] in (["--version"], ["-v"]):
-        print(f"lyrashield {get_version()}")  # noqa: T201
-        return
     _run_upstream()
 
 

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from strix.config import codex
+from strix.config.settings import PRODUCT_BOUNDARY_ENV_VAR
 from strix.interface import auth_cli
 
 
@@ -17,6 +18,9 @@ if TYPE_CHECKING:
 @pytest.fixture(autouse=True)
 def _tmp_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(codex, "AUTH_PATH", tmp_path / "home" / ".strix" / "subscription-auth.json")
+    monkeypatch.delenv(PRODUCT_BOUNDARY_ENV_VAR, raising=False)
+    monkeypatch.delenv("LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION", raising=False)
+    monkeypatch.delenv("STRIX_ALLOW_CHATGPT_SUBSCRIPTION", raising=False)
 
 
 def test_login_provider_is_chatgpt() -> None:
@@ -85,17 +89,14 @@ def test_model_subcommand_removed() -> None:
 
 
 @pytest.mark.parametrize("provider", ["chatgpt", "codex", "ChatGPT"])
-def test_login_accepts_provider_aliases(provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    reached = {"flow": False}
+def test_login_accepts_supported_provider(monkeypatch: pytest.MonkeyPatch, provider: str) -> None:
+    reached: dict[str, bool] = {"flow": False}
 
     def _fake_flow(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         reached["flow"] = True
         return {
-            "type": "oauth",
-            "provider": "codex",
-            "access": "a",
-            "refresh": "r",
-            "account_id": "acct",
+            "ok": True,
+            "access_token": "test-token",
             "expires_at": 0,
         }
 
@@ -104,3 +105,26 @@ def test_login_accepts_provider_aliases(provider: str, monkeypatch: pytest.Monke
 
     assert auth_cli.run_auth(["login", provider]) == 0
     assert reached["flow"] is True
+
+
+def test_auth_rejected_under_product_boundary_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LyraShield rejects ChatGPT subscription sign-in when explicitly disabled."""
+    monkeypatch.setenv(PRODUCT_BOUNDARY_ENV_VAR, "1")
+    monkeypatch.setenv("LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION", "0")
+    assert auth_cli.run_auth(["login", "chatgpt"]) == 1
+
+
+def test_auth_allowed_under_product_boundary_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ChatGPT subscription auth is available by default."""
+    monkeypatch.setenv(PRODUCT_BOUNDARY_ENV_VAR, "1")
+
+    def _fake_flow(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "access_token": "test-token", "expires_at": 0}
+
+    monkeypatch.setattr(auth_cli, "_run_oauth_flow", _fake_flow)
+    monkeypatch.setattr(codex, "save_record", lambda _record: None)
+    assert auth_cli.run_auth(["login", "chatgpt"]) == 0

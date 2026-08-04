@@ -59,18 +59,62 @@ def request_timeout_extra_args(timeout_s: float | None) -> dict[str, float] | No
 
 
 def is_gpt56_model(model_name: str | None) -> bool:
-    r"""Return whether a configured deployment is one of LyraShield's GPT-5.6 tiers.
+    """Return whether a configured deployment is one of LyraShield's GPT-5.6 tiers.
 
     Matches the worker's allowed set: Terra or Luna. The worker regex is
-    ``/(?:^|[/.-])gpt-5\.6-(?:terra|luna)(?:$|[/.-])/`` after lower-casing and
-    converting underscores to dashes. Sol was retired from the supported set, so
-    it is rejected here at startup rather than reaching budget enforcement (which
-    no longer carries a Sol rate) and failing mid-scan.
+    intentionally generous with separators so providers can namespace the model
+    (e.g. ``azure/eu/gpt-5.6-luna`` or ``bedrock_mantle/openai.gpt-5.6-luna``).
+    A deployment that names a retired or unsupported tier is rejected here at
+    startup rather than reaching budget enforcement (which no longer carries a
+    Sol rate) and failing mid-scan.
     """
     if not model_name:
         return False
     normalized = model_name.strip().lower().replace("_", "-")
     return re.search(r"(?:^|[/.-])gpt-5\.6-(?:terra|luna)(?:$|[/.-])", normalized) is not None
+
+
+# Providers LiteLLM's cost map lists for gpt-5.6-* deployments, plus the Azure
+# alias and the ChatGPT subscription route. Keep in sync with the LiteLLM model
+# cost map; run ``scripts/list-gpt56-providers.py`` to refresh.
+_GPT56_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "openai",
+        "azure",
+        "azure_ai",
+        "bedrock_mantle",
+        "chatgpt",
+    }
+)
+
+
+def is_gpt56_supported_provider(model_name: str | None) -> bool:
+    """Return whether a model name identifies a GPT-5.6 Terra/Luna deployment
+    from a provider LiteLLM is known to support for that model family.
+
+    The allowed set is intentionally conservative. If a new provider starts
+    carrying GPT-5.6, add its LiteLLM provider marker here (and in the cost-map
+    refresh script) before advertising it in docs.
+    """
+    if not is_gpt56_model(model_name):
+        return False
+    name = (model_name or "").strip().lower()
+    # The ChatGPT subscription route is gated separately by auth, not by this
+    # provider allow-list; let it through so the product auth check can run.
+    if name.startswith("chatgpt/"):
+        return True
+    # Bare OpenAI model names (e.g. "gpt-5.6-luna" or "prod-gpt-5.6-luna")
+    # are routed to OpenAI. They may contain dots, so only require no provider
+    # slash and no LiteLLM passthrough prefix.
+    if "/" not in name:
+        return True
+    # Strip LiteLLM passthrough prefixes before looking at the provider.
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    parts = name.replace(".", "/").split("/")
+    return any(part in _GPT56_SUPPORTED_PROVIDERS for part in parts)
 
 
 def model_supports_programmatic_tool_calling(model_name: str | None) -> bool:
@@ -126,14 +170,14 @@ class _CodexResponsesModel(OpenAIResponsesModel):
         effort = self._reasoning_effort
         if effort and effort != "none":
             # Clamp to efforts the backend accepts.
-            match effort:
-                case "minimal":
-                    effort = "low"
-                case "xhigh" | "max":
-                    effort = "high"
-                case _:
-                    pass
-            overrides = overrides.resolve(ModelSettings(reasoning=Reasoning(effort=effort)))
+            clamped: ReasoningEffort
+            if effort == "minimal":
+                clamped = "low"
+            elif effort in ("xhigh", "max"):
+                clamped = "high"
+            else:
+                clamped = cast("ReasoningEffort", effort)
+            overrides = overrides.resolve(ModelSettings(reasoning=Reasoning(effort=clamped)))
         return model_settings.resolve(overrides)
 
     async def _fetch_response(self, *args: Any, stream: bool = False, **kwargs: Any) -> Any:
@@ -353,7 +397,15 @@ class StrixProvider(MultiProvider):
         stripped_model_name: str | None,
     ) -> tuple[ModelProvider, str | None]:
         if prefix in {"azure", "azure_ai"} and self._azure_responses_enabled:
-            return self.openai_provider, stripped_model_name
+            # Names like ``azure/eu/gpt-5.6-terra`` or ``azure_ai/gpt-5.6-luna``
+            # both resolve to the final deployment/model segment for Azure's
+            # v1 Responses API.
+            deployment = (
+                stripped_model_name.rsplit("/", 1)[-1]
+                if stripped_model_name
+                else stripped_model_name
+            )
+            return self.openai_provider, deployment
         if prefix in {"openai", "litellm", "any-llm"}:
             return super()._resolve_prefixed_model(
                 original_model_name=original_model_name,
