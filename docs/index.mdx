@@ -16,7 +16,10 @@ The engine is not an independent source of verification. Model confidence and ge
 - OpenAI- and Azure-compatible endpoints are supported; other inherited provider paths are rejected.
 - ChatGPT subscription-backed models are rejected before sandbox setup; only API deployments are allowed.
 - The application sends repository targets to the engine. URL targets use the application's pinned deterministic URL scanner.
-- Inherited telemetry is forced off by the adapter.
+- Inherited telemetry is forced off by the adapter. Telemetry keys are read lazily from environment variables — no hardcoded keys in source.
+- The system prompt defines trust boundary tags (`[SYSTEM-NOTICE]`, `[SYSTEM-VERIFIED PEER MESSAGE]`) with anti-spoofing rules to resist prompt injection.
+- All vulnerability report and final report free-text fields are redacted at persistence. Secret redaction runs before LLM summarization. Internal path redaction is mode-aware (whitebox preserves target paths, blackbox redacts them).
+- Prompt inputs (`root_instructions_override`, `extra_system_prompt_context`, target values) are sanitized to strip Jinja template tags and control characters.
 
 ## Execution flow
 

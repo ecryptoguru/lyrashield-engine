@@ -22,6 +22,7 @@ from strix.config.models import StrixProvider
 from strix.core.inputs import make_model_settings
 from strix.core.sessions import replace_session_items, session_write_lock
 from strix.llm.context_budget import context_window, count_tokens, output_limit
+from strix.utils.redaction import redact_text
 
 
 if TYPE_CHECKING:
@@ -93,9 +94,18 @@ EXHAUSTIVE, not concise. Enumerate every distinct item as its own bullet — \
 never merge, deduplicate, generalise, or omit distinct findings, credentials, \
 or dead ends, even if they seem minor or repetitive. If the source mentions \
 five vulnerabilities, list five. Copy exact values verbatim: URLs, endpoints, \
-file paths, parameters, payloads, credentials, tokens, keys, hashes, cracked \
-passwords, software versions, and error messages — never paraphrase or \
-placeholder them. Do not invent anything and do not describe this compaction \
+file paths, parameters, payloads, software versions, and error messages — \
+never paraphrase or placeholder them.
+
+**Secrets and credentials have been redacted from the input.** You will see \
+placeholders like [SECRET], [TOKEN], [JWT], [AWS_KEY], [PRIVATE_KEY], [PII], \
+and [INTERNAL_PATH]. Preserve these placeholders verbatim in your summary — \
+do not attempt to reconstruct or guess the original values. In the \
+## Credentials & Secrets section, note the *type* and *location* of each \
+redacted secret (e.g. "[SECRET] used for API authentication at /login") \
+so the agent knows a secret was found without exposing its value.
+
+Do not invent anything and do not describe this compaction \
 process.
 
 Return Markdown with exactly these sections:
@@ -109,8 +119,10 @@ misconfig, etc.). For each: type, exact location (URL/endpoint/param/file), the 
 verbatim payload or proof, confirmation status, and impact. List them all.
 
 ## Credentials & Secrets
-One bullet per credential, secret, API key, token, hash, or cracked password, \
-copied verbatim with where it applies. Write "(none)" only if truly none.
+One bullet per credential, secret, API key, token, hash, or cracked password. \
+Since secrets have been redacted from the input, record the placeholder type \
+and where it applies (e.g. "[SECRET] used for API auth at /login"). Write \
+"(none)" only if truly none.
 
 ## System & Recon Details
 Architecture, tech stack, versions, discovered endpoints/paths/params, and \
@@ -389,9 +401,10 @@ async def maybe_compact(
         return False
 
     serialized_head = _fit_to_tokens(model, _serialize_items(head), input_budget)
+    redacted_head = redact_text(serialized_head)
     summary = await _summarize(
         model,
-        _build_summary_prompt(serialized_head, previous),
+        _build_summary_prompt(redacted_head, previous),
         _summary_output_tokens(model, settings=settings),
         model_provider=model_provider,
         settings=settings,
@@ -399,7 +412,9 @@ async def maybe_compact(
     if summary is None:
         return False
 
-    new_items = [_checkpoint_item(summary), *recent]
+    redacted_summary = redact_text(summary)
+
+    new_items = [_checkpoint_item(redacted_summary), *recent]
     rewritten = await replace_session_items(session, new_items, expected_len=len(items))
     if rewritten:
         logger.info(

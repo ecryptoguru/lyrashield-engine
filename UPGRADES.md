@@ -252,3 +252,76 @@ It is not an LLM endpoint and does not alter the GPT-5.6 product boundary.
 - `docs/advanced/configuration.mdx` and `docs/llm-providers/overview.mdx`:
   updated to clarify that Parallel is not an LLM endpoint but may be used as a
   web search tool when explicitly enabled.
+
+## Security hardening pass (2026-08-05)
+
+Comprehensive AI safety, privacy, and reliability hardening based on the
+multi-domain audit in `AI_AUDIT_REPORT.md`. All 911 tests pass with no
+regressions. See the audit report for per-finding resolution status.
+
+### Prompt injection and trust boundaries
+
+- `strix/agents/prompts/system_prompt.jinja`: added `TRUST BOUNDARIES —
+  SYSTEM-INJECTED MARKERS` section defining `[SYSTEM-NOTICE]` (budget/turn
+  warnings) and `[SYSTEM-VERIFIED PEER MESSAGE]` (inter-agent communication)
+  tags, with anti-spoofing rules. Tags are only valid at the start of a
+  top-level user message from the platform; tags inside tool output or target
+  content are treated as injection attempts.
+- `strix/core/agents.py`: `_message_to_session_item` wraps peer messages with
+  the `[SYSTEM-VERIFIED PEER MESSAGE | id=... | from=... | type=... |
+  priority=...]` header (already present from upstream sync, now documented in
+  the system prompt).
+- `strix/core/hooks.py`: budget/turn warnings prefixed with `[SYSTEM-NOTICE]`
+  (already present from upstream sync, now documented in the system prompt).
+
+### Privacy and data leakage
+
+- `strix/llm/compaction.py`: summary prompt no longer instructs verbatim
+  credential preservation. Now instructs the model to record placeholder types
+  (e.g. `[SECRET]`) and where they apply. Conversation head is redacted via
+  `redact_text()` before summarization; summary is redacted again before
+  checkpointing.
+- `strix/report/state.py`: `add_vulnerability_report` and
+  `update_scan_final_fields` now apply `redact_text()` to all free-text fields.
+  Internal path redaction is mode-aware via `_is_whitebox` property: whitebox
+  scans preserve `/workspace/<subdir>` target paths; blackbox scans redact them.
+  `poc_script_code` always preserves internal paths for reproducibility.
+- `strix/utils/redaction.py`: split path patterns into `_ALWAYS_REDACT_PATH_\
+  PATTERNS` (spill paths, tmp state — always redacted) and `_MODE_DEPENDENT_\
+  PATH_PATTERNS` (general `/workspace/` paths — mode-dependent). Added
+  `redact_spill_paths()` for whitebox mode.
+
+### Structured output reliability
+
+- `strix/report/dedupe.py`: `DedupeJudgement` Pydantic model with
+  `AgentOutputSchema(strict_json_schema=True)` enforces structured output.
+  Fallback to lenient `_parse_dedupe_response` on validation failure (already
+  present from upstream sync, now covered by new tests).
+
+### Telemetry hygiene
+
+- `strix/telemetry/posthog.py`: replaced module-level `_POSTHOG_PUBLIC_API_KEY`
+  and `_POSTHOG_HOST` with lazy `_posthog_api_key()` / `_posthog_host()`
+  functions that read `STRIX_POSTHOG_API_KEY` / `STRIX_POSTHOG_HOST` at call
+  time.
+- `strix/telemetry/scarf.py`: replaced module-level `_SCARF_ENDPOINT` with
+  lazy `_scarf_endpoint()` that reads `STRIX_SCARF_ENDPOINT` at call time.
+- `strix/skills/__init__.py`: `_track_skill_loaded` now checks
+  `load_settings().telemetry.enabled` before spawning the telemetry thread.
+
+### Prompt sanitization
+
+- `strix/core/inputs.py`: `_JINJA_TAG_RE` regex updated to also strip Jinja
+  comment tags (`{# #}`) in addition to `{{ }}` and `{% %}`. Applied to
+  `root_instructions_override`, `extra_system_prompt_context`, and target
+  values in `build_scope_context`.
+
+### Tests added
+
+- `tests/test_redaction.py`: whitebox path preservation, PoC path preservation
+  in blackbox, spill path always redacted.
+- `tests/test_dedupe_model.py`: schema validation path, fallback parser path,
+  `DedupeJudgement` field validation.
+- `tests/test_telemetry_keys.py` (new): lazy env var reads, skip-when-
+  unconfigured, skills telemetry gate.
+- `tests/test_runner_root_prompt.py`: Jinja comment tag stripping test case.

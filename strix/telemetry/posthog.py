@@ -1,5 +1,6 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 import logging
+import os
 from datetime import datetime
 from typing import Any, cast
 
@@ -16,8 +17,13 @@ from strix.telemetry._common import (
 
 logger = logging.getLogger(__name__)
 
-_POSTHOG_PUBLIC_API_KEY = "phc_7rO3XRuNT5sgSKAl6HDIrWdSGh1COzxw0vxVIAR6vVZ"
-_POSTHOG_HOST = "https://us.i.posthog.com"
+
+def _posthog_api_key() -> str:
+    return os.environ.get("STRIX_POSTHOG_API_KEY", "")
+
+
+def _posthog_host() -> str:
+    return os.environ.get("STRIX_POSTHOG_HOST", "https://us.i.posthog.com")
 
 
 def _is_enabled() -> bool:
@@ -28,14 +34,22 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
     if not _is_enabled():
         logger.debug("posthog disabled; skipping event %s", event)
         return False
+    api_key = _posthog_api_key()
+    if not api_key:
+        logger.debug("posthog API key not configured; skipping event %s", event)
+        return False
     try:
         payload = {
-            "api_key": _POSTHOG_PUBLIC_API_KEY,
+            "api_key": api_key,
             "event": event,
             "distinct_id": SESSION_ID,
             "properties": properties,
         }
-        requests.post(f"{_POSTHOG_HOST}/capture/", json=cast("dict[str, Any]", payload), timeout=10)
+        requests.post(
+            f"{_posthog_host()}/capture/",
+            json=cast("dict[str, Any]", payload),
+            timeout=10,
+        )
     except Exception:  # noqa: BLE001
         logger.debug("posthog send failed for event %s", event, exc_info=True)
         return False

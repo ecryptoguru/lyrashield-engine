@@ -17,6 +17,7 @@ import strix.tools.notes.tools as notes_tools
 import strix.tools.todo.tools as todo_tools
 from strix.core import runner
 from strix.core.agents import AgentCoordinator
+from strix.core.inputs import _sanitize_prompt_value
 from strix.runtime import session_manager
 
 
@@ -177,3 +178,72 @@ async def test_root_prompt_options_default_to_none(
     assert kwargs["instructions_override"] is not None
     assert "You are Strix" in kwargs["instructions_override"]
     assert kwargs["system_prompt_context"] == {"scope": "built-in"}
+
+
+def test_sanitize_prompt_value_strips_jinja_tags() -> None:
+    assert _sanitize_prompt_value("{{ malicious }}") == ""
+    assert _sanitize_prompt_value("{% if x %}bad{% endif %}") == "bad"
+    assert _sanitize_prompt_value("{# comment #}normal") == "normal"
+    assert _sanitize_prompt_value("normal text") == "normal text"
+
+
+def test_sanitize_prompt_value_strips_control_chars() -> None:
+    assert _sanitize_prompt_value("hello\x00world\x07!") == "helloworld!"
+    assert _sanitize_prompt_value("line\nbreak") == "line\nbreak"
+
+
+def test_sanitize_prompt_value_truncates_long_input() -> None:
+    long = "A" * 10_000
+    assert len(_sanitize_prompt_value(long, max_len=100)) == 100
+
+
+@pytest.mark.asyncio
+async def test_root_instructions_override_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """Jinja directives and control chars in root_instructions_override are stripped."""
+    scope_context = {"scope": "built-in"}
+    captured = _patch_engine_scaffold(monkeypatch, tmp_path, scope_context)
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-sanitize",
+        image="img",
+        coordinator=AgentCoordinator(),
+        root_instructions_override="Normal instructions {{ injected }}\x00done",
+    )
+
+    kwargs = captured["kwargs"]
+    instructions = kwargs["instructions_override"]
+    assert "Normal instructions" in instructions
+    assert "{{ injected }}" not in instructions
+    assert "{{" not in instructions
+    assert "\x00" not in instructions
+
+
+@pytest.mark.asyncio
+async def test_extra_system_prompt_context_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """Jinja directives in extra_system_prompt_context string values are stripped."""
+    scope_context = {"scope": "built-in"}
+    captured = _patch_engine_scaffold(monkeypatch, tmp_path, scope_context)
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-ctx-sanitize",
+        image="img",
+        coordinator=AgentCoordinator(),
+        extra_system_prompt_context={
+            "notes": "safe value",
+            "dangerous": "{{ attack }}",
+            "items": ["clean", "{% if true %}bad{% endif %}"],
+        },
+    )
+
+    ctx = captured["kwargs"]["system_prompt_context"]
+    assert ctx["notes"] == "safe value"
+    assert ctx["dangerous"] == ""
+    assert ctx["items"] == ["clean", "bad"]

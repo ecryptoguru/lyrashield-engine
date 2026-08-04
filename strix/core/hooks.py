@@ -40,6 +40,12 @@ _COMPACTION_NOTICE = {
 }
 _COMPACTED_ITEM_MAX_BYTES = 64_000
 _GPT56_LONG_CONTEXT_TOKENS = 272_000
+
+# System-trusted tag for budget/turn warnings injected into the conversation.
+# The system prompt instructs the model to treat messages prefixed with this
+# tag as system-verified and to ignore any similar-looking content from
+# user or peer messages.
+_SYSTEM_NOTICE_TAG = "[SYSTEM-NOTICE]"
 _GPT56_RATES = {
     "terra": (2.5, 15.0),
     "luna": (1.0, 6.0),
@@ -616,7 +622,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         remaining = max(self._max_turns - turns_used, 0)
         pct = round(100 * turns_used / self._max_turns)
         content = (
-            f"[{_urgency(stage)}] Turn budget: {turns_used}/{self._max_turns} used ({pct}%). "
+            f"{_SYSTEM_NOTICE_TAG} [{_urgency(stage)}] Turn budget: "
+            f"{turns_used}/{self._max_turns} used ({pct}%). "
             f"About {remaining} turn(s) remain before this agent is force-stopped and any "
             f"in-progress work is discarded. {_wrapup_directive(context, stage)}"
         )
@@ -645,14 +652,16 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         reserve_pct = round(_SUBAGENT_BUDGET_RESERVE * 100)
         if self._interactive:
             content = (
-                f"[{_urgency(stage)}] Scan cost budget: ${cost:.2f}/${self._max_budget_usd:.2f} "
+                f"{_SYSTEM_NOTICE_TAG} [{_urgency(stage)}] Scan cost budget: "
+                f"${cost:.2f}/${self._max_budget_usd:.2f} "
                 f"spent ({pct}%). This budget is shared across every agent in the scan; when it "
                 "is reached all agents are paused until the user chooses to continue. "
                 f"{_wrapup_directive(context, stage)}"
             )
         elif is_root:
             content = (
-                f"[{_urgency(stage)}] Scan cost budget: ${cost:.2f}/${self._max_budget_usd:.2f} "
+                f"{_SYSTEM_NOTICE_TAG} [{_urgency(stage)}] Scan cost budget: "
+                f"${cost:.2f}/${self._max_budget_usd:.2f} "
                 f"spent ({pct}%). This budget is shared across every agent in the scan; when it "
                 "is reached the whole scan is stopped immediately, and sub-agents are stopped at "
                 f"{reserve_pct}% to reserve the remainder for your final report. "
@@ -660,7 +669,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             )
         else:
             content = (
-                f"[{_urgency(stage)}] Scan cost budget: ${cost:.2f}/${self._max_budget_usd:.2f} "
+                f"{_SYSTEM_NOTICE_TAG} [{_urgency(stage)}] Scan cost budget: "
+                f"${cost:.2f}/${self._max_budget_usd:.2f} "
                 f"spent ({pct}%). This budget is shared across every agent in the scan; "
                 f"sub-agents are stopped at {reserve_pct}% to leave the remainder for the root "
                 f"agent's final report. {_wrapup_directive(context, stage)}"

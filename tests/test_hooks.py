@@ -511,3 +511,27 @@ def test_compact_item_keeps_whole_multibyte_characters(
     head, _, tail = content.partition("...[older item compacted]...")
     assert "😀" in head
     assert "😀" in tail
+
+
+@pytest.mark.asyncio
+async def test_budget_warning_has_system_notice_tag() -> None:
+    """Budget warnings must be prefixed with [SYSTEM-NOTICE] so they can't be spoofed."""
+    hooks = ReportUsageHooks(model="test-model", max_budget_usd=10.0)
+    state = _make_report_state(7.5)
+    items: list[Any] = []
+    with patch("strix.core.hooks.get_global_report_state", return_value=state):
+        await hooks.on_llm_start(
+            _make_warn_context(requests=0, parent_id=None), MagicMock(), None, items
+        )
+    assert items
+    assert "[SYSTEM-NOTICE]" in items[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_turn_warning_has_system_notice_tag() -> None:
+    """Turn warnings must be prefixed with [SYSTEM-NOTICE] so they can't be spoofed."""
+    hooks = ReportUsageHooks(model="test-model", max_turns=100)
+    items: list[Any] = []
+    await hooks.on_llm_start(_make_warn_context(requests=69), MagicMock(), None, items)
+    assert items
+    assert "[SYSTEM-NOTICE]" in items[0]["content"]

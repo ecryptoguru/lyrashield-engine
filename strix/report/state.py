@@ -26,6 +26,7 @@ from strix.report.writer import (
     write_vulnerabilities,
 )
 from strix.telemetry import posthog, scarf
+from strix.utils.redaction import redact_text
 
 
 logger = logging.getLogger(__name__)
@@ -272,24 +273,37 @@ class ReportState:
             "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
         }
 
+        _redact_paths = not self._is_whitebox
         if description:
-            report["description"] = description.strip()
+            report["description"] = redact_text(
+                description.strip(), include_internal_paths=_redact_paths
+            )
         if impact:
-            report["impact"] = impact.strip()
+            report["impact"] = redact_text(impact.strip(), include_internal_paths=_redact_paths)
         if target:
             report["target"] = target.strip()
         if technical_analysis:
-            report["technical_analysis"] = technical_analysis.strip()
+            report["technical_analysis"] = redact_text(
+                technical_analysis.strip(), include_internal_paths=_redact_paths
+            )
         if poc_description:
-            report["poc_description"] = poc_description.strip()
+            report["poc_description"] = redact_text(
+                poc_description.strip(), include_internal_paths=_redact_paths
+            )
         if poc_script_code:
-            report["poc_script_code"] = poc_script_code.strip()
+            report["poc_script_code"] = redact_text(
+                poc_script_code.strip(), include_internal_paths=False
+            )
         if remediation_steps:
-            report["remediation_steps"] = remediation_steps.strip()
+            report["remediation_steps"] = redact_text(
+                remediation_steps.strip(), include_internal_paths=_redact_paths
+            )
         if evidence:
-            report["evidence"] = evidence.strip()
+            report["evidence"] = redact_text(evidence.strip(), include_internal_paths=_redact_paths)
         if assumptions:
-            report["assumptions"] = assumptions.strip()
+            report["assumptions"] = redact_text(
+                assumptions.strip(), include_internal_paths=_redact_paths
+            )
         if fix_effort:
             report["fix_effort"] = fix_effort.strip().lower()
         if cvss is not None:
@@ -307,7 +321,9 @@ class ReportState:
         if code_locations:
             report["code_locations"] = code_locations
         if fix_pr_body:
-            report["fix_pr_body"] = fix_pr_body.strip()
+            report["fix_pr_body"] = redact_text(
+                fix_pr_body.strip(), include_internal_paths=_redact_paths
+            )
         report["finding_class"] = (finding_class or "dynamic").strip().lower()
         if dependency_metadata:
             report["dependency_metadata"] = dependency_metadata
@@ -398,12 +414,19 @@ class ReportState:
         technical_analysis: str,
         recommendations: str,
     ) -> None:
+        _redact_paths = not self._is_whitebox
         self.scan_results = {
             "scan_completed": True,
-            "executive_summary": executive_summary.strip(),
-            "methodology": methodology.strip(),
-            "technical_analysis": technical_analysis.strip(),
-            "recommendations": recommendations.strip(),
+            "executive_summary": redact_text(
+                executive_summary.strip(), include_internal_paths=_redact_paths
+            ),
+            "methodology": redact_text(methodology.strip(), include_internal_paths=_redact_paths),
+            "technical_analysis": redact_text(
+                technical_analysis.strip(), include_internal_paths=_redact_paths
+            ),
+            "recommendations": redact_text(
+                recommendations.strip(), include_internal_paths=_redact_paths
+            ),
             "success": True,
         }
 
@@ -417,6 +440,14 @@ class ReportState:
         self.save_run_data(mark_complete=True)
         posthog.end(self, exit_reason="finished_by_tool")
         scarf.end(self, exit_reason="finished_by_tool")
+
+    @property
+    def _is_whitebox(self) -> bool:
+        """True if any target is a local source tree (whitebox / source-aware)."""
+        if not self.scan_config:
+            return False
+        targets = self.scan_config.get("targets") or []
+        return any(isinstance(t, dict) and t.get("type") == "local_code" for t in targets)
 
     def set_scan_config(self, config: dict[str, Any]) -> None:
         self.scan_config = config

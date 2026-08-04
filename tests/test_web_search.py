@@ -73,6 +73,28 @@ def test_web_search_env_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.web_search.max_calls_per_scan == 10
 
 
+def test_web_search_env_aliases_product_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The worker passes LYRASHIELD_WEB_SEARCH_API_KEY, not the upstream PARALLEL_API_KEY."""
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_ENABLED", "1")
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_API_KEY", "lyra-product-key")
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_PROVIDER", "parallel")
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_MODE", "basic")
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_MAX_RESULTS", "7")
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_MAX_CHARS_TOTAL", "2500")
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_MAX_CALLS_PER_SCAN", "5")
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_BUDGET_USD", "2.5")
+
+    settings = _reload_settings()
+    assert settings.web_search.enabled is True
+    assert settings.web_search.api_key == "lyra-product-key"
+    assert settings.web_search.provider == "parallel"
+    assert settings.web_search.mode == "basic"
+    assert settings.web_search.max_results == 7
+    assert settings.web_search.max_chars_total == 2500
+    assert settings.web_search.max_calls_per_scan == 5
+    assert settings.web_search.budget_usd == 2.5
+
+
 def test_redact_query_handles_sensitive_patterns() -> None:
     """Redactor should strip credentials, PII, and URLs without breaking topic intent."""
     query = (

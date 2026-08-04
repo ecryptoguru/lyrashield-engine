@@ -10,9 +10,11 @@ import re
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
+from agents.agent_output import AgentOutputSchema
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
+from pydantic import BaseModel, Field, ValidationError
 
 from strix.config import load_settings
 from strix.config.models import (
@@ -190,6 +192,26 @@ _PER_ITEM_ENCODING_OVERHEAD = 8
 # JSON object, so this is deliberately generous rather than tuned.
 _DEDUPE_MAX_OUTPUT_TOKENS = 512
 
+
+class DedupeJudgement(BaseModel):
+    """Enforced response schema for the LLM deduplication judge.
+
+    The model is asked to return only this object; ``AgentOutputSchema`` turns
+    the definition into a provider-level ``response_format`` so the output is
+    constrained to these fields and no surrounding prose.
+    """
+
+    is_duplicate: bool
+    duplicate_id: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = ""
+
+
+_DEDUPE_OUTPUT_SCHEMA: AgentOutputSchema = AgentOutputSchema(
+    DedupeJudgement,
+    strict_json_schema=True,
+)
+
 # Conservative chars-per-token ratio for sizing the reservation. Under-counting
 # would let the reservation understate real spend, so round pessimistically.
 _CHARS_PER_TOKEN = 3.5
@@ -237,7 +259,7 @@ async def _request_dedupe_judgement(
             input=user_msg,
             model_settings=model_settings,
             tools=[],
-            output_schema=None,
+            output_schema=_DEDUPE_OUTPUT_SCHEMA,
             handoffs=[],
             tracing=ModelTracing.DISABLED,
             previous_response_id=None,
@@ -532,21 +554,35 @@ def _extract_balanced_json(text: str) -> str:
 
 
 def _parse_dedupe_response(content: str) -> dict[str, Any]:
+    """Parse and validate the dedupe model's JSON response.
+
+    First tries strict Pydantic validation against ``DedupeJudgement``. If the
+    provider returned malformed or extra-prose output (e.g. during a fallback
+    path), fall back to the older lenient parser so the scan isn't blocked.
+    """
     json_text = _extract_balanced_json(content)
-    parsed = json.loads(json_text)
-
-    duplicate_id = str(parsed.get("duplicate_id") or "")[:64]
-    reason = str(parsed.get("reason") or "")[:500]
     try:
-        confidence = float(parsed.get("confidence", 0.0))
-    except (TypeError, ValueError):
-        confidence = 0.0
-
+        judgement = DedupeJudgement.model_validate_json(json_text)
+    except (ValidationError, ValueError):
+        logger.warning("Dedupe response failed schema validation; falling back to lenient parser")
+        parsed = json.loads(json_text)
+        duplicate_id = str(parsed.get("duplicate_id") or "")[:64]
+        reason = str(parsed.get("reason") or "")[:500]
+        try:
+            confidence = float(parsed.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return {
+            "is_duplicate": bool(parsed.get("is_duplicate", False)),
+            "duplicate_id": duplicate_id,
+            "confidence": confidence,
+            "reason": reason,
+        }
     return {
-        "is_duplicate": bool(parsed.get("is_duplicate", False)),
-        "duplicate_id": duplicate_id,
-        "confidence": confidence,
-        "reason": reason,
+        "is_duplicate": judgement.is_duplicate,
+        "duplicate_id": judgement.duplicate_id[:64],
+        "confidence": judgement.confidence,
+        "reason": judgement.reason[:500],
     }
 
 
