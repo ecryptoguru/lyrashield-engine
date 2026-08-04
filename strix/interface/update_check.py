@@ -1,3 +1,4 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Update notifications and self-update for the strix CLI.
 
 Follows the pattern used by tools like gh, uv, and pip: a background,
