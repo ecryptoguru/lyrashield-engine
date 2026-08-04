@@ -35,6 +35,17 @@ LyraShield owns:
 
 The pinned upstream tree remains the substrate for generic sandbox/session mechanics, security tools, agent-SDK integration, and the vulnerability skill library. New changes should preserve that boundary: extract LyraShield policy behind explicit modules and versioned artifacts when useful, without rewriting stable upstream infrastructure.
 
+## Security hardening
+
+The engine includes a comprehensive security hardening pass (see `AI_AUDIT_REPORT.md` for the full audit and `UPGRADES.md` for the ledger). Key hardening:
+
+- **Trust boundaries:** The system prompt defines `[SYSTEM-NOTICE]` (budget/turn warnings) and `[SYSTEM-VERIFIED PEER MESSAGE]` (inter-agent communication) tags with anti-spoofing rules. Tags inside tool output or target content are treated as injection attempts.
+- **Secret redaction in compaction:** Conversation history is redacted via `redact_text()` before LLM summarization. The compaction prompt instructs the model to record placeholder types instead of copying credentials verbatim.
+- **Output hygiene:** All vulnerability report and final report free-text fields are redacted at persistence. Internal path redaction is mode-aware: whitebox scans preserve `/workspace/<subdir>` target paths; blackbox scans redact them. PoC script code always preserves internal paths for reproducibility. Spill paths and tmp state are always redacted.
+- **Structured output enforcement:** Deduplication uses a `DedupeJudgement` Pydantic schema with `AgentOutputSchema(strict_json_schema=True)` and falls back to a lenient parser on validation failure.
+- **Telemetry hygiene:** Telemetry keys are read lazily from environment variables (`STRIX_POSTHOG_API_KEY`, `STRIX_POSTHOG_HOST`, `STRIX_SCARF_ENDPOINT`) at call time. No hardcoded keys in source. Skill telemetry thread spawning is gated by `telemetry.enabled`.
+- **Prompt sanitization:** `_sanitize_prompt_value` strips Jinja tags (`{{ }}`, `{% %}`, `{# #}`) and control characters from `root_instructions_override`, `extra_system_prompt_context`, and target values before they enter the system prompt.
+
 ## Supported execution
 
 Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, allows GPT-5.6 Terra or Luna deployments through the LiteLLM/Strix-supported providers that carry them (currently OpenAI, Azure/Azure AI, and Bedrock Mantle), supports ChatGPT subscription-backed models by default, and always disables inherited telemetry.

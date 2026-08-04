@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 
+from strix.config import load_settings
 from strix.telemetry import posthog, scarf
 from strix.utils.resource_paths import get_strix_resource_path
 
@@ -181,6 +182,9 @@ def validate_requested_skills(skill_list: list[str], max_skills: int = 5) -> str
 
 
 def _track_skill_loaded(skill_name: str, file_path: Path) -> None:
+    if not load_settings().telemetry.enabled:
+        return
+
     builtin = get_strix_resource_path("skills")
     if not file_path.is_relative_to(builtin):
         skill_name = "custom"

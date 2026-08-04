@@ -87,6 +87,8 @@ class LLMUsageLedger:
             record.pop("request_usage_entries", None)
         if self._has_cost or self.zero_cost:
             record["cost"] = _round_cost(self._total_cost)
+        if self.zero_cost:
+            record["subscription"] = True
         agents: list[dict[str, Any]] = []
 
         agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}

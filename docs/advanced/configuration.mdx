@@ -207,6 +207,18 @@ The engine starts the sandbox with `NET_ADMIN` and `NET_RAW` capabilities so too
   Telemetry toggle. The `lyrashield` adapter forces `STRIX_TELEMETRY=0`, so telemetry is off in production regardless of this setting. The inherited PostHog and Scarf clients are disabled; no remote analytics are sent. Alias of `STRIX_TELEMETRY`.
 </ParamField>
 
+<ParamField path="STRIX_POSTHOG_API_KEY" type="string">
+  PostHog public API key. Read lazily at call time, not at import. Only used when telemetry is enabled (which the LyraShield adapter forces off). No hardcoded key in source.
+</ParamField>
+
+<ParamField path="STRIX_POSTHOG_HOST" default="https://us.i.posthog.com" type="string">
+  PostHog host URL. Read lazily at call time. Only used when telemetry is enabled.
+</ParamField>
+
+<ParamField path="STRIX_SCARF_ENDPOINT" type="string">
+  Scarf endpoint URL. Read lazily at call time. Only used when telemetry is enabled.
+</ParamField>
+
 ## Viewer
 
 <ParamField path="LYRASHIELD_APP_URL" default="https://app.strix.ai" type="string">

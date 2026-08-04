@@ -15,6 +15,7 @@ from strix.core import hooks as hooks_module
 from strix.report import dedupe as dedupe_module
 from strix.report.dedupe import (
     _MAX_EXISTING_REPORTS_CHARS,
+    DedupeJudgement,
     _bound_existing_reports,
     _dedupe_model_settings,
     _extract_balanced_json,
@@ -302,3 +303,52 @@ def test_parse_dedupe_response_coerces_fields_and_truncates() -> None:
     assert len(parsed["duplicate_id"]) <= 64
     assert parsed["confidence"] == 0.0
     assert len(parsed["reason"]) <= 500
+
+
+def test_parse_dedupe_response_validates_via_schema() -> None:
+    """A well-formed response should pass Pydantic schema validation."""
+    payload = json.dumps(
+        {
+            "is_duplicate": True,
+            "duplicate_id": "vuln-0001",
+            "confidence": 0.95,
+            "reason": "Same endpoint and payload",
+        }
+    )
+    parsed = _parse_dedupe_response(payload)
+    assert parsed["is_duplicate"] is True
+    assert parsed["duplicate_id"] == "vuln-0001"
+    assert parsed["confidence"] == 0.95
+    assert parsed["reason"] == "Same endpoint and payload"
+
+
+def test_parse_dedupe_response_falls_back_on_invalid_schema() -> None:
+    """A response with extra fields or wrong types should fall back to lenient parser."""
+    payload = json.dumps(
+        {
+            "is_duplicate": "yes",
+            "duplicate_id": "vuln-0002",
+            "confidence": "high",
+            "reason": "Similar finding",
+            "extra_field": "ignored",
+        }
+    )
+    parsed = _parse_dedupe_response(payload)
+    assert parsed["is_duplicate"] is True
+    assert parsed["duplicate_id"] == "vuln-0002"
+    assert parsed["confidence"] == 0.0
+    assert parsed["reason"] == "Similar finding"
+
+
+def test_dedupe_judgement_schema_validates_correct_fields() -> None:
+    """DedupeJudgement Pydantic model enforces field types and confidence range."""
+    j = DedupeJudgement(is_duplicate=True, duplicate_id="vuln-0001", confidence=0.8, reason="dup")
+    assert j.is_duplicate is True
+    assert j.duplicate_id == "vuln-0001"
+    assert j.confidence == 0.8
+
+    j2 = DedupeJudgement(is_duplicate=False)
+    assert j2.is_duplicate is False
+    assert j2.duplicate_id == ""
+    assert j2.confidence == 0.0
+    assert j2.reason == ""

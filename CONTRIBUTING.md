@@ -129,6 +129,17 @@ Do not add providers or models outside GPT-5.6 Terra and Luna; re-enable telemet
 
 Artifact schema changes (`run.json`, `vulnerabilities.json`) require coordinated worker compatibility testing against `ecryptoguru/lyrashield-ai`.
 
+## Security hardening
+
+The engine includes a comprehensive security hardening pass (see `AI_AUDIT_REPORT.md` for the full audit and `UPGRADES.md` for the ledger). When contributing changes that touch security-sensitive areas:
+
+- **Trust boundaries:** Do not remove or weaken `[SYSTEM-NOTICE]` or `[SYSTEM-VERIFIED PEER MESSAGE]` tags from the system prompt or message wrapping code. Tags must only be valid at the start of a top-level user message from the platform.
+- **Secret redaction:** Do not bypass `redact_text()` calls in `ReportState.add_vulnerability_report`, `ReportState.update_scan_final_fields`, or `maybe_compact`. PoC script code must always preserve internal paths for reproducibility.
+- **Path redaction:** Do not remove the `_is_whitebox` mode-aware path redaction logic. Spill paths (`/workspace/.strix/tool-output/`) and tmp state (`/tmp/.strix`) must always be redacted.
+- **Telemetry:** Do not hardcode telemetry keys. Use the lazy `_posthog_api_key()`, `_posthog_host()`, and `_scarf_endpoint()` helpers that read from environment variables at call time. Do not spawn telemetry threads when `telemetry.enabled` is false.
+- **Prompt sanitization:** Do not bypass `_sanitize_prompt_value` for `root_instructions_override`, `extra_system_prompt_context`, or target values. The regex must cover `{{ }}`, `{% %}`, and `{# #}` Jinja tags.
+- **Dedupe schema:** Do not remove `AgentOutputSchema(strict_json_schema=True)` from the dedupe model call. The fallback lenient parser must remain for resilience.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Upstream names and marks remain their owners' property.

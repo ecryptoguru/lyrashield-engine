@@ -44,3 +44,20 @@ def test_normal_ledger_still_estimates_cost() -> None:
     assert ledger.to_record()["total_tokens"] == 1200
     # Cost estimation depends on litellm's cost map; it should be >= 0 and not error.
     assert ledger.total_cost >= 0.0
+
+
+def test_zero_cost_ledger_marks_subscription_in_record() -> None:
+    ledger = LLMUsageLedger()
+    ledger.zero_cost = True
+    ledger.record(agent_id="a", usage=_usage(), agent_name="strix", model="gpt-5.5")
+
+    record = ledger.to_record()
+    assert record.get("subscription") is True
+
+
+def test_normal_ledger_does_not_mark_subscription() -> None:
+    ledger = LLMUsageLedger()
+    ledger.record(agent_id="a", usage=_usage(), agent_name="strix", model="gpt-5.5")
+
+    record = ledger.to_record()
+    assert "subscription" not in record

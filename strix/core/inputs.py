@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 from agents.model_settings import ModelSettings
@@ -27,6 +28,26 @@ if TYPE_CHECKING:
     from openai.types.responses.response_create_params import PromptCacheOptions
 
     from strix.config.settings import ReasoningEffort
+
+
+_JINJA_TAG_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}", re.DOTALL)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_prompt_value(value: str, *, max_len: int = 4096) -> str:
+    """Strip Jinja template syntax and control characters from a prompt-bound string.
+
+    Target values, instruction overrides, and extra context values are rendered
+    into Jinja templates or concatenated into system prompts. A malicious or
+    malformed value containing ``{{ }}``, ``{% %}``, or control characters could
+    break the template or inject unexpected content.
+    """
+    cleaned = _JINJA_TAG_RE.sub("", value)
+    cleaned = _CONTROL_CHAR_RE.sub("", cleaned)
+    cleaned = cleaned.strip()
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len]
+    return cleaned
 
 
 DEFAULT_MAX_TURNS = 500
@@ -210,7 +231,7 @@ def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
         details = _as_str_dict(target.get("details"))
         key = value_keys.get(ttype)
         raw_value = details.get(key, "") if key is not None else target.get("original", "")
-        value = str(raw_value or "")
+        value = _sanitize_prompt_value(str(raw_value or ""))
 
         workspace_subdir_raw = details.get("workspace_subdir")
         workspace_subdir = workspace_subdir_raw if isinstance(workspace_subdir_raw, str) else ""

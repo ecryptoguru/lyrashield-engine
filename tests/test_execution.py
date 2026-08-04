@@ -1216,3 +1216,38 @@ async def test_finalization_sequence_promotes_running_to_completed() -> None:
             await coordinator.set_status("root", "completed")
 
     assert coordinator.statuses["root"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_inter_agent_message_has_trust_boundary() -> None:
+    """Peer messages must carry a system-verified trust boundary prefix."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+
+    item = coordinator._message_to_session_item(
+        {
+            "id": "msg_abc123",
+            "from": "root",
+            "content": "Check the login endpoint",
+            "type": "instruction",
+            "priority": "high",
+        }
+    )
+    content = item["content"]
+    assert "SYSTEM-VERIFIED PEER MESSAGE" in content
+    assert "msg_abc123" in content
+    assert "from=strix (root)" in content
+    assert "type=instruction" in content
+    assert "priority=high" in content
+    assert "Check the login endpoint" in content
+    assert "orchestration layer" in content
+
+
+@pytest.mark.asyncio
+async def test_user_message_has_no_trust_boundary() -> None:
+    """User messages should not carry the peer message trust boundary."""
+    coordinator = AgentCoordinator()
+    item = coordinator._message_to_session_item({"from": "user", "content": "Hello agent"})
+    assert "SYSTEM-VERIFIED PEER MESSAGE" not in item["content"]
+    assert item["content"] == "Hello agent"

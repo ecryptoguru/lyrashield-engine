@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import urllib.parse
 from datetime import datetime
 from typing import Any
@@ -20,7 +21,9 @@ from strix.telemetry._common import (
 
 logger = logging.getLogger(__name__)
 
-_SCARF_ENDPOINT = "https://strix.gateway.scarf.sh"
+
+def _scarf_endpoint() -> str:
+    return os.environ.get("STRIX_SCARF_ENDPOINT", "")
 
 
 def _is_enabled() -> bool:
@@ -31,6 +34,10 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
     if not _is_enabled():
         logger.debug("scarf disabled; skipping event %s", event)
         return False
+    endpoint = _scarf_endpoint()
+    if not endpoint:
+        logger.debug("scarf endpoint not configured; skipping event %s", event)
+        return False
     try:
         props = dict(properties)
         version = str(props.pop("strix_version", get_version()) or "unknown")
@@ -38,7 +45,7 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
         query = urllib.parse.urlencode(
             {k: ("" if v is None else str(v)) for k, v in props.items()},
         )
-        url = f"{_SCARF_ENDPOINT}{path}"
+        url = f"{endpoint}{path}"
         if query:
             url = f"{url}?{query}"
         requests.post(url, timeout=10)

@@ -331,3 +331,35 @@ async def test_maybe_compact_skips_when_no_room_to_summarise(
     assert await compaction.maybe_compact(session, model="m", force=True) is False
     assert not captured
     assert await session.get_items() == before
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_redacts_secrets_from_summary_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Secrets in the conversation head must be redacted before summarization."""
+    _patch_budget(monkeypatch, keep_tokens=30, window=4_000)
+    captured: dict[str, Any] = {}
+    _patch_summary(monkeypatch, "SUMMARY with api_key=sk-leaked123", captured)
+
+    items = [
+        _user("Found api_key=sk-1234567890abcdef in /workspace/config"),
+        _assistant("password=admin123 exposed at /workspace/secret.py"),
+        *_turns(10),
+    ]
+    session = FakeSession(items)
+
+    assert await compaction.maybe_compact(session, model="m", force=True) is True
+
+    # The prompt sent to the summarization model must not contain raw secrets.
+    assert "sk-1234567890abcdef" not in captured["input"]
+    assert "admin123" not in captured["input"]
+    assert "/workspace/config" not in captured["input"]
+    assert "/workspace/secret.py" not in captured["input"]
+    assert "[SECRET]" in captured["input"]
+    assert "[INTERNAL_PATH]" in captured["input"]
+
+    # The checkpoint stored in the session must also be redacted.
+    checkpoint = (await session.get_items())[0]
+    assert "sk-leaked123" not in checkpoint["content"]
+    assert "[SECRET]" in checkpoint["content"]
