@@ -76,6 +76,31 @@ def test_is_content_filter_error_ignores_response_failed_without_filter_context(
     assert execution._is_content_filter_error(exc) is False
 
 
+def test_response_failed_without_filter_context_is_transient() -> None:
+    """``response.failed`` without a filter-specific marker IS transient.
+
+    Azure's Responses API can return ``response.failed`` for transient
+    server-side issues (overload, capacity, internal errors). These should be
+    retried with backoff rather than crashing the scan.
+    """
+    exc = ModelBehaviorError(
+        "Responses stream ended with terminal event `response.failed`. status=failed."
+    )
+    assert execution._is_transient_model_error(exc) is True
+
+
+def test_response_failed_with_filter_context_is_not_transient() -> None:
+    """``response.failed`` WITH a filter-specific marker is NOT transient.
+
+    Content-filter errors need session sanitization, not a simple retry.
+    """
+    exc = ModelBehaviorError(
+        "Responses stream ended with terminal event `response.failed`. "
+        "status=failed; content_filter triggered."
+    )
+    assert execution._is_transient_model_error(exc) is False
+
+
 def test_is_content_filter_error_detects_guardrail() -> None:
     guardrail = codex.CodexContentGuardrailError("gpt-5.6-terra")
     assert execution._is_content_filter_error(guardrail) is True
@@ -479,6 +504,81 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
     result = await runner.run_strix_scan(
         scan_config={"targets": [], "scan_mode": "deep"},
         scan_id="scan-fallback-test",
+        image="img",
+        coordinator=coordinator,
+    )
+
+    assert result is not None
+    assert call_count["n"] == 2  # One coordinator failure + one delegate success
+
+
+@pytest.mark.asyncio
+async def test_runner_falls_back_to_delegate_on_non_content_filter_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """When the coordinator model hits a non-content-filter ModelBehaviorError,
+    the scan still switches to the delegate model (any model error triggers the
+    fallback, not just content_filter)."""
+    monkeypatch.setattr(runner, "run_dir_for", lambda _scan_id: tmp_path)
+    monkeypatch.setattr(runner, "runtime_state_dir", lambda _run_dir: tmp_path)
+    monkeypatch.setattr(runner, "setup_scan_logging", lambda _run_dir: lambda: None)
+    monkeypatch.setattr(runner, "set_scan_id", lambda _scan_id: None)
+
+    settings = types.SimpleNamespace(
+        llm=types.SimpleNamespace(
+            model="openai/gpt-4o",
+            delegate_model="openai/gpt-4o-mini",
+            reasoning_effort="high",
+            delegate_reasoning_effort="medium",
+            force_required_tool_choice=False,
+            timeout=300,
+            prompt_cache=True,
+            extra_headers=None,
+        ),
+        runtime=types.SimpleNamespace(max_context_images=3),
+    )
+    monkeypatch.setattr(runner, "load_settings", lambda: settings)
+    monkeypatch.setattr(runner, "configure_sdk_model_defaults", lambda _settings: None)
+    monkeypatch.setattr(
+        runner, "uses_chat_completions_tool_schema", lambda _model, _settings: False
+    )
+
+    monkeypatch.setattr(todo_tools, "hydrate_todos_from_disk", lambda _state_dir: None)
+    monkeypatch.setattr(notes_tools, "hydrate_notes_from_disk", lambda _state_dir: None)
+
+    async def _create_or_reuse(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"client": object(), "session": object(), "caido_client": None}
+
+    async def _cleanup(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(session_manager, "create_or_reuse", _create_or_reuse)
+    monkeypatch.setattr(session_manager, "cleanup", _cleanup)
+
+    monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
+    monkeypatch.setattr(runner, "build_root_initial_input", lambda _config, **_kw: "task")
+    monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: "")
+    monkeypatch.setattr(runner, "make_model_settings", lambda *_a, **_kw: {})
+    monkeypatch.setattr(runner, "build_strix_agent", lambda **_kw: object())
+    monkeypatch.setattr(runner, "make_child_factory", lambda **_kw: lambda **_k: object())
+    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kw: object())
+
+    call_count = {"n": 0}
+
+    async def _run_agent_loop(*_args: Any, **_kwargs: Any) -> Any:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Coordinator hits a non-content-filter error
+            raise ModelBehaviorError("Max turns exceeded")
+        return types.SimpleNamespace(final_output='{"scan_completed": true}')
+
+    monkeypatch.setattr(runner, "run_agent_loop", _run_agent_loop)
+
+    coordinator = AgentCoordinator()
+    result = await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-noncf-fallback-test",
         image="img",
         coordinator=coordinator,
     )
