@@ -554,33 +554,35 @@ async def run_strix_scan(
                 hooks=hooks,
             )
         except ModelBehaviorError as exc:
-            if not _is_content_filter_error(exc):
-                raise
-            # Content filter triggered on the root agent. Layer 1 in
-            # ``_run_cycle`` may have already sanitized the session and retried
-            # with caution messages. Rather than retrying the same coordinator
-            # model (Terra), switch directly to the delegate model (Luna) at the
-            # delegate reasoning effort. This avoids wasting a retry on a model
-            # that already triggered the filter and gets the scan running on the
-            # cheaper, less-filter-prone model immediately.
+            # The root agent (Terra) hit a model error. This may be a content
+            # filter, max-turns exhaustion, malformed JSON, or any other model
+            # behavior issue. Rather than re-raising and losing all partial
+            # findings, switch directly to the delegate model (Luna) at the
+            # delegate reasoning effort. If the delegate also fails, salvage
+            # whatever was collected.
+            is_content_filter = _is_content_filter_error(exc)
             if delegate_model == resolved_model:
                 logger.exception(
-                    "Scan %s: root agent hit content_filter and no separate "
-                    "delegate model is configured; salvaging partial findings.",
+                    "Scan %s: root agent hit %s and no separate delegate model "
+                    "is configured; salvaging partial findings.",
                     scan_id,
+                    "content_filter" if is_content_filter else "model_error",
                 )
                 await coordinator.cancel_descendants(root_id)
                 with contextlib.suppress(Exception):
                     await coordinator.set_status(root_id, "stopped")
                 report_state = get_global_report_state()
                 if report_state is not None:
-                    report_state.set_terminal_reason("content_filter_stopped")
+                    report_state.set_terminal_reason(
+                        "content_filter_stopped" if is_content_filter else "engine_stopped"
+                    )
                 return None
             logger.warning(
-                "Scan %s: root agent (model=%s) hit content_filter; switching "
-                "directly to delegate model %s at %s reasoning (no coordinator retry).",
+                "Scan %s: root agent (model=%s) hit %s; switching directly to "
+                "delegate model %s at %s reasoning (no coordinator retry).",
                 scan_id,
                 resolved_model,
+                "content_filter" if is_content_filter else "model_error",
                 delegate_model,
                 delegate_reasoning_effort,
             )

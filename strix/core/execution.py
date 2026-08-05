@@ -168,6 +168,16 @@ def _is_transient_model_error(exc: BaseException) -> bool:
         exc, APITimeoutError | APIConnectionError | TimeoutError | ConnectionError | OSError
     ):
         return True
+    # Azure's Responses API can return a `response.failed` terminal event for
+    # transient server-side issues (overload, capacity, internal errors) with no
+    # content-filter context. These should be retried with backoff rather than
+    # crashing the scan. If the error text contains content-filter markers, it
+    # is handled by the content-filter recovery path above.
+    text = str(exc).lower()
+    if _RESPONSE_FAILED_MARKER in text and not any(
+        ctx in text for ctx in _CONTENT_FILTER_CONTEXT_MARKERS
+    ):
+        return True
     code = _model_error_status_code(exc)
     if code is not None:
         return bool(litellm._should_retry(code))

@@ -673,7 +673,7 @@ Examples:
         "specific vulnerability types to focus on (e.g., 'Focus on IDOR and XSS'), "
         "testing approaches (e.g., 'Perform thorough authentication testing'), "
         "test credentials (e.g., 'Use the following credentials to access the app: "
-        "admin:password123'), "
+        "testuser:REDACTED'), "
         "or areas of interest (e.g., 'Check login API endpoint for security issues').",
     )
 

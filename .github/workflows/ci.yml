@@ -42,6 +42,20 @@ jobs:
           uv build
           uv run lyrashield --version
 
+      - name: Ruff lint and format check
+        run: |
+          uv run ruff check --no-fix .
+          uv run ruff format --check .
+
+      - name: Mypy type check
+        run: uv run mypy strix lyrashield_adapter
+
+      - name: Bandit security scan
+        run: uv run bandit -c pyproject.toml -r strix lyrashield_adapter
+
+      - name: Run test suite
+        run: uv run pytest -q
+
       - name: Verify native release binary
         run: bash scripts/build.sh
 
