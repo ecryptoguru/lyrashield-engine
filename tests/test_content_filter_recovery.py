@@ -24,6 +24,7 @@ from strix.config import codex
 from strix.core import execution, runner
 from strix.core.agents import AgentCoordinator
 from strix.core.sessions import sanitize_session_secrets
+from strix.report.state import ReportState, get_global_report_state, set_global_report_state
 from strix.runtime import session_manager
 
 
@@ -418,8 +419,8 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """When the coordinator model hits content_filter twice, the scan falls
-    back to the delegate model for the root agent."""
+    """When the coordinator model hits content_filter once, the scan switches
+    directly to the delegate model for the root agent (no coordinator retry)."""
     monkeypatch.setattr(runner, "run_dir_for", lambda _scan_id: tmp_path)
     monkeypatch.setattr(runner, "runtime_state_dir", lambda _run_dir: tmp_path)
     monkeypatch.setattr(runner, "setup_scan_logging", lambda _run_dir: lambda: None)
@@ -443,7 +444,6 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
     monkeypatch.setattr(
         runner, "uses_chat_completions_tool_schema", lambda _model, _settings: False
     )
-    monkeypatch.setattr(runner, "_prompt_cache_explicit_enabled", lambda _model: False)
 
     monkeypatch.setattr(todo_tools, "hydrate_todos_from_disk", lambda _state_dir: None)
     monkeypatch.setattr(notes_tools, "hydrate_notes_from_disk", lambda _state_dir: None)
@@ -469,7 +469,7 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
 
     async def _run_agent_loop(*_args: Any, **_kwargs: Any) -> Any:
         call_count["n"] += 1
-        if call_count["n"] <= 2:
+        if call_count["n"] == 1:
             raise _content_filter_model_error()
         return types.SimpleNamespace(final_output='{"scan_completed": true}')
 
@@ -484,4 +484,165 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
     )
 
     assert result is not None
-    assert call_count["n"] == 3  # Two coordinator failures + one delegate success
+    assert call_count["n"] == 2  # One coordinator failure + one delegate success
+
+
+@pytest.mark.asyncio
+async def test_runner_salvages_when_delegate_also_hits_content_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """When both the coordinator and the delegate fallback hit content_filter,
+    the scan salvages partial findings and returns None with
+    ``content_filter_stopped`` as the terminal reason."""
+    report_state = ReportState(run_name="scan-salvage-test")
+    set_global_report_state(report_state)
+    monkeypatch.setattr(runner, "run_dir_for", lambda _scan_id: tmp_path)
+    monkeypatch.setattr(runner, "runtime_state_dir", lambda _run_dir: tmp_path)
+    monkeypatch.setattr(runner, "setup_scan_logging", lambda _run_dir: lambda: None)
+    monkeypatch.setattr(runner, "set_scan_id", lambda _scan_id: None)
+
+    settings = types.SimpleNamespace(
+        llm=types.SimpleNamespace(
+            model="openai/gpt-4o",
+            delegate_model="openai/gpt-4o-mini",
+            reasoning_effort="high",
+            delegate_reasoning_effort="medium",
+            force_required_tool_choice=False,
+            timeout=300,
+            prompt_cache=True,
+            extra_headers=None,
+        ),
+        runtime=types.SimpleNamespace(max_context_images=3),
+    )
+    monkeypatch.setattr(runner, "load_settings", lambda: settings)
+    monkeypatch.setattr(runner, "configure_sdk_model_defaults", lambda _settings: None)
+    monkeypatch.setattr(
+        runner, "uses_chat_completions_tool_schema", lambda _model, _settings: False
+    )
+
+    monkeypatch.setattr(todo_tools, "hydrate_todos_from_disk", lambda _state_dir: None)
+    monkeypatch.setattr(notes_tools, "hydrate_notes_from_disk", lambda _state_dir: None)
+
+    async def _create_or_reuse(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"client": object(), "session": object(), "caido_client": None}
+
+    async def _cleanup(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(session_manager, "create_or_reuse", _create_or_reuse)
+    monkeypatch.setattr(session_manager, "cleanup", _cleanup)
+
+    monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
+    monkeypatch.setattr(runner, "build_root_initial_input", lambda _config, **_kw: "task")
+    monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: "")
+    monkeypatch.setattr(runner, "make_model_settings", lambda *_a, **_kw: {})
+    monkeypatch.setattr(runner, "build_strix_agent", lambda **_kw: object())
+    monkeypatch.setattr(runner, "make_child_factory", lambda **_kw: lambda **_k: object())
+    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kw: object())
+
+    call_count = {"n": 0}
+
+    async def _run_agent_loop(*_args: Any, **_kwargs: Any) -> Any:
+        call_count["n"] += 1
+        # Both the coordinator and the delegate fallback hit content_filter
+        raise _content_filter_model_error()
+
+    monkeypatch.setattr(runner, "run_agent_loop", _run_agent_loop)
+
+    coordinator = AgentCoordinator()
+    result = await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-salvage-test",
+        image="img",
+        coordinator=coordinator,
+    )
+
+    assert result is None  # Salvaged, not a normal completion
+    assert call_count["n"] == 2  # One coordinator failure + one delegate failure
+    final_report_state = get_global_report_state()
+    assert final_report_state is not None
+    assert final_report_state.run_record.get("terminal_reason") == "content_filter_stopped"
+    set_global_report_state(None)
+
+
+@pytest.mark.asyncio
+async def test_runner_salvages_when_delegate_hits_non_content_filter_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """When the coordinator hits content_filter and the delegate fallback hits
+    a non-content-filter ModelBehaviorError, the scan still salvages partial
+    findings with ``engine_stopped`` as the terminal reason."""
+    report_state = ReportState(run_name="scan-engine-stopped-test")
+    set_global_report_state(report_state)
+    monkeypatch.setattr(runner, "run_dir_for", lambda _scan_id: tmp_path)
+    monkeypatch.setattr(runner, "runtime_state_dir", lambda _run_dir: tmp_path)
+    monkeypatch.setattr(runner, "setup_scan_logging", lambda _run_dir: lambda: None)
+    monkeypatch.setattr(runner, "set_scan_id", lambda _scan_id: None)
+
+    settings = types.SimpleNamespace(
+        llm=types.SimpleNamespace(
+            model="openai/gpt-4o",
+            delegate_model="openai/gpt-4o-mini",
+            reasoning_effort="high",
+            delegate_reasoning_effort="medium",
+            force_required_tool_choice=False,
+            timeout=300,
+            prompt_cache=True,
+            extra_headers=None,
+        ),
+        runtime=types.SimpleNamespace(max_context_images=3),
+    )
+    monkeypatch.setattr(runner, "load_settings", lambda: settings)
+    monkeypatch.setattr(runner, "configure_sdk_model_defaults", lambda _settings: None)
+    monkeypatch.setattr(
+        runner, "uses_chat_completions_tool_schema", lambda _model, _settings: False
+    )
+
+    monkeypatch.setattr(todo_tools, "hydrate_todos_from_disk", lambda _state_dir: None)
+    monkeypatch.setattr(notes_tools, "hydrate_notes_from_disk", lambda _state_dir: None)
+
+    async def _create_or_reuse(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"client": object(), "session": object(), "caido_client": None}
+
+    async def _cleanup(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(session_manager, "create_or_reuse", _create_or_reuse)
+    monkeypatch.setattr(session_manager, "cleanup", _cleanup)
+
+    monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
+    monkeypatch.setattr(runner, "build_root_initial_input", lambda _config, **_kw: "task")
+    monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: "")
+    monkeypatch.setattr(runner, "make_model_settings", lambda *_a, **_kw: {})
+    monkeypatch.setattr(runner, "build_strix_agent", lambda **_kw: object())
+    monkeypatch.setattr(runner, "make_child_factory", lambda **_kw: lambda **_k: object())
+    monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kw: object())
+
+    call_count = {"n": 0}
+
+    async def _run_agent_loop(*_args: Any, **_kwargs: Any) -> Any:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Coordinator hits content_filter
+            raise _content_filter_model_error()
+        # Delegate hits a non-content-filter ModelBehaviorError
+        raise ModelBehaviorError("Max turns exceeded")
+
+    monkeypatch.setattr(runner, "run_agent_loop", _run_agent_loop)
+
+    coordinator = AgentCoordinator()
+    result = await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-engine-stopped-test",
+        image="img",
+        coordinator=coordinator,
+    )
+
+    assert result is None  # Salvaged, not a normal completion
+    assert call_count["n"] == 2  # One coordinator failure + one delegate failure
+    final_report_state = get_global_report_state()
+    assert final_report_state is not None
+    assert final_report_state.run_record.get("terminal_reason") == "engine_stopped"
+    set_global_report_state(None)
