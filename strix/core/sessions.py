@@ -11,6 +11,8 @@ from weakref import WeakKeyDictionary
 from agents.items import ItemHelpers
 from agents.memory import OpenAIConversationsSession, SQLiteSession
 
+from strix.utils.redaction import redact_secrets
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -178,6 +180,113 @@ async def strip_all_images_from_session(session: Session) -> bool:
                 changed = True
             else:
                 rebuilt.append(item)
+        return rebuilt, changed
+
+    return await _rewrite_session(session, _transform)
+
+
+# --- Content-filter recovery: redact secrets in session tool outputs and
+# assistant messages so a replayed turn does not re-trigger Azure's filter.
+
+
+def _output_has_text(item_dict: dict[str, Any]) -> bool:
+    """Return True if a function_call_output item carries text content."""
+    if item_dict.get("type") != "function_call_output":
+        return False
+    output = item_dict.get("output")
+    if isinstance(output, str):
+        return bool(output)
+    if isinstance(output, list):
+        return any(
+            isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "input_text"
+            for block in output
+        )
+    return False
+
+
+def _redact_output_secrets(item_dict: dict[str, Any]) -> dict[str, Any] | None:
+    """Redact secrets in a function_call_output item; return None if unchanged."""
+    output = item_dict.get("output")
+    if isinstance(output, str):
+        redacted = redact_secrets(output)
+        return {**item_dict, "output": redacted} if redacted != output else None
+    if isinstance(output, list):
+        new_blocks: list[Any] = []
+        changed = False
+        for block in output:
+            if isinstance(block, dict) and block.get("type") == "input_text":
+                text = block.get("text", "")
+                if isinstance(text, str):
+                    redacted = redact_secrets(text)
+                    if redacted != text:
+                        new_blocks.append({**block, "text": redacted})
+                        changed = True
+                        continue
+            new_blocks.append(block)
+        return {**item_dict, "output": new_blocks} if changed else None
+    return None
+
+
+def _message_has_text(item_dict: dict[str, Any]) -> bool:
+    """Return True if a message_output item carries output_text content."""
+    if item_dict.get("type") != "message_output":
+        return False
+    content = item_dict.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "output_text"
+        for block in content
+    )
+
+
+def _redact_message_secrets(item_dict: dict[str, Any]) -> dict[str, Any] | None:
+    """Redact secrets in a message_output item; return None if unchanged."""
+    content = item_dict.get("content")
+    if not isinstance(content, list):
+        return None
+    new_blocks: list[Any] = []
+    changed = False
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "output_text":
+            text = block.get("text", "")
+            if isinstance(text, str):
+                redacted = redact_secrets(text)
+                if redacted != text:
+                    new_blocks.append({**block, "text": redacted})
+                    changed = True
+                    continue
+        new_blocks.append(block)
+    return {**item_dict, "content": new_blocks} if changed else None
+
+
+async def sanitize_session_secrets(session: Session) -> bool:
+    """Redact secrets in tool outputs and assistant messages to clear a content-filter block.
+
+    Mirrors :func:`strip_all_images_from_session` but applies
+    :func:`strix.utils.redaction.redact_secrets` to text content in
+    ``function_call_output`` and ``message_output`` items. Returns True if any
+    item was rewritten (caller should retry the turn), False if nothing changed.
+    """
+
+    def _transform(items: list[Any]) -> tuple[list[Any], bool]:
+        rebuilt: list[Any] = []
+        changed = False
+        for item in items:
+            item_dict = cast("dict[str, Any]", item) if isinstance(item, dict) else None
+            if item_dict is not None and _output_has_text(item_dict):
+                new_item = _redact_output_secrets(item_dict)
+                if new_item is not None:
+                    rebuilt.append(new_item)
+                    changed = True
+                    continue
+            if item_dict is not None and _message_has_text(item_dict):
+                new_item = _redact_message_secrets(item_dict)
+                if new_item is not None:
+                    rebuilt.append(new_item)
+                    changed = True
+                    continue
+            rebuilt.append(item)
         return rebuilt, changed
 
     return await _rewrite_session(session, _transform)

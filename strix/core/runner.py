@@ -29,6 +29,7 @@ from strix.config.models import (
 )
 from strix.core.agents import AgentCoordinator
 from strix.core.execution import (
+    _is_content_filter_error,
     respawn_subagents,
     run_agent_loop,
 )
@@ -554,52 +555,141 @@ async def run_strix_scan(
                 hooks=hooks,
             )
         except ModelBehaviorError as exc:
-            if "content_filter" not in str(exc) or not _prompt_cache_explicit_enabled(
-                resolved_model
-            ):
+            if not _is_content_filter_error(exc):
                 raise
-            logger.warning(
-                "Scan %s hit content_filter with explicit prompt caching; "
-                "falling back to implicit caching and retrying.",
-                scan_id,
-            )
-            initial_input = build_root_task(scan_config)
-            model_settings = make_model_settings(
-                llm_settings.reasoning_effort,
-                model_name=resolved_model,
-                force_required_tool_choice=llm_settings.force_required_tool_choice,
-                request_timeout=llm_settings.timeout,
-                max_output_tokens=max_output_tokens,
-                prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
-                prompt_cache_options=None,
-            )
-            root_agent = build_strix_agent(
-                name="Strix",
-                skills=skills,
-                is_root=True,
-                scan_mode=scan_mode,
-                is_whitebox=is_whitebox,
-                interactive=interactive,
-                chat_completions_tools=chat_completions_tools,
-                system_prompt_context=root_context,
-                instructions_override=root_instructions,
-                model=resolved_model,
-                model_settings=model_settings,
-            )
-            result = await run_agent_loop(
-                agent=root_agent,
-                initial_input=initial_input,
-                run_config=run_config,
-                context=context,
-                max_turns=max_turns,
-                coordinator=coordinator,
-                agent_id=root_id,
-                interactive=interactive,
-                session=root_session,
-                start_parked=bool(interactive and is_resume and root_status != "running"),
-                event_sink=event_sink,
-                hooks=hooks,
-            )
+            # Content filter triggered on the root agent. Layer 1 in
+            # ``_run_cycle`` may have already sanitized the session and retried
+            # with caution messages; this is a second chance for the root agent.
+            cache_was_explicit = _prompt_cache_explicit_enabled(resolved_model)
+            if cache_was_explicit:
+                logger.warning(
+                    "Scan %s hit content_filter with explicit prompt caching; "
+                    "falling back to implicit caching and retrying.",
+                    scan_id,
+                )
+                initial_input = build_root_task(scan_config)
+                model_settings = make_model_settings(
+                    llm_settings.reasoning_effort,
+                    model_name=resolved_model,
+                    force_required_tool_choice=llm_settings.force_required_tool_choice,
+                    request_timeout=llm_settings.timeout,
+                    max_output_tokens=max_output_tokens,
+                    prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
+                    prompt_cache_options=None,
+                )
+                root_agent = build_strix_agent(
+                    name="Strix",
+                    skills=skills,
+                    is_root=True,
+                    scan_mode=scan_mode,
+                    is_whitebox=is_whitebox,
+                    interactive=interactive,
+                    chat_completions_tools=chat_completions_tools,
+                    system_prompt_context=root_context,
+                    instructions_override=root_instructions,
+                    model=resolved_model,
+                    model_settings=model_settings,
+                )
+            else:
+                logger.warning(
+                    "Scan %s hit content_filter; retrying root agent "
+                    "(session may have been sanitized by _run_cycle recovery).",
+                    scan_id,
+                )
+            try:
+                result = await run_agent_loop(
+                    agent=root_agent,
+                    initial_input=initial_input,
+                    run_config=run_config,
+                    context=context,
+                    max_turns=max_turns,
+                    coordinator=coordinator,
+                    agent_id=root_id,
+                    interactive=interactive,
+                    session=root_session,
+                    start_parked=bool(interactive and is_resume and root_status != "running"),
+                    event_sink=event_sink,
+                    hooks=hooks,
+                )
+            except ModelBehaviorError as retry_exc:
+                # Coordinator model retry also failed with content_filter. Fall
+                # back to the delegate model which does not trigger the content
+                # filter. This ensures the scan completes with findings rather
+                # than failing with 0 engine findings.
+                if not _is_content_filter_error(retry_exc):
+                    raise
+                if delegate_model == resolved_model:
+                    logger.exception(
+                        "Scan %s: coordinator model content_filter retry failed and no separate "
+                        "delegate model is configured; giving up.",
+                        scan_id,
+                    )
+                    raise
+                logger.warning(
+                    "Scan %s: coordinator model content_filter retry failed; falling back to "
+                    "delegate model %s for root agent.",
+                    scan_id,
+                    delegate_model,
+                )
+                fallback_chat_completions_tools = uses_chat_completions_tool_schema(
+                    delegate_model, settings
+                )
+                fallback_model_settings = make_model_settings(
+                    delegate_reasoning_effort,
+                    model_name=delegate_model,
+                    force_required_tool_choice=llm_settings.force_required_tool_choice,
+                    request_timeout=llm_settings.timeout,
+                    max_output_tokens=min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING),
+                    prompt_cache_key=f"lyrashield:{scan_id}:coordinator-fallback",
+                    prompt_cache_options=None,
+                )
+                fallback_agent = build_strix_agent(
+                    name="Strix",
+                    skills=skills,
+                    is_root=True,
+                    scan_mode=scan_mode,
+                    is_whitebox=is_whitebox,
+                    interactive=interactive,
+                    chat_completions_tools=fallback_chat_completions_tools,
+                    system_prompt_context=root_context,
+                    instructions_override=root_instructions,
+                    model=delegate_model,
+                    model_settings=fallback_model_settings,
+                )
+                try:
+                    result = await run_agent_loop(
+                        agent=fallback_agent,
+                        initial_input=initial_input,
+                        run_config=run_config,
+                        context=context,
+                        max_turns=max_turns,
+                        coordinator=coordinator,
+                        agent_id=root_id,
+                        interactive=interactive,
+                        session=root_session,
+                        start_parked=bool(interactive and is_resume and root_status != "running"),
+                        event_sink=event_sink,
+                        hooks=hooks,
+                    )
+                except ModelBehaviorError as fallback_exc:
+                    # Delegate fallback also hit content_filter. Salvage whatever
+                    # findings were collected before the block and treat the
+                    # scan as content-filter-stopped rather than failed. This
+                    # preserves partial results instead of losing everything.
+                    if not _is_content_filter_error(fallback_exc):
+                        raise
+                    logger.warning(
+                        "Scan %s: delegate fallback also hit content_filter; "
+                        "salvaging partial findings and stopping.",
+                        scan_id,
+                    )
+                    await coordinator.cancel_descendants(root_id)
+                    with contextlib.suppress(Exception):
+                        await coordinator.set_status(root_id, "stopped")
+                    report_state = get_global_report_state()
+                    if report_state is not None:
+                        report_state.set_terminal_reason("content_filter_stopped")
+                    return None
         if not interactive and result is not None:
             final = getattr(result, "final_output", None)
             scan_completed = False

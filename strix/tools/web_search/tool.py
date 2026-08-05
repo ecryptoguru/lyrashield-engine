@@ -355,8 +355,10 @@ async def web_search(
                     "mode": mode,
                     "objective": objective,
                     "search_queries": search_queries,
-                    "max_results": web_search_settings.max_results,
                     "max_chars_total": web_search_settings.max_chars_total,
+                    "advanced_settings": {
+                        "max_results": web_search_settings.max_results,
+                    },
                 },
             )
             response.raise_for_status()
