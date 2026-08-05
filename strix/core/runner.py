@@ -633,14 +633,6 @@ async def run_strix_scan(
                 # losing everything — the scan already spent budget and may have
                 # collected child-agent findings.
                 is_cf = _is_content_filter_error(fallback_exc)
-                with contextlib.suppress(Exception):
-                    debug_path = run_dir_for(scan_id) / "debug_error.txt"
-                    existing = debug_path.read_text(encoding="utf-8") if debug_path.exists() else ""
-                    debug_path.write_text(
-                        existing + f"FALLBACK ERROR: type={type(fallback_exc).__name__}, "
-                        f"content_filter={is_cf}, message={str(fallback_exc)[:500]}\n",
-                        encoding="utf-8",
-                    )
                 terminal_reason = "content_filter_stopped" if is_cf else "engine_stopped"
                 logger.warning(
                     "Scan %s: delegate fallback also failed (content_filter=%s); "
