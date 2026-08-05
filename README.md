@@ -110,6 +110,8 @@ Deep scans use a deterministic two-tier route: the Terra/medium root owns coordi
 
 The TypeScript worker treats all engine output as untrusted. It schema-validates these artifacts, never persists raw stdout/stderr, and does not allow model confidence to become independent verification proof. Existing artifact keys are compatibility-sensitive; coordinate changes with the worker contract tests in `lyrashield-ai`.
 
+When the root model (Terra) hits any `ModelBehaviorError`, the engine falls back to the delegate model (Luna) rather than failing the scan immediately. If no separate delegate is configured, or if the delegate also fails, partial findings are salvaged with an `engine_stopped` (or `content_filter_stopped` for content-filter errors) terminal reason recorded in `run.json`. The exit code is 2 when findings are present and 5 when none were collected. Azure's transient `response.failed` status (without content-filter context) is retried with backoff rather than failing the scan.
+
 ## Verification
 
 Run the full gate before opening or approving a change:
@@ -119,6 +121,8 @@ bash scripts/verify-thin-fork.sh
 ```
 
 The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, the full test suite (`pytest`), headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
+
+Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`: Ruff lint and format check, Mypy type check, Bandit security scan, and the full pytest test suite (597 tests), in addition to thin-fork verification, CLI build, and worker contract checks. This closes the gap where pre-commit hooks only ran locally.
 
 Budget enforcement now falls back to LiteLLM's `model_cost` table and then to conservative default rates for non-GPT-5.6 models, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-5.6 Terra/Luna deployments before scan start.
 

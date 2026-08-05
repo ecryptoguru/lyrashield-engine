@@ -1563,6 +1563,53 @@ New file; utility to refresh the GPT-5.6 provider allow-list.
 
 ---
 
+## Post-hardening updates
+
+### Broadened delegate fallback (`strix/core/runner.py`)
+
+The root agent (Terra) now falls back to the delegate model (Luna) on **any** `ModelBehaviorError`, not just `content_filter` errors. Previously the fallback was limited to content-filter blocks; now max-turns exhaustion, malformed JSON, and other model behavior issues also trigger the delegate switch.
+
+- **No separate delegate configured** (`strix/core/runner.py:564-579`): partial findings are salvaged with `engine_stopped` (or `content_filter_stopped` if the error is content-filter related) terminal reason. The coordinator cancels descendants and sets the root agent status to `stopped`.
+- **Delegate configured** (`strix/core/runner.py:580-628`): the root agent is rebuilt with the delegate model at the delegate reasoning effort and the scan continues. Output tokens are capped at `DELEGATE_OUTPUT_TOKEN_CEILING`.
+- **Delegate also fails** (`strix/core/runner.py:629-649`): when the delegate model also hits a `ModelBehaviorError`, partial findings are salvaged with `engine_stopped` or `content_filter_stopped` depending on whether the delegate error is content-filter related.
+
+### Transient `response.failed` handling (`strix/core/execution.py`)
+
+Azure's Responses API can return a `response.failed` terminal event for transient server-side issues (overload, capacity, internal errors) with no content-filter context. This is now treated as a transient error and retried with backoff, rather than failing the scan immediately.
+
+- **Detection** (`strix/core/execution.py:171-180`): `_is_transient_model_error` checks for the `response.failed` marker in the error text. If content-filter context markers (`content_filter`, `content_policy`) are also present, the error is routed to the content-filter recovery path instead.
+- **Retry** (`strix/core/execution.py:187-189`): transient errors use exponential backoff via `_transient_model_retry_delay`, capped at `_TRANSIENT_MODEL_RETRY_MAX_DELAY_S`.
+
+### `engine_stopped` terminal reason (`strix/core/runner.py`, `strix/interface/main.py`)
+
+New terminal reason for scans that stop due to non-content-filter model errors. Distinguished from `content_filter_stopped` (which applies to content-filter/guardrail blocks).
+
+- **Set in runner** (`strix/core/runner.py:577, 636`): `report_state.set_terminal_reason("engine_stopped")` is called when the root or delegate model fails with a non-content-filter `ModelBehaviorError`.
+- **Exit code mapping** (`strix/interface/main.py:1344-1348`): `engine_stopped` (and `content_filter_stopped`) map to exit code 2 when findings are present (partial scan — worker persists findings) or 5 when no findings were collected.
+
+### Engine CI quality gates (`.github/workflows/ci.yml`)
+
+Engine CI previously ran only thin-fork verification, CLI build, and worker contract checks. It now also runs the full quality gate suite, closing the gap where pre-commit hooks only ran locally:
+
+- **Ruff lint and format check** (`.github/workflows/ci.yml:45-48`): `uv run ruff check --no-fix .` and `uv run ruff format --check .`.
+- **Mypy type check** (`.github/workflows/ci.yml:50-51`): `uv run mypy strix lyrashield_adapter`.
+- **Bandit security scan** (`.github/workflows/ci.yml:53-54`): `uv run bandit -c pyproject.toml -r strix lyrashield_adapter`.
+- **Full pytest test suite** (`.github/workflows/ci.yml:56-57`): `uv run pytest -q` (597 tests).
+
+### Dependabot Python dependencies (`.github/dependabot.yml`)
+
+Dependabot previously tracked only GitHub Actions updates. It now also tracks Python pip dependencies:
+
+- **pip ecosystem** (`.github/dependabot.yml:7-10`): weekly schedule with `open-pull-requests-limit: 5`, alongside the existing `github-actions` ecosystem entry.
+
+### Redacted example credentials (`strix/interface/main.py`)
+
+Example credentials in the `--instruction` argument help text were redacted to avoid encouraging the use of realistic-looking credentials in documentation.
+
+- **Help text** (`strix/interface/main.py:675-676`): changed `admin:password123` to `testuser:REDACTED` in the `--instruction` argument help string.
+
+---
+
 ## Summary of changes versus base
 
 | File | Change | Hunk | Lines in HEAD |
