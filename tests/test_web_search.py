@@ -364,3 +364,56 @@ async def test_reserve_web_search_call_enforces_budget() -> None:
         await hooks.reserve_web_search_call(key=f"{key}:2", estimated_cost=0.002)
 
     await hooks.release_web_search_call(key=key, actual_cost=0.001)
+
+
+@pytest.mark.asyncio
+async def test_web_search_payload_includes_advanced_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The API payload should nest max_results under advanced_settings."""
+    _clear_settings_cache()
+    os.environ["LYRASHIELD_WEB_SEARCH_ENABLED"] = "1"
+    os.environ["PARALLEL_API_KEY"] = "pk_test"
+    os.environ["LYRASHIELD_WEB_SEARCH_MODE"] = "turbo"
+    os.environ["LYRASHIELD_WEB_SEARCH_MAX_RESULTS"] = "3"
+
+    report_state = ReportState(run_name="test")
+    set_global_report_state(report_state)
+
+    captured_payload: dict[str, Any] = {}
+
+    class FakeResponse:
+        def json(self) -> dict[str, Any]:
+            return {"results": []}
+
+        def raise_for_status(self) -> None:
+            pass
+
+    class FakeClient:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def post(self, _url: str, *, json: dict[str, Any], **_: object) -> FakeResponse:
+            captured_payload.update(json)
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    args = {"query": "Find CVEs for Django 4.2"}
+    await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args))
+
+    assert "advanced_settings" in captured_payload
+    assert captured_payload["advanced_settings"]["max_results"] == 3
+    assert "max_results" not in captured_payload or captured_payload.get("max_results") is None
+
+    del os.environ["LYRASHIELD_WEB_SEARCH_ENABLED"]
+    del os.environ["PARALLEL_API_KEY"]
+    del os.environ["LYRASHIELD_WEB_SEARCH_MODE"]
+    del os.environ["LYRASHIELD_WEB_SEARCH_MAX_RESULTS"]
+    set_global_report_state(None)

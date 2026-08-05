@@ -70,6 +70,7 @@ from strix.tools.todo.tools import (
     update_todo,
 )
 from strix.tools.web_search.tool import web_search
+from strix.utils.redaction import redact_secrets
 
 
 if TYPE_CHECKING:
@@ -300,6 +301,27 @@ def _apply_shell_output_cap(parsed: dict[str, Any]) -> None:
     )
 
 
+def _redact_tool_output(result: Any, tool_name: str) -> Any:
+    """Redact secrets in tool output before it enters the model context.
+
+    Proactively redacts PEM keys, API keys, JWTs, and passwords to prevent
+    Azure content-filter blocks on sensitive material without hiding
+    vulnerability-relevant code patterns (function names, SQL, auth logic).
+    """
+    if not isinstance(result, str):
+        return result
+    redacted = redact_secrets(result)
+    if redacted != result:
+        logger.debug(
+            "%s output redacted %d -> %d chars",
+            tool_name,
+            len(result),
+            len(redacted),
+        )
+        return redacted
+    return result
+
+
 def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
 
@@ -314,7 +336,7 @@ def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
             _apply_shell_output_cap(parsed)
             raw_input = json.dumps(parsed)
         try:
-            return await invoke_tool(ctx, raw_input)
+            result = await invoke_tool(ctx, raw_input)
         except ValidationError as exc:
             return _format_validation_error(tool.name, exc)
         except InvalidManifestPathError as exc:
@@ -324,6 +346,7 @@ def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
                 "(or omitted to use the turn's cwd). "
                 f"Got: {rel!r}."
             )
+        return _redact_tool_output(result, tool.name)
 
     tool.on_invoke_tool = invoke
     return tool
@@ -343,9 +366,10 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
             _apply_shell_output_cap(parsed)
             raw_input = json.dumps(parsed)
         try:
-            return await invoke_tool(ctx, raw_input)
+            result = await invoke_tool(ctx, raw_input)
         except ValidationError as exc:
             return _format_validation_error(tool.name, exc)
+        return _redact_tool_output(result, tool.name)
 
     tool.on_invoke_tool = invoke
     return tool

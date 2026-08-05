@@ -32,6 +32,7 @@ from strix.core.sessions import (
     enforce_image_budget,
     open_agent_session,
     replace_session_items,
+    sanitize_session_secrets,
     seed_initial_input,
     session_write_lock,
     strip_all_images_from_session,
@@ -56,6 +57,41 @@ StreamEventSink = Callable[[str, Any], None]
 
 _INPUT_REJECTION_CODES = frozenset({400, 404, 422})
 _MAX_COMPACTIONS_PER_CYCLE = 2
+_MAX_CONTENT_FILTER_RETRIES = 2
+
+# Markers that unambiguously indicate a content-filter / guardrail block.
+_CONTENT_FILTER_MARKERS = (
+    "content_filter",
+    "response.incomplete",
+    "incomplete_details",
+)
+
+# ``response.failed`` can follow a content_filter block on retry — Azure's
+# filter may reject the retried response with a different event code. But it
+# also fires for non-filter failures, so we only treat it as content-filter
+# when the error text also contains a filter-specific marker.
+_RESPONSE_FAILED_MARKER = "response.failed"
+_CONTENT_FILTER_CONTEXT_MARKERS = ("content_filter", "content_policy")
+
+
+def _is_content_filter_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` is a content-filter / guardrail block.
+
+    Covers Azure AI ``response.incomplete`` with ``reason='content_filter'``
+    and the ChatGPT cybersecurity guardrail. ``response.failed`` is only
+    treated as content-filter when the error text also contains a
+    filter-specific marker (``content_filter`` or ``content_policy``).
+    Distinct from transient errors (those retry unchanged; content-filter
+    retries need session sanitization).
+    """
+    if codex.is_content_guardrail_error(exc):
+        return True
+    text = str(exc).lower()
+    if any(marker in text for marker in _CONTENT_FILTER_MARKERS):
+        return True
+    return _RESPONSE_FAILED_MARKER in text and any(
+        ctx in text for ctx in _CONTENT_FILTER_CONTEXT_MARKERS
+    )
 
 
 class ProviderRefusalError(AgentsException):
@@ -125,6 +161,8 @@ def _model_error_status_code(exc: BaseException) -> int | None:
 
 def _is_transient_model_error(exc: BaseException) -> bool:
     if codex.is_content_guardrail_error(exc):
+        return False
+    if _is_content_filter_error(exc):
         return False
     if isinstance(
         exc, APITimeoutError | APIConnectionError | TimeoutError | ConnectionError | OSError
@@ -659,6 +697,7 @@ async def _run_cycle(  # noqa: PLR0915
     image_strips = 0
     compactions = 0
     model_retries = 0
+    content_filter_retries = 0
     while True:
         stream: Any = None
         pre_run_items: list[Any] = []
@@ -790,6 +829,50 @@ async def _run_cycle(  # noqa: PLR0915
                 await asyncio.sleep(delay)
                 if session is not None:
                     input_data = []
+                continue
+            if (
+                content_filter_retries < _MAX_CONTENT_FILTER_RETRIES
+                and session is not None
+                and _is_content_filter_error(exc)
+            ):
+                try:
+                    sanitized = await sanitize_session_secrets(session)
+                except Exception:
+                    logger.exception("content-filter session sanitization failed for %s", agent_id)
+                    sanitized = False
+                content_filter_retries += 1
+                if sanitized:
+                    logger.warning(
+                        "content_filter hit for %s; sanitized session secrets "
+                        "and replaying turn (%d/%d)",
+                        agent_id,
+                        content_filter_retries,
+                        _MAX_CONTENT_FILTER_RETRIES,
+                    )
+                else:
+                    logger.warning(
+                        "content_filter hit for %s; session had no redactable secrets, "
+                        "replaying with caution message (%d/%d)",
+                        agent_id,
+                        content_filter_retries,
+                        _MAX_CONTENT_FILTER_RETRIES,
+                    )
+                # Inject a caution message on retry to help the model avoid
+                # regenerating the same blocked response. Escalate the caution
+                # on the second retry.
+                caution = (
+                    "Your previous response was blocked by a content filter. "
+                    "Rephrase your analysis at a higher level — avoid including "
+                    "specific exploit code, sensitive code snippets, or detailed "
+                    "attack patterns. Report the finding with a summary and "
+                    "remediation only."
+                    if content_filter_retries == 1
+                    else "Your response was blocked again. Provide only a brief "
+                    "summary of the finding without any code, payloads, or "
+                    "sensitive technical details. Focus on the title, severity, "
+                    "and remediation steps."
+                )
+                input_data = [{"role": "user", "content": caution}]
                 continue
             if session is not None:
                 await _salvage_stream_to_session(session, pre_run_items, stream, agent_id)

@@ -1341,6 +1341,11 @@ def _non_interactive_exit_code(report_state: Any | None) -> int:
             return 3
         case "rate_limited":
             return 4
+        case "content_filter_stopped":
+            # Partial scan — findings may have been collected before the
+            # content filter blocked the model. Treat like "vulnerabilities
+            # found" so the worker persists them rather than failing.
+            return 2 if report_state.vulnerability_reports else 5
         case _:
             return 5
 

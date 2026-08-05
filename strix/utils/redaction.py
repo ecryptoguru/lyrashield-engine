@@ -126,8 +126,36 @@ _MODE_DEPENDENT_PATH_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
 ]
 
 
+# Fast-path: cheap substring checks that cover all sensitive patterns.
+# If none of these appear, the text cannot match any regex and we skip the
+# full suite — important for large shell outputs on every exec_command.
+_SECRET_FAST_PATH_MARKERS = (
+    "private key",
+    "eyj",
+    "akia",
+    "asia",
+    "aroa",
+    "aida",
+    "api_key",
+    "apikey",
+    "api-key",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "bearer",
+    "@",
+)
+
+
 def redact_secrets(text: str) -> str:
     """Redact credentials, PII, and high-entropy tokens from ``text``."""
+    if not text:
+        return text
+    text_lower = text.lower()
+    if not any(marker in text_lower for marker in _SECRET_FAST_PATH_MARKERS):
+        return text
     redacted = text
     for _name, pattern, replacement in _SENSITIVE_PATTERNS:
         redacted = pattern.sub(replacement, redacted)

@@ -115,3 +115,83 @@ def test_function_tools_are_result_bounded() -> None:
     by_name = {t.name: t for t in agent.tools}
 
     assert getattr(by_name["think"], "_strix_bounded", False) is True
+
+
+# --- Layer 3: proactive secret redaction in shell tool output ---
+
+
+def _secret_returning_exec_tool(return_value: str) -> FunctionTool:
+    async def invoke(_ctx: Any, _raw_input: str) -> str:
+        return return_value
+
+    return FunctionTool(
+        name="exec_command",
+        description="test tool",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=invoke,
+    )
+
+
+@pytest.mark.asyncio
+async def test_wrap_exec_command_redacts_private_key_in_output() -> None:
+    pem = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "MIIEowIBAAKCAQEAtest1234567890abcdef\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    wrapped = factory._wrap_exec_command(
+        _secret_returning_exec_tool(f"cat config/key.pem\n{pem}\nend")
+    )
+
+    result = await wrapped.on_invoke_tool(cast("Any", None), json.dumps({"cmd": "cat key.pem"}))
+
+    assert "MIIEowIBAAKCAQEAtest1234567890abcdef" not in result
+    assert "[PRIVATE_KEY]" in result
+    assert "cat config/key.pem" in result  # non-secret content preserved
+
+
+@pytest.mark.asyncio
+async def test_wrap_exec_command_redacts_api_key_in_output() -> None:
+    wrapped = factory._wrap_exec_command(
+        _secret_returning_exec_tool("api_key=sk_live_1234567890abcdef")
+    )
+
+    result = await wrapped.on_invoke_tool(cast("Any", None), json.dumps({"cmd": "env"}))
+
+    assert "sk_live_1234567890abcdef" not in result
+    assert "[SECRET]" in result
+
+
+@pytest.mark.asyncio
+async def test_wrap_exec_command_preserves_normal_code_output() -> None:
+    code = "function login(user, pass) { return authenticate(user, pass); }"
+    wrapped = factory._wrap_exec_command(_secret_returning_exec_tool(code))
+
+    result = await wrapped.on_invoke_tool(cast("Any", None), json.dumps({"cmd": "cat auth.ts"}))
+
+    assert result == code  # no secrets → no redaction → unchanged
+
+
+@pytest.mark.asyncio
+async def test_wrap_write_stdin_redacts_secrets_in_output() -> None:
+    pem = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "MIIEowIBAAKCAQEAtest1234567890abcdef\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+
+    async def invoke(_ctx: Any, _raw_input: str) -> str:
+        return f"output: {pem}"
+
+    tool = FunctionTool(
+        name="write_stdin",
+        description="test",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=invoke,
+    )
+    wrapped = factory._wrap_write_stdin(tool)
+
+    result = await wrapped.on_invoke_tool(cast("Any", None), json.dumps({"chars": "test"}))
+
+    assert "MIIEowIBAAKCAQEAtest1234567890abcdef" not in result
+    assert "[PRIVATE_KEY]" in result
