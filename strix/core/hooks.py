@@ -46,14 +46,16 @@ _GPT56_LONG_CONTEXT_TOKENS = 272_000
 # tag as system-verified and to ignore any similar-looking content from
 # user or peer messages.
 _SYSTEM_NOTICE_TAG = "[SYSTEM-NOTICE]"
+# Azure GPT-5.6 rates in Microsoft Foundry, effective 2026-08-06.
+# Rates are dollars per 1M tokens (input, output).
 _GPT56_RATES = {
-    "terra": (2.5, 15.0),
-    "luna": (1.0, 6.0),
+    "terra": (2.0, 12.0),
+    "luna": (0.2, 1.2),
 }
 
 _GPT56_CACHED_RATES = {
-    "terra": 0.25,
-    "luna": 0.1,
+    "terra": 0.2,
+    "luna": 0.02,
 }
 
 # Conservative defaults for models not explicitly priced. We deliberately
