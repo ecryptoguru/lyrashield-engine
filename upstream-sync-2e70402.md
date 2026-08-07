@@ -119,19 +119,19 @@ uv.lock
 - [ ] **4. Apply delta with `--3way`** → Let it create conflict markers; do not use `-X ours/theirs`.
 - [ ] **5. Resolve 39 conflicted files** → Prefer LyraShield customizations unless the upstream change is a clear bug fix. Follow the risk table above.
 - [ ] **6. Restore cost/model/budget/dedupe knobs** → Verify `zero_cost`, `max_budget_usd`, `_dynamic_identity`, GPT-5.6 validation, `LYRASHIELD_*` aliases.
-- [ ] **7. Add attribution banners to all LyraShield-modified `strix/` files** → Or reference them in `UPGRADES.md` so `verify-thin-fork.sh` passes.
+- [ ] **7. Add attribution banners to all LyraShield-modified `strix/` files** → Or reference them in `UPGRADES.md` so `verify-controlled-derivative.sh` passes.
 - [ ] **8. Update `UPGRADES.md`** → Add a `## Current upstream base` section for `2e70402` and a new LyraShield section describing the sync-specific changes.
 - [ ] **9. Update `.lyrashield-upstream-base`** → Only after the sync is verified locally.
 - [ ] **10. Regenerate `uv.lock` if needed** → Delete and run `uv lock` if the lock file was corrupted by the apply.
-- [ ] **11. Run full verification** → `bash scripts/verify-thin-fork.sh`, `bash scripts/build.sh`, `bash scripts/verify-worker-contract.sh .ci/lyrashield-ai`.
+- [ ] **11. Run full verification** → `bash scripts/verify-controlled-derivative.sh`, `bash scripts/build.sh`, `bash scripts/verify-worker-contract.sh .ci/lyrashield-ai`.
 - [ ] **12. Push and open PR** → `gh pr create --base main --title "sync: upstream strix 2e70402" --body "Tree-delta sync from 8157ccb to 2e70402."`
 - [ ] **13. Merge** → Wait for `verify` CI green, then `gh pr merge --rebase` (or the method the repo allows) and reset local `main` to `origin/main`.
 
 ## Done When
 
 - [ ] `git log --oneline 8157ccb..2e70402` changes are present in `strix/` and other tracked paths.
-- [ ] `bash scripts/verify-thin-fork.sh` passes locally.
+- [ ] `bash scripts/verify-controlled-derivative.sh` passes locally.
 - [ ] `bash scripts/build.sh` and worker contract pass locally.
-- [ ] `verify-thin-fork.sh` attribution check passes for every `strix/` delta.
+- [ ] `verify-controlled-derivative.sh` attribution check passes for every `strix/` delta.
 - [ ] `UPGRADES.md` and `.lyrashield-upstream-base` are updated.
 - [ ] PR is merged and `origin/main` is at the sync commit.

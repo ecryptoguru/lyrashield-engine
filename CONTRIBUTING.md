@@ -71,11 +71,11 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
 6. Run the verify gate and check for whitespace errors:
 
    ```bash
-   bash scripts/verify-thin-fork.sh
+   bash scripts/verify-controlled-derivative.sh
    git diff --check
    ```
 
-   The gate runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It also diffs `strix/**` against the pinned upstream base and fails on any file that lacks both the attribution banner and a `UPGRADES.md` entry, preventing undocumented `strix/` drift.
+   The gate runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It also diffs `strix/**` against the pinned upstream base and fails on any file that lacks both the attribution banner and a `UPGRADES.md` entry, preventing undocumented `strix/` drift. A **footprint budget** check warns (does not fail) when `strix/**` drift exceeds the configured thresholds (max 80 files, +8000 insertions, -2000 deletions), so accumulated drift stays visible.
 
 7. Require human approval and green Engine CI before merge. Engine CI (`.github/workflows/ci.yml`) now enforces the same quality gates as pre-commit on every pull request and push to `main`: Ruff lint and format check, Mypy type check, Bandit security scan, and the full pytest test suite (597 tests). Using `--no-verify` to skip pre-commit hooks no longer bypasses quality gates — CI will catch the same issues and block the merge.
 

@@ -117,12 +117,12 @@ When the root model (Terra) hits any `ModelBehaviorError`, the engine falls back
 Run the full gate before opening or approving a change:
 
 ```bash
-bash scripts/verify-thin-fork.sh
+bash scripts/verify-controlled-derivative.sh
 ```
 
-The script name is retained for workflow compatibility; the repository is now maintained as a controlled derivative. The gate covers Ruff lint/format, the full test suite (`pytest`), headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract.
+The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It also enforces a **footprint budget** on `strix/**` drift vs the pinned upstream base — warning (not failing) when the number of changed files, insertions, or deletions exceeds the configured thresholds, so accumulated drift stays visible.
 
-Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`: Ruff lint and format check, Mypy type check, Bandit security scan, and the full pytest test suite (597 tests), in addition to thin-fork verification, CLI build, and worker contract checks. This closes the gap where pre-commit hooks only ran locally.
+Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`: Ruff lint and format check, Mypy type check, Bandit security scan, and the full pytest test suite (597 tests), in addition to controlled-derivative verification, CLI build, and worker contract checks. This closes the gap where pre-commit hooks only ran locally.
 
 Budget enforcement now falls back to LiteLLM's `model_cost` table and then to conservative default rates for non-GPT-5.6 models, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-5.6 Terra/Luna deployments before scan start.
 
