@@ -35,7 +35,7 @@ jobs:
           node-version: "22"
 
       - name: Verify source and policy gates
-        run: scripts/verify-thin-fork.sh
+        run: scripts/verify-controlled-derivative.sh
 
       - name: Verify Python packages and CLI
         run: |

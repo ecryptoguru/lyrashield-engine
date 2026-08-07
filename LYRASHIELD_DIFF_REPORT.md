@@ -1486,7 +1486,7 @@ The upstream Strix README (320 lines) is replaced by a LyraShield controlled-der
 - **Security hardening** (`README.md:38-47`): summarizes the audit-driven hardening pass — trust boundaries, secret redaction in compaction, output hygiene, structured output enforcement, telemetry hygiene, and prompt sanitization.
 - **Supported execution** (`README.md:49-99`): documents the `lyrashield` CLI, Python/uv/Docker requirements, GPT-5.6 Terra/Luna provider list (`openai`, `azure`, `azure_ai`, `bedrock_mantle`), ChatGPT subscription path, unsupported endpoints, and the `provider-contract` probe commands.
 - **Worker artifact contract** (`README.md:102-111`): describes `run.json` and `vulnerabilities.json` as bounded, schema-validated artifacts and warns the TypeScript worker treats engine output as untrusted.
-- **Verification** (`README.md:113-125`): references `scripts/verify-thin-fork.sh`, lists the checks it runs, and explicitly states these prove implementation compatibility, not detection accuracy; points to `benchmarks/README.md` for quality claims.
+- **Verification** (`README.md:113-125`): references `scripts/verify-controlled-derivative.sh`, lists the checks it runs, and explicitly states these prove implementation compatibility, not detection accuracy; points to `benchmarks/README.md` for quality claims.
 - **License** (`README.md:127-129`): retains Apache-2.0 attribution and upstream mark notice.
 
 ---
@@ -1502,7 +1502,7 @@ New file; the single hunk adds the entire ownership and upstream-import ledger.
 - **Compatibility patches** (`UPGRADES.md:28-63`): retained `lyrashield_adapter` behavior, out-of-band budget reservations, bounded dedupe, telemetry and self-update defaults, Pydantic fixes, pre-Docker validation, per-instance binds, worker output compatibility, Apache banners, and formatter/typing compatibility holds.
 - **Current upstream base** (`UPGRADES.md:65-86`): pins `8157ccba...`, documents the 2026-07-26 tree-delta import from `08126eb..upstream/main`, and lists the root-agent rename and five report fence-handling fixes that were imported.
 - **PR history** (`UPGRADES.md:88-125`): per-PR sections for #20 (cost accounting/telemetry), #22 (token caps / Sol retirement), #26 (8157ccb sync / dedupe reservation), #33 (Azure gates), #35 (cache/cost review), #36 (sync session close), #39 (lint/viewer extra), and #40 (`run.json` progress fields).
-- **Deep code review v11** (`UPGRADES.md:127-138`): attribution banner additions and `verify-thin-fork.sh` ledger enforcement.
+- **Deep code review v11** (`UPGRADES.md:127-138`): attribution banner additions and `verify-controlled-derivative.sh` ledger enforcement.
 - **Sync to upstream 2e70402** (`UPGRADES.md:140-203`): major v1.4.1 import themes (LLM lifecycle, prompt caching, model support, budget/resilience, viewer, reporting) and the list of 31 files with meaningful merge work.
 - **Independence decision** (`UPGRADES.md:205-212`): states the criteria for when the fork would become fully independent.
 - **Documentation reconciliation** (`UPGRADES.md:214-235`): rewrites to `CONTRIBUTING.md`, `docs/usage/cli.mdx`, `docs/advanced/configuration.mdx`, `docs/llm-providers/local.mdx`, and `strix/telemetry/README.md`.
@@ -1527,16 +1527,16 @@ New file; a static AI/LLM safety and production-readiness audit of the Strix-der
 
 ---
 
-## scripts/verify-thin-fork.sh
+## scripts/verify-controlled-derivative.sh
 
-**Hunk:** `@@ -0,0 +1,82 @@` (`scripts/verify-thin-fork.sh:1-82`)
+**Hunk:** `@@ -0,0 +1,82 @@` (`scripts/verify-controlled-derivative.sh:1-82`)
 
 New file; the controlled-derivative gate script.
 
-- **Upstream base validation** (`scripts/verify-thin-fork.sh:10-41`): requires `.lyrashield-upstream-base` to exist and contain a SHA, ensures an `upstream` remote points to `usestrix/strix.git`, and fetches the pinned base if it is not already present.
-- **Sync commit discovery** (`scripts/verify-thin-fork.sh:43-49`): finds the fork commit that imported the pinned base into `strix/` by grepping for the short SHA in `strix/` commit messages.
-- **Documentation drift check** (`scripts/verify-thin-fork.sh:51-72`): diffs `strix/` between the sync commit and `HEAD`; for each modified file, fails if the file lacks a "Modifications...LyraShield" banner in the first two lines and is not listed in `UPGRADES.md`.
-- **Quality gates** (`scripts/verify-thin-fork.sh:74-82`): runs `uv sync --frozen --extra viewer`, `ruff check`, `ruff format --check`, `pytest`, `mypy strix lyrashield_adapter`, and `bandit`.
+- **Upstream base validation** (`scripts/verify-controlled-derivative.sh:10-41`): requires `.lyrashield-upstream-base` to exist and contain a SHA, ensures an `upstream` remote points to `usestrix/strix.git`, and fetches the pinned base if it is not already present.
+- **Sync commit discovery** (`scripts/verify-controlled-derivative.sh:43-49`): finds the fork commit that imported the pinned base into `strix/` by grepping for the short SHA in `strix/` commit messages.
+- **Documentation drift check** (`scripts/verify-controlled-derivative.sh:51-72`): diffs `strix/` between the sync commit and `HEAD`; for each modified file, fails if the file lacks a "Modifications...LyraShield" banner in the first two lines and is not listed in `UPGRADES.md`.
+- **Quality gates** (`scripts/verify-controlled-derivative.sh:74-82`): runs `uv sync --frozen --extra viewer`, `ruff check`, `ruff format --check`, `pytest`, `mypy strix lyrashield_adapter`, and `bandit`.
 
 ---
 
@@ -1617,6 +1617,6 @@ Example credentials in the `--instruction` argument help text were redacted to a
 | `README.md` | Replaced upstream Strix README with LyraShield controlled-derivative landing | `@@ -1,320 +1,129 @@` | 1-129 |
 | `UPGRADES.md` | Added ownership/upstream-import ledger | `@@ -0,0 +1,327 @@` | 1-327 |
 | `AI_AUDIT_REPORT.md` | Added AI feature, safety, and production-readiness audit report | `@@ -0,0 +1,158 @@` | 1-158 |
-| `scripts/verify-thin-fork.sh` | Added controlled-derivative verification gate | `@@ -0,0 +1,82 @@` | 1-82 |
+| `scripts/verify-controlled-derivative.sh` | Added controlled-derivative verification gate | `@@ -0,0 +1,82 @@` | 1-82 |
 | `scripts/verify-worker-contract.sh` | Added worker artifact contract verification gate | `@@ -0,0 +1,47 @@` | 1-47 |
 | `scripts/list-gpt56-providers.py` | Added LiteLLM GPT-5.6 provider discovery helper | `@@ -0,0 +1,25 @@` | 1-25 |

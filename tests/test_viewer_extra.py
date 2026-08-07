@@ -1,7 +1,7 @@
 """Regression tests for the optional ``viewer`` extra packaging.
 
 Issue #27: reportlab/pypdf must stay out of the base install but be present
-for release builds and the ``verify-thin-fork.sh`` gate.
+for release builds and the ``verify-controlled-derivative.sh`` gate.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build.sh"
-VERIFY_SCRIPT = PROJECT_ROOT / "scripts" / "verify-thin-fork.sh"
+VERIFY_SCRIPT = PROJECT_ROOT / "scripts" / "verify-controlled-derivative.sh"
 BUILD_RELEASE_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "build-release.yml"
 
 _PDF_AVAILABLE = (

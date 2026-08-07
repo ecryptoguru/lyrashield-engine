@@ -5,6 +5,9 @@ set -euo pipefail
 # - pinned upstream base exists and is fetchable
 # - every strix/** modification since the last upstream import is documented
 #   (attribution banner or UPGRADES.md entry)
+# - footprint budget check: warns (does not fail) if strix/** drift vs the
+#   pinned base exceeds the configured thresholds, so accumulated drift stays
+#   visible without blocking legitimate work
 # - lint, format, tests, types, and security checks pass
 
 BASE_FILE=".lyrashield-upstream-base"
@@ -69,6 +72,43 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     echo "  $f" >&2
   done
   exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Footprint budget: measure strix/** drift vs the pinned upstream base and
+# warn (not fail) when the delta exceeds the configured thresholds. This keeps
+# accumulated drift visible without blocking legitimate work. The thresholds
+# give ~20% headroom over the current state (68 files, +5397, -1297).
+# ---------------------------------------------------------------------------
+MAX_FILES=80
+MAX_INSERTIONS=8000
+MAX_DELETIONS=2000
+
+# git diff --shortstat prints a single line like:
+#   " 68 files changed, 5397 insertions(+), 1297 deletions(-)"
+# (deletions are omitted when zero, so guard each parse).
+SHORTSTAT=$(git diff --shortstat "$BASE..HEAD" -- strix/)
+FP_FILES=$(echo "$SHORTSTAT" | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' || echo 0)
+FP_INSERTIONS=$(echo "$SHORTSTAT" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
+FP_DELETIONS=$(echo "$SHORTSTAT" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
+
+echo "Footprint: ${FP_FILES} files, +${FP_INSERTIONS}/-${FP_DELETIONS} lines (budget: ${MAX_FILES} files, +${MAX_INSERTIONS}/-${MAX_DELETIONS})"
+
+budget_warned=false
+if (( FP_FILES > MAX_FILES )); then
+  echo "warning: footprint budget exceeded — ${FP_FILES} files changed (max ${MAX_FILES})" >&2
+  budget_warned=true
+fi
+if (( FP_INSERTIONS > MAX_INSERTIONS )); then
+  echo "warning: footprint budget exceeded — ${FP_INSERTIONS} insertions (max ${MAX_INSERTIONS})" >&2
+  budget_warned=true
+fi
+if (( FP_DELETIONS > MAX_DELETIONS )); then
+  echo "warning: footprint budget exceeded — ${FP_DELETIONS} deletions (max ${MAX_DELETIONS})" >&2
+  budget_warned=true
+fi
+if [[ "$budget_warned" == true ]]; then
+  echo "warning: strix/** drift exceeds the footprint budget; review whether this drift is intentional and document it in UPGRADES.md" >&2
 fi
 
 # The PDF tests import pypdf and must run to exercise the viewer code path.

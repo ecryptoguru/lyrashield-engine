@@ -6,6 +6,18 @@ model, lifecycle, budget, result, and worker-contract behavior is intentionally
 owned within modified upstream modules. Preserve this reviewed boundary while
 syncing releases.
 
+> **Deep Review v12 — footprint budget (P1-4, path a).** The verification
+> script has been renamed from `scripts/verify-thin-fork.sh` to
+> `scripts/verify-controlled-derivative.sh` to reflect that the engine is a
+> controlled derivative, not a thin fork. In addition to the existing
+> documentation check, the script now enforces a **footprint budget** on
+> `strix/**` drift vs the pinned upstream base: it warns (does not fail) when
+> the number of changed files exceeds 80, insertions exceed 8000, or deletions
+> exceed 2000. The current state (68 files, +5397, -1297) sits ~20% under the
+> budget. The thresholds are defined at the top of the script and should be
+> raised deliberately, with an entry here, when a reviewed import legitimately
+> grows the footprint.
+
 ## LyraShield-owned contract
 
 - GPT-5.6 Terra and Luna acceptance (Sol retired in PR #22); only
@@ -92,7 +104,7 @@ Merged from branch `codex/engine-v5`. This change set refined the GPT-5.6 cost a
 - `strix/core/hooks.py`: `_model_rates` now returns a 2-tuple (input, output) matching the GPT-5.6 Terra/Luna rate card; `_usage_cost_upper_bound` handles provider-reported cache-read tokens and extracts `input_tokens`/`output_tokens` from both dict and object usage entries via `_usage_value`.
 - `strix/interface/main.py`: telemetry start arguments are passed as explicit keyword arguments to `posthog.start` and `scarf.start` instead of an untyped kwargs dict.
 - `tests/conftest.py`: a pytest fixture clears LLM-related environment variables before each test to isolate unit tests from leaked Azure endpoints.
-- `Makefile`: the `type-check` and `security` targets now match `scripts/verify-thin-fork.sh` (mypy excludes `strix/interface/tui`, bandit covers `strix` and `lyrashield_adapter`).
+- `Makefile`: the `type-check` and `security` targets now match `scripts/verify-controlled-derivative.sh` (mypy excludes `strix/interface/tui`, bandit covers `strix` and `lyrashield_adapter`).
 
 The existing worker artifact contract and `run.json`/`vulnerabilities.json` schema did not change.
 
@@ -131,7 +143,7 @@ Post-review hardening of the controlled-derivative boundary:
 - `strix/core/runner.py`: added the missing 2026 LyraShield attribution banner.
 - `strix/core/inputs.py`: added the missing 2026 LyraShield attribution banner.
 - `strix/interface/cli.py`: added the missing 2026 LyraShield attribution banner.
-- `scripts/verify-thin-fork.sh`: now diffs `strix/**` against the pinned upstream
+- `scripts/verify-controlled-derivative.sh`: now diffs `strix/**` against the pinned upstream
   base and fails on any file that lacks both the attribution banner and a
   `UPGRADES.md` entry, preventing future undocumented `strix/` drift.
 - `README.md`: reconciled the pinned upstream base with `UPGRADES.md` and

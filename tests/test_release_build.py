@@ -24,8 +24,8 @@ def test_release_workflow_syncs_with_viewer_extra() -> None:
 
 
 def test_verify_thin_fork_syncs_with_viewer_extra() -> None:
-    lines = _uv_sync_lines(ROOT / "scripts" / "verify-thin-fork.sh")
-    assert lines, "expected a uv sync line in scripts/verify-thin-fork.sh"
+    lines = _uv_sync_lines(ROOT / "scripts" / "verify-controlled-derivative.sh")
+    assert lines, "expected a uv sync line in scripts/verify-controlled-derivative.sh"
     for line in lines:
         assert "--extra viewer" in line
 
