@@ -35,6 +35,19 @@ _global_report_state: Optional["ReportState"] = None
 
 _ALLOWED_PHASES = frozenset({"setup", "running", "finalizing", "completed", "stopped"})
 
+# Schema version for run.json.
+#
+# run.json is a cross-repo contract: the LyraShield worker parses it to decide a
+# scan's terminal status, cost, and coverage. Until now it carried no version, so
+# a consumer had no way to detect an incompatible producer other than by probing
+# for individual fields.
+#
+# Bump the MAJOR component for a breaking change (a field removed, renamed, or
+# given new semantics) and the MINOR component for additive, backward-compatible
+# fields. The worker's zod schema uses `.strip()`, so unknown keys are ignored —
+# additive changes are safe to ship ahead of a worker update.
+RUN_RECORD_SCHEMA_VERSION = "1.0"
+
 
 def _strix_version() -> str | None:
     """Best-effort package version for the SARIF tool.driver.version field."""
@@ -136,6 +149,7 @@ class ReportState:
         auth_mode = codex.auth_mode(load_settings().llm.model)
         self._llm_usage.zero_cost = auth_mode == "subscription"
         self.run_record: dict[str, Any] = {
+            "schema_version": RUN_RECORD_SCHEMA_VERSION,
             "run_id": self.run_id,
             "run_name": self.run_name,
             "start_time": self.start_time,
