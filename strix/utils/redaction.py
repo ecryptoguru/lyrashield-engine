@@ -21,7 +21,41 @@ _SPILL_PATH_PLACEHOLDER = "[SPILL_PATH]"
 
 # Ordered from most specific (private keys, JWTs, AWS keys) to broad
 # high-entropy fallbacks, so precise patterns win before generic ones.
-_SENSITIVE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
+#
+# The list is split into two groups for the redaction fast-path:
+#   * ``_ALWAYS_RUN_PATTERNS`` — uuid / ipv4 / ipv6 — have no keyword trigger
+#     in the fast-path marker set, so they must run unconditionally to avoid
+#     leaking PII (e.g. ``"Connected to 10.0.5.23"`` with no secret keyword).
+#   * ``_KEYWORD_GATED_PATTERNS`` — the expensive keyword-anchored patterns
+#     (password, secret, token, bearer, email, …) that are only applied when
+#     a cheap substring pre-check confirms a potential match.
+_ALWAYS_RUN_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
+    (
+        "uuid",
+        re.compile(
+            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            re.IGNORECASE,
+        ),
+        _PII_PLACEHOLDER,
+    ),
+    (
+        "ipv4",
+        re.compile(
+            r"\b(?:25[0-5]|2[0-4]\d|1\d{1,2}|\d{1,2})"
+            r"\.(?:25[0-5]|2[0-4]\d|1\d{1,2}|\d{1,2})"
+            r"\.(?:25[0-5]|2[0-4]\d|1\d{1,2}|\d{1,2})"
+            r"\.(?:25[0-5]|2[0-4]\d|1\d{1,2}|\d{1,2})\b"
+        ),
+        _PII_PLACEHOLDER,
+    ),
+    (
+        "ipv6",
+        re.compile(r"\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}\b", re.IGNORECASE),
+        _PII_PLACEHOLDER,
+    ),
+]
+
+_KEYWORD_GATED_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     (
         "private_key",
         re.compile(
@@ -43,31 +77,8 @@ _SENSITIVE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
         _AWS_KEY_PLACEHOLDER,
     ),
     (
-        "uuid",
-        re.compile(
-            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
-            re.IGNORECASE,
-        ),
-        _PII_PLACEHOLDER,
-    ),
-    (
         "email",
         re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
-        _PII_PLACEHOLDER,
-    ),
-    (
-        "ipv4",
-        re.compile(
-            r"\b(?:25[0-5]|2[0-4]\d|1\d{1,2}|\d{1,2})"
-            r"\.(?:25[0-5]|2[0-4]\d|1\d{1,2}|\d{1,2})"
-            r"\.(?:25[0-5]|2[0-4]\d|1\d{1,2}|\d{1,2})"
-            r"\.(?:25[0-5]|2[0-4]\d|1\d{1,2}|\d{1,2})\b"
-        ),
-        _PII_PLACEHOLDER,
-    ),
-    (
-        "ipv6",
-        re.compile(r"\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}\b", re.IGNORECASE),
         _PII_PLACEHOLDER,
     ),
     (
@@ -101,6 +112,10 @@ _SENSITIVE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ),
 ]
 
+# Combined list preserved for backward compatibility with any external callers
+# that iterate over the full ordered set.
+_SENSITIVE_PATTERNS = _ALWAYS_RUN_PATTERNS + _KEYWORD_GATED_PATTERNS
+
 # Paths that should NEVER appear in customer-facing output, regardless of scan mode.
 _ALWAYS_REDACT_PATH_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     (
@@ -126,9 +141,11 @@ _MODE_DEPENDENT_PATH_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
 ]
 
 
-# Fast-path: cheap substring checks that cover all sensitive patterns.
-# If none of these appear, the text cannot match any regex and we skip the
-# full suite — important for large shell outputs on every exec_command.
+# Fast-path: cheap substring checks that cover the keyword-anchored patterns.
+# If none of these appear, the text cannot match any keyword-gated regex and we
+# skip that (expensive) suite — important for large shell outputs on every
+# exec_command.  The uuid/ipv4/ipv6 patterns have no keyword trigger, so they
+# are applied unconditionally (see ``_ALWAYS_RUN_PATTERNS``).
 _SECRET_FAST_PATH_MARKERS = (
     "private key",
     "eyj",
@@ -150,15 +167,26 @@ _SECRET_FAST_PATH_MARKERS = (
 
 
 def redact_secrets(text: str) -> str:
-    """Redact credentials, PII, and high-entropy tokens from ``text``."""
+    """Redact credentials, PII, and high-entropy tokens from ``text``.
+
+    The uuid, ipv4, and ipv6 patterns are applied unconditionally because they
+    have no keyword trigger in the fast-path marker set — without this, text
+    such as ``"Connected to 10.0.5.23"`` would pass through unredacted.  The
+    remaining keyword-anchored patterns (password, secret, token, bearer,
+    email, …) are gated behind a cheap substring pre-check for performance.
+    """
     if not text:
         return text
-    text_lower = text.lower()
-    if not any(marker in text_lower for marker in _SECRET_FAST_PATH_MARKERS):
-        return text
+    # Always run the cheap uuid/IP patterns — they have no keyword trigger.
     redacted = text
-    for _name, pattern, replacement in _SENSITIVE_PATTERNS:
+    for _name, pattern, replacement in _ALWAYS_RUN_PATTERNS:
         redacted = pattern.sub(replacement, redacted)
+    # Fast-path: only run the expensive keyword-anchored patterns when a
+    # potential marker is present.
+    text_lower = redacted.lower()
+    if any(marker in text_lower for marker in _SECRET_FAST_PATH_MARKERS):
+        for _name, pattern, replacement in _KEYWORD_GATED_PATTERNS:
+            redacted = pattern.sub(replacement, redacted)
     return redacted
 
 

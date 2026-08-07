@@ -561,6 +561,26 @@ async def run_strix_scan(
             # delegate reasoning effort. If the delegate also fails, salvage
             # whatever was collected.
             is_content_filter = _is_content_filter_error(exc)
+            # Log the originating exception type so content-filter blocks can be
+            # distinguished from genuine agent bugs (malformed JSON, etc.) in
+            # logs.  The fallback behaviour is unchanged either way.
+            exc_type = type(exc).__name__
+            if is_content_filter:
+                logger.warning(
+                    "Scan %s: root agent hit content_filter block "
+                    "(exc_type=%s); will attempt delegate model swap.",
+                    scan_id,
+                    exc_type,
+                )
+            else:
+                logger.warning(
+                    "Scan %s: root agent hit non-filter model error "
+                    "(exc_type=%s, detail=%r); treating as agent bug, will "
+                    "attempt delegate model swap.",
+                    scan_id,
+                    exc_type,
+                    str(exc)[:200],
+                )
             if delegate_model == resolved_model:
                 logger.exception(
                     "Scan %s: root agent hit %s and no separate delegate model "
@@ -578,11 +598,12 @@ async def run_strix_scan(
                     )
                 return None
             logger.warning(
-                "Scan %s: root agent (model=%s) hit %s; switching directly to "
+                "Scan %s: root agent (model=%s) hit %s (exc_type=%s); switching directly to "
                 "delegate model %s at %s reasoning (no coordinator retry).",
                 scan_id,
                 resolved_model,
                 "content_filter" if is_content_filter else "model_error",
+                exc_type,
                 delegate_model,
                 delegate_reasoning_effort,
             )
@@ -633,12 +654,16 @@ async def run_strix_scan(
                 # losing everything — the scan already spent budget and may have
                 # collected child-agent findings.
                 is_cf = _is_content_filter_error(fallback_exc)
+                fallback_exc_type = type(fallback_exc).__name__
                 terminal_reason = "content_filter_stopped" if is_cf else "engine_stopped"
                 logger.warning(
-                    "Scan %s: delegate fallback also failed (content_filter=%s); "
+                    "Scan %s: delegate fallback also failed "
+                    "(content_filter=%s, exc_type=%s, detail=%r); "
                     "salvaging partial findings and stopping.",
                     scan_id,
                     is_cf,
+                    fallback_exc_type,
+                    str(fallback_exc)[:200],
                 )
                 await coordinator.cancel_descendants(root_id)
                 with contextlib.suppress(Exception):

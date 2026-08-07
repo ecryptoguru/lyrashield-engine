@@ -56,6 +56,35 @@ def test_redact_secrets_strips_emails() -> None:
     assert "[PII]" in redacted
 
 
+def test_redact_secrets_strips_ipv4_without_keyword() -> None:
+    """IPv4 addresses must be redacted even with no keyword trigger present.
+
+    Regression test for P1-3: the fast-path keyword pre-check used to skip the
+    entire regex suite when no secret marker was found, but ipv4/ipv6/uuid
+    patterns have no corresponding trigger keyword.
+    """
+    text = "Connected to internal host 10.0.5.23"
+    redacted = redact_secrets(text)
+    assert "10.0.5.23" not in redacted
+    assert "[PII]" in redacted
+
+
+def test_redact_secrets_strips_ipv6_without_keyword() -> None:
+    """IPv6 addresses must be redacted even with no keyword trigger present."""
+    text = "Assigned address 2001:0db8:85a3:0000:0000:8a2e:0370:7334 to host"
+    redacted = redact_secrets(text)
+    assert "2001:0db8:85a3:0000:0000:8a2e:0370:7334" not in redacted
+    assert "[PII]" in redacted
+
+
+def test_redact_secrets_strips_uuid_without_keyword() -> None:
+    """UUIDs must be redacted even with no keyword trigger present."""
+    text = "Request id 550e8400-e29b-41d4-a716-446655440000 logged"
+    redacted = redact_secrets(text)
+    assert "550e8400-e29b-41d4-a716-446655440000" not in redacted
+    assert "[PII]" in redacted
+
+
 def test_redact_internal_paths_strips_workspace() -> None:
     text = "Found at /workspace/src/app.py and /workspace/.strix/tool-output/abc123.txt"
     redacted = redact_internal_paths(text)
