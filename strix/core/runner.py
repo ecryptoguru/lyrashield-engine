@@ -568,15 +568,15 @@ async def run_strix_scan(
             if is_content_filter:
                 logger.warning(
                     "Scan %s: root agent hit content_filter block "
-                    "(exc_type=%s); will attempt delegate model swap.",
+                    "(exc_type=%s); evaluating fallback options.",
                     scan_id,
                     exc_type,
                 )
             else:
                 logger.warning(
                     "Scan %s: root agent hit non-filter model error "
-                    "(exc_type=%s, detail=%r); treating as agent bug, will "
-                    "attempt delegate model swap.",
+                    "(exc_type=%s, detail=%r); treating as agent bug, "
+                    "evaluating fallback options.",
                     scan_id,
                     exc_type,
                     str(exc)[:200],

@@ -77,6 +77,22 @@ def test_redact_secrets_strips_ipv6_without_keyword() -> None:
     assert "[PII]" in redacted
 
 
+def test_redact_secrets_strips_compressed_ipv6_loopback() -> None:
+    """Compressed IPv6 loopback ``::1`` must be redacted (RFC 4291 compressed form)."""
+    text = "Connecting to ::1 for the health check"
+    redacted = redact_secrets(text)
+    assert "::1" not in redacted
+    assert "[PII]" in redacted
+
+
+def test_redact_secrets_strips_compressed_ipv6_interior() -> None:
+    """Compressed IPv6 with interior ``::`` (e.g. ``2001:db8::1``) must be redacted."""
+    text = "Resolved 2001:db8::1 via DNS"
+    redacted = redact_secrets(text)
+    assert "2001:db8::1" not in redacted
+    assert "[PII]" in redacted
+
+
 def test_redact_secrets_strips_uuid_without_keyword() -> None:
     """UUIDs must be redacted even with no keyword trigger present."""
     text = "Request id 550e8400-e29b-41d4-a716-446655440000 logged"

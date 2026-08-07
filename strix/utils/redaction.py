@@ -50,7 +50,29 @@ _ALWAYS_RUN_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ),
     (
         "ipv6",
-        re.compile(r"\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}\b", re.IGNORECASE),
+        # Matches both full (8-group) and RFC 4291 compressed forms (``::``).
+        # The previous pattern ``(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}`` only
+        # matched uncompressed addresses and missed ``::1`` / ``2001:db8::1``,
+        # leaking loopback and compressed IPv6 PII into logs.  Boundaries use
+        # ``(?<![\w:])`` / ``(?![\w:])`` instead of ``\b`` because ``::1``
+        # starts with a non-word char (``:``), so ``\b`` would not fire.
+        re.compile(
+            r"(?<![\w:])"
+            r"(?:"
+            r"(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}"  # full 8 groups
+            r"|(?:[0-9a-f]{1,4}:){1,7}:"  # 1:: ... 1:2:3:4:5:6:7::
+            r"|(?:[0-9a-f]{1,4}:){1,6}(?::[0-9a-f]{1,4})"  # 1::8 ... 1:2:3:4:5:6::8
+            r"|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}"
+            r"|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}"
+            r"|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}"
+            r"|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}"
+            r"|[0-9a-f]{1,4}:(?::[0-9a-f]{1,4}){1,6}"
+            r"|:(?::[0-9a-f]{1,4}){1,7}"
+            r"|::"
+            r")"
+            r"(?![\w:])",
+            re.IGNORECASE,
+        ),
         _PII_PLACEHOLDER,
     ),
 ]
