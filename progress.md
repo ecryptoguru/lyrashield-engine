@@ -103,6 +103,16 @@
 - Updated `tests/test_lyrashield_skills_overlay.py` to assert the rendered root system prompt contains the product `[SYSTEM-NOTICE]` marker.
 - Verification: `uv run ruff check .` passes; `uv run mypy strix/agents/prompt.py tests/test_lyrashield_skills_overlay.py` passes; `uv run pytest tests/test_skill_dir_extension.py tests/test_lyrashield_skills_overlay.py tests/test_agent_tool_registration.py tests/test_agent_factory_shell.py` passes (47 tests).
 
+### Phase 4: todo tool override slice
+
+- **Status:** complete
+- Moved the product todo tool implementation from `strix/tools/todo/tools.py` to `lyrashield/tools/todo/tools.py`.
+- Reset `strix/tools/todo/tools.py` to v1.5.2.
+- Added `lyrashield/tools/todo/__init__.py`.
+- Updated `lyrashield_adapter/cli.py` to register `create_todo`, `list_todos`, `update_todo`, `mark_todo_done`, `mark_todo_pending`, and `delete_todo` overrides.
+- Updated `tests/test_agent_tool_registration.py` to assert all product todo overrides are registered.
+- Verification: `uv run ruff check .` passes; `uv run mypy lyrashield_adapter/cli.py lyrashield/tools/todo/tools.py` passes; `uv run pytest tests/test_agent_tool_registration.py tests/test_agent_factory_shell.py` passes (24 tests); combined targeted suite (47 tests) passes.
+
 ## Resume Instructions
 
 1. Read `task_plan.md` and `findings.md` fully.

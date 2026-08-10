@@ -110,17 +110,10 @@ def _get_agent_todos(agent_id: str) -> dict[str, dict[str, Any]]:
 
 
 def _normalize_priority(priority: str | None, default: str = "normal") -> str:
-    candidate = str(priority or default or "normal").strip().lower()
+    candidate = (priority or default or "normal").lower()
     if candidate not in VALID_PRIORITIES:
         raise ValueError(f"Invalid priority. Must be one of: {', '.join(VALID_PRIORITIES)}")
     return candidate
-
-
-def _coerce_priority(priority: str | None, default: str = "normal") -> str:
-    try:
-        return _normalize_priority(priority, default)
-    except ValueError:
-        return default
 
 
 def _sorted_todos(agent_id: str) -> list[dict[str, Any]]:
@@ -292,16 +285,11 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
             - ``description`` (str, optional): extra context or
               acceptance criteria.
             - ``priority`` (str, optional): one of ``"low"`` /
-              ``"normal"`` / ``"high"`` / ``"critical"``. Anything else,
-              including omitting it, falls back to ``"normal"`` rather
-              than failing.
+              ``"normal"`` / ``"high"`` / ``"critical"``. Defaults to
+              ``"normal"``.
 
             Example: ``[{"title": "Probe /admin", "priority": "high"},
             {"title": "Check JWT alg=none"}]``.
-
-        A title already on the list, or repeated within this call, is
-        skipped rather than duplicated; skipped titles come back under
-        ``skipped``.
     """
     agent_id = _agent_id_from(ctx)
     try:
@@ -314,21 +302,13 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
             )
 
         agent_todos = _get_agent_todos(agent_id)
-        seen = {todo["title"].strip().lower() for todo in agent_todos.values()}
         created: list[dict[str, Any]] = []
-        skipped: list[dict[str, str]] = []
         for task in tasks:
-            title = task["title"]
-            key = title.lower()
-            if key in seen:
-                skipped.append({"title": title, "reason": "duplicate title"})
-                continue
-            seen.add(key)
-            task_priority = _coerce_priority(task.get("priority"))
+            task_priority = _normalize_priority(task.get("priority"))
             todo_id = str(uuid.uuid4())[:6]
             timestamp = datetime.now(UTC).isoformat()
             agent_todos[todo_id] = {
-                "title": title,
+                "title": task["title"],
                 "description": task.get("description"),
                 "priority": task_priority,
                 "status": "pending",
@@ -336,7 +316,7 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
                 "updated_at": timestamp,
                 "completed_at": None,
             }
-            created.append({"todo_id": todo_id, "title": title, "priority": task_priority})
+            created.append({"todo_id": todo_id, "title": task["title"], "priority": task_priority})
     except (ValueError, TypeError) as e:
         return json.dumps(
             {"success": False, "error": f"Failed to create todo: {e}"},
@@ -350,7 +330,6 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
             "success": True,
             "created": created,
             "created_count": len(created),
-            "skipped": skipped,
             "todos": _sorted_todos(agent_id),
             "total_count": len(_get_agent_todos(agent_id)),
         },

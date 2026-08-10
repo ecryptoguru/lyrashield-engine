@@ -142,3 +142,19 @@ def test_adapter_registers_lyrashield_web_search() -> None:
 
     assert "web_search" in factory._TOOL_OVERRIDES
     assert factory._TOOL_OVERRIDES["web_search"].name == "web_search"
+
+
+def test_adapter_registers_lyrashield_todo_tools() -> None:
+    """The product entry point registers the LyraShield todo tool overrides."""
+    _register_lyrashield_tool_overrides()
+
+    for name in (
+        "create_todo",
+        "list_todos",
+        "update_todo",
+        "mark_todo_done",
+        "mark_todo_pending",
+        "delete_todo",
+    ):
+        assert name in factory._TOOL_OVERRIDES
+        assert factory._TOOL_OVERRIDES[name].name == name

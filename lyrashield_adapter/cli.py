@@ -172,12 +172,26 @@ def _register_lyrashield_skills() -> None:
 
 
 def _register_lyrashield_tool_overrides() -> None:
+    from lyrashield.tools.todo.tools import (  # noqa: PLC0415
+        create_todo,
+        delete_todo,
+        list_todos,
+        mark_todo_done,
+        mark_todo_pending,
+        update_todo,
+    )
     from lyrashield.tools.web_search.tool import (  # noqa: PLC0415
         web_search as lyra_web_search,
     )
     from strix.agents.factory import register_tool_override  # noqa: PLC0415
 
     register_tool_override("web_search", lyra_web_search)
+    register_tool_override("create_todo", create_todo)
+    register_tool_override("list_todos", list_todos)
+    register_tool_override("update_todo", update_todo)
+    register_tool_override("mark_todo_done", mark_todo_done)
+    register_tool_override("mark_todo_pending", mark_todo_pending)
+    register_tool_override("delete_todo", delete_todo)
 
 
 def _run_upstream() -> None:
