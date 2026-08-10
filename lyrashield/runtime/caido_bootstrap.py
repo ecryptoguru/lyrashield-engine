@@ -83,20 +83,27 @@ async def _login_as_guest(
 async def bootstrap_caido(
     session: BaseSandboxSession,
     *,
+    scan_id: str,
     host_url: str,
     container_url: str,
 ) -> Client:
     """Connect to the in-container Caido sidecar and select a fresh project."""
-    logger.info("Bootstrapping Caido client (host=%s, container=%s)", host_url, container_url)
+    logger.info(
+        "Bootstrapping Caido client (host=%s, container=%s, scan=%s)",
+        host_url,
+        container_url,
+        scan_id,
+    )
 
     access_token = await _login_as_guest(session, container_url=container_url)
 
     client = Client(host_url, auth=TokenAuthOptions(token=access_token))
     await client.connect()
 
+    project_name = f"sandbox-{scan_id[:8]}"
     try:
         project = await client.project.create(
-            CreateProjectOptions(name="sandbox", temporary=True),
+            CreateProjectOptions(name=project_name, temporary=True),
         )
         await client.project.select(project.id)
     except BaseException:

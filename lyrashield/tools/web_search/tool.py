@@ -310,7 +310,7 @@ async def web_search(
     web_search_settings = settings.web_search
     api_key = web_search_settings.api_key
 
-    from strix.core.hooks import get_active_hooks
+    from lyrashield.lifecycle.hooks import get_active_hooks
     from strix.report.state import get_global_report_state
 
     report_state = get_global_report_state()

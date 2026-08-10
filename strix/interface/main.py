@@ -38,7 +38,7 @@ from lyrashield.policy.settings import (
     is_lyrashield_product,
 )
 from strix.config import apply_config_override
-from strix.core.inputs import DEFAULT_MAX_TURNS, make_model_settings
+from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS, make_model_settings
 from strix.core.paths import run_dir_for, runs_base_dir, runtime_state_dir
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui

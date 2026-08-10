@@ -12,7 +12,7 @@ from typing import Any, Literal, get_args
 
 from agents import RunContextWrapper, function_tool
 
-from strix.core.agents import Status, coordinator_from_context
+from lyrashield.lifecycle.agents import Status, coordinator_from_context
 from strix.skills import validate_requested_skills
 
 

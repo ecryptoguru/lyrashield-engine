@@ -259,6 +259,11 @@ ignore = [
 "lyrashield/tools/reporting/tool.py" = ["PLC0415"]
 "lyrashield/tools/proxy/caido_api.py" = ["ARG001"]
 "lyrashield/policy/models.py" = ["PLC0415"]
+"lyrashield/lifecycle/*.py" = ["PLR0912", "PLR0915", "PLC0415", "RUF100"]
+"lyrashield/runtime/*.py" = ["BLE001", "TC002", "TC003"]
+"strix/core/**/*.py" = ["RUF100"]
+"strix/runtime/**/*.py" = ["RUF100"]
+"strix/llm/**/*.py" = ["RUF100"]
 "lyrashield/policy/codex.py" = ["PLC0415"]
 "lyrashield/policy/loader.py" = ["PLC0415"]
 # Custom Docker subclass duplicates parent body; some imports are for annotations.

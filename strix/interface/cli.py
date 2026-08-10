@@ -15,10 +15,10 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import load_settings
-from strix.core.inputs import DEFAULT_MAX_TURNS
-from strix.core.runner import run_strix_scan
+from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
+from lyrashield.lifecycle.runner import run_strix_scan
 from strix.report.state import ReportState, set_global_report_state
-from strix.runtime import session_manager
+from lyrashield.runtime import session_manager
 
 from .utils import (
     build_live_stats_text,

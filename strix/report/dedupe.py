@@ -241,7 +241,7 @@ async def _request_dedupe_judgement(
     """
     # Lazy import: strix.core.hooks imports strix.report.state, so a
     # module-level import here would close a cycle.
-    from strix.core.hooks import get_active_hooks
+    from lyrashield.lifecycle.hooks import get_active_hooks
 
     hooks = get_active_hooks()
     reservation_key = f"dedupe:{uuid4().hex}"

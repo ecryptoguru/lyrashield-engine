@@ -1,5 +1,6 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """StrixDockerSandboxClient — preserves the image's ENTRYPOINT and adds
-NET_ADMIN/NET_RAW capabilities + host-gateway.
+NET_ADMIN/NET_RAW capabilities + an opt-in host gateway.
 
 The SDK's ``DockerSandboxClient._create_container`` does not expose a hook for
 extending ``create_kwargs`` before ``containers.create`` is called. We subclass
@@ -12,9 +13,12 @@ deltas:
    starts inside the container and ``bootstrap_caido`` retries against a
    dead port.
 2. Append NET_ADMIN/NET_RAW to ``cap_add`` (required by ``nmap -sS`` and
-   other raw-socket tools).
-3. Add ``host.docker.internal`` → host-gateway to ``extra_hosts`` so the
-   agent can reach host-served apps.
+   other raw-socket tools) only when the operator has opted in by setting
+   ``STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1``. The legacy
+   ``STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES`` is still honored if the new
+   variable is not set.
+3. Optionally add ``host.docker.internal`` → host-gateway to ``extra_hosts``
+   when ``STRIX_SANDBOX_ALLOW_HOST_GATEWAY`` is explicitly enabled.
 
 Pinned to ``openai-agents==0.14.6``. Bumping the SDK requires
 re-merging the parent body. Track upstream for an injection hook.
@@ -30,7 +34,7 @@ from typing import Any, cast
 
 from agents.sandbox.errors import ExposedPortUnavailableError
 from agents.sandbox.manifest import Manifest
-from agents.sandbox.sandboxes.docker import (
+from agents.sandbox.sandboxes.docker import (  # pyright: ignore[reportPrivateImportUsage]
     DockerSandboxClient,
     DockerSandboxSession,
     _build_docker_volume_mounts,
@@ -40,11 +44,11 @@ from agents.sandbox.sandboxes.docker import (
 )
 from agents.sandbox.session.sandbox_session import SandboxSession
 from agents.sandbox.types import ExposedPortEndpoint
-from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
-from docker.models.containers import Container  # type: ignore[import-untyped, unused-ignore]
-from docker.types import LogConfig  # type: ignore[import-untyped, unused-ignore]
-from docker.types import Mount as DockerSDKMount  # type: ignore[import-untyped, unused-ignore]
-from docker.utils import parse_repository_tag  # type: ignore[import-untyped, unused-ignore]
+from docker import errors as docker_errors  # pyright: ignore[reportMissingTypeStubs]
+from docker.models.containers import Container  # pyright: ignore[reportMissingTypeStubs]
+from docker.types import LogConfig  # pyright: ignore[reportMissingTypeStubs]
+from docker.types import Mount as DockerSDKMount  # pyright: ignore[reportMissingTypeStubs]
+from docker.utils import parse_repository_tag  # pyright: ignore[reportMissingTypeStubs]
 from requests.exceptions import RequestException
 
 
@@ -52,6 +56,31 @@ logger = logging.getLogger(__name__)
 
 
 _SANDBOX_NETWORK_ENV = "STRIX_DOCKER_SANDBOX_NETWORK"
+_SANDBOX_HOST_GATEWAY_ENV = "STRIX_SANDBOX_ALLOW_HOST_GATEWAY"
+
+
+def host_gateway_enabled() -> bool:
+    return os.environ.get(_SANDBOX_HOST_GATEWAY_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def network_capabilities_enabled() -> bool:
+    """Return whether NET_ADMIN/NET_RAW should be added to the sandbox.
+
+    Network capabilities are now opt-in via ``STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES``.
+    The legacy ``STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES`` is still honored when the
+    new variable is not set, so explicit existing overrides continue to work.
+    """
+    new = os.environ.get("STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES", "").strip().lower()
+    if new:
+        return new in {"1", "true", "yes"}
+    old = os.environ.get("STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES", "").strip().lower()
+    if old in {"1", "true", "yes"}:
+        return False
+    return old in {"0", "false", "no", "off"}
 
 
 def _sandbox_network() -> str | None:
@@ -142,31 +171,37 @@ class StrixDockerSandboxSession(DockerSandboxSession):
                 cause=e,
             ) from e
 
-        attrs = getattr(self._container, "attrs", {}) or {}
-        networks = attrs.get("NetworkSettings", {}).get("Networks", {})
-        endpoint = networks.get(self.sandbox_network) or {}
+        attrs = cast("dict[str, Any]", getattr(self._container, "attrs", {}) or {})
+        network_settings = cast("dict[str, Any]", attrs.get("NetworkSettings", {}) or {})
+        networks = cast("dict[str, Any]", network_settings.get("Networks", {}) or {})
+        endpoint = cast("dict[str, Any]", networks.get(self.sandbox_network) or {})
         ip = endpoint.get("IPAddress") or endpoint.get("GlobalIPv6Address")
-        if not isinstance(ip, str) or not ip:
-            raise ExposedPortUnavailableError(
-                port=port,
-                exposed_ports=self.state.exposed_ports,
-                reason="backend_unavailable",
-                context={
-                    "backend": "docker",
-                    "detail": "container_not_on_network",
-                    "network": self.sandbox_network,
-                },
-            )
-        host = f"[{ip}]" if ":" in ip else ip
-        return ExposedPortEndpoint(host=host, port=port, tls=False)
+        if isinstance(ip, str) and ip:
+            host = f"[{ip}]" if ":" in ip else ip
+            return ExposedPortEndpoint(host=host, port=port, tls=False)
+
+        # Custom-network lookup failed; the container may not have joined the
+        # configured network, or ports were published to the host. Fall back to
+        # the SDK's default host-port resolver before giving up.
+        logger.debug(
+            "Custom-network IP lookup failed for port %s on network %s; "
+            "falling back to SDK default resolver",
+            port,
+            self.sandbox_network,
+        )
+        return await super()._resolve_exposed_port(port)
 
 
 class StrixDockerSandboxClient(DockerSandboxClient):
     # Host directories to bind-mount into the container, set by the docker
     # backend before ``create()``. Each item is ``{source, target, read_only}``.
-    strix_bind_mounts: list[dict[str, Any]] | None = None
+    strix_bind_mounts: list[dict[str, Any]]
 
-    async def _create_container(
+    def _ensure_image_available(self, image: str) -> None:
+        if not self.image_exists(image):
+            raise docker_errors.DockerException(f"Docker image unavailable after pull: {image}")
+
+    async def _create_container(  # noqa: PLR0912 - mirrors the pinned SDK container builder
         self,
         image: str,
         *,
@@ -177,10 +212,16 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         # ----- BEGIN VERBATIM COPY of DockerSandboxClient._create_container -----
         # SDK ref: src/agents/sandbox/sandboxes/docker.py:1434-1477 (v0.14.6).
         if not self.image_exists(image):
+            if os.environ.get("STRIX_IMAGE_DIGEST", "").strip():
+                raise RuntimeError(
+                    f"Sandbox image {image} is not present locally and "
+                    "STRIX_IMAGE_DIGEST is set. Pre-pull the image with the verified digest "
+                    "before starting the scan."
+                )
             repo, tag = parse_repository_tag(image)
             self.docker_client.images.pull(repo, tag=tag or None, all_tags=False)
 
-        assert self.image_exists(image)
+        self._ensure_image_available(image)
         environment: dict[str, str] | None = None
         if manifest:
             environment = await manifest.environment.resolve()
@@ -221,34 +262,47 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         # ----- END VERBATIM COPY -----
 
         # Strix injections — append, don't overwrite, so FUSE/SYS_ADMIN survives.
-        cap_add = create_kwargs.setdefault("cap_add", [])
-        if not isinstance(cap_add, list):
-            cap_add = list(cap_add)
-            create_kwargs["cap_add"] = cap_add
-        for cap in ("NET_ADMIN", "NET_RAW"):
-            if cap not in cap_add:
-                cap_add.append(cap)
+        cap_add_value: Any = create_kwargs.setdefault("cap_add", [])
+        if isinstance(cap_add_value, (list, tuple)):
+            cap_items: list[Any] | tuple[Any, ...] = cap_add_value
+            cap_add = [str(c) for c in cap_items]
+        elif cap_add_value:
+            cap_add = [str(cap_add_value)]
+        else:
+            cap_add = []
+        create_kwargs["cap_add"] = cap_add
+        if network_capabilities_enabled():
+            for cap in ("NET_ADMIN", "NET_RAW"):
+                if cap not in cap_add:
+                    cap_add.append(cap)
+            logger.info("Network capabilities enabled for sandbox")
+        else:
+            logger.info(
+                "Network capabilities disabled for sandbox "
+                "(default; set STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1 to enable)"
+            )
 
-        extra_hosts = create_kwargs.setdefault("extra_hosts", {})
-        extra_hosts["host.docker.internal"] = "host-gateway"
+        if host_gateway_enabled():
+            extra_hosts = create_kwargs.setdefault("extra_hosts", {})
+            extra_hosts["host.docker.internal"] = "host-gateway"
 
         _apply_sandbox_network(create_kwargs)
         _apply_resource_limits(create_kwargs)
         _apply_log_limits(create_kwargs)
         _apply_run_labels(create_kwargs)
 
-        # Strix injection: local source trees, sorted shallowest-first so a
-        # nested spec lands on top of the tree it covers.
-        bind_mounts = self.strix_bind_mounts or ()
+        # Strix injection: host bind mounts (e.g. large repos passed via --mount)
+        # that bypass the SDK's file-by-file LocalDir copy.
+        bind_mounts = getattr(self, "strix_bind_mounts", ())
         if bind_mounts:
             mounts = create_kwargs.setdefault("mounts", [])
-            for spec in sorted(bind_mounts, key=lambda s: str(s["target"]).count("/")):
+            for spec in bind_mounts:
                 mounts.append(
                     DockerSDKMount(
                         target=spec["target"],
                         source=spec["source"],
                         type="bind",
-                        read_only=spec.get("read_only", False),
+                        read_only=spec.get("read_only", True),
                     )
                 )
 
@@ -269,14 +323,15 @@ class StrixDockerSandboxClient(DockerSandboxClient):
     async def create(self, **kwargs: Any) -> SandboxSession:
         session = await super().create(**kwargs)
         network = _sandbox_network()
-        inner = session._inner
+        inner = getattr(session, "_inner")  # noqa: B009
         if network and isinstance(inner, DockerSandboxSession):
             inner.__class__ = StrixDockerSandboxSession
             cast("StrixDockerSandboxSession", inner).sandbox_network = network
         return session
 
     async def delete(self, session: SandboxSession) -> SandboxSession:
-        container_id = getattr(getattr(session._inner, "state", None), "container_id", None)
+        inner = getattr(session, "_inner")  # noqa: B009
+        container_id = getattr(getattr(inner, "state", None), "container_id", None)
         if container_id:
             # Best-effort kill: NotFound/APIError cover a gone or unhappy
             # container. RequestException covers a torn-down daemon socket —
@@ -288,5 +343,13 @@ class StrixDockerSandboxClient(DockerSandboxClient):
             with contextlib.suppress(
                 docker_errors.NotFound, docker_errors.APIError, RequestException
             ):
-                self.docker_client.containers.get(container_id).kill()
-        return await super().delete(session)
+                cast("Any", self.docker_client.containers.get(container_id)).kill()
+        try:
+            return await super().delete(session)
+        except (docker_errors.APIError, RequestException, OSError) as exc:
+            logger.warning(
+                "docker delete raised for container %s; it may need manual reaping: %s",
+                container_id,
+                exc,
+            )
+            return session

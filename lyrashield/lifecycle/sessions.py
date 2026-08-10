@@ -1,0 +1,336 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
+"""SDK session helpers for Strix agents."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING, Any, cast
+from weakref import WeakKeyDictionary
+
+from agents.items import ItemHelpers
+from agents.memory import OpenAIConversationsSession, SQLiteSession
+
+from strix.utils.redaction import redact_secrets
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from agents.items import TResponseInputItem
+    from agents.memory import Session
+
+
+logger = logging.getLogger(__name__)
+
+
+def open_agent_session(
+    agent_id: str,
+    path: Path,
+    *,
+    server_conversation: bool = False,
+    conversation_id: str | None = None,
+) -> Session:
+    """Open an agent session, preferring a server-managed conversation when enabled.
+
+    ``server_conversation`` gates ``OpenAIConversationsSession``; it is fail-closed
+    and falls back to ``SQLiteSession`` if the feature is not enabled or no
+    ``conversation_id`` can be reused.
+    """
+    if server_conversation:
+        try:
+            return OpenAIConversationsSession(conversation_id=conversation_id)
+        except Exception:
+            logger.exception(
+                "server conversation session unavailable for %s; falling back to SQLite", agent_id
+            )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return SQLiteSession(session_id=agent_id, db_path=path)
+
+
+async def seed_initial_input(session: Session, initial_input: Any) -> bool:
+    """Commit an agent's opening identity/task input before its first run cycle."""
+    items = ItemHelpers.input_to_new_input_list(initial_input)
+    if not items:
+        return False
+    async with session_write_lock(session):
+        if await session.get_items():
+            return False
+        await session.add_items(items)
+    return True
+
+
+_IMAGE_REJECTED_TEXT = "[image rejected by the model]"
+_IMAGE_ELIDED_TEXT = "[older screenshot elided to bound context memory]"
+_INHERITED_IMAGE_TEXT = "[screenshot omitted from inherited context]"
+
+
+def _output_has_image(item_dict: dict[str, Any]) -> bool:
+    if item_dict.get("type") != "function_call_output":
+        return False
+    output = item_dict.get("output")
+    if not isinstance(output, list):
+        return False
+    blocks = output
+    return any(
+        isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "input_image"
+        for block in blocks
+    )
+
+
+def _elided_output(item_dict: dict[str, Any], text: str) -> dict[str, Any]:
+    # Replace only image blocks; sibling text blocks are preserved.
+    output = item_dict.get("output")
+    blocks = output if isinstance(output, list) else []
+    return {
+        "type": "function_call_output",
+        "call_id": item_dict.get("call_id"),
+        "output": [
+            (
+                {"type": "input_text", "text": text}
+                if isinstance(block, dict)
+                and cast("dict[str, Any]", block).get("type") == "input_image"
+                else block
+            )
+            for block in blocks
+        ],
+    }
+
+
+_session_write_locks: WeakKeyDictionary[Session, asyncio.Lock] = WeakKeyDictionary()
+
+
+def session_write_lock(session: Session) -> asyncio.Lock:
+    """Lock serialising all out-of-band writes to ``session``."""
+    lock = _session_write_locks.get(session)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_write_locks[session] = lock
+    return lock
+
+
+async def _rewrite_session(
+    session: Session,
+    transform: Callable[[list[Any]], tuple[list[Any], bool]],
+) -> bool:
+    """Read-modify-write a session under its write lock, restoring on failure."""
+    async with session_write_lock(session):
+        items = await session.get_items()
+        if not items:
+            return False
+        rebuilt, changed = transform(list(items))
+        if not changed:
+            return False
+        original_items = list(items)
+        await session.clear_session()
+        try:
+            await session.add_items(rebuilt)
+        except Exception:
+            logger.exception("session rewrite failed; restoring original items")
+            await session.clear_session()
+            await session.add_items(original_items)
+            raise
+        return True
+
+
+async def replace_session_items(
+    session: Session,
+    new_items: list[Any],
+    *,
+    expected_len: int | None = None,
+) -> bool:
+    """Overwrite the session's items, restoring the originals on failure.
+
+    When ``expected_len`` is given, the rewrite is skipped if the session no
+    longer has that many items (a concurrent writer changed it), so a slow
+    compaction summary can't clobber newer turns.
+    """
+    async with session_write_lock(session):
+        original = list(await session.get_items())
+        if expected_len is not None and len(original) != expected_len:
+            logger.warning(
+                "skipping session rewrite: expected %d items, found %d",
+                expected_len,
+                len(original),
+            )
+            return False
+        rebuilt = cast("list[TResponseInputItem]", new_items)
+        await session.clear_session()
+        try:
+            await session.add_items(rebuilt)
+        except Exception:
+            logger.exception("session rewrite failed; restoring original items")
+            await session.clear_session()
+            await session.add_items(original)
+            raise
+        return True
+
+
+async def strip_all_images_from_session(session: Session) -> bool:
+    """Replace every image tool output with a text placeholder (rejection recovery)."""
+
+    def _transform(items: list[Any]) -> tuple[list[Any], bool]:
+        rebuilt: list[Any] = []
+        changed = False
+        for item in items:
+            item_dict = cast("dict[str, Any]", item) if isinstance(item, dict) else None
+            if item_dict is not None and _output_has_image(item_dict):
+                rebuilt.append(_elided_output(item_dict, _IMAGE_REJECTED_TEXT))
+                changed = True
+            else:
+                rebuilt.append(item)
+        return rebuilt, changed
+
+    return await _rewrite_session(session, _transform)
+
+
+# --- Content-filter recovery: redact secrets in session tool outputs and
+# assistant messages so a replayed turn does not re-trigger Azure's filter.
+
+
+def _output_has_text(item_dict: dict[str, Any]) -> bool:
+    """Return True if a function_call_output item carries text content."""
+    if item_dict.get("type") != "function_call_output":
+        return False
+    output = item_dict.get("output")
+    if isinstance(output, str):
+        return bool(output)
+    if isinstance(output, list):
+        return any(
+            isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "input_text"
+            for block in output
+        )
+    return False
+
+
+def _redact_output_secrets(item_dict: dict[str, Any]) -> dict[str, Any] | None:
+    """Redact secrets in a function_call_output item; return None if unchanged."""
+    output = item_dict.get("output")
+    if isinstance(output, str):
+        redacted = redact_secrets(output)
+        return {**item_dict, "output": redacted} if redacted != output else None
+    if isinstance(output, list):
+        new_blocks: list[Any] = []
+        changed = False
+        for block in output:
+            if isinstance(block, dict) and block.get("type") == "input_text":
+                text = block.get("text", "")
+                if isinstance(text, str):
+                    redacted = redact_secrets(text)
+                    if redacted != text:
+                        new_blocks.append({**block, "text": redacted})
+                        changed = True
+                        continue
+            new_blocks.append(block)
+        return {**item_dict, "output": new_blocks} if changed else None
+    return None
+
+
+def _message_has_text(item_dict: dict[str, Any]) -> bool:
+    """Return True if a message_output item carries output_text content."""
+    if item_dict.get("type") != "message_output":
+        return False
+    content = item_dict.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "output_text"
+        for block in content
+    )
+
+
+def _redact_message_secrets(item_dict: dict[str, Any]) -> dict[str, Any] | None:
+    """Redact secrets in a message_output item; return None if unchanged."""
+    content = item_dict.get("content")
+    if not isinstance(content, list):
+        return None
+    new_blocks: list[Any] = []
+    changed = False
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "output_text":
+            text = block.get("text", "")
+            if isinstance(text, str):
+                redacted = redact_secrets(text)
+                if redacted != text:
+                    new_blocks.append({**block, "text": redacted})
+                    changed = True
+                    continue
+        new_blocks.append(block)
+    return {**item_dict, "content": new_blocks} if changed else None
+
+
+async def sanitize_session_secrets(session: Session) -> bool:
+    """Redact secrets in tool outputs and assistant messages to clear a content-filter block.
+
+    Mirrors :func:`strip_all_images_from_session` but applies
+    :func:`strix.utils.redaction.redact_secrets` to text content in
+    ``function_call_output`` and ``message_output`` items. Returns True if any
+    item was rewritten (caller should retry the turn), False if nothing changed.
+    """
+
+    def _transform(items: list[Any]) -> tuple[list[Any], bool]:
+        rebuilt: list[Any] = []
+        changed = False
+        for item in items:
+            item_dict = cast("dict[str, Any]", item) if isinstance(item, dict) else None
+            if item_dict is not None and _output_has_text(item_dict):
+                new_item = _redact_output_secrets(item_dict)
+                if new_item is not None:
+                    rebuilt.append(new_item)
+                    changed = True
+                    continue
+            if item_dict is not None and _message_has_text(item_dict):
+                new_item = _redact_message_secrets(item_dict)
+                if new_item is not None:
+                    rebuilt.append(new_item)
+                    changed = True
+                    continue
+            rebuilt.append(item)
+        return rebuilt, changed
+
+    return await _rewrite_session(session, _transform)
+
+
+async def enforce_image_budget(session: Session, max_images: int) -> bool:
+    """Keep only the most recent ``max_images`` image outputs; elide older ones."""
+    if max_images < 0:
+        return False
+
+    def _transform(items: list[Any]) -> tuple[list[Any], bool]:
+        image_indices = [
+            i
+            for i, item in enumerate(items)
+            if isinstance(item, dict) and _output_has_image(cast("dict[str, Any]", item))
+        ]
+        if len(image_indices) <= max_images:
+            return items, False
+        to_elide = set(image_indices[: len(image_indices) - max_images])
+        rebuilt = [
+            (
+                _elided_output(cast("dict[str, Any]", item), _IMAGE_ELIDED_TEXT)
+                if i in to_elide
+                else item
+            )
+            for i, item in enumerate(items)
+        ]
+        return rebuilt, True
+
+    return await _rewrite_session(session, _transform)
+
+
+def scrub_images_from_items(items: list[Any]) -> list[Any]:
+    """Return a copy of ``items`` with every image block replaced by text."""
+
+    def _scrub(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            obj_dict = cast("dict[str, Any]", obj)
+            if obj_dict.get("type") == "input_image":
+                return {"type": "input_text", "text": _INHERITED_IMAGE_TEXT}
+            return {k: _scrub(v) for k, v in obj_dict.items()}
+        if isinstance(obj, list):
+            obj_list = obj
+            return [_scrub(v) for v in obj_list]
+        return obj
+
+    return [_scrub(item) for item in items]

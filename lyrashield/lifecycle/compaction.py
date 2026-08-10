@@ -10,7 +10,7 @@ pairing so the trimmed history is still valid provider input.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
@@ -18,15 +18,19 @@ from litellm.exceptions import BadRequestError, ContextWindowExceededError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 from strix.config import load_settings
-from strix.config.models import StrixProvider
-from strix.core.inputs import make_model_settings
-from strix.core.sessions import replace_session_items, session_write_lock
+from lyrashield.policy.models import StrixProvider
+from lyrashield.lifecycle.inputs import make_model_settings
+from lyrashield.lifecycle.sessions import replace_session_items, session_write_lock
 from strix.llm.context_budget import context_window, count_tokens, output_limit
+from strix.utils.redaction import redact_text
 
 
 if TYPE_CHECKING:
     from agents.items import ModelResponse
     from agents.memory import Session
+    from agents.models.interface import ModelProvider
+
+    from lyrashield.policy.settings import Settings
 
 
 logger = logging.getLogger(__name__)
@@ -90,9 +94,18 @@ EXHAUSTIVE, not concise. Enumerate every distinct item as its own bullet — \
 never merge, deduplicate, generalise, or omit distinct findings, credentials, \
 or dead ends, even if they seem minor or repetitive. If the source mentions \
 five vulnerabilities, list five. Copy exact values verbatim: URLs, endpoints, \
-file paths, parameters, payloads, credentials, tokens, keys, hashes, cracked \
-passwords, software versions, and error messages — never paraphrase or \
-placeholder them. Do not invent anything and do not describe this compaction \
+file paths, parameters, payloads, software versions, and error messages — \
+never paraphrase or placeholder them.
+
+**Secrets and credentials have been redacted from the input.** You will see \
+placeholders like [SECRET], [TOKEN], [JWT], [AWS_KEY], [PRIVATE_KEY], [PII], \
+and [INTERNAL_PATH]. Preserve these placeholders verbatim in your summary — \
+do not attempt to reconstruct or guess the original values. In the \
+## Credentials & Secrets section, note the *type* and *location* of each \
+redacted secret (e.g. "[SECRET] used for API authentication at /login") \
+so the agent knows a secret was found without exposing its value.
+
+Do not invent anything and do not describe this compaction \
 process.
 
 Return Markdown with exactly these sections:
@@ -106,8 +119,10 @@ misconfig, etc.). For each: type, exact location (URL/endpoint/param/file), the 
 verbatim payload or proof, confirmation status, and impact. List them all.
 
 ## Credentials & Secrets
-One bullet per credential, secret, API key, token, hash, or cracked password, \
-copied verbatim with where it applies. Write "(none)" only if truly none.
+One bullet per credential, secret, API key, token, hash, or cracked password. \
+Since secrets have been redacted from the input, record the placeholder type \
+and where it applies (e.g. "[SECRET] used for API auth at /login"). Write \
+"(none)" only if truly none.
 
 ## System & Recon Details
 Architecture, tech stack, versions, discovered endpoints/paths/params, and \
@@ -164,7 +179,11 @@ def _serialize_item(item: Any) -> str:
         text = output if isinstance(output, str) else _content_text(output)
         return f"[tool_result] {_truncate(text, _TOOL_OUTPUT_MAX_CHARS)}"
     if item_type == "reasoning":
-        return ""
+        summary = item.get("summary")
+        text = _content_text(summary) if summary else _content_text(item.get("text"))
+        if text:
+            return f"[reasoning] {_truncate(text, _TOOL_OUTPUT_MAX_CHARS)}"
+        return "[reasoning]"
     if role or item_type == "message":
         return f"[{role or 'assistant'}] {_content_text(item.get('content'))}".strip()
     return ""
@@ -205,6 +224,10 @@ def _select_split(model: str, items: list[Any], keep_tokens: int) -> int:
     open_calls = _open_calls_at(items)
     while split > 0 and open_calls[split] != 0:
         split -= 1
+    # Any leading orphan tool outputs at the split would create an invalid
+    # provider input (an output with no preceding call), so fold them into head.
+    while split < len(items) and _is_tool_output(items[split]):
+        split += 1
     return split
 
 
@@ -233,18 +256,21 @@ def _fit_to_tokens(model: str, text: str, max_tokens: int) -> str:
     return candidate
 
 
-def _summary_output_tokens(model: str) -> int:
+def _summary_output_tokens(model: str, settings: Settings | None = None) -> int:
     """Summary output allowance, capped at the model's own output limit."""
-    return min(load_settings().context.summary_max_tokens, output_limit(model))
+    context = settings.context if settings is not None else load_settings().context
+    return min(context.summary_max_tokens, output_limit(model))
 
 
-def _summary_input_budget(model: str, previous: str | None) -> int:
+def _summary_input_budget(
+    model: str, previous: str | None, settings: Settings | None = None
+) -> int:
     """Token room left for the head after instructions and the summary output."""
     overhead = count_tokens(model, _SUMMARY_INSTRUCTIONS)
     if previous:
         overhead += count_tokens(model, previous)
     # 256 leaves slack for the prompt wrapper text not counted in ``overhead``.
-    room = context_window(model) - _summary_output_tokens(model) - overhead - 256
+    room = context_window(model) - _summary_output_tokens(model, settings=settings) - overhead - 256
     return max(0, room)
 
 
@@ -286,8 +312,19 @@ def _extract_text(response: ModelResponse) -> str:
     return "".join(parts)
 
 
-async def _summarize(model: str, prompt: str, max_tokens: int) -> str | None:
-    llm = load_settings().llm
+async def _summarize(
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    *,
+    model_provider: ModelProvider | None = None,
+    settings: Settings | None = None,
+) -> str | None:
+    if settings is None:
+        settings = cast(Settings, load_settings())
+    if model_provider is None:
+        model_provider = StrixProvider()
+    llm = settings.llm
     model_settings = make_model_settings(
         None,
         model_name=model,
@@ -296,21 +333,17 @@ async def _summarize(model: str, prompt: str, max_tokens: int) -> str | None:
         extra_headers=llm.extra_headers,
     ).resolve(ModelSettings(max_tokens=max_tokens))
     try:
-        response = (
-            await StrixProvider()
-            .get_model(model)
-            .get_response(
-                system_instructions=None,
-                input=prompt,
-                model_settings=model_settings,
-                tools=[],
-                output_schema=None,
-                handoffs=[],
-                tracing=ModelTracing.DISABLED,
-                previous_response_id=None,
-                conversation_id=None,
-                prompt=None,
-            )
+        response = await model_provider.get_model(model).get_response(
+            system_instructions=None,
+            input=prompt,
+            model_settings=model_settings,
+            tools=[],
+            output_schema=None,
+            handoffs=[],
+            tracing=ModelTracing.DISABLED,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
         )
     except Exception:
         logger.exception("compaction summary call failed for model %s", model)
@@ -329,13 +362,17 @@ async def maybe_compact(
     instructions: str = "",
     tools_text: str = "",
     force: bool = False,
+    model_provider: ModelProvider | None = None,
+    settings: Settings | None = None,
 ) -> bool:
     """Compact ``session`` if it is near the model's context window.
 
     Returns ``True`` when the session was rewritten. ``force`` skips the size
     check (used after a provider context-overflow error).
     """
-    context = load_settings().context
+    if settings is None:
+        settings = cast(Settings, load_settings())
+    context = settings.context
     if not context.auto_compact and not force:
         return False
 
@@ -354,7 +391,7 @@ async def maybe_compact(
     split = _select_split(model, items, context.keep_tokens)
     head, recent = items[:split], items[split:]
     previous = _previous_summary(head)
-    input_budget = _summary_input_budget(model, previous)
+    input_budget = _summary_input_budget(model, previous, settings=settings)
     if not head or input_budget <= 0:
         # Nothing to summarise, or no room for even the summary request itself.
         if head:
@@ -364,15 +401,20 @@ async def maybe_compact(
         return False
 
     serialized_head = _fit_to_tokens(model, _serialize_items(head), input_budget)
+    redacted_head = redact_text(serialized_head)
     summary = await _summarize(
         model,
-        _build_summary_prompt(serialized_head, previous),
-        _summary_output_tokens(model),
+        _build_summary_prompt(redacted_head, previous),
+        _summary_output_tokens(model, settings=settings),
+        model_provider=model_provider,
+        settings=settings,
     )
     if summary is None:
         return False
 
-    new_items = [_checkpoint_item(summary), *recent]
+    redacted_summary = redact_text(summary)
+
+    new_items = [_checkpoint_item(redacted_summary), *recent]
     rewritten = await replace_session_items(session, new_items, expected_len=len(items))
     if rewritten:
         logger.info(

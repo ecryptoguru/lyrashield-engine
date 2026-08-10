@@ -35,9 +35,9 @@ from textual.widgets.tree import TreeNode
 
 from strix.config import load_settings
 from strix.config.models import is_recommended_or_frontier_model
-from strix.core.hooks import BudgetExceededError
-from strix.core.inputs import DEFAULT_MAX_TURNS
-from strix.core.runner import run_strix_scan
+from lyrashield.lifecycle.hooks import BudgetExceededError
+from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
+from lyrashield.lifecycle.runner import run_strix_scan
 from strix.interface.tui.live_view import TuiLiveView
 from strix.interface.tui.messages import send_user_message_to_agent
 from strix.interface.tui.renderers import render_tool_widget
@@ -806,7 +806,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.live_view.hydrate_from_run_dir(self.report_state.get_run_dir())
         self._agent_graph_sync_future: Any | None = None
 
-        from strix.core.agents import AgentCoordinator
+        from lyrashield.lifecycle.agents import AgentCoordinator
 
         self.coordinator = AgentCoordinator()
 
