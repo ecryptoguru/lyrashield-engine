@@ -1,14 +1,14 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """SDK model configuration helpers."""
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import inspect
-import logging
 import os
+import re
+import threading
 import time
-from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, cast
 
 from agents import (
@@ -27,19 +27,12 @@ from agents.retry import (
     RetryPolicyContext,
     retry_policies,
 )
-from openai.types.responses import (
-    Response,
-    ResponseCompletedEvent,
-    ResponseOutputItemAddedEvent,
-    ResponseOutputItemDoneEvent,
-)
+from openai.types.responses import Response, ResponseCompletedEvent
 from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared import Reasoning
 
 from strix.config import codex
 from strix.config.loader import load_settings
-from strix.config.tool_call_ids import TurnCallIdRewriter, dedupe_input
-from strix.config.tool_call_limits import TurnToolCallLimiter
 
 
 if TYPE_CHECKING:
@@ -58,14 +51,102 @@ if TYPE_CHECKING:
     from strix.config.settings import LlmSettings, ReasoningEffort, Settings
 
 
-logger = logging.getLogger(__name__)
-
-
 def request_timeout_extra_args(timeout_s: float | None) -> dict[str, float] | None:
     """Per-request model timeout; a plain float so ``ModelSettings.to_json_dict()`` stays serializable."""  # noqa: E501
     if not timeout_s or timeout_s <= 0:
         return None
     return {"timeout": timeout_s}
+
+
+def is_gpt56_model(model_name: str | None) -> bool:
+    """Return whether a configured deployment is one of LyraShield's GPT-5.6 tiers.
+
+    Matches the worker's allowed set: Terra or Luna. The worker regex is
+    intentionally generous with separators so providers can namespace the model
+    (e.g. ``azure/eu/gpt-5.6-luna`` or ``bedrock_mantle/openai.gpt-5.6-luna``).
+    A deployment that names a retired or unsupported tier is rejected here at
+    startup rather than reaching budget enforcement (which no longer carries a
+    Sol rate) and failing mid-scan.
+    """
+    if not model_name:
+        return False
+    normalized = model_name.strip().lower().replace("_", "-")
+    return re.search(r"(?:^|[/.-])gpt-5\.6-(?:terra|luna)(?:$|[/.-])", normalized) is not None
+
+
+# Providers LiteLLM's cost map lists for gpt-5.6-* deployments, plus the Azure
+# alias and the ChatGPT subscription route. Keep in sync with the LiteLLM model
+# cost map; run ``scripts/list-gpt56-providers.py`` to refresh.
+_GPT56_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "openai",
+        "azure",
+        "azure_ai",
+        "bedrock_mantle",
+        "chatgpt",
+    }
+)
+
+
+def is_gpt56_supported_provider(model_name: str | None) -> bool:
+    """Return whether a model name identifies a GPT-5.6 Terra/Luna deployment
+    from a provider LiteLLM is known to support for that model family.
+
+    The allowed set is intentionally conservative. If a new provider starts
+    carrying GPT-5.6, add its LiteLLM provider marker here (and in the cost-map
+    refresh script) before advertising it in docs.
+    """
+    if not is_gpt56_model(model_name):
+        return False
+    name = (model_name or "").strip().lower()
+    # The ChatGPT subscription route is gated separately by auth, not by this
+    # provider allow-list; let it through so the product auth check can run.
+    if name.startswith("chatgpt/"):
+        return True
+    # Bare OpenAI model names (e.g. "gpt-5.6-luna" or "prod-gpt-5.6-luna")
+    # are routed to OpenAI. They may contain dots, so only require no provider
+    # slash and no LiteLLM passthrough prefix.
+    if "/" not in name:
+        return True
+    # Strip LiteLLM passthrough prefixes before looking at the provider.
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    parts = name.replace(".", "/").split("/")
+    return any(part in _GPT56_SUPPORTED_PROVIDERS for part in parts)
+
+
+def model_supports_programmatic_tool_calling(model_name: str | None) -> bool:
+    """Return whether the resolved model is known to support programmatic tool calling.
+
+    The feature is enabled by default for OpenAI ``gpt-5.6-*`` deployments, which
+    currently support the ``programmatic_tool_calling`` Responses tool type. Azure AI
+    ``azure_ai/gpt-5.6-*`` requires a Trusted Access / Cyber-enabled deployment and is
+    only enabled when ``LYRASHIELD_PROGRAMMATIC_TOOL_CALLING=1`` is explicitly set.
+    Use ``LYRASHIELD_PROGRAMMATIC_TOOL_CALLING=0`` to force it off.
+    """
+    if not model_name:
+        return False
+    env = (
+        (
+            os.environ.get("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "")
+            or os.environ.get("STRIX_PROGRAMMATIC_TOOL_CALLING", "")
+        )
+        .strip()
+        .lower()
+    )
+    if env in ("0", "false", "no"):
+        return False
+    name = model_name.strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    if env in ("1", "true", "yes"):
+        return is_gpt56_model(name)
+    # Default: only OpenAI direct deployments are known to support PTC today.
+    return name.startswith("openai/") and is_gpt56_model(name)
 
 
 def _retry_statusless_provider_errors(context: RetryPolicyContext) -> bool:
@@ -96,19 +177,21 @@ class _CodexResponsesModel(OpenAIResponsesModel):
         effort = self._reasoning_effort
         if effort and effort != "none":
             # Clamp to efforts the backend accepts.
-            match effort:
-                case "minimal":
-                    effort = "low"
-                case "xhigh" | "max":
-                    effort = "high"
-                case _:
-                    pass
-            overrides = overrides.resolve(ModelSettings(reasoning=Reasoning(effort=effort)))
+            clamped: ReasoningEffort
+            if effort == "minimal":
+                clamped = "low"
+            elif effort in ("xhigh", "max"):
+                clamped = "high"
+            else:
+                clamped = cast("ReasoningEffort", effort)
+            overrides = overrides.resolve(ModelSettings(reasoning=Reasoning(effort=clamped)))
         return model_settings.resolve(overrides)
 
     async def _fetch_response(self, *args: Any, stream: bool = False, **kwargs: Any) -> Any:
         if len(args) >= 3:  # model_settings is positional arg 2
             args = (*args[:2], self._codex_settings(args[2]), *args[3:])
+        if "model_settings" in kwargs:
+            kwargs["model_settings"] = self._codex_settings(kwargs["model_settings"])
         try:
             events = await super()._fetch_response(*args, stream=True, **kwargs)  # type: ignore[call-overload]
         except Exception as exc:
@@ -153,7 +236,7 @@ class _CodexResponsesModel(OpenAIResponsesModel):
         aclose = getattr(events, "aclose", None)
         if callable(aclose):
             with contextlib.suppress(Exception):
-                await aclose()
+                await cast("Any", aclose())
             return
         close = getattr(events, "close", None)
         if callable(close):
@@ -242,170 +325,6 @@ class _NonStreamingModel(Model):
         yield _completed_stream_event(response, getattr(self._inner, "model", None))
 
 
-class _TurnGuardModel(Model):
-    """Keep one turn from corrupting the conversation or running away.
-
-    Tool-call ids: providers that number calls per turn (``exec_command:0``,
-    ...) restart the counter each turn, so the same id eventually appears twice
-    in one conversation and strict providers reject every subsequent request.
-    Ids that collide with the history are rewritten before the turn is
-    recorded, and already-corrupted histories are repaired on the way out.
-
-    Tool-call volume: a degenerate response can queue hundreds of calls that
-    the run loop then honours one by one. Only the first
-    ``LLM_MAX_TOOL_CALLS_PER_TURN`` calls of a response are kept.
-
-    Stalled streams: a turn that emits a few tokens and then goes silent is
-    not covered by the request timeout, which resets on any byte (keepalives
-    included). ``LLM_STREAM_IDLE_TIMEOUT`` bounds the gap between events so the
-    turn fails instead of hanging, and the existing retry path replays it.
-    """
-
-    def __init__(
-        self,
-        inner: Model,
-        *,
-        max_tool_calls_per_turn: int = 0,
-        stream_idle_timeout: float = 0.0,
-    ) -> None:
-        self._inner = inner
-        self._max_tool_calls_per_turn = max_tool_calls_per_turn
-        self._stream_idle_timeout = stream_idle_timeout
-
-    def _limiter(self) -> TurnToolCallLimiter:
-        return TurnToolCallLimiter(self._max_tool_calls_per_turn)
-
-    def _log_dropped(self, limiter: TurnToolCallLimiter) -> None:
-        if limiter.dropped:
-            logger.warning(
-                "dropped %d tool call(s) past the per-response limit of %d",
-                limiter.dropped,
-                self._max_tool_calls_per_turn,
-            )
-
-    async def close(self) -> None:
-        await self._inner.close()
-
-    def get_retry_advice(self, request: ModelRetryAdviceRequest) -> ModelRetryAdvice | None:
-        return self._inner.get_retry_advice(request)
-
-    async def get_response(
-        self,
-        system_instructions: str | None,
-        input: str | list[TResponseInputItem],  # noqa: A002
-        model_settings: ModelSettings,
-        tools: list[Tool],
-        output_schema: AgentOutputSchemaBase | None,
-        handoffs: list[Handoff],
-        tracing: ModelTracing,
-        *,
-        previous_response_id: str | None,
-        conversation_id: str | None,
-        prompt: ResponsePromptParam | None,
-    ) -> ModelResponse:
-        sanitized = dedupe_input(input)
-        rewriter = TurnCallIdRewriter(sanitized)
-        response = await self._inner.get_response(
-            system_instructions,
-            cast("str | list[TResponseInputItem]", sanitized),
-            model_settings,
-            tools,
-            output_schema,
-            handoffs,
-            tracing,
-            previous_response_id=previous_response_id,
-            conversation_id=conversation_id,
-            prompt=prompt,
-        )
-        limiter = self._limiter()
-        response.output = limiter.filter_items(rewriter.rewrite_items(list(response.output)))
-        self._log_dropped(limiter)
-        return response
-
-    async def stream_response(
-        self,
-        system_instructions: str | None,
-        input: str | list[TResponseInputItem],  # noqa: A002
-        model_settings: ModelSettings,
-        tools: list[Tool],
-        output_schema: AgentOutputSchemaBase | None,
-        handoffs: list[Handoff],
-        tracing: ModelTracing,
-        *,
-        previous_response_id: str | None,
-        conversation_id: str | None,
-        prompt: ResponsePromptParam | None,
-    ) -> AsyncIterator[TResponseStreamEvent]:
-        sanitized = dedupe_input(input)
-        rewriter = TurnCallIdRewriter(sanitized)
-        limiter = self._limiter()
-        stream = self._inner.stream_response(
-            system_instructions,
-            cast("str | list[TResponseInputItem]", sanitized),
-            model_settings,
-            tools,
-            output_schema,
-            handoffs,
-            tracing,
-            previous_response_id=previous_response_id,
-            conversation_id=conversation_id,
-            prompt=prompt,
-        )
-        async for event in _with_idle_timeout(stream, self._stream_idle_timeout):
-            guarded = _guard_event(event, rewriter, limiter)
-            if guarded is not None:
-                yield guarded
-        self._log_dropped(limiter)
-
-
-async def _aclose(stream: AsyncIterator[TResponseStreamEvent]) -> None:
-    if isinstance(stream, AsyncGenerator):
-        with contextlib.suppress(Exception):
-            await stream.aclose()
-
-
-async def _with_idle_timeout(
-    stream: AsyncIterator[TResponseStreamEvent], timeout: float
-) -> AsyncIterator[TResponseStreamEvent]:
-    if timeout <= 0:
-        async for event in stream:
-            yield event
-        return
-
-    iterator = stream.__aiter__()
-    while True:
-        try:
-            event = await asyncio.wait_for(iterator.__anext__(), timeout)
-        except StopAsyncIteration:
-            return
-        except TimeoutError:
-            await _aclose(stream)
-            message = f"model stream produced no event for {timeout:.0f}s"
-            logger.warning("%s; abandoning the turn", message)
-            raise TimeoutError(message) from None
-        yield event
-
-
-def _guard_event(
-    event: TResponseStreamEvent, rewriter: TurnCallIdRewriter, limiter: TurnToolCallLimiter
-) -> TResponseStreamEvent | None:
-    if isinstance(event, ResponseOutputItemAddedEvent | ResponseOutputItemDoneEvent):
-        rewritten = rewriter.rewrite_item(event.item)
-        if not limiter.allow(rewritten):
-            return None
-        if rewritten is not event.item:
-            return event.model_copy(update={"item": rewritten})
-        return event
-    if isinstance(event, ResponseCompletedEvent):
-        original = list(event.response.output)
-        output = limiter.filter_items(rewriter.rewrite_items(original))
-        if output != original:
-            return event.model_copy(
-                update={"response": event.response.model_copy(update={"output": output})}
-            )
-    return event
-
-
 def _completed_stream_event(
     model_response: ModelResponse, model_name: object | None
 ) -> TResponseStreamEvent:
@@ -451,6 +370,32 @@ class StrixProvider(MultiProvider):
     ``litellm/deepseek/deepseek-chat``.
     """
 
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        self._settings = settings
+        llm = settings.llm if settings is not None else None
+        configured_models = (
+            (getattr(llm, "model", None), getattr(llm, "delegate_model", None))
+            if llm is not None
+            else (None, None)
+        )
+        self._azure_responses_enabled = any(
+            _is_azure_model(model_name) and is_gpt56_model(model_name)
+            for model_name in configured_models
+        )
+
+        if self._azure_responses_enabled:
+            if llm is None or not llm.api_base:
+                raise RuntimeError(
+                    "Azure GPT-5.6 requires LLM_API_BASE or an Azure endpoint variable."
+                )
+            super().__init__(
+                openai_api_key=llm.api_key,
+                openai_base_url=_azure_responses_base_url(llm.api_base),
+                openai_use_responses=True,
+            )
+        else:
+            super().__init__()
+
     def _resolve_prefixed_model(
         self,
         *,
@@ -458,6 +403,16 @@ class StrixProvider(MultiProvider):
         prefix: str,
         stripped_model_name: str | None,
     ) -> tuple[ModelProvider, str | None]:
+        if prefix in {"azure", "azure_ai"} and self._azure_responses_enabled:
+            # Names like ``azure/eu/gpt-5.6-terra`` or ``azure_ai/gpt-5.6-luna``
+            # both resolve to the final deployment/model segment for Azure's
+            # v1 Responses API.
+            deployment = (
+                stripped_model_name.rsplit("/", 1)[-1]
+                if stripped_model_name
+                else stripped_model_name
+            )
+            return self.openai_provider, deployment
         if prefix in {"openai", "litellm", "any-llm"}:
             return super()._resolve_prefixed_model(
                 original_model_name=original_model_name,
@@ -469,31 +424,33 @@ class StrixProvider(MultiProvider):
         return self._get_fallback_provider("litellm"), original_model_name
 
     def get_model(self, model_name: str | None) -> Model:
-        llm = load_settings().llm
+        if self._settings is None:
+            self._settings = load_settings()
+        llm = self._settings.llm
         slug = codex.subscription_model(model_name)
-        idle_timeout = float(llm.stream_idle_timeout)
         if slug:
             # The ChatGPT subscription backend is always streamed; it has no
             # non-streaming mode to fall back to, so LLM_DISABLE_STREAMING
             # does not apply here.
-            model: Model = _CodexResponsesModel(
+            return _CodexResponsesModel(
                 slug,
                 codex.get_subscription_client(),
                 reasoning_effort=llm.reasoning_effort,
             )
-        else:
-            model = super().get_model(model_name)
-            if llm.disable_streaming:
-                model = _NonStreamingModel(model)
-                # The wrapper emits its single event only once the whole request
-                # is done, so an idle gap is meaningless here; the request
-                # timeout bounds it instead.
-                idle_timeout = 0.0
-        return _TurnGuardModel(
-            model,
-            max_tool_calls_per_turn=llm.max_tool_calls_per_turn,
-            stream_idle_timeout=idle_timeout,
-        )
+        model = super().get_model(model_name)
+        if llm.disable_streaming:
+            return _NonStreamingModel(model)
+        return model
+
+
+def _azure_responses_base_url(api_base: str) -> str:
+    """Normalize an Azure resource or project endpoint for the v1 Responses API."""
+    base = api_base.strip().rstrip("/")
+    if not base:
+        raise RuntimeError("Azure GPT-5.6 requires a non-empty API base URL.")
+    if not base.lower().endswith("/openai/v1"):
+        base = f"{base}/openai/v1"
+    return f"{base}/"
 
 
 DEFAULT_MODEL_RETRY = ModelRetrySettings(
@@ -513,28 +470,8 @@ DEFAULT_MODEL_RETRY = ModelRetrySettings(
 )
 
 RECOMMENDED_MODEL_NAMES = (
-    "openai/gpt-5.6-sol",
-    "openai/gpt-5.6-terra",
     "openai/gpt-5.6-luna",
-    "openai/gpt-5.6",
-    "openai/gpt-5.5-pro",
-    "openai/gpt-5.5",
-    "openai/gpt-5.4",
-    "openai/gpt-5.3-codex",
-    "anthropic/claude-fable-5",
-    "anthropic/claude-opus-5",
-    "anthropic/claude-opus-4-8",
-    "anthropic/claude-sonnet-5",
-    "anthropic/claude-sonnet-4-6",
-    "vertex_ai/gemini-3.1-pro-preview",
-    "gemini/gemini-3.1-pro-preview",
-    "gemini/gemini-3.6-flash",
-    "deepseek/deepseek-v4-pro",
-    "deepseek/deepseek-v4-flash",
-    "dashscope/qwen3.8-max",
-    "dashscope/qwen3.7-max-2026-06-08",
-    "moonshot/kimi-k3",
-    "moonshot/kimi-k2.7-code",
+    "openai/gpt-5.6-terra",
 )
 
 _RECOMMENDED_MODEL_NAME_SET = frozenset(name.lower() for name in RECOMMENDED_MODEL_NAMES)
@@ -552,25 +489,71 @@ FRONTIER_MODEL_FAMILIES = (
 )
 
 
+_sdk_config_lock = threading.Lock()
+_last_sdk_settings: Any | None = None
+
+
+def reset_sdk_model_defaults() -> None:
+    """Clear SDK-wide defaults so a fresh :func:`configure_sdk_model_defaults` can re-apply them.
+
+    Useful in tests and at process startup to avoid stale configuration from a
+    previous scan or another test case.
+    """
+    import litellm
+
+    codex._subscription_client = None
+    litellm.api_key = None
+    litellm.api_base = None
+    litellm.api_version = None
+    litellm.headers = None
+    set_default_openai_key("", use_for_tracing=False)
+    set_default_openai_api("responses")
+
+
 def configure_sdk_model_defaults(settings: Settings) -> None:
     """Apply Strix config to SDK-native defaults."""
-    llm = settings.llm
-    set_tracing_disabled(True)
-    if codex.subscription_model(llm.model):
-        return
-    _configure_litellm_compatibility()
-    _configure_openrouter_attribution(llm.model)
-    if llm.api_key:
-        set_default_openai_key(llm.api_key, use_for_tracing=False)
-        _configure_litellm_default("api_key", llm.api_key)
-        _mirror_api_key_to_provider_env(llm.model, llm.api_key)
-    if llm.api_base:
-        os.environ["OPENAI_BASE_URL"] = llm.api_base
-        _configure_litellm_default("api_base", llm.api_base)
-        set_default_openai_api("chat_completions")
-    else:
-        set_default_openai_api("responses")
-    _configure_extra_headers(llm)
+    global _last_sdk_settings  # noqa: PLW0603
+    with _sdk_config_lock:
+        if _last_sdk_settings is settings:
+            return
+        reset_sdk_model_defaults()
+        _last_sdk_settings = settings
+
+        llm = settings.llm
+        set_tracing_disabled(True)
+        if codex.subscription_model(llm.model):
+            return
+        _configure_litellm_compatibility()
+        _configure_openrouter_attribution(llm.model)
+        if llm.api_key:
+            set_default_openai_key(llm.api_key, use_for_tracing=False)
+            _configure_litellm_default("api_key", llm.api_key)
+            _mirror_api_key_to_provider_env(llm.model, llm.api_key)
+        if llm.api_base:
+            _configure_litellm_default("api_base", llm.api_base)
+            if not _is_azure_model(llm.model):
+                os.environ["OPENAI_BASE_URL"] = llm.api_base
+                set_default_openai_api("chat_completions")
+            else:
+                set_default_openai_api("responses")
+        else:
+            set_default_openai_api("responses")
+        if llm.api_version:
+            _configure_litellm_default("api_version", llm.api_version)
+        _mirror_azure_env(llm.model, llm.api_base, llm.api_version)
+        _configure_extra_headers(llm)
+
+
+def _is_azure_model(model_name: str | None) -> bool:
+    """Return True if the model is routed through Azure or Azure AI."""
+    if not model_name:
+        return False
+    name = model_name.strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return name.startswith(("azure/", "azure_ai/"))
 
 
 def _mirror_api_key_to_provider_env(model_name: str | None, api_key: str) -> None:
@@ -584,12 +567,42 @@ def _mirror_api_key_to_provider_env(model_name: str | None, api_key: str) -> Non
             name = name[len(prefix) :]
             break
     try:
-        report = litellm.validate_environment(model=name.lower())
+        report = cast(
+            "dict[str, Any]",
+            litellm.validate_environment(model=name.lower()),  # pyright: ignore[reportUnknownMemberType]
+        )
     except Exception:  # noqa: BLE001
         return
-    for env_key in report.get("missing_keys") or []:
-        if env_key.endswith("_API_KEY"):
-            os.environ.setdefault(env_key, api_key)
+    missing_keys = report.get("missing_keys")
+    if isinstance(missing_keys, list):
+        for env_key in missing_keys:
+            if isinstance(env_key, str) and env_key.endswith("_API_KEY"):
+                os.environ.setdefault(env_key, api_key)
+
+
+def _mirror_azure_env(
+    model_name: str | None,
+    api_base: str | None,
+    api_version: str | None,
+) -> None:
+    """Mirror Azure OpenAI / Azure AI config into LiteLLM's expected env vars."""
+    if not model_name:
+        return
+
+    name = model_name.strip()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.lower().startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    if not name.lower().startswith(("azure/", "azure_ai/")):
+        return
+
+    if api_base:
+        os.environ.setdefault("AZURE_API_BASE", api_base)
+        os.environ.setdefault("AZURE_AI_API_BASE", api_base)
+    if api_version:
+        os.environ.setdefault("AZURE_API_VERSION", api_version)
+        os.environ.setdefault("AZURE_AI_API_VERSION", api_version)
 
 
 def _configure_litellm_compatibility() -> None:
@@ -662,7 +675,7 @@ _OPENROUTER_ATTRIBUTION_HEADERS = {
 def _configure_openrouter_attribution(model_name: str | None) -> None:
     import litellm
 
-    current: object = litellm.headers
+    current: dict[str, str] | None = getattr(litellm, "headers", None)
     existing: dict[str, str] = current if isinstance(current, dict) else {}
     if not model_name or "openrouter/" not in model_name.strip().lower():
         if any(key in existing for key in _OPENROUTER_ATTRIBUTION_HEADERS):
@@ -735,6 +748,10 @@ def _configure_litellm_default(name: str, value: str) -> None:
 
 def uses_chat_completions_tool_schema(model_name: str, settings: Settings) -> bool:
     """Return whether the resolved SDK route can only receive JSON function tools."""
+    # ponytail: explicit operator opt-in is the provider capability assertion.
+    # Keep Azure on its proven JSON-tool path unless that assertion is present.
+    if model_supports_programmatic_tool_calling(model_name):
+        return False
     if codex.subscription_model(model_name):
         return False
     model = model_name.strip().lower()
@@ -745,6 +762,11 @@ def uses_chat_completions_tool_schema(model_name: str, settings: Settings) -> bo
     return not model_supports_reasoning(model_name)
 
 
+def _model_cost_entry(model_cost: dict[str, Any], name: str) -> dict[str, Any] | None:
+    entry: Any = model_cost.get(name)
+    return cast("dict[str, Any]", entry) if isinstance(entry, dict) else None
+
+
 def model_supports_reasoning(model_name: str) -> bool:
     import litellm
 
@@ -753,10 +775,11 @@ def model_supports_reasoning(model_name: str) -> bool:
         if name.startswith(prefix):
             name = name[len(prefix) :]
             break
-    entry = litellm.model_cost.get(name)
+    model_cost = cast("dict[str, Any]", litellm.model_cost)
+    entry = _model_cost_entry(model_cost, name)
     if entry is None and "/" in name:
-        entry = litellm.model_cost.get(name.rsplit("/", 1)[1])
-    return bool(entry and entry.get("supports_reasoning"))
+        entry = _model_cost_entry(model_cost, name.rsplit("/", 1)[1])
+    return bool(entry is not None and entry.get("supports_reasoning"))
 
 
 def is_recommended_or_frontier_model(model_name: str) -> bool:
@@ -837,8 +860,9 @@ def is_known_openai_bare_model(model_name: str) -> bool:
     name = model_name.strip().lower()
     if not name or "/" in name:
         return False
-    entry = litellm.model_cost.get(name)
-    return bool(entry and entry.get("litellm_provider") == "openai")
+    model_cost = cast("dict[str, Any]", litellm.model_cost)
+    entry = _model_cost_entry(model_cost, name)
+    return bool(entry is not None and entry.get("litellm_provider") == "openai")
 
 
 def is_claude_model(model_name: str) -> bool:

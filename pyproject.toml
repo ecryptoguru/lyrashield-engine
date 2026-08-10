@@ -254,6 +254,7 @@ ignore = [
 "lyrashield/tools/web_search/tool.py" = ["PLC0415"]
 "lyrashield/tools/reporting/tool.py" = ["PLC0415"]
 "lyrashield/tools/proxy/caido_api.py" = ["ARG001"]
+"lyrashield/policy/models.py" = ["PLC0415"]
 # Custom Docker subclass duplicates parent body; some imports are for annotations.
 # Backend factories import their backend's deps lazily so deployments
 # that pick a different backend don't need every backend's libs installed.

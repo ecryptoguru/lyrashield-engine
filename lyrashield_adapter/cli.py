@@ -137,7 +137,7 @@ def _reject_unsupported_gpt56_providers(env: MutableMapping[str, str]) -> None:
     ``bedrock_mantle`` for ``gpt-5.6-*``. The Azure alias ``azure_ai`` and the
     ChatGPT subscription route ``chatgpt/`` are also allowed.
     """
-    from strix.config.models import (  # noqa: PLC0415
+    from lyrashield.policy.models import (  # noqa: PLC0415
         is_gpt56_model,
         is_gpt56_supported_provider,
     )
@@ -223,6 +223,18 @@ def _register_lyrashield_tool_overrides() -> None:
     register_tool_override("delete_todo", delete_todo)
 
 
+def _register_lyrashield_model_policy() -> None:
+    from lyrashield.policy.models import (  # noqa: PLC0415
+        model_supports_programmatic_tool_calling,
+    )
+    from strix.agents.factory import register_model_policy  # noqa: PLC0415
+
+    register_model_policy(
+        "model_supports_programmatic_tool_calling",
+        model_supports_programmatic_tool_calling,
+    )
+
+
 def _run_upstream() -> None:
     from strix.interface.main import main as upstream_main  # noqa: PLC0415
 
@@ -239,6 +251,7 @@ def main() -> None:
     prepare_environment()
     _register_lyrashield_skills()
     _register_lyrashield_tool_overrides()
+    _register_lyrashield_model_policy()
     _run_upstream()
 
 

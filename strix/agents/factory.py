@@ -26,7 +26,6 @@ from pydantic import ValidationError
 
 from strix.agents.prompt import render_system_prompt
 from strix.config import load_settings
-from strix.config.models import model_supports_programmatic_tool_calling
 from strix.tools.agents_graph.tools import (
     agent_finish,
     create_agent,
@@ -598,6 +597,34 @@ def _apply_tool_overrides(tools: list[Tool]) -> list[Tool]:
         if key not in replaced:
             updated.append(tool)
     return updated
+
+
+_MODEL_POLICY: dict[str, Callable[..., Any]] = {}
+
+
+def register_model_policy(name: str, fn: Callable[..., Any]) -> None:
+    """Register a product-specific model-policy helper used by the agent factory.
+
+    This is a neutral seam: upstream `strix.agents.factory` exposes no product
+    model names, and the adapter binds the product helpers before calling the
+    upstream entry point.
+    """
+    _MODEL_POLICY[name] = fn
+
+
+def _model_policy(name: str, *args: Any, default: Any = False, **kwargs: Any) -> Any:
+    if name in _MODEL_POLICY:
+        return _MODEL_POLICY[name](*args, **kwargs)
+    return default
+
+
+def model_supports_programmatic_tool_calling(model_name: str | None) -> bool:
+    """Return whether the resolved model is known to support programmatic tool calling.
+
+    The default is False. The product adapter can register a policy helper to
+    enable this for specific model families.
+    """
+    return bool(_model_policy("model_supports_programmatic_tool_calling", model_name))
 
 
 def build_strix_agent(
