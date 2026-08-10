@@ -70,7 +70,9 @@ def render_system_prompt(
     """Render the system prompt or fail before a tool-capable agent is created."""
     try:
         prompt_dir = get_strix_resource_path("agents", _PROMPT_DIRNAME)
-        loader_dirs = [prompt_dir, *skill_search_dirs()]
+        # Search registered skill directories first so product overrides can
+        # replace built-in templates without modifying the upstream tree.
+        loader_dirs = [*skill_search_dirs(), prompt_dir]
         env = Environment(
             loader=FileSystemLoader(loader_dirs),
             autoescape=select_autoescape(

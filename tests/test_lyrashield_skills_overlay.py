@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from strix.agents.prompt import render_system_prompt
 from strix.skills import _EXTRA_SKILL_DIRS, load_skills, register_skill_dir
 
 
@@ -60,3 +61,9 @@ def test_builtin_skill_reverted_to_no_web_search(tool: str = "tooling/ffuf") -> 
         assert "web_search" in content
     finally:
         _EXTRA_SKILL_DIRS[:] = saved
+
+
+def test_lyrashield_system_prompt_overlay_shadows_builtin() -> None:
+    """The product system prompt template in lyra`shield/skills` replaces the built-in one."""
+    rendered = render_system_prompt(is_root=True)
+    assert "[SYSTEM-NOTICE]" in rendered

@@ -87,12 +87,21 @@
 - Regenerated `MIGRATION_MATRIX.md` against v1.5.2 (175 `strix/` paths, +12,226/-17,605).
 - Added `register_tool_override` / `_apply_tool_overrides` to `strix/agents/factory.py` as a generic upstream-compatible seam.
 - Moved the product `web_search` tool implementation from `strix/tools/web_search/tool.py` to `lyrashield/tools/web_search/tool.py`.
-- Reset `strix/tools/web_search/tool.py` and `__rashield/tools/web_search/__init__.py` to v1.5.2.
+- Reset `strix/tools/web_search/tool.py` and `strix/tools/web_search/__init__.py` to v1.5.2.
 - Wired `lyrashield_adapter/cli.py` to call `register_tool_override("web_search", ...)` with the product tool.
 - Added `lyrashield/tools/__init__.py` and `lyrashield/tools/web_search/__init__.py`.
 - Updated `pyproject.toml` per-file ignores for `lyrashield/tools/web_search/tool.py` (lazy imports) and to preserve the upstream `strix/tools/web_search/tool.py` `noqa`.
 - Updated `tests/test_agent_tool_registration.py` with override and adapter registration tests.
 - Verification: `uv run ruff check .` passes; `uv run mypy strix/agents/factory.py lyrashield/tools/web_search/tool.py lyrashield_adapter/cli.py tests/test_agent_tool_registration.py` passes; `uv run pytest tests/test_skill_dir_extension.py tests/test_lyrashield_skills_overlay.py tests/test_agent_tool_registration.py tests/test_agent_factory_shell.py` passes (46 tests).
+
+### Phase 4: system prompt overlay slice
+
+- **Status:** complete
+- Copied the product `system_prompt.jinja` from `strix/agents/prompts/` to `lyrashield/skills/system_prompt.jinja`.
+- Reset `strix/agents/prompts/system_prompt.jinja` to v1.5.2.
+- Added a generic seam in `strix/agents/prompt.py`: `FileSystemLoader` now searches registered skill directories before the built-in `strix/agents/prompts/` path, allowing product templates to override built-in ones.
+- Updated `tests/test_lyrashield_skills_overlay.py` to assert the rendered root system prompt contains the product `[SYSTEM-NOTICE]` marker.
+- Verification: `uv run ruff check .` passes; `uv run mypy strix/agents/prompt.py tests/test_lyrashield_skills_overlay.py` passes; `uv run pytest tests/test_skill_dir_extension.py tests/test_lyrashield_skills_overlay.py tests/test_agent_tool_registration.py tests/test_agent_factory_shell.py` passes (47 tests).
 
 ## Resume Instructions
 
