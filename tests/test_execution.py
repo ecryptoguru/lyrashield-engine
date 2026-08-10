@@ -22,7 +22,7 @@ from lyrashield.lifecycle.execution import (
     _notify_root_on_budget_reserve,
 )
 from lyrashield.lifecycle.sessions import seed_initial_input
-from strix.tools.finish.tool import finish_scan
+from lyrashield.tools.finish.tool import finish_scan
 
 
 _NO_STREAM_EVENTS: list[Any] = []

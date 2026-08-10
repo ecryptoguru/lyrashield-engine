@@ -257,6 +257,7 @@ ignore = [
 "strix/tools/web_search/tool.py" = ["PLC0415", "RUF100"]
 "lyrashield/tools/web_search/tool.py" = ["PLC0415"]
 "lyrashield/tools/reporting/tool.py" = ["PLC0415"]
+"lyrashield/tools/finish/tool.py" = ["PLC0415", "TC002"]
 "lyrashield/tools/proxy/caido_api.py" = ["ARG001"]
 "lyrashield/policy/models.py" = ["PLC0415"]
 "lyrashield/lifecycle/*.py" = ["PLR0912", "PLR0915", "PLC0415", "RUF100"]

@@ -9,7 +9,7 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
-from strix.core.agents import coordinator_from_context
+from lyrashield.lifecycle.agents import coordinator_from_context
 
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def _do_finish(
         return {"success": False, "error": "Validation failed", "errors": errors}
 
     try:
-        from strix.report.state import get_global_report_state
+        from lyrashield.artifacts.state import get_global_report_state
 
         report_state = get_global_report_state()
         if report_state is None:

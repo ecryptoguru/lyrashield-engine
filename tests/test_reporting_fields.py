@@ -8,13 +8,13 @@ import pytest
 
 from lyrashield.artifacts.dedupe import _check_dependency_duplicate, check_duplicate
 from lyrashield.artifacts.state import ReportState, set_global_report_state
+from lyrashield.tools.finish.tool import finish_scan
 from lyrashield.tools.reporting.tool import (
     _do_create,
     _do_create_dependency,
     create_dependency_report,
     create_vulnerability_report,
 )
-from strix.tools.finish.tool import finish_scan
 
 
 if TYPE_CHECKING:

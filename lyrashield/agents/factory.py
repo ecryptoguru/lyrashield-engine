@@ -25,6 +25,7 @@ from agents.tool import (
 from pydantic import ValidationError
 
 from lyrashield.agents.prompt import render_system_prompt
+from lyrashield.tools.finish.tool import finish_scan
 from lyrashield.tools.output_store import bound_and_store, bound_text
 from lyrashield.tools.proxy.tools import (
     list_requests,
@@ -60,7 +61,6 @@ from strix.tools.agents_graph.tools import (
     view_agent_graph,
     wait_for_agents,
 )
-from strix.tools.finish.tool import finish_scan
 from strix.tools.load_skill.tool import load_skill
 from strix.tools.notes.tools import (
     create_note,
