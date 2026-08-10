@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from agents import RunContextWrapper, function_tool
 
-from strix.tools.proxy import caido_api
+from lyrashield.tools.proxy import caido_api
 
 
 logger = logging.getLogger(__name__)
@@ -24,14 +24,14 @@ if TYPE_CHECKING:
 
     from caido_sdk_client import Client
 
-    from strix.tools.proxy.caido_api import (
+    from lyrashield.tools.proxy.caido_api import (
         RequestPart,
         SitemapDepth,
         SortBy,
         SortOrder,
     )
 else:
-    from strix.tools.proxy.caido_api import (  # noqa: TC001
+    from lyrashield.tools.proxy.caido_api import (  # noqa: TC001
         RequestPart,
         SitemapDepth,
         SortBy,
@@ -95,6 +95,27 @@ def _err(name: str, exc: Exception) -> str:
         ensure_ascii=False,
         default=str,
     )
+
+
+def _is_match_all_pattern(pattern: str) -> bool:
+    """True if a Caido scope pattern contains no literal host characters."""
+    return not any(ch.isalnum() for ch in pattern)
+
+
+def _validate_scope_allowlist(allowlist: list[str] | None) -> str | None:
+    """Return an error string if the allowlist is empty or match-all."""
+    if not allowlist:
+        return (
+            "scope allowlist must contain at least one target pattern "
+            "(empty allowlist allows all domains)"
+        )
+    for pattern in allowlist:
+        if _is_match_all_pattern(pattern):
+            return (
+                f"scope allowlist pattern {pattern!r} is too broad "
+                "(must contain at least one literal host segment)"
+            )
+    return None
 
 
 @function_tool(timeout=120)
@@ -509,7 +530,7 @@ async def view_sitemap_entry(
 
 
 @function_tool(timeout=60)
-async def scope_rules(
+async def scope_rules(  # noqa: PLR0912
     ctx: RunContextWrapper,
     action: ScopeAction,
     allowlist: list[str] | None = None,
@@ -549,7 +570,8 @@ async def scope_rules(
             - ``delete`` — needs ``scope_id``.
 
         allowlist: Domain patterns to include (e.g.
-            ``["*.example.com", "api.test.com"]``).
+            ``["*.example.com", "api.test.com"]``). Empty allowlists and
+            match-all patterns (e.g. ``"*"``) are rejected.
         denylist: Patterns to exclude.
         scope_id: Required for ``get`` / ``update`` / ``delete``.
         scope_name: Required for ``create`` / ``update``.
@@ -586,6 +608,13 @@ async def scope_rules(
                     ensure_ascii=False,
                     default=str,
                 )
+            allowlist_error = _validate_scope_allowlist(allowlist)
+            if allowlist_error:
+                return json.dumps(
+                    {"success": False, "error": allowlist_error},
+                    ensure_ascii=False,
+                    default=str,
+                )
             scope = await _call(
                 client,
                 lambda client: caido_api.scope_create(
@@ -607,6 +636,13 @@ async def scope_rules(
                     ensure_ascii=False,
                     default=str,
                 )
+            allowlist_error = _validate_scope_allowlist(allowlist)
+            if allowlist_error:
+                return json.dumps(
+                    {"success": False, "error": allowlist_error},
+                    ensure_ascii=False,
+                    default=str,
+                )
             scope = await _call(
                 client,
                 lambda client: caido_api.scope_update(
@@ -618,19 +654,25 @@ async def scope_rules(
                 ensure_ascii=False,
                 default=str,
             )
-        if not scope_id:
+        if action == "delete":
+            if not scope_id:
+                return json.dumps(
+                    {"success": False, "error": "Scope_id is required for action='delete'"},
+                    ensure_ascii=False,
+                    default=str,
+                )
+            await _call(client, lambda client: caido_api.scope_delete(client, scope_id))
             return json.dumps(
-                {"success": False, "error": "Scope_id is required for action='delete'"},
+                {
+                    "success": True,
+                    "deleted": scope_id,
+                    "message": f"Scope {scope_id} deleted",
+                },
                 ensure_ascii=False,
                 default=str,
             )
-        await _call(client, lambda client: caido_api.scope_delete(client, scope_id))
-        return json.dumps(
-            {
-                "success": True,
-                "deleted": scope_id,
-                "message": f"Scope {scope_id} deleted",
-            },
+        return json.dumps(  # type: ignore[unreachable]
+            {"success": False, "error": f"Unknown action '{action}'"},
             ensure_ascii=False,
             default=str,
         )

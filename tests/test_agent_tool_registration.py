@@ -166,6 +166,22 @@ def test_adapter_registers_lyrashield_reporting_tools() -> None:
         assert factory._TOOL_OVERRIDES[name].name == name
 
 
+def test_adapter_registers_lyrashield_proxy_tools() -> None:
+    """The product entry point registers the LyraShield Caido proxy tool overrides."""
+    _register_lyrashield_tool_overrides()
+
+    for name in (
+        "list_requests",
+        "view_request",
+        "repeat_request",
+        "list_sitemap",
+        "view_sitemap_entry",
+        "scope_rules",
+    ):
+        assert name in factory._TOOL_OVERRIDES
+        assert factory._TOOL_OVERRIDES[name].name == name
+
+
 def test_adapter_registers_lyrashield_todo_tools() -> None:
     """The product entry point registers the LyraShield todo tool overrides."""
     _register_lyrashield_tool_overrides()

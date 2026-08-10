@@ -134,6 +134,18 @@
 - Updated `tests/test_agent_tool_registration.py` to assert the reporting overrides are registered.
 - Verification: `uv run ruff check .` passes; `uv run mypy lyrashield/tools/reporting/tool.py lyrashield_adapter/cli.py` passes; `uv run pytest tests/test_agent_tool_registration.py` passes (14 tests).
 
+### Phase 4: Caido proxy tool override slice
+
+- **Status:** complete
+- Moved the product Caido proxy tools from `strix/tools/proxy/tools.py` and `strix/tools/proxy/caido_api.py` to `lyrashield/tools/proxy/tools.py` and `lyrashield/tools/proxy/caido_api.py`.
+- Reset `strix/tools/proxy/tools.py` and `strix/tools/proxy/caido_api.py` to v1.5.2.
+- Added `lyrashield/tools/proxy/__init__.py`.
+- Updated imports in `lyrashield/tools/proxy/tools.py` to use the local `caido_api` module.
+- Updated `lyrashield_adapter/cli.py` to register `list_requests`, `view_request`, `repeat_request`, `list_sitemap`, `view_sitemap_entry`, and `scope_rules` overrides.
+- Added `pyproject.toml` per-file `ARG001` ignore for `lyrashield/tools/proxy/caido_api.py` (upstream keeps the same unused argument for API consistency).
+- Updated `tests/test_agent_tool_registration.py` to assert the proxy overrides are registered.
+- Verification: `uv run ruff check .` passes; `uv run mypy lyrashield/tools/proxy/tools.py lyrashield/tools/proxy/caido_api.py lyrashield_adapter/cli.py` passes; `uv run pytest tests/test_agent_tool_registration.py` passes (15 tests).
+
 ## Resume Instructions
 
 1. Read `task_plan.md` and `findings.md` fully.

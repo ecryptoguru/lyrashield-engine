@@ -172,6 +172,14 @@ def _register_lyrashield_skills() -> None:
 
 
 def _register_lyrashield_tool_overrides() -> None:
+    from lyrashield.tools.proxy.tools import (  # noqa: PLC0415
+        list_requests,
+        list_sitemap,
+        repeat_request,
+        scope_rules,
+        view_request,
+        view_sitemap_entry,
+    )
     from lyrashield.tools.reporting.tool import (  # noqa: PLC0415
         create_dependency_report,
         create_vulnerability_report,
@@ -196,6 +204,12 @@ def _register_lyrashield_tool_overrides() -> None:
 
     register_tool_override("web_search", lyra_web_search)
     register_tool_override("respond_to_user", lyra_respond_to_user)
+    register_tool_override("list_requests", list_requests)
+    register_tool_override("view_request", view_request)
+    register_tool_override("repeat_request", repeat_request)
+    register_tool_override("list_sitemap", list_sitemap)
+    register_tool_override("view_sitemap_entry", view_sitemap_entry)
+    register_tool_override("scope_rules", scope_rules)
     register_tool_override("create_vulnerability_report", create_vulnerability_report)
     register_tool_override("create_dependency_report", create_dependency_report)
     register_tool_override("list_reports", list_reports)
