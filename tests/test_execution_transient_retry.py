@@ -15,9 +15,9 @@ from openai import (
     RateLimitError,
 )
 
-from strix.config import codex
-from strix.core import execution
-from strix.core.agents import AgentCoordinator
+from lyrashield.lifecycle import execution
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.policy import codex
 
 
 def _request() -> httpx.Request:

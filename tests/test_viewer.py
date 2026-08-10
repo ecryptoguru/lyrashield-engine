@@ -10,7 +10,6 @@ import urllib.request
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from strix.core.paths import latest_run_dir, runs_base_dir
 from lyrashield.interface.viewer.server import serve
 from lyrashield.interface.viewer.transcript import (
     build_run_state,
@@ -18,6 +17,7 @@ from lyrashield.interface.viewer.transcript import (
     read_run_summary,
     read_vulnerabilities,
 )
+from strix.core.paths import latest_run_dir, runs_base_dir
 
 
 if TYPE_CHECKING:
@@ -269,7 +269,9 @@ def test_server_event_endpoint_forwards_agent_steered(
     _bundle(tmp_path, monkeypatch)
 
     seen: list[bool] = []
-    monkeypatch.setattr("lyrashield.telemetry.posthog.viewer_agent_steered", lambda: seen.append(True))
+    monkeypatch.setattr(
+        "lyrashield.telemetry.posthog.viewer_agent_steered", lambda: seen.append(True)
+    )
 
     httpd, url, _ = serve(run_dir, open_browser=False)
     try:
@@ -462,7 +464,9 @@ def test_auth_mutations_require_session(tmp_path: Path, monkeypatch: pytest.Monk
     run_dir = _make_run(tmp_path, "authmut", status="running", end_time=None)
     _bundle(tmp_path, monkeypatch)
     forgotten = {"value": False}
-    monkeypatch.setattr("lyrashield.interface.viewer.auth.forget", lambda: forgotten.update(value=True))
+    monkeypatch.setattr(
+        "lyrashield.interface.viewer.auth.forget", lambda: forgotten.update(value=True)
+    )
 
     httpd, url, _ = serve(run_dir, open_browser=False)
     try:

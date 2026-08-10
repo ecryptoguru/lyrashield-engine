@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from lyrashield.policy import loader
+from lyrashield.policy.loader import apply_config_override
 from lyrashield.policy.settings import (
     PRODUCT_BOUNDARY_ENV_VAR,
     is_chatgpt_subscription_allowed,
 )
 from lyrashield_adapter import cli
-from strix.config import apply_config_override
 
 
 if TYPE_CHECKING:

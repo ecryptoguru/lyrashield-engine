@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from strix.core.runner import (
+from lyrashield.lifecycle.runner import (
     DELEGATE_OUTPUT_TOKEN_CEILING,
     resolve_max_output_tokens,
 )

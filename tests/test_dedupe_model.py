@@ -9,11 +9,8 @@ from typing import Any, cast
 
 import pytest
 
-from strix.config import loader
-from strix.config.settings import DedupeSettings
-from strix.core import hooks as hooks_module
-from strix.report import dedupe as dedupe_module
-from strix.report.dedupe import (
+from lyrashield.artifacts import dedupe as dedupe_module
+from lyrashield.artifacts.dedupe import (
     _MAX_EXISTING_REPORTS_CHARS,
     DedupeJudgement,
     _bound_existing_reports,
@@ -21,6 +18,9 @@ from strix.report.dedupe import (
     _extract_balanced_json,
     _parse_dedupe_response,
 )
+from lyrashield.lifecycle import hooks as hooks_module
+from lyrashield.policy import loader
+from lyrashield.policy.settings import DedupeSettings
 
 
 def test_dedupe_key_sent_per_call_not_via_global_env() -> None:
@@ -251,7 +251,7 @@ async def test_dedupe_works_without_active_hooks() -> None:
 
 def test_runner_clears_active_hooks_on_every_exit_path() -> None:
     """A stale hooks registration would let a later scan reserve against a dead budget."""
-    runner = Path("strix/core/runner.py").read_text(encoding="utf-8")
+    runner = Path("lyrashield/lifecycle/runner.py").read_text(encoding="utf-8")
     assert "set_active_hooks(hooks)" in runner
     # The clear must live in the `finally` so it runs on success, failure, and cancel.
     finally_block = runner.split("\n    finally:\n", 1)[1]

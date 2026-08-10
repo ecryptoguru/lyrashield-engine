@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-cli_main: Any = importlib.import_module("strix.interface.main")
+cli_main: Any = importlib.import_module("lyrashield.interface.main")
 
 
 def _stub_settings(monkeypatch: pytest.MonkeyPatch) -> None:

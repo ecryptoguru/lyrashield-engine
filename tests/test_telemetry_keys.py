@@ -10,8 +10,8 @@ from unittest.mock import patch
 import pytest
 
 import strix.skills as skills_mod
-from strix.config import loader
-from strix.telemetry import posthog, scarf
+from lyrashield.policy import loader
+from lyrashield.telemetry import posthog, scarf
 
 
 @pytest.fixture(autouse=True)

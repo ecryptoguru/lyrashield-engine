@@ -1,11 +1,11 @@
-"""Tests for the SARIF 2.1.0 emitter in strix.report.sarif."""
+"""Tests for the SARIF 2.1.0 emitter in lyrashield.artifacts.sarif."""
 
 from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any
 
-from strix.report.sarif import write_sarif
+from lyrashield.artifacts.sarif import write_sarif
 
 
 if TYPE_CHECKING:

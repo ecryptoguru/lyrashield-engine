@@ -24,9 +24,33 @@ from agents.tool import (
 )
 from pydantic import ValidationError
 
+from lyrashield.agents.prompt import render_system_prompt
 from lyrashield.tools.output_store import bound_and_store, bound_text
+from lyrashield.tools.proxy.tools import (
+    list_requests,
+    list_sitemap,
+    repeat_request,
+    scope_rules,
+    view_request,
+    view_sitemap_entry,
+)
+from lyrashield.tools.reporting.tool import (
+    create_dependency_report,
+    create_vulnerability_report,
+    get_report,
+    list_reports,
+)
+from lyrashield.tools.respond.tool import respond_to_user
+from lyrashield.tools.todo.tools import (
+    create_todo,
+    delete_todo,
+    list_todos,
+    mark_todo_done,
+    mark_todo_pending,
+    update_todo,
+)
+from lyrashield.tools.web_search.tool import web_search
 from lyrashield.utils.redaction import redact_secrets
-from strix.agents.prompt import render_system_prompt
 from strix.config import load_settings
 from strix.tools.agents_graph.tools import (
     agent_finish,
@@ -45,31 +69,7 @@ from strix.tools.notes.tools import (
     list_notes,
     update_note,
 )
-from strix.tools.proxy.tools import (
-    list_requests,
-    list_sitemap,
-    repeat_request,
-    scope_rules,
-    view_request,
-    view_sitemap_entry,
-)
-from strix.tools.reporting.tool import (
-    create_dependency_report,
-    create_vulnerability_report,
-    get_report,
-    list_reports,
-)
-from strix.tools.respond.tool import respond_to_user
 from strix.tools.thinking.tool import think
-from strix.tools.todo.tools import (
-    create_todo,
-    delete_todo,
-    list_todos,
-    mark_todo_done,
-    mark_todo_pending,
-    update_todo,
-)
-from strix.tools.web_search.tool import web_search
 
 
 if TYPE_CHECKING:

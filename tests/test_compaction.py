@@ -9,8 +9,8 @@ import pytest
 from litellm.exceptions import BadRequestError, ContextWindowExceededError, RateLimitError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
-from strix.config import ContextSettings
-from strix.llm import compaction
+from lyrashield.lifecycle import compaction
+from lyrashield.policy.settings import ContextSettings
 
 
 if TYPE_CHECKING:

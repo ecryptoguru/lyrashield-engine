@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from strix.config import codex
-from strix.config.settings import PRODUCT_BOUNDARY_ENV_VAR
-from strix.interface import auth_cli
+from lyrashield.interface import auth_cli
+from lyrashield.policy import codex
+from lyrashield.policy.settings import PRODUCT_BOUNDARY_ENV_VAR
 
 
 if TYPE_CHECKING:

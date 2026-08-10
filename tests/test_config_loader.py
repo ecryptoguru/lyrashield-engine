@@ -1,4 +1,4 @@
-"""Tests for strix.config.loader: JSON overrides, alias resolution, persistence."""
+"""Tests for lyrashield.policy.loader: JSON overrides, alias resolution, persistence."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import pytest
 from pydantic import AliasChoices, Field, ValidationError
 from pydantic.fields import FieldInfo
 
-from strix.config import loader
-from strix.config.settings import ContextSettings
+from lyrashield.policy import loader
+from lyrashield.policy.settings import ContextSettings
 
 
 if TYPE_CHECKING:

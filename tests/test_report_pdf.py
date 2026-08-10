@@ -12,7 +12,7 @@ pytest.importorskip("pypdf", reason="requires the optional 'viewer' extra")
 from pypdf import PdfReader
 from pypdf.errors import WrongPasswordError
 
-from strix.interface.viewer.report_pdf import (
+from lyrashield.interface.viewer.report_pdf import (
     build_encrypted_report,
     encrypt_pdf,
     generate_password,

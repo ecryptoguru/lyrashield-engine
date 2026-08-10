@@ -3,7 +3,7 @@ from __future__ import annotations
 from agents.usage import Usage
 from openai.types.responses.response_usage import InputTokensDetails
 
-from strix.report.usage import LLMUsageLedger
+from lyrashield.artifacts.usage import LLMUsageLedger
 
 
 def test_usage_ledger_preserves_provider_cache_write_receipts() -> None:

@@ -18,14 +18,14 @@ from agents import RunConfig, Runner
 from agents.exceptions import ModelBehaviorError
 from agents.memory import SQLiteSession
 
+import lyrashield.tools.todo.tools as todo_tools
 import strix.tools.notes.tools as notes_tools
-import strix.tools.todo.tools as todo_tools
-from strix.config import codex
-from strix.core import execution, runner
-from strix.core.agents import AgentCoordinator
-from strix.core.sessions import sanitize_session_secrets
-from strix.report.state import ReportState, get_global_report_state, set_global_report_state
-from strix.runtime import session_manager
+from lyrashield.artifacts.state import ReportState, get_global_report_state, set_global_report_state
+from lyrashield.lifecycle import execution, runner
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.lifecycle.sessions import sanitize_session_secrets
+from lyrashield.policy import codex
+from lyrashield.runtime import session_manager
 
 
 # ---------------------------------------------------------------------------

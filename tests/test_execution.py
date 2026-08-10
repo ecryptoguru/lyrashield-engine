@@ -15,13 +15,13 @@ from agents.memory import SQLiteSession
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
 
-from strix.core import execution
-from strix.core.agents import AgentCoordinator
-from strix.core.execution import (
+from lyrashield.lifecycle import execution
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.lifecycle.execution import (
     _notify_parent_on_terminal,
     _notify_root_on_budget_reserve,
 )
-from strix.core.sessions import seed_initial_input
+from lyrashield.lifecycle.sessions import seed_initial_input
 from strix.tools.finish.tool import finish_scan
 
 
@@ -687,7 +687,7 @@ async def test_structured_provider_refusal_fails_interactive_agent(
     refusal = "This request was blocked under the provider's usage policy."
     stream = _StructuredRefusalStream(refusal)
     monkeypatch.setattr(
-        "strix.core.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
+        "lyrashield.lifecycle.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
     )
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
@@ -719,7 +719,7 @@ async def test_structured_provider_refusal_fails_noninteractive_child(
     refusal = "This request was blocked under the provider's usage policy."
     stream = _StructuredRefusalStream(refusal)
     monkeypatch.setattr(
-        "strix.core.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
+        "lyrashield.lifecycle.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
     )
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)

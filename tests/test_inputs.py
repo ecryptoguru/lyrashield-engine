@@ -1,4 +1,4 @@
-"""Tests for pure input builders in strix.core.inputs."""
+"""Tests for pure input builders in lyrashield.lifecycle.inputs."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 import litellm
 import pytest
 
-from strix.core.inputs import build_root_task, child_initial_input, make_model_settings
+from lyrashield.lifecycle.inputs import build_root_task, child_initial_input, make_model_settings
 
 
 def _child_kwargs(parent_history: list[Any]) -> dict[str, Any]:
