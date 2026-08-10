@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from strix.config import load_settings
+from lyrashield.policy.loader import load_settings
 from strix.llm import context_budget
 
 
