@@ -113,6 +113,16 @@
 - Updated `tests/test_agent_tool_registration.py` to assert all product todo overrides are registered.
 - Verification: `uv run ruff check .` passes; `uv run mypy lyrashield_adapter/cli.py lyrashield/tools/todo/tools.py` passes; `uv run pytest tests/test_agent_tool_registration.py tests/test_agent_factory_shell.py` passes (24 tests); combined targeted suite (47 tests) passes.
 
+### Phase 4: respond_to_user tool override slice
+
+- **Status:** complete
+- Moved the product `respond_to_user` tool from `strix/tools/respond/tool.py` to `lyrashield/tools/respond/tool.py`.
+- Reset `strix/tools/respond/tool.py` to v1.5.2.
+- Added `lyrashield/tools/respond/__init__.py`.
+- Updated `lyrashield_adapter/cli.py` to register the `respond_to_user` override.
+- Updated `tests/test_agent_tool_registration.py` to assert the override is registered.
+- Verification: `uv run ruff check .` passes; `uv run mypy lyrashield_adapter/cli.py lyrashield/tools/respond/tool.py` passes; `uv run pytest tests/test_agent_tool_registration.py` passes (13 tests).
+
 ## Resume Instructions
 
 1. Read `task_plan.md` and `findings.md` fully.

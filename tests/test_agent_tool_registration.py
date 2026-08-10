@@ -144,6 +144,14 @@ def test_adapter_registers_lyrashield_web_search() -> None:
     assert factory._TOOL_OVERRIDES["web_search"].name == "web_search"
 
 
+def test_adapter_registers_lyrashield_respond_to_user() -> None:
+    """The product entry point registers the LyraShield respond_to_user override."""
+    _register_lyrashield_tool_overrides()
+
+    assert "respond_to_user" in factory._TOOL_OVERRIDES
+    assert factory._TOOL_OVERRIDES["respond_to_user"].name == "respond_to_user"
+
+
 def test_adapter_registers_lyrashield_todo_tools() -> None:
     """The product entry point registers the LyraShield todo tool overrides."""
     _register_lyrashield_tool_overrides()

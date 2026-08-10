@@ -172,6 +172,9 @@ def _register_lyrashield_skills() -> None:
 
 
 def _register_lyrashield_tool_overrides() -> None:
+    from lyrashield.tools.respond.tool import (  # noqa: PLC0415
+        respond_to_user as lyra_respond_to_user,
+    )
     from lyrashield.tools.todo.tools import (  # noqa: PLC0415
         create_todo,
         delete_todo,
@@ -186,6 +189,7 @@ def _register_lyrashield_tool_overrides() -> None:
     from strix.agents.factory import register_tool_override  # noqa: PLC0415
 
     register_tool_override("web_search", lyra_web_search)
+    register_tool_override("respond_to_user", lyra_respond_to_user)
     register_tool_override("create_todo", create_todo)
     register_tool_override("list_todos", list_todos)
     register_tool_override("update_todo", update_todo)
