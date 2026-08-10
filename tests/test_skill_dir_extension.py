@@ -35,11 +35,15 @@ def _write_root_skill(root: Path, name: str, body: str) -> None:
     (root / f"{name}.md").write_text(body, encoding="utf-8")
 
 
+def _skill_names(skills: list[dict[str, str]]) -> set[str]:
+    return {skill["name"] for skill in skills}
+
+
 def test_no_registration_leaves_builtin_only() -> None:
     assert registered_skill_dirs() == ()
     builtin = skills_mod.get_strix_resource_path("skills")
     assert skill_search_dirs() == (builtin,)
-    assert {"nmap", "subfinder"}.issubset(get_available_skills()["tooling"])
+    assert {"nmap", "subfinder"}.issubset(_skill_names(get_available_skills()["tooling"]))
 
 
 def test_register_is_idempotent_and_ordered(tmp_path: Path) -> None:
@@ -61,7 +65,7 @@ def test_registered_dir_adds_new_skill(tmp_path: Path) -> None:
     register_skill_dir(tmp_path)
 
     assert "widget" in get_all_skill_names()
-    assert get_available_skills()["extra"] == ["widget"]
+    assert _skill_names(get_available_skills()["extra"]) == {"widget"}
     assert load_skills(["widget"]) == {"widget": "widget body"}
 
 
@@ -70,7 +74,7 @@ def test_registered_root_skill_is_discoverable_and_valid(tmp_path: Path) -> None
     register_skill_dir(tmp_path)
 
     assert "widget" in get_all_skill_names()
-    assert get_available_skills()["root"] == ["widget"]
+    assert _skill_names(get_available_skills()["root"]) == {"widget"}
     assert validate_requested_skills(["widget"]) is None
     assert validate_requested_skills(["root/widget"]) is None
     assert load_skills(["widget"]) == {"widget": "widget body"}
@@ -83,8 +87,8 @@ def test_ambiguous_bare_skill_requires_qualified_name(tmp_path: Path) -> None:
     register_skill_dir(tmp_path)
 
     assert "widget" in get_all_skill_names()
-    assert get_available_skills()["alpha"] == ["widget"]
-    assert get_available_skills()["beta"] == ["widget"]
+    assert _skill_names(get_available_skills()["alpha"]) == {"widget"}
+    assert _skill_names(get_available_skills()["beta"]) == {"widget"}
     assert validate_requested_skills(["alpha/widget"]) is None
     assert validate_requested_skills(["beta/widget"]) is None
 

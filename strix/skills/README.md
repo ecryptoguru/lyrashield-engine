@@ -17,7 +17,7 @@ When an agent is created, it can load up to 5 specialized skills relevant to the
 create_agent(
     task="Test authentication mechanisms in API",
     name="Auth Specialist",
-    skills="authentication_jwt,business_logic",
+    skills="authentication_jwt,business_logic"
 )
 ```
 

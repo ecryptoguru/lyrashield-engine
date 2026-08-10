@@ -1,0 +1,90 @@
+# Progress Log: Strix Overlay Migration
+
+## Session: 2026-08-10
+
+### Planning and feasibility audit
+
+- **Status:** complete
+- Inspected the live engine branch, remotes, pinned upstream base, current upstream head, adapter, core construction points, packaging configuration, verification scripts, and sibling worker contract.
+- Classified the architectural goal as an immutable upstream tree with product behavior outside `strix/**`.
+- Identified existing tool, skill, and backend registration seams.
+- Identified missing report-state, usage-hook, model-policy, lifecycle-policy, and artifact seams.
+- Confirmed that simply moving code into one adapter file or monkeypatching Strix would not reduce upgrade coupling.
+- Created the durable handoff files:
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+### Phase 0: Establish the reproducible baseline
+
+- **Status:** complete
+- Branch: `codex/strix-overlay-migration` (created from `main`)
+- Initial `MIGRATION_MATRIX.md` generated for the 68 changed `strix/` paths against the pinned base.
+- Subsequent review against `v1.5.2` revealed the full diff is 173 paths (renames, deletions, upstream additions); a regenerated matrix is in progress.
+- Current engine HEAD: `63800d5e66a8b6cc0c767a02c10cf9faabd9d553`
+- `origin/main`: `63800d5e66a8b6cc0c767a02c10cf9faabd9d553`
+- Pinned upstream base: `2e7040240d201f433d0fe42f922dbfbe953c6c8b`
+- Latest stable upstream tag: `v1.5.2` at `597aae67159636ee794a02a3cc1694138d619c44`
+- `upstream/main`: `ae07af61597041951d2116f108fb72bae4967caf`
+- Drift from pinned base to `HEAD` across `strix/`: 68 files changed, +5486/-1297
+- Upstream commits from base to `v1.5.2`: 46; from `v1.5.2` to `upstream/main`: 2
+- Plan files are untracked by design; all other tracked files are clean.
+
+## Test Results
+
+| Test | Expected | Actual | Status |
+|---|---|---|---|
+| `bash scripts/verify-controlled-derivative.sh` | Current source baseline passes | 953 passed, 1 skipped; Ruff, format, mypy, Bandit passed; footprint 68/+5486/-1297 under budget | Pass |
+| `bash scripts/verify-worker-contract.sh /Users/defiankit/Desktop/lyrashieldai` | CLI and worker contract pass | 2 test files and 68 tests passed | Pass |
+| `uv run lyrashield --version` | Prints version | `lyrashield 1.2.0` | Pass |
+| `uv run lyrashield --help` | Prints worker-required flags and self-update disabled | Flags present; `--update` documented as disabled | Pass |
+| `uv build` | Produces wheel/sdist | `lyrashield_engine-1.2.0` wheel and sdist built | Pass |
+| Engine worktree status | No test-generated tracked changes | On `codex/strix-overlay-migration`; only untracked plan files | Pass |
+| Native binary | Not run in planning audit | Unverified this session | Pending |
+| Docker worker/sandbox | Not run in planning audit | Unverified this session | Pending |
+| Live Terra/Luna scans | Not run in planning audit | Unverified this session | Pending |
+| `run.json`/`vulnerabilities.json` fixtures | Capture sanitized fixtures | 8 fixtures in `fixtures/` (7 run.json variants + 1 vulnerabilities.json); JSON-valid | Pass |
+
+## Error Log
+
+| Timestamp | Error | Attempt | Resolution |
+|---|---|---:|---|
+| 2026-08-10 | None during handoff creation | 1 | N/A |
+
+## 5-Question Reboot Check
+
+| Question | Answer |
+|---|---|
+| Where am I? | Handoff complete; Phase 0 implementation is the next phase. |
+| Where am I going? | Exact upstream Strix source plus external LyraShield policy/adapter modules. |
+| What's the goal? | Make future Strix updates routine without breaking LyraShield contracts. |
+| What have I learned? | See `findings.md`. |
+| What have I done? | Completed live audit, baseline verification, and durable plan creation. |
+
+### Phase 1: Decide source consumption
+
+- **Status:** complete
+- Tested exact `strix-agent` dependency in a throwaway worktree (`/tmp/strix-dep-spike`).
+- `uv sync` failed because the fork's direct `openai-agents` git pin cannot satisfy `strix-agent` v1.5.2's `openai-agents[litellm]>=0.19.0,<0.20` constraint together with the project's broad `requires-python`.
+- Upstream `strix-agent` v1.5.2 also does not declare a direct `textual` dependency, while the fork's Python Textual TUI depends on it.
+- Decision: **vendored `strix/**` reset to byte-identical v1.5.2**, with product behavior outside.
+
+### Phase 4: Skill markdown overlay slice
+
+- **Status:** complete
+- Created `lyrashield/skills/` with 15 product-specific `.md` overlays plus `__init__.py`.
+- Merged `custom/source_aware_sast.md` and `custom/dependency_cve_scanning.md` onto v1.5.2 base to preserve both upstream v1.5.2 improvements and product wording.
+- Moved the renamed `strix/skills/technologies/firebase_firestore.md` to `lyrashield/skills/technologies/firebase_firestore.md`; reset `strix/skills/technologies/firebase.md` to v1.5.2.
+- Reset all other `strix/skills/*.md` to v1.5.2 (`git checkout 597aae67159636ee794a02a3cc1694138d619c44 -- strix/skills/`), then removed the leftover `firebase_firestore.md` from `strix/skills/`.
+- Added a telemetry gate to `strix/skills/__init__.py` (micro-fork generic seam) and a `yaml.*` mypy override in `pyproject.toml`.
+- Wired `lyrashield_adapter/cli.py` to call `strix.skills.register_skill_dir` for `lyrashield/skills/` before handing off to upstream `main()`.
+- Added `tests/test_lyrashield_skills_overlay.py` and updated `tests/test_skill_dir_extension.py` for v1.5.2's metadata-bearing `get_available_skills()`.
+- Verification: `verify-controlled-derivative.sh` 968 passed/1 skipped; `verify-worker-contract.sh` 68 passed; `uv build` succeeds; `git diff --stat 597aae... -- strix/skills/` shows only `__init__.py` (+4 lines).
+
+## Resume Instructions
+
+1. Read `task_plan.md` and `findings.md` fully.
+2. Run `git status --short --branch` before editing; the three planning files may be untracked by design.
+3. Re-fetch upstream and refresh every drift count before relying on the 2026-08-10 snapshot.
+4. Mark Phase 0 `in_progress`, update `Current Phase` and `Next Step`, and log the exact branch/SHAs here.
+5. Do not begin source extraction until the baseline inventory and fixtures are complete.

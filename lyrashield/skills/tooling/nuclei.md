@@ -63,5 +63,4 @@ Failure recovery:
 - If findings are unexpectedly empty, verify template selection (`-as` vs explicit `-t/-tags`).
 - If scan duration grows, reduce target set and enforce stricter template/severity filters.
 
-If uncertain, query web_search with:
-`site:docs.projectdiscovery.io nuclei <flag> running`
+If uncertain, use `nuclei -h` and retain the installed-version output.
