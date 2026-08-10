@@ -513,6 +513,10 @@ _ROOT_ORCHESTRATION_TOOLS: tuple[Tool, ...] = (
 # ``build_strix_agent`` call and every agent (root + children) gets them.
 _EXTRA_TOOLS: list[Tool] = []
 
+# Product overrides for base tools. A name mapped here replaces any tool
+# with the same name in the assembled tool list.
+_TOOL_OVERRIDES: dict[str, Tool] = {}
+
 
 def _ensure_unique_tool_names(tools: Sequence[Tool]) -> None:
     seen: set[str] = set()
@@ -557,6 +561,43 @@ def register_agent_tools(*tools: Tool) -> None:
 def registered_agent_tools() -> tuple[Tool, ...]:
     """Return the currently registered scan-agent tools."""
     return tuple(_EXTRA_TOOLS)
+
+
+def register_tool_override(name: str, tool: Tool) -> None:
+    """Override a base tool by name across all agents built afterwards.
+
+    If ``tool.name`` differs from ``name``, ``tool.name`` is used as the
+    override key. This allows a product-specific implementation to replace
+    an upstream base tool without editing the base toolset.
+    """
+    key = tool.name
+    if key != name:
+        logger.warning(
+            "Tool override key %r differs from tool.name %r; using %r",
+            name,
+            key,
+            key,
+        )
+    _TOOL_OVERRIDES[key] = tool
+    logger.info("Registered tool override: %s", key)
+
+
+def _apply_tool_overrides(tools: list[Tool]) -> list[Tool]:
+    """Replace any tool whose name is registered as an override."""
+    if not _TOOL_OVERRIDES:
+        return tools
+    updated: list[Tool] = []
+    replaced: set[str] = set()
+    for tool in tools:
+        if tool.name in _TOOL_OVERRIDES:
+            updated.append(_TOOL_OVERRIDES[tool.name])
+            replaced.add(tool.name)
+        else:
+            updated.append(tool)
+    for key, tool in _TOOL_OVERRIDES.items():
+        if key not in replaced:
+            updated.append(tool)
+    return updated
 
 
 def build_strix_agent(
@@ -609,6 +650,8 @@ def build_strix_agent(
         ]
     else:
         tools = [*_BASE_TOOLS, *agent_tools, agent_finish]
+
+    tools = _apply_tool_overrides(tools)
 
     use_programmatic = (
         not chat_completions_tools

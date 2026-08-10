@@ -81,6 +81,19 @@
 - Added `tests/test_lyrashield_skills_overlay.py` and updated `tests/test_skill_dir_extension.py` for v1.5.2's metadata-bearing `get_available_skills()`.
 - Verification: `verify-controlled-derivative.sh` 968 passed/1 skipped; `verify-worker-contract.sh` 68 passed; `uv build` succeeds; `git diff --stat 597aae... -- strix/skills/` shows only `__init__.py` (+4 lines).
 
+### Phase 4: web_search tool override slice
+
+- **Status:** complete
+- Regenerated `MIGRATION_MATRIX.md` against v1.5.2 (175 `strix/` paths, +12,226/-17,605).
+- Added `register_tool_override` / `_apply_tool_overrides` to `strix/agents/factory.py` as a generic upstream-compatible seam.
+- Moved the product `web_search` tool implementation from `strix/tools/web_search/tool.py` to `lyrashield/tools/web_search/tool.py`.
+- Reset `strix/tools/web_search/tool.py` and `__rashield/tools/web_search/__init__.py` to v1.5.2.
+- Wired `lyrashield_adapter/cli.py` to call `register_tool_override("web_search", ...)` with the product tool.
+- Added `lyrashield/tools/__init__.py` and `lyrashield/tools/web_search/__init__.py`.
+- Updated `pyproject.toml` per-file ignores for `lyrashield/tools/web_search/tool.py` (lazy imports) and to preserve the upstream `strix/tools/web_search/tool.py` `noqa`.
+- Updated `tests/test_agent_tool_registration.py` with override and adapter registration tests.
+- Verification: `uv run ruff check .` passes; `uv run mypy strix/agents/factory.py lyrashield/tools/web_search/tool.py lyrashield_adapter/cli.py tests/test_agent_tool_registration.py` passes; `uv run pytest tests/test_skill_dir_extension.py tests/test_lyrashield_skills_overlay.py tests/test_agent_tool_registration.py tests/test_agent_factory_shell.py` passes (46 tests).
+
 ## Resume Instructions
 
 1. Read `task_plan.md` and `findings.md` fully.

@@ -171,6 +171,15 @@ def _register_lyrashield_skills() -> None:
     register_skill_dir(Path(__file__).resolve().parents[1] / "lyrashield" / "skills")
 
 
+def _register_lyrashield_tool_overrides() -> None:
+    from lyrashield.tools.web_search.tool import (  # noqa: PLC0415
+        web_search as lyra_web_search,
+    )
+    from strix.agents.factory import register_tool_override  # noqa: PLC0415
+
+    register_tool_override("web_search", lyra_web_search)
+
+
 def _run_upstream() -> None:
     from strix.interface.main import main as upstream_main  # noqa: PLC0415
 
@@ -186,6 +195,7 @@ def main() -> None:
         load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
     prepare_environment()
     _register_lyrashield_skills()
+    _register_lyrashield_tool_overrides()
     _run_upstream()
 
 

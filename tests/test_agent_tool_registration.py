@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from agents.tool import FunctionTool
 
+from lyrashield_adapter.cli import _register_lyrashield_tool_overrides
 from strix.agents import factory
 
 
@@ -36,6 +37,16 @@ def _reset_registry() -> object:
         yield
     finally:
         factory._EXTRA_TOOLS[:] = saved
+
+
+@pytest.fixture(autouse=True)
+def _reset_tool_overrides() -> object:
+    saved = dict(factory._TOOL_OVERRIDES)
+    factory._TOOL_OVERRIDES.clear()
+    try:
+        yield
+    finally:
+        factory._TOOL_OVERRIDES.update(saved)
 
 
 def test_register_agent_tools_is_deduped() -> None:
@@ -112,3 +123,22 @@ def test_wait_for_agents_is_available_in_both_modes() -> None:
     for interactive in (True, False):
         agent = factory.build_strix_agent(is_root=True, interactive=interactive)
         assert "wait_for_agents" in [t.name for t in agent.tools]
+
+
+def test_register_tool_override_replaces_base_tool() -> None:
+    """A product tool can replace an upstream base tool by name."""
+    override = _tool("web_search")
+    factory.register_tool_override("web_search", override)
+
+    agent = factory.build_strix_agent(is_root=True)
+    web_search_tools = [t for t in agent.tools if t.name == "web_search"]
+
+    assert web_search_tools == [override]
+
+
+def test_adapter_registers_lyrashield_web_search() -> None:
+    """The product entry point registers the LyraShield web_search override."""
+    _register_lyrashield_tool_overrides()
+
+    assert "web_search" in factory._TOOL_OVERRIDES
+    assert factory._TOOL_OVERRIDES["web_search"].name == "web_search"

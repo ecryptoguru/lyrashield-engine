@@ -249,7 +249,8 @@ ignore = [
 "strix/tools/**/*.py" = [
     "ARG001", # Unused function argument (tools may have unused args for interface consistency)
 ]
-"strix/tools/web_search/tool.py" = ["PLC0415"]
+"strix/tools/web_search/tool.py" = ["PLC0415", "RUF100"]
+"lyrashield/tools/web_search/tool.py" = ["PLC0415"]
 # Custom Docker subclass duplicates parent body; some imports are for annotations.
 # Backend factories import their backend's deps lazily so deployments
 # that pick a different backend don't need every backend's libs installed.
