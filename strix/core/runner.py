@@ -19,14 +19,14 @@ from agents.exceptions import ModelBehaviorError
 from agents.sandbox import SandboxRunConfig
 from openai import RateLimitError
 
-from strix.agents.factory import build_strix_agent, make_child_factory
-from strix.agents.prompt import render_system_prompt
-from strix.config import load_settings
-from strix.config.models import (
+from lyrashield.policy.loader import load_settings
+from lyrashield.policy.models import (
     StrixProvider,
     configure_sdk_model_defaults,
     uses_chat_completions_tool_schema,
 )
+from strix.agents.factory import build_strix_agent, make_child_factory
+from strix.agents.prompt import render_system_prompt
 from strix.core.agents import AgentCoordinator
 from strix.core.execution import (
     _is_content_filter_error,
@@ -66,7 +66,7 @@ if TYPE_CHECKING:
     from agents.memory import Session
     from agents.result import RunResultBase
 
-    from strix.config.settings import ReasoningEffort
+    from lyrashield.policy.settings import ReasoningEffort
 
 
 logger = logging.getLogger(__name__)

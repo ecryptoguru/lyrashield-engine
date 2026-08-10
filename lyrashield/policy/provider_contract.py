@@ -13,11 +13,11 @@ from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from agents.tool import ProgrammaticToolCallingTool
 
-from strix.config.models import StrixProvider, configure_sdk_model_defaults
+from lyrashield.policy.models import StrixProvider, configure_sdk_model_defaults
 
 
 if TYPE_CHECKING:
-    from strix.config.settings import Settings
+    from lyrashield.policy.settings import Settings
 
 
 _SAFE_ERROR_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")

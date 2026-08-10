@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 
 from pydantic import AliasChoices, BaseModel
 
-from strix.config.settings import (
+from lyrashield.policy import loader as _lyra_loader  # noqa: F401
+from lyrashield.policy.settings import (
     PRODUCT_BOUNDARY_ENV_VAR,
     Settings,
     is_chatgpt_subscription_allowed,

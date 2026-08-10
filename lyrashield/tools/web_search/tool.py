@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from agents import RunContextWrapper, function_tool
 
-from strix.config import load_settings
+from lyrashield.policy.loader import load_settings
 
 
 if TYPE_CHECKING:

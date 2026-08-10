@@ -1,22 +1,23 @@
-"""Settings loader, override switch, and disk persistence."""
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
+"""LyraShield product settings loader, override switch, and disk persistence."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import AliasChoices, BaseModel
 
-from strix.config.settings import Settings
-from strix.utils.secret_files import write_secret_text
+from lyrashield.policy.settings import Settings
+from strix.config import loader as _strix_loader
 
 
 if TYPE_CHECKING:
-    from types import ModuleType
-
     from pydantic.fields import FieldInfo
 
 
@@ -26,31 +27,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PATH: Path = Path.home() / ".strix" / "cli-config.json"
 _override: Path | None = None
 _cached: Settings | None = None
-_SETTINGS_LOADER: ModuleType | None = None
-
-
-def register_settings_loader(loader: ModuleType) -> None:
-    """Register a product settings loader to be used by ``strix.config.load_settings``.
-
-    This is a neutral seam: upstream ``strix.config.loader`` falls back to its
-    own implementation when no loader is registered, and product adapters can
-    register a loader that returns product-specific settings.
-    """
-    global _SETTINGS_LOADER  # noqa: PLW0603
-    _SETTINGS_LOADER = loader
-    logger.info("registered settings loader: %s", getattr(loader, "__name__", loader))
 
 
 def load_settings() -> Settings:
     """Resolve settings from env + JSON file + defaults. Memoized.
 
-    If a product loader is registered, it is used instead. Otherwise the
-    upstream ``Settings`` class is instantiated from ``strix.config.settings``.
-
     Precedence: env vars win, then the JSON file, then field defaults.
     """
-    if _SETTINGS_LOADER is not None:
-        return _SETTINGS_LOADER.load_settings()  # type: ignore[no-any-return]
     global _cached  # noqa: PLW0603
     if _cached is None:
         source_path = _override or _DEFAULT_PATH
@@ -67,9 +50,6 @@ def load_settings() -> Settings:
 
 def apply_config_override(path: Path) -> None:
     """Switch the JSON source to ``path`` and invalidate the cache."""
-    if _SETTINGS_LOADER is not None and hasattr(_SETTINGS_LOADER, "apply_config_override"):
-        _SETTINGS_LOADER.apply_config_override(path)
-        return
     global _override, _cached  # noqa: PLW0603
     _override = path
     _cached = None
@@ -78,15 +58,12 @@ def apply_config_override(path: Path) -> None:
 
 def persist_current() -> None:
     """Write currently-set env vars to the active config file (0o600)."""
-    if _SETTINGS_LOADER is not None and hasattr(_SETTINGS_LOADER, "persist_current"):
-        _SETTINGS_LOADER.persist_current()
-        return
     s = load_settings()
     target = _override or _DEFAULT_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
 
     env_block: dict[str, str] = {}
-    for sub_name in s.model_fields:
+    for sub_name in type(s).model_fields:
         sub_model = getattr(s, sub_name)
         if not isinstance(sub_model, BaseModel):
             continue
@@ -97,7 +74,9 @@ def persist_current() -> None:
                     env_block[alias.upper()] = value
                     break
 
-    write_secret_text(target, json.dumps({"env": env_block}, indent=2))
+    target.write_text(json.dumps({"env": env_block}, indent=2), encoding="utf-8")
+    with contextlib.suppress(OSError):
+        target.chmod(0o600)
 
 
 def _aliases_for(finfo: FieldInfo) -> list[str]:
@@ -125,9 +104,13 @@ def _read_json_overrides(path: Path) -> dict[str, dict[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
-    env_block = data.get("env", {}) if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    data = cast("dict[str, Any]", data)
+    env_block = data.get("env", {})
     if not isinstance(env_block, dict):
         return {}
+    env_block = cast("dict[str, Any]", env_block)
 
     env_block_upper = {str(k).upper(): v for k, v in env_block.items()}
     env_present = {k.upper() for k in os.environ}
@@ -149,3 +132,11 @@ def _read_json_overrides(path: Path) -> dict[str, dict[str, Any]]:
         if sub_data:
             nested[sub_name] = sub_data
     return nested
+
+
+def _register_with_strix() -> None:
+    """Register this product loader with the upstream Strix config seam."""
+    _strix_loader.register_settings_loader(sys.modules[__name__])
+
+
+_register_with_strix()

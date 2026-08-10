@@ -10,9 +10,10 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from strix.config import apply_config_override, load_settings
+from lyrashield.policy.loader import load_settings
+from lyrashield.policy.provider_contract import probe_provider_contract
+from strix.config import apply_config_override
 from strix.interface.utils import validate_config_file
-from strix.provider_contract import probe_provider_contract
 
 
 if TYPE_CHECKING:

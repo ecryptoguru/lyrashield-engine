@@ -31,8 +31,8 @@ from openai.types.responses import Response, ResponseCompletedEvent
 from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared import Reasoning
 
-from strix.config import codex
-from strix.config.loader import load_settings
+from lyrashield.policy import codex
+from lyrashield.policy.loader import load_settings
 
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.responses.response_prompt_param import ResponsePromptParam
 
-    from strix.config.settings import LlmSettings, ReasoningEffort, Settings
+    from lyrashield.policy.settings import LlmSettings, ReasoningEffort, Settings
 
 
 def request_timeout_extra_args(timeout_s: float | None) -> dict[str, float] | None:

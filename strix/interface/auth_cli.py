@@ -22,11 +22,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import codex, load_settings
-from strix.config.settings import (
+from lyrashield.policy import codex
+from lyrashield.policy.settings import (
     is_chatgpt_subscription_allowed,
     is_lyrashield_product,
 )
+from strix.config import load_settings
 
 
 if TYPE_CHECKING:

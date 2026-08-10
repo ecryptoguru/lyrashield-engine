@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.model_settings import ModelSettings
 from openai.types.shared import Reasoning
 
-from strix.config.models import (
+from lyrashield.policy.models import (
     DEFAULT_MODEL_RETRY,
     bedrock_route_supports_prompt_caching,
     is_bedrock_route,
@@ -27,7 +27,7 @@ from strix.core.sessions import scrub_images_from_items
 if TYPE_CHECKING:
     from openai.types.responses.response_create_params import PromptCacheOptions
 
-    from strix.config.settings import ReasoningEffort
+    from lyrashield.policy.settings import ReasoningEffort
 
 
 _JINJA_TAG_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}", re.DOTALL)

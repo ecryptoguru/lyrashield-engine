@@ -22,12 +22,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import (
-    apply_config_override,
-    codex,
-    load_settings,
-)
-from strix.config.models import (
+from lyrashield.policy import codex
+from lyrashield.policy.loader import load_settings
+from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     configure_sdk_model_defaults,
@@ -35,11 +32,12 @@ from strix.config.models import (
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
 )
-from strix.config.settings import (
+from lyrashield.policy.settings import (
     Settings,
     is_chatgpt_subscription_allowed,
     is_lyrashield_product,
 )
+from strix.config import apply_config_override
 from strix.core.inputs import DEFAULT_MAX_TURNS, make_model_settings
 from strix.core.paths import run_dir_for, runs_base_dir, runtime_state_dir
 from strix.interface.cli import run_cli

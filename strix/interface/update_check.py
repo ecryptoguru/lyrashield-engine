@@ -1,4 +1,3 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Update notifications and self-update for the strix CLI.
 
 Follows the pattern used by tools like gh, uv, and pip: a background,
@@ -17,7 +16,7 @@ import os
 import platform
 import shutil
 import stat
-import subprocess  # nosec B404
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -31,7 +30,6 @@ import requests
 from rich.console import Console
 from rich.prompt import Prompt
 
-from strix.config.settings import is_lyrashield_product
 from strix.telemetry._common import get_version
 
 
@@ -48,13 +46,9 @@ _background_thread: threading.Thread | None = None
 
 
 def _is_disabled() -> bool:
-    return (
-        bool(os.environ.get("STRIX_NO_UPDATE_CHECK"))
-        or is_lyrashield_product()
-        or any(
-            os.environ.get(key)
-            for key in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL", "BUILDKITE", "CIRCLECI")
-        )
+    return bool(os.environ.get("STRIX_NO_UPDATE_CHECK")) or any(
+        os.environ.get(key)
+        for key in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL", "BUILDKITE", "CIRCLECI")
     )
 
 
@@ -103,21 +97,21 @@ def _is_newer(latest: str, current: str) -> bool:
 def _fetch_latest_version() -> str | None:
     try:
         if is_binary_install():
-            response = requests.get(
+            with requests.get(
                 f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
                 timeout=REQUEST_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
-            tag = response.json().get("tag_name", "")
+            ) as response:
+                response.raise_for_status()
+                tag = response.json().get("tag_name", "")
             return tag.lstrip("v") or None
-        response = requests.get(
+        with requests.get(
             f"https://pypi.org/pypi/{PYPI_PACKAGE}/json",
             timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        version = response.json().get("info", {}).get("version")
+        ) as response:
+            response.raise_for_status()
+            version = response.json().get("info", {}).get("version")
         return str(version) if version else None
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.debug("update check failed", exc_info=True)
         return None
 
@@ -125,17 +119,18 @@ def _fetch_latest_version() -> str | None:
 def _fetch_asset_digest(version: str, filename: str) -> str | None:
     """Return the expected sha256 (hex) for a release asset, if the API provides one."""
     try:
-        response = requests.get(
+        with requests.get(
             f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/v{version}",
             timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        for asset in response.json().get("assets", []):
+        ) as response:
+            response.raise_for_status()
+            assets = response.json().get("assets", [])
+        for asset in assets:
             if asset.get("name") == filename:
                 digest = asset.get("digest") or ""
                 if digest.startswith("sha256:"):
                     return digest.removeprefix("sha256:")
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.debug("release asset digest lookup failed", exc_info=True)
     return None
 
@@ -154,7 +149,7 @@ def _read_cache() -> dict[str, object]:
             data = json.load(f)
         if isinstance(data, dict):
             return cast("dict[str, object]", data)
-    except Exception:  # noqa: S110
+    except Exception:  # noqa: BLE001, S110
         pass  # nosec B110
     return {}
 
@@ -165,7 +160,7 @@ def _write_cache(**fields: object) -> None:
         cache.update(fields)
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         _CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
-    except Exception:  # noqa: S110
+    except Exception:  # noqa: BLE001, S110
         pass  # nosec B110
 
 
@@ -226,7 +221,7 @@ def run_package_upgrade(console: Console, method: str) -> bool:
     command = get_upgrade_command(method).split()
     console.print(f"[dim]Running[/] [#60a5fa]{' '.join(command)}[/]")
     try:
-        result = subprocess.run(command, check=False)  # noqa: S603  # nosec B603
+        result = subprocess.run(command, check=False)  # noqa: S603
     except OSError as e:
         console.print(f"[bold red]Update failed:[/] {e}")
         return False
@@ -387,7 +382,7 @@ def self_update(console: Console | None = None, version: str | None = None) -> b
 
     try:
         _download_and_replace(latest, target, console)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug("self-update failed", exc_info=True)
         console.print(f"[bold red]Update failed:[/] {e}")
         console.print(

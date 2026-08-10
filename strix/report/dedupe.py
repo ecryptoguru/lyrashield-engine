@@ -16,8 +16,8 @@ from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
 from pydantic import BaseModel, Field, ValidationError
 
-from strix.config import load_settings
-from strix.config.models import (
+from lyrashield.policy.loader import load_settings
+from lyrashield.policy.models import (
     StrixProvider,
     configure_sdk_model_defaults,
 )
@@ -28,7 +28,7 @@ from strix.report.state import get_global_report_state
 if TYPE_CHECKING:
     from agents.items import ModelResponse
 
-    from strix.config.settings import DedupeSettings, Settings
+    from lyrashield.policy.settings import DedupeSettings, Settings
 
 
 logger = logging.getLogger(__name__)
