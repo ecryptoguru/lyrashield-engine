@@ -437,9 +437,7 @@ def _strip_leading_heading(md: str) -> str:
     return md
 
 
-def _markdown_flowables(
-    md: str, styles: dict[str, ParagraphStyle]
-) -> list[Flowable]:
+def _markdown_flowables(md: str, styles: dict[str, ParagraphStyle]) -> list[Flowable]:
     """Render a markdown block (headings, lists, fenced code, prose) to flowables."""
     flow: list[Flowable] = []
     para: list[str] = []

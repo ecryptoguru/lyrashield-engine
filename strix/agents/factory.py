@@ -1,3 +1,4 @@
+# 2026 LyraShield --- controlled-derivative seam: delegates agent factory and tool registration.
 """Build SandboxAgents for root + child Strix runs."""
 
 from __future__ import annotations

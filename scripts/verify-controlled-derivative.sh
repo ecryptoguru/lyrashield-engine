@@ -3,8 +3,12 @@ set -euo pipefail
 
 # Verify the controlled-derivative invariants:
 # - pinned upstream base exists and is fetchable
-# - every strix/** modification since the last upstream import is documented
+# - every strix/** change vs the pinned upstream base is documented
 #   (attribution banner or UPGRADES.md entry)
+# - added files in strix/ are forbidden (new files must not be added to
+#   upstream tree)
+# - deleted files in strix/ are expected when product code moves out of strix/
+#   into lyrashield/** or lyrashield_adapter/**
 # - footprint budget check: warns (does not fail) if strix/** drift vs the
 #   pinned base exceeds the configured thresholds, so accumulated drift stays
 #   visible without blocking legitimate work
@@ -43,49 +47,94 @@ if ! git cat-file -t "$BASE" >/dev/null 2>&1; then
   fi
 fi
 
-# Find the fork commit that imported this upstream base into strix/.
-# (The sync commit message mentions the upstream short SHA and touches strix/.)
-SYNC_COMMIT=$(git log --all --grep="${BASE:0:7}" --format=%H -- strix/ | tail -1)
-if [[ -z "$SYNC_COMMIT" ]]; then
-  echo "error: cannot find fork sync commit for upstream base $BASE" >&2
-  exit 1
-fi
+has_banner_or_ledger() {
+  local f=$1
+  if head -n 2 "$f" | grep -qEi "LyraShield.*(modification|seam|controlled)"; then
+    return 0
+  fi
+  if grep -qF "$f" UPGRADES.md; then
+    return 0
+  fi
+  return 1
+}
 
 missing=()
-for f in $(git diff --name-only "$SYNC_COMMIT..HEAD" -- strix/); do
-  has_banner=false
-  if head -n 2 "$f" | grep -q "Modifications.*LyraShield"; then
-    has_banner=true
-  fi
-  in_ledger=false
-  if grep -q "$f" UPGRADES.md; then
-    in_ledger=true
-  fi
-  if [[ "$has_banner" == false && "$in_ledger" == false ]]; then
-    missing+=("$f")
-  fi
-done
+added=()
+other=()
+
+# Compare strix/** directly against the pinned upstream base.
+# Statuses:
+#   D = deleted (product file moved out of strix; expected)
+#   A = added (forbidden)
+#   M = modified (must have banner or UPGRADES.md entry)
+#   R/C/T = rename/copy/type change (unexpected; treated as error)
+while IFS=$'\t' read -r status path dest; do
+  [[ -z "$status" ]] && continue
+  case "$status" in
+    D)
+      echo "info: deleted $path (product file moved out of strix; expected)"
+      ;;
+    A)
+      added+=("$path")
+      ;;
+    M)
+      if ! has_banner_or_ledger "$path"; then
+        missing+=("$path")
+      fi
+      ;;
+    R*|C*)
+      added+=("$dest (renamed/copied from $path)")
+      if ! has_banner_or_ledger "$dest"; then
+        missing+=("$dest")
+      fi
+      ;;
+    *)
+      other+=("$path (status $status)")
+      ;;
+  esac
+done < <(git diff --name-status "$BASE..HEAD" -- strix/)
+
+if [[ ${#added[@]} -gt 0 ]]; then
+  echo "error: new files must not be added to strix/:" >&2
+  for f in "${added[@]}"; do
+    echo "  $f" >&2
+  done
+fi
 
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "error: undocumented strix/ modifications (add banner or UPGRADES.md entry):" >&2
   for f in "${missing[@]}"; do
     echo "  $f" >&2
   done
+fi
+
+if [[ ${#other[@]} -gt 0 ]]; then
+  echo "error: unexpected strix/ diff status:" >&2
+  for f in "${other[@]}"; do
+    echo "  $f" >&2
+  done
+fi
+
+if [[ ${#added[@]} -gt 0 || ${#missing[@]} -gt 0 || ${#other[@]} -gt 0 ]]; then
   exit 1
 fi
 
 # ---------------------------------------------------------------------------
 # Footprint budget: measure strix/** drift vs the pinned upstream base and
 # warn (not fail) when the delta exceeds the configured thresholds. This keeps
-# accumulated drift visible without blocking legitimate work. The thresholds
-# give ~20% headroom over the current state (68 files, +5397, -1297).
+# accumulated drift visible without blocking legitimate work.
+#
+# v1.5.2 reset state: 4 files changed, 76 insertions(+), 720 deletions(-).
+# The four generic seams (strix/agents/factory.py, strix/agents/prompt.py,
+# strix/config/loader.py, strix/skills/__init__.py) account for the entire
+# footprint. Thresholds include a small headroom for reviewed seam work.
 # ---------------------------------------------------------------------------
-MAX_FILES=80
-MAX_INSERTIONS=8000
-MAX_DELETIONS=2000
+MAX_FILES=6
+MAX_INSERTIONS=100
+MAX_DELETIONS=900
 
 # git diff --shortstat prints a single line like:
-#   " 68 files changed, 5397 insertions(+), 1297 deletions(-)"
+#   " 4 files changed, 76 insertions(+), 720 deletions(-)"
 # (deletions are omitted when zero, so guard each parse).
 SHORTSTAT=$(git diff --shortstat "$BASE..HEAD" -- strix/)
 FP_FILES=$(echo "$SHORTSTAT" | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' || echo 0)

@@ -1,3 +1,4 @@
+# 2026 LyraShield --- controlled-derivative seam: allows a product settings loader to be registered.
 """Settings loader, override switch, and disk persistence."""
 
 from __future__ import annotations

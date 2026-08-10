@@ -1,3 +1,4 @@
+# 2026 LyraShield --- controlled-derivative seam: product skill directory registration.
 import logging
 import re
 import threading

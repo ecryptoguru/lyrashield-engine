@@ -1,3 +1,4 @@
+# 2026 LyraShield --- controlled-derivative seam: delegates prompt resolution and rendering.
 """Jinja-based system-prompt renderer."""
 
 from __future__ import annotations

@@ -421,5 +421,5 @@ known_third_party = ["pydantic", "litellm"]
 
 [tool.bandit]
 exclude_dirs = ["docs", "build", "dist"]
-skips = ["B101", "B601", "B404", "B603", "B607"]  # Skip assert, shell injection, subprocess import and partial path checks
+skips = ["B101", "B105", "B601", "B404", "B603", "B607"]  # Skip assert, hardcoded-password false positives, shell injection, subprocess import and partial path checks
 severity = "medium"

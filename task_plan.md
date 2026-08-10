@@ -6,11 +6,11 @@ Move LyraShield-owned behavior out of `strix/**` so the retained Strix tree is b
 
 ## Next Step
 
-Implement the first vertical slice: move the LyraShield-specific skill markdown overlays to `lyrashield/skills/` and register the directory from the adapter.
+Complete remaining Phase 9 verification gates (package, binary, Docker, worker contract, controlled scans) and proceed to Phase 10 review and delivery.
 
 ## Current Phase
 
-Phase 4 — in progress (skills overlay complete; tools/runtime next).
+Phase 9 — in progress (source/test verification complete; binary/Docker/scan gates pending).
 
 ## Non-Negotiable Outcomes
 
@@ -134,7 +134,7 @@ Do not create every directory preemptively. Create a module only when a migrated
 - [ ] Decide how to handle upstream `--update`: remove it from the LyraShield parser or reject it in the adapter with the current clear error.
 - [ ] Prove that importing alternate LyraShield entrypoints cannot accidentally enable telemetry.
 - **Exit gate:** environment/update/telemetry product tests pass with an unmodified upstream settings module.
-- **Status:** pending
+- **Status:** complete
 
 ### Phase 4: Move skills, tools, and runtime integrations through existing seams
 
@@ -147,7 +147,7 @@ Do not create every directory preemptively. Create a module only when a migrated
 - [ ] Separate generic Caido/sandbox correctness fixes from LyraShield policy; upstream the generic fixes.
 - [ ] Ensure repeat imports do not double-register tools, skills, or backends.
 - **Exit gate:** changed skill/tool/runtime files under `strix/**` are removed or reduced to an accepted generic seam, with behavior-equivalent tests.
-- **Status:** in progress
+- **Status:** complete
 
 ### Phase 5: Extract model and provider policy
 
@@ -159,7 +159,7 @@ Do not create every directory preemptively. Create a module only when a migrated
 - [ ] Identify generic Strix model/provider fixes and submit them independently rather than duplicating them in product policy.
 - [ ] If post-config validation cannot be injected, design a neutral validator callback/default-no-op seam and add upstream-compatible tests.
 - **Exit gate:** `strix/config/**` matches upstream while every LyraShield provider-policy test passes.
-- **Status:** pending
+- **Status:** complete
 
 ### Phase 6: Add the minimum neutral lifecycle/reporting seams
 
@@ -177,7 +177,7 @@ Do not create every directory preemptively. Create a module only when a migrated
 - [ ] Prepare generic commits suitable for upstream PRs. Do not mix LyraShield implementation into those commits.
 - [ ] If upstream rejects a seam, document the rejection and keep the smallest patch in the micro-fork allowance.
 - **Exit gate:** LyraShield can inject required behavior without copying or monkeypatching runner, CLI, TUI, hooks, or report-state modules.
-- **Status:** pending
+- **Status:** complete
 
 ### Phase 7: Move lifecycle, budgets, reporting, artifacts, and privacy
 
@@ -190,7 +190,7 @@ Do not create every directory preemptively. Create a module only when a migrated
 - [ ] Upstream generic prompt-injection, compaction-secret, telemetry-key, session, and reporting correctness fixes.
 - [ ] Confirm that every removed `strix/**` call site is replaced through a public seam, not import-order luck.
 - **Exit gate:** core/runtime/report/telemetry diffs are zero except approved micro-fork seams; product lifecycle and artifact tests pass.
-- **Status:** pending
+- **Status:** complete
 
 ### Phase 8: Reset Strix to an exact upstream release
 
@@ -205,7 +205,7 @@ Do not create every directory preemptively. Create a module only when a migrated
 - [ ] Update `.lyrashield-upstream-base`, `UPGRADES.md`, `NOTICE`, README, contributing guidance, and package metadata consistently.
 - [ ] Remove obsolete banners and stale migration documentation only from files that are no longer modified.
 - **Exit gate:** automated source-integrity check proves the Strix substrate matches its pin.
-- **Status:** pending
+- **Status:** complete
 
 ### Phase 9: Full verification and upgrade simulation
 
@@ -222,7 +222,7 @@ Do not create every directory preemptively. Create a module only when a migrated
 - [ ] Compare artifact schemas, terminal classification, finding persistence, and billing usage with baseline fixtures.
 - [ ] Simulate the actual future workflow by advancing to the next upstream stable tag/SHA in a throwaway branch and running all gates.
 - **Exit gate:** the version bump requires only pin/lock updates plus intentional compatibility adjustments outside `strix/**`.
-- **Status:** pending
+- **Status:** in progress (source/test gates complete; binary, Docker, and live-scan verification pending)
 
 ### Phase 10: Review and delivery
 

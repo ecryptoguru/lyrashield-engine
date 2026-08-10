@@ -179,3 +179,15 @@
 3. Re-fetch upstream and refresh every drift count before relying on the 2026-08-10 snapshot.
 4. Mark Phase 0 `in_progress`, update `Current Phase` and `Next Step`, and log the exact branch/SHAs here.
 5. Do not begin source extraction until the baseline inventory and fixtures are complete.
+
+## Session: 2026-08-11
+
+### Phase 8/9: Reset Strix to v1.5.2 and full verification
+
+- **Status:** complete
+- `strix/**` reset to `v1.5.2` with 4 documented generic seams.
+- Product modules moved to `lyrashield/**`: `policy`, `lifecycle`, `artifacts`, `runtime`, `tools`, `skills`, `agents`, `interface`, `utils`, `telemetry`.
+- Full test suite: `975 passed, 1 skipped`.
+- `strix/**` drift: 4 files changed, ~72 insertions / ~720 deletions.
+- Remaining deferred / out-of-scope:
+  - `strix/tools/agents_graph/tools.py` is now byte-identical to `v1.5.2`; the product `agents_graph` tool lives in `lyrashield/tools/agents_graph/` and is covered by the tool-override seam in `strix/agents/factory.py`.
