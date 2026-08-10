@@ -123,6 +123,17 @@
 - Updated `tests/test_agent_tool_registration.py` to assert the override is registered.
 - Verification: `uv run ruff check .` passes; `uv run mypy lyrashield_adapter/cli.py lyrashield/tools/respond/tool.py` passes; `uv run pytest tests/test_agent_tool_registration.py` passes (13 tests).
 
+### Phase 4: reporting tool override slice
+
+- **Status:** complete
+- Moved the product reporting tool from `strix/tools/reporting/tool.py` to `lyrashield/tools/reporting/tool.py`.
+- Reset `strix/tools/reporting/tool.py` to v1.5.2.
+- Added `lyrashield/tools/reporting/__init__.py`.
+- Updated `lyrashield_adapter/cli.py` to register `create_vulnerability_report`, `create_dependency_report`, `list_reports`, and `get_report` overrides.
+- Added `pyproject.toml` per-file `PLC0415` ignore for `lyrashield/tools/reporting/tool.py` (lazy imports to avoid circular dependencies).
+- Updated `tests/test_agent_tool_registration.py` to assert the reporting overrides are registered.
+- Verification: `uv run ruff check .` passes; `uv run mypy lyrashield/tools/reporting/tool.py lyrashield_adapter/cli.py` passes; `uv run pytest tests/test_agent_tool_registration.py` passes (14 tests).
+
 ## Resume Instructions
 
 1. Read `task_plan.md` and `findings.md` fully.

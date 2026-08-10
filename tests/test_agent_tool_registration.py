@@ -152,6 +152,20 @@ def test_adapter_registers_lyrashield_respond_to_user() -> None:
     assert factory._TOOL_OVERRIDES["respond_to_user"].name == "respond_to_user"
 
 
+def test_adapter_registers_lyrashield_reporting_tools() -> None:
+    """The product entry point registers the LyraShield reporting tool overrides."""
+    _register_lyrashield_tool_overrides()
+
+    for name in (
+        "create_vulnerability_report",
+        "create_dependency_report",
+        "list_reports",
+        "get_report",
+    ):
+        assert name in factory._TOOL_OVERRIDES
+        assert factory._TOOL_OVERRIDES[name].name == name
+
+
 def test_adapter_registers_lyrashield_todo_tools() -> None:
     """The product entry point registers the LyraShield todo tool overrides."""
     _register_lyrashield_tool_overrides()
