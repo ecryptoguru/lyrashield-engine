@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from strix.interface import cli
+from lyrashield.interface import cli
 
 
-main_module = import_module("strix.interface.main")
+main_module = import_module("lyrashield.interface.main")
 
 
 class _ProviderFailureError(RuntimeError):

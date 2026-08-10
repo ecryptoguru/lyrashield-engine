@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-import strix.interface.utils as interface_utils
-from strix.interface.utils import (
+import lyrashield.interface.utils as interface_utils
+from lyrashield.interface.utils import (
     build_mount_targets_info,
     clone_repository,
     collect_local_sources,

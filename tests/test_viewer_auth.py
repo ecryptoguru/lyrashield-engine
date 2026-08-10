@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from strix.interface.viewer import auth
+from lyrashield.interface.viewer import auth
 
 
 def _iso(delta: timedelta) -> str:

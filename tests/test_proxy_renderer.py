@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from rich.text import Text
 
-from strix.interface.tui.renderers.proxy_renderer import ViewRequestRenderer
+from lyrashield.interface.tui.renderers.proxy_renderer import ViewRequestRenderer
 
 
 def _plain(static: object) -> str:

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from strix.interface.main import _normalize_digest, _verify_image_digest
+from lyrashield.interface.main import _normalize_digest, _verify_image_digest
 
 
 VALID_DIGEST = "a" * 64

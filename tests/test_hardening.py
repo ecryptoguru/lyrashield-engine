@@ -8,11 +8,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from docker import errors as docker_errors
 
-from strix.interface.utils import validate_run_name
-from strix.runtime.docker_client import StrixDockerSandboxClient, network_capabilities_enabled
+from lyrashield.interface.utils import validate_run_name
+from lyrashield.runtime.docker_client import StrixDockerSandboxClient, network_capabilities_enabled
 
 
-main_module = import_module("strix.interface.main")
+main_module = import_module("lyrashield.interface.main")
 
 
 def test_main_validates_configuration_before_docker_setup() -> None:
