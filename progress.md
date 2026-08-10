@@ -146,6 +146,26 @@
 - Updated `tests/test_agent_tool_registration.py` to assert the proxy overrides are registered.
 - Verification: `uv run ruff check .` passes; `uv run mypy lyrashield/tools/proxy/tools.py lyrashield/tools/proxy/caido_api.py lyrashield_adapter/cli.py` passes; `uv run pytest tests/test_agent_tool_registration.py` passes (15 tests).
 
+### Phase 5: config/policy slice
+
+- **Status:** complete
+- Moved product `strix/config/settings.py` to `lyrashield/policy/settings.py` and reset `strix/config/settings.py` to v1.5.2.
+- Moved product `strix/config/codex.py` to `lyrashield/policy/codex.py` and reset `strix/config/codex.py` to v1.5.2.
+- Moved `strix/provider_contract.py` to `lyrashield/policy/provider_contract.py` and removed the `strix/` copy.
+- Added `lyrashield/policy/loader.py` as the product settings loader; it registers itself with the upstream `strix.config.loader.register_settings_loader()` seam.
+- Added the generic `register_settings_loader()` seam to `strix/config/loader.py` so `strix.config.load_settings()`/`apply_config_override()`/`persist_current()` can transparently return product settings without `strix` importing `lyrashield`.
+- Restored `strix/utils/secret_files.py` and `strix/utils/api_spec.py` from v1.5.2.
+- Reset `strix/interface/update_check.py` to v1.5.2 (LyraShield disables updates via `STRIX_NO_UPDATE_CHECK=1`).
+- Updated product files still in `strix/` to import from `lyrashield.policy`:
+  - `strix/interface/main.py`, `strix/interface/auth_cli.py`, `strix/interface/provider_contract_cli.py`
+  - `strix/core/inputs.py`, `strix/core/runner.py`
+  - `strix/report/dedupe.py`
+  - `lyrashield/tools/web_search/tool.py`, `lyrashield_adapter/cli.py`
+- Updated `pyproject.toml` first-party/isort config, ruff per-file ignores, and mypy overrides.
+- Updated `tests/test_models.py` and `tests/test_lyrashield_adapter.py` to use `lyrashield.policy.*`.
+- Verification: `uv run ruff check .` passes; `uv run mypy strix lyrashield_adapter lyrashield` passes; `uv run pytest tests/test_agent_tool_registration.py tests/test_agent_factory_shell.py tests/test_lyrashield_skills_overlay.py tests/test_models.py tests/test_lyrashield_adapter.py` passes (175 tests).
+- Committed: `cddeaef` "Phase 5: config/policy slice".
+
 ### Phase 4: agent graph tool override (deferred)
 
 - `strix/tools/agents_graph/tools.py` was attempted as a tool-override move, but the v1.5.2 upstream version imports `notify_parent_on_terminal` from `strix.core.execution` and calls `coordinator.claim_parent_notice`, neither of which exist in the product fork of `strix/core/execution.py` and `strix/core/agents.py`.
