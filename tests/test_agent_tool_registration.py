@@ -30,7 +30,7 @@ def _tool(name: str) -> FunctionTool:
 
 
 @pytest.fixture(autouse=True)
-def _reset_registry() -> object:
+def _reset_registry() -> object:  # pyright: ignore[reportUnusedFunction]
     saved = list(factory._EXTRA_TOOLS)
     factory._EXTRA_TOOLS.clear()
     try:
@@ -40,7 +40,7 @@ def _reset_registry() -> object:
 
 
 @pytest.fixture(autouse=True)
-def _reset_tool_overrides() -> object:
+def _reset_tool_overrides() -> object:  # pyright: ignore[reportUnusedFunction]
     saved = dict(factory._TOOL_OVERRIDES)
     factory._TOOL_OVERRIDES.clear()
     try:
