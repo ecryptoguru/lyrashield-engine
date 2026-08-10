@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -70,9 +71,11 @@ def render_system_prompt(
     """Render the system prompt or fail before a tool-capable agent is created."""
     try:
         prompt_dir = get_strix_resource_path("agents", _PROMPT_DIRNAME)
-        # Search registered skill directories first so product overrides can
-        # replace built-in templates without modifying the upstream tree.
-        loader_dirs = [*skill_search_dirs(), prompt_dir]
+        product_skills_dir = Path(__file__).resolve().parents[1] / "skills"
+        # Search the product skills tree and registered skill directories first
+        # so product overrides replace built-in templates without modifying the
+        # upstream tree.
+        loader_dirs = [product_skills_dir, *skill_search_dirs(), prompt_dir]
         env = Environment(
             loader=FileSystemLoader(loader_dirs),
             autoescape=select_autoescape(

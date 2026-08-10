@@ -9,7 +9,7 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
-from strix.core.agents import coordinator_from_context
+from lyrashield.lifecycle.agents import coordinator_from_context
 
 
 logger = logging.getLogger(__name__)

@@ -37,7 +37,7 @@ from lyrashield.lifecycle.sessions import (
     session_write_lock,
     strip_all_images_from_session,
 )
-from strix.config import codex
+from lyrashield.policy import codex
 
 
 if TYPE_CHECKING:

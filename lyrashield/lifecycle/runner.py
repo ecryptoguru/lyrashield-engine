@@ -19,6 +19,8 @@ from agents.exceptions import ModelBehaviorError
 from agents.sandbox import SandboxRunConfig
 from openai import RateLimitError
 
+from lyrashield.agents.factory import build_strix_agent, make_child_factory
+from lyrashield.agents.prompt import render_system_prompt
 from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.execution import (
@@ -57,8 +59,6 @@ from lyrashield.tools.output_store import (
     WORKSPACE_SPILL_DIR,
     configure_spill_writer,
 )
-from strix.agents.factory import build_strix_agent, make_child_factory
-from strix.agents.prompt import render_system_prompt
 from strix.core.paths import run_dir_for, runtime_state_dir
 
 
