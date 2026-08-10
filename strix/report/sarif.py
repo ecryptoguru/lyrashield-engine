@@ -1,4 +1,3 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """SARIF 2.1.0 output for Strix vulnerability reports.
 
 Builds a GitHub code-scanning compatible SARIF document from Strix findings
@@ -532,6 +531,10 @@ def _result_properties(
         if value not in (None, ""):
             strix[key] = value
 
+    dependency_metadata = report.get("dependency_metadata")
+    if isinstance(dependency_metadata, dict) and dependency_metadata:
+        strix["dependency_metadata"] = dependency_metadata
+
     # SARIF is written for external upload (code-scanning / ASPM), so it must
     # NOT carry the weaponized exploit payload — that stays a local run
     # artifact (vulnerabilities.json / the finding MD). We surface the PoC
@@ -571,7 +574,6 @@ def _build_fixes(report: dict[str, Any]) -> list[dict[str, Any]] | None:
     for location in raw_locations:
         if not isinstance(location, dict):
             continue
-        location = cast("dict[str, Any]", location)
         file_path = _string_value(location.get("file"))
         fix_before = _string_value(location.get("fix_before"))
         fix_after = _string_value(location.get("fix_after"))
@@ -672,7 +674,6 @@ def _build_physical_locations(raw_locations: Any) -> tuple[list[dict[str, Any]],
         if not isinstance(location, dict):
             dropped_location_count += 1
             continue
-        location = cast("dict[str, Any]", location)
 
         file_path = _string_value(location.get("file"))
         start_line = location.get("start_line")
@@ -853,16 +854,11 @@ def _primary_fingerprint(
     uri = ""
     start_line: int | None = None
     if primary_physical:
-        artifact_location = primary_physical.get("artifactLocation")
-        if isinstance(artifact_location, dict):
-            artifact_location = cast("dict[str, Any]", artifact_location)
-            uri = _string_value(artifact_location.get("uri")) or ""
-        region = primary_physical.get("region")
-        if isinstance(region, dict):
-            region = cast("dict[str, Any]", region)
-            sl = region.get("startLine")
-            if isinstance(sl, int) and sl >= 1:
-                start_line = sl
+        uri = (primary_physical.get("artifactLocation") or {}).get("uri", "") or ""
+        region = primary_physical.get("region") or {}
+        sl = region.get("startLine")
+        if isinstance(sl, int) and sl >= 1:
+            start_line = sl
 
     method = _string_value(report.get("method")) or ""
     endpoint = _string_value(report.get("endpoint")) or ""
@@ -902,7 +898,7 @@ def _first_physical_location(locations: list[dict[str, Any]]) -> dict[str, Any] 
     """Return the first location's physicalLocation payload, if any."""
     for location in locations:
         physical = location.get("physicalLocation")
-        if isinstance(physical, dict):
+        if physical:
             return cast("dict[str, Any]", physical)
     return None
 

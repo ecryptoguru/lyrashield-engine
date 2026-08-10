@@ -173,6 +173,14 @@ def _register_lyrashield_skills() -> None:
 
 
 def _register_lyrashield_tool_overrides() -> None:
+    from lyrashield.tools.agents_graph.tools import (  # noqa: PLC0415
+        agent_finish,
+        create_agent,
+        send_message_to_agent,
+        stop_agent,
+        view_agent_graph,
+        wait_for_agents,
+    )
     from lyrashield.tools.proxy.tools import (  # noqa: PLC0415
         list_requests,
         list_sitemap,
@@ -202,6 +210,13 @@ def _register_lyrashield_tool_overrides() -> None:
         web_search as lyra_web_search,
     )
     from strix.agents.factory import register_tool_override  # noqa: PLC0415
+
+    register_tool_override("agent_finish", agent_finish)
+    register_tool_override("create_agent", create_agent)
+    register_tool_override("send_message_to_agent", send_message_to_agent)
+    register_tool_override("stop_agent", stop_agent)
+    register_tool_override("view_agent_graph", view_agent_graph)
+    register_tool_override("wait_for_agents", wait_for_agents)
 
     register_tool_override("web_search", lyra_web_search)
     register_tool_override("respond_to_user", lyra_respond_to_user)
@@ -237,9 +252,9 @@ def _register_lyrashield_model_policy() -> None:
 
 
 def _run_upstream() -> None:
-    from strix.interface.main import main as upstream_main  # noqa: PLC0415
+    from lyrashield.interface.main import main as product_main  # noqa: PLC0415
 
-    upstream_main()
+    product_main()
 
 
 def main() -> None:

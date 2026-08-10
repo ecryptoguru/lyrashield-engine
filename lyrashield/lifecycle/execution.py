@@ -21,7 +21,7 @@ from openai import (
     APITimeoutError,
 )
 
-from strix.config import codex
+from lyrashield.lifecycle.compaction import is_context_overflow, maybe_compact
 from lyrashield.lifecycle.hooks import (
     BudgetExceededError,
     BudgetPausedError,
@@ -37,7 +37,7 @@ from lyrashield.lifecycle.sessions import (
     session_write_lock,
     strip_all_images_from_session,
 )
-from lyrashield.lifecycle.compaction import is_context_overflow, maybe_compact
+from strix.config import codex
 
 
 if TYPE_CHECKING:

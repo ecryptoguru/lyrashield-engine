@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from agents.lifecycle import RunHooks
 
-from strix.report.state import get_global_report_state
-from strix.tools.output_store import _take_prefix, _take_suffix
+from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.tools.output_store import _take_prefix, _take_suffix
 
 
 if TYPE_CHECKING:

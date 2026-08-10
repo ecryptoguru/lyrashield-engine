@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.model_settings import ModelSettings
 from openai.types.shared import Reasoning
 
+from lyrashield.lifecycle.sessions import scrub_images_from_items
 from lyrashield.policy.models import (
     DEFAULT_MODEL_RETRY,
     bedrock_route_supports_prompt_caching,
@@ -21,7 +22,6 @@ from lyrashield.policy.models import (
     model_supports_reasoning,
     request_timeout_extra_args,
 )
-from lyrashield.lifecycle.sessions import scrub_images_from_items
 
 
 if TYPE_CHECKING:

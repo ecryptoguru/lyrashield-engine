@@ -11,7 +11,7 @@ from weakref import WeakKeyDictionary
 from agents.items import ItemHelpers
 from agents.memory import OpenAIConversationsSession, SQLiteSession
 
-from strix.utils.redaction import redact_secrets
+from lyrashield.utils.redaction import redact_secrets
 
 
 if TYPE_CHECKING:
@@ -264,7 +264,7 @@ async def sanitize_session_secrets(session: Session) -> bool:
     """Redact secrets in tool outputs and assistant messages to clear a content-filter block.
 
     Mirrors :func:`strip_all_images_from_session` but applies
-    :func:`strix.utils.redaction.redact_secrets` to text content in
+    :func:`lyrashield.utils.redaction.redact_secrets` to text content in
     ``function_call_output`` and ``message_output`` items. Returns True if any
     item was rewritten (caller should retry the turn), False if nothing changed.
     """

@@ -15,7 +15,7 @@ from lyrashield.policy.loader import load_settings
 
 
 if TYPE_CHECKING:
-    from strix.report.state import ReportState
+    from lyrashield.artifacts.state import ReportState
 
 
 logger = logging.getLogger(__name__)
@@ -201,7 +201,7 @@ def _estimate_cost(mode: str, settings: Any) -> float:
 
 def _target_hosts_from_report() -> set[str] | None:
     """Extract target hostnames from the global report state, if any."""
-    from strix.report.state import get_global_report_state
+    from lyrashield.artifacts.state import get_global_report_state
 
     report_state = get_global_report_state()
     if report_state is None:
@@ -310,8 +310,8 @@ async def web_search(
     web_search_settings = settings.web_search
     api_key = web_search_settings.api_key
 
+    from lyrashield.artifacts.state import get_global_report_state
     from lyrashield.lifecycle.hooks import get_active_hooks
-    from strix.report.state import get_global_report_state
 
     report_state = get_global_report_state()
 

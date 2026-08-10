@@ -1,10 +1,9 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """SDK-native LLM usage aggregation for scan reports."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any, cast
+from typing import Any
 
 from agents.usage import Usage, deserialize_usage, serialize_usage
 
@@ -19,9 +18,7 @@ class LLMUsageLedger:
         self._total_usage = Usage()
         self._agent_usage: dict[str, Usage] = {}
         self._agent_metadata: dict[str, dict[str, str]] = {}
-        self._request_usage_entries: list[dict[str, Any]] = []
         self._total_cost = 0.0
-        self._has_cost = False
         # When True, tokens are still tracked but cost stays $0 — the run is on a
         # model subscription, so there is no metered per-token charge to report.
         self.zero_cost = False
@@ -40,7 +37,6 @@ class LLMUsageLedger:
         normalized_agent_id = str(agent_id or "unknown")
         self._total_usage.add(usage)
         self._agent_usage.setdefault(normalized_agent_id, Usage()).add(usage)
-        self._request_usage_entries.extend(_serialize_request_usage_entries(usage, model=model))
 
         metadata = self._agent_metadata.setdefault(normalized_agent_id, {})
         if agent_name:
@@ -52,20 +48,14 @@ class LLMUsageLedger:
             estimated = _estimate_litellm_cost(usage, model)
             if estimated:
                 self._total_cost += estimated
-                self._has_cost = True
 
         return True
 
-    def record_observed_cost(self, cost: Any) -> None:
+    def record_observed_cost(self, cost: float) -> None:
         if self.zero_cost:
             return
-        try:
-            numeric_cost = float(cost)
-        except (TypeError, ValueError):
-            return
-        if numeric_cost > 0:
-            self._total_cost += numeric_cost
-            self._has_cost = True
+        if isinstance(cost, int | float) and cost > 0:
+            self._total_cost += float(cost)
 
     @property
     def total_cost(self) -> float:
@@ -73,23 +63,8 @@ class LLMUsageLedger:
 
     def to_record(self) -> dict[str, Any]:
         record = serialize_usage(self._total_usage)
-        # ``Usage.add`` reconstructs SDK request entries from aggregate detail
-        # models, which can drop provider extension fields such as
-        # ``cache_write_tokens``. Preserve each original response receipt so
-        # the worker can price it exactly when the provider exposed every
-        # billable dimension.
-        if self._request_usage_entries:
-            record["request_usage_entries"] = list(self._request_usage_entries)
-        elif self._total_usage.requests != 1:
-            # The SDK may synthesize one request entry from a multi-request
-            # aggregate. It has no per-call cache buckets, so it cannot be
-            # used for exact pricing.
-            record.pop("request_usage_entries", None)
-        if self._has_cost or self.zero_cost:
-            record["cost"] = _round_cost(self._total_cost)
-        if self.zero_cost:
-            record["subscription"] = True
-        agents: list[dict[str, Any]] = []
+        record["cost"] = _round_cost(self._total_cost)
+        record["agents"] = []
 
         agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}
         total_tokens = sum(agent_tokens.values())
@@ -106,26 +81,21 @@ class LLMUsageLedger:
                     "agent_id": agent_id,
                     "agent_name": metadata.get("agent_name") or agent_id,
                     "model": metadata.get("model"),
+                    "cost": _round_cost(agent_cost),
                 }
             )
-            if self._has_cost:
-                agent_record["cost"] = _round_cost(agent_cost)
-            agents.append(agent_record)
+            record["agents"].append(agent_record)
 
-        record["agents"] = agents
         return record
 
     def hydrate(self, raw_usage: Any) -> None:
         self._total_usage = Usage()
         self._agent_usage.clear()
         self._agent_metadata.clear()
-        self._request_usage_entries.clear()
         self._total_cost = 0.0
-        self._has_cost = False
 
         if not isinstance(raw_usage, dict):
             return
-        raw_usage = cast("dict[str, Any]", raw_usage)
 
         try:
             self._total_usage = deserialize_usage(raw_usage)
@@ -133,36 +103,28 @@ class LLMUsageLedger:
             logger.exception("Failed to hydrate aggregate llm_usage from run.json")
             self._total_usage = Usage()
 
-        if "cost" in raw_usage:
-            self._total_cost = _float_or_zero(raw_usage.get("cost"))
-            self._has_cost = True
-        self._request_usage_entries = _hydrate_request_usage_entries(
-            raw_usage.get("request_usage_entries")
-        )
+        self._total_cost = _float_or_zero(raw_usage.get("cost"))
 
-        raw_agents = raw_usage.get("agents")
-        if isinstance(raw_agents, list):
-            for raw in raw_agents:
-                if not isinstance(raw, dict):
-                    continue
-                raw_agent = cast("dict[str, Any]", raw)
-                agent_id = str(raw_agent.get("agent_id") or "").strip()
-                if not agent_id:
-                    continue
-                try:
-                    self._agent_usage[agent_id] = deserialize_usage(raw_agent)
-                except Exception:
-                    logger.exception("Failed to hydrate llm_usage for agent %s", agent_id)
-                    self._agent_usage[agent_id] = Usage()
+        for raw_agent in raw_usage.get("agents") or []:
+            if not isinstance(raw_agent, dict):
+                continue
+            agent_id = str(raw_agent.get("agent_id") or "").strip()
+            if not agent_id:
+                continue
+            try:
+                self._agent_usage[agent_id] = deserialize_usage(raw_agent)
+            except Exception:
+                logger.exception("Failed to hydrate llm_usage for agent %s", agent_id)
+                self._agent_usage[agent_id] = Usage()
 
-                metadata: dict[str, str] = {}
-                agent_name = raw_agent.get("agent_name")
-                model = raw_agent.get("model")
-                if isinstance(agent_name, str) and agent_name:
-                    metadata["agent_name"] = agent_name
-                if isinstance(model, str) and model:
-                    metadata["model"] = model
-                self._agent_metadata[agent_id] = metadata
+            metadata: dict[str, str] = {}
+            agent_name = raw_agent.get("agent_name")
+            model = raw_agent.get("model")
+            if isinstance(agent_name, str) and agent_name:
+                metadata["agent_name"] = agent_name
+            if isinstance(model, str) and model:
+                metadata["model"] = model
+            self._agent_metadata[agent_id] = metadata
 
 
 def _resolve_total_tokens(usage: Usage) -> int:
@@ -198,7 +160,7 @@ def _estimate_litellm_cost(usage: Usage, model: str | None) -> float | None:
     if not litellm_model:
         return None
 
-    entries = list(usage.request_usage_entries or [])
+    entries = list(usage.request_usage_entries)
     if not entries:
         return _estimate_litellm_entry_cost(usage, litellm_model)
 
@@ -284,69 +246,6 @@ def _details_to_dict(details: Any) -> dict[str, Any]:
     if not isinstance(details, dict):
         return {}
     return {str(k): v for k, v in details.items() if v is not None}
-
-
-def _serialize_request_usage_entries(
-    usage: Usage,
-    *,
-    model: str | None = None,
-) -> list[dict[str, Any]]:
-    entries: list[Any] = list(usage.request_usage_entries or [])
-    # An aggregate covering more than one request is not a billable receipt:
-    # its cache buckets may differ per call. Keep it out of the exact-pricing
-    # path until the provider supplies the individual records.
-    if not entries and usage.requests == 1 and _usage_has_activity(usage):
-        entries = [usage]
-    serialized = [_serialize_request_usage_entry(entry) for entry in entries]
-    if model:
-        for entry in serialized:
-            entry["model"] = model
-    return serialized
-
-
-def _serialize_request_usage_entry(entry: Any) -> dict[str, Any]:
-    input_tokens = _int_or_zero(getattr(entry, "input_tokens", 0))
-    output_tokens = _int_or_zero(getattr(entry, "output_tokens", 0))
-    total_tokens = _int_or_zero(getattr(entry, "total_tokens", 0))
-    input_details = _details_to_dict(getattr(entry, "input_tokens_details", None))
-    details: dict[str, int] = {
-        "cached_tokens": _int_or_zero(input_details.get("cached_tokens")),
-    }
-    cache_write_tokens = input_details.get("cache_write_tokens")
-    if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
-        details["cache_write_tokens"] = cache_write_tokens
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens or input_tokens + output_tokens,
-        "input_tokens_details": details,
-    }
-
-
-def _hydrate_request_usage_entries(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    entries: list[dict[str, Any]] = []
-    for entry in value:
-        if not isinstance(entry, dict):
-            continue
-        entry = cast("dict[str, Any]", entry)
-        serialized = _serialize_request_usage_entry(_UsageEntryAdapter(entry))
-        model = entry.get("model")
-        if isinstance(model, str) and model:
-            serialized["model"] = model
-        entries.append(serialized)
-    return entries
-
-
-class _UsageEntryAdapter:
-    """Adapter for preserving bounded serialized receipts during resume."""
-
-    def __init__(self, entry: dict[str, Any]) -> None:
-        self.input_tokens = entry.get("input_tokens")
-        self.output_tokens = entry.get("output_tokens")
-        self.total_tokens = entry.get("total_tokens")
-        self.input_tokens_details = entry.get("input_tokens_details")
 
 
 def _int_or_zero(value: Any) -> int:

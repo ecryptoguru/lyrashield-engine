@@ -1,29 +1,26 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 import logging
-import os
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from strix.config import load_settings
 from strix.telemetry._common import (
+    SEND_TIMEOUT,
     SESSION_ID,
-    ReportState,
     base_props,
     is_first_run,
 )
 
 
+if TYPE_CHECKING:
+    from strix.report.state import ReportState
+
+
 logger = logging.getLogger(__name__)
 
-
-def _posthog_api_key() -> str:
-    return os.environ.get("STRIX_POSTHOG_API_KEY", "")
-
-
-def _posthog_host() -> str:
-    return os.environ.get("STRIX_POSTHOG_HOST", "https://us.i.posthog.com")
+_POSTHOG_PUBLIC_API_KEY = "phc_7rO3XRuNT5sgSKAl6HDIrWdSGh1COzxw0vxVIAR6vVZ"
+_POSTHOG_HOST = "https://us.i.posthog.com"
 
 
 def _is_enabled() -> bool:
@@ -34,22 +31,15 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
     if not _is_enabled():
         logger.debug("posthog disabled; skipping event %s", event)
         return False
-    api_key = _posthog_api_key()
-    if not api_key:
-        logger.debug("posthog API key not configured; skipping event %s", event)
-        return False
     try:
         payload = {
-            "api_key": api_key,
+            "api_key": _POSTHOG_PUBLIC_API_KEY,
             "event": event,
             "distinct_id": SESSION_ID,
             "properties": properties,
         }
-        requests.post(
-            f"{_posthog_host()}/capture/",
-            json=cast("dict[str, Any]", payload),
-            timeout=10,
-        )
+        with requests.post(f"{_POSTHOG_HOST}/capture/", json=payload, timeout=SEND_TIMEOUT):
+            pass
     except Exception:  # noqa: BLE001
         logger.debug("posthog send failed for event %s", event, exc_info=True)
         return False
@@ -103,7 +93,7 @@ def skill_loaded(skill_name: str) -> None:
     )
 
 
-def end(report_state: ReportState, exit_reason: str = "completed") -> None:
+def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
     if report_state.posthog_scan_ended_sent:
         return
     if report_state.scan_ended_exit_reason is None:
@@ -126,13 +116,14 @@ def end(report_state: ReportState, exit_reason: str = "completed") -> None:
     llm_props: dict[str, int | float] = {}
     try:
         usage = report_state.get_total_llm_usage()
-        llm_props = {
-            "llm_requests": int(usage.get("requests") or 0),
-            "llm_input_tokens": int(usage.get("input_tokens") or 0),
-            "llm_output_tokens": int(usage.get("output_tokens") or 0),
-            "llm_tokens": int(usage.get("total_tokens") or 0),
-            "llm_cost": float(usage.get("cost") or 0.0),
-        }
+        if isinstance(usage, dict):
+            llm_props = {
+                "llm_requests": int(usage.get("requests") or 0),
+                "llm_input_tokens": int(usage.get("input_tokens") or 0),
+                "llm_output_tokens": int(usage.get("output_tokens") or 0),
+                "llm_tokens": int(usage.get("total_tokens") or 0),
+                "llm_cost": float(usage.get("cost") or 0.0),
+            }
     except (TypeError, ValueError, AttributeError):
         pass
 

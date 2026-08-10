@@ -1,13 +1,11 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 import atexit
 import contextlib
 import logging
-import re
 import signal
 import sys
 import threading
 import time
-from typing import Any, cast
+from typing import Any
 
 from rich.console import Console
 from rich.live import Live
@@ -15,32 +13,19 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import load_settings
-from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
-from lyrashield.lifecycle.runner import run_strix_scan
+from strix.config.settings import DEFAULT_MAX_TURNS
+from strix.core.runner import run_strix_scan
 from strix.report.state import ReportState, set_global_report_state
-from lyrashield.runtime import session_manager
+from strix.runtime import session_manager
 
 from .utils import (
     build_live_stats_text,
     format_vulnerability_report,
+    has_model_response,
 )
 
 
 logger = logging.getLogger(__name__)
-_SAFE_PROVIDER_ERROR_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-
-
-def _noninteractive_failure_label(exc: Exception) -> str:
-    label = type(exc).__name__
-    body = getattr(exc, "body", None)
-    if not isinstance(body, dict):
-        return label
-    body = cast("dict[str, Any]", body)
-    for key in ("code", "type", "param"):
-        component = body.get(key)
-        if isinstance(component, str) and _SAFE_PROVIDER_ERROR_COMPONENT.fullmatch(component):
-            return f"{label}.{component}"
-    return label
 
 
 def _resolve_sandbox_image() -> str:
@@ -52,9 +37,8 @@ def _resolve_sandbox_image() -> str:
     return image
 
 
-async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
+async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console = Console()
-    non_interactive = bool(getattr(args, "non_interactive", False))
 
     start_text = Text()
     start_text.append("Penetration test initiated", style="bold #22c55e")
@@ -94,10 +78,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         padding=(1, 2),
     )
 
-    if not non_interactive:
-        console.print("\n")
-        console.print(startup_panel)
-        console.print()
+    console.print("\n")
+    console.print(startup_panel)
+    console.print()
 
     scan_mode = getattr(args, "scan_mode", "deep")
 
@@ -122,14 +105,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")
-
-        if non_interactive:
-            logger.info(
-                "Finding recorded: id=%s severity=%s",
-                report_id,
-                report.get("severity", "unknown"),
-            )
-            return
 
         vuln_text = format_vulnerability_report(report)
 
@@ -161,15 +136,16 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     set_global_report_state(report_state)
 
-    for warm_model, warm_usage in getattr(args, "warm_up_usages", []) or []:
-        report_state.record_sdk_usage(
-            agent_id="warmup", agent_name="warmup", model=warm_model, usage=warm_usage
-        )
+    startup_phase: list[str] = ["Starting up"]
 
     def create_live_status() -> Panel:
         status_text = Text()
         status_text.append("Penetration test in progress", style="bold #22c55e")
         status_text.append("\n\n")
+
+        if not has_model_response(report_state):
+            status_text.append(f"{startup_phase[0]}...", style="dim")
+            status_text.append("\n\n")
 
         stats_text = build_live_stats_text(report_state)
         if stats_text:
@@ -183,69 +159,56 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
             padding=(1, 2),
         )
 
-    async def execute_scan() -> None:
-        logger.info(
-            "CLI launching scan: run_name=%s targets=%d interactive=%s",
-            args.run_name,
-            len(scan_config.get("targets") or []),
-            bool(getattr(args, "interactive", False)),
-        )
-        await run_strix_scan(
-            scan_config=scan_config,
-            scan_id=args.run_name,
-            image=_resolve_sandbox_image(),
-            local_sources=getattr(args, "local_sources", None) or [],
-            interactive=bool(getattr(args, "interactive", False)),
-            max_budget_usd=getattr(args, "max_budget_usd", None),
-            max_turns=getattr(args, "max_turns", DEFAULT_MAX_TURNS),
-        )
+    def _note_startup_phase(phase: str) -> None:
+        startup_phase[:] = [phase]
 
     try:
-        if non_interactive:
+        console.print()
+
+        with Live(
+            create_live_status(), console=console, refresh_per_second=2, transient=False
+        ) as live:
+            stop_updates = threading.Event()
+
+            def update_status() -> None:
+                while not stop_updates.is_set():
+                    try:
+                        live.update(create_live_status())
+                        time.sleep(2)
+                    except Exception:
+                        break
+
+            update_thread = threading.Thread(target=update_status, daemon=True)
+            update_thread.start()
+
             try:
-                await execute_scan()
+                logger.info(
+                    "CLI launching scan: run_name=%s targets=%d interactive=%s",
+                    args.run_name,
+                    len(scan_config.get("targets") or []),
+                    bool(getattr(args, "interactive", False)),
+                )
+                await run_strix_scan(
+                    scan_config=scan_config,
+                    scan_id=args.run_name,
+                    image=_resolve_sandbox_image(),
+                    local_sources=getattr(args, "local_sources", None) or [],
+                    interactive=bool(getattr(args, "interactive", False)),
+                    max_budget_usd=getattr(args, "max_budget_usd", None),
+                    max_turns=getattr(args, "max_turns", DEFAULT_MAX_TURNS),
+                    status_sink=_note_startup_phase,
+                )
             finally:
+                stop_updates.set()
+                update_thread.join(timeout=1)
                 with contextlib.suppress(Exception):
                     await session_manager.cleanup(args.run_name)
-        else:
-            console.print()
-            with Live(
-                create_live_status(), console=console, refresh_per_second=2, transient=False
-            ) as live:
-                stop_updates = threading.Event()
-
-                def update_status() -> None:
-                    while not stop_updates.is_set():
-                        try:
-                            live.update(create_live_status())
-                            time.sleep(2)
-                        except Exception:
-                            break
-
-                update_thread = threading.Thread(target=update_status, daemon=True)
-                update_thread.start()
-
-                try:
-                    await execute_scan()
-                finally:
-                    stop_updates.set()
-                    update_thread.join(timeout=1)
-                    with contextlib.suppress(Exception):
-                        await session_manager.cleanup(args.run_name)
 
     except Exception as e:
-        if non_interactive:
-            # Do not persist the exception text or traceback; engine failures may
-            # contain target-derived content in non-interactive worker runs.
-            logger.error(  # noqa: TRY400
-                "Non-interactive scan failed: %s",
-                _noninteractive_failure_label(e),
-            )
-        else:
-            console.print(f"[bold red]Error during penetration test:[/] {e}")
+        console.print(f"[bold red]Error during penetration test:[/] {e}")
         raise
 
-    if report_state.final_scan_result and not non_interactive:
+    if report_state.final_scan_result:
         console.print()
 
         final_report_text = Text()

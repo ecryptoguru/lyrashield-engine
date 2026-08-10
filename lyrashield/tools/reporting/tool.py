@@ -252,7 +252,7 @@ async def _do_create(  # noqa: PLR0912
     cvss_score, severity, _vector = _calculate_cvss(cvss_breakdown)
 
     try:
-        from strix.report.state import get_global_report_state
+        from lyrashield.artifacts.state import get_global_report_state
 
         report_state = get_global_report_state()
         if report_state is None:
@@ -263,7 +263,7 @@ async def _do_create(  # noqa: PLR0912
                 "warning": "Report could not be persisted - report state unavailable",
             }
 
-        from strix.report.dedupe import check_duplicate
+        from lyrashield.artifacts.dedupe import check_duplicate
 
         existing = report_state.get_existing_vulnerabilities()
         candidate = {
@@ -809,7 +809,7 @@ async def _do_create_dependency(  # noqa: PLR0912
     )
 
     try:
-        from strix.report.state import get_global_report_state
+        from lyrashield.artifacts.state import get_global_report_state
 
         report_state = get_global_report_state()
         if report_state is None:
@@ -820,7 +820,7 @@ async def _do_create_dependency(  # noqa: PLR0912
                 "warning": "Report could not be persisted - report state unavailable",
             }
 
-        from strix.report.dedupe import check_duplicate
+        from lyrashield.artifacts.dedupe import check_duplicate
 
         existing = report_state.get_existing_vulnerabilities()
         candidate = {
@@ -1109,7 +1109,7 @@ def _do_list_reports(
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
 
-    from strix.report.state import get_global_report_state
+    from lyrashield.artifacts.state import get_global_report_state
 
     report_state = get_global_report_state()
     if report_state is None:
@@ -1156,7 +1156,7 @@ def _do_get_report(report_id: str, caller_agent_id: str | None = None) -> dict[s
     if not report_id:
         return {"success": False, "error": "report_id cannot be empty", "report": None}
 
-    from strix.report.state import get_global_report_state
+    from lyrashield.artifacts.state import get_global_report_state
 
     report_state = get_global_report_state()
     if report_state is None:

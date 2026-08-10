@@ -103,7 +103,7 @@ strict = true
 # TUI is not yet clean under strict mypy; keep it out of the gate until it is.
 # Tests are also excluded because the strict gate in the verify script only
 # covers source packages; test-only type issues are tracked by pytest + ruff.
-exclude = ["strix/interface/tui", "tests"]
+exclude = ["strix/interface/tui", "lyrashield/interface/tui", "lyrashield/interface/viewer", "tests"]
 strict_optional = true
 warn_redundant_casts = false
 warn_unused_ignores = true
@@ -144,7 +144,7 @@ ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
 
 [[tool.mypy.overrides]]
-module = ["strix.tools.web_search.tool"]
+module = ["strix.tools.web_search.tool", "strix.telemetry.posthog"]
 disable_error_code = ["arg-type"]
 
 # ============================================================================
@@ -236,13 +236,13 @@ ignore = [
 "tests/test_viewer_auth.py" = ["S105", "S106", "ARG001"]
 "tests/test_codex_auth.py" = ["S105", "S106", "SLF001"]
 # Stdlib HTTP handler overrides (do_GET/do_POST).
-"strix/interface/auth_cli.py" = ["N802", "BLE001"]
+"strix/interface/auth_cli.py" = ["N802", "BLE001", "RUF100"]
 "tests/test_codex_streaming.py" = ["N802"]
 "tests/test_disable_streaming.py" = ["N802"]
 "tests/test_report_pdf.py" = ["S105", "S106", "E402", "I001"]
 # Stdlib HTTP handler overrides (do_GET/do_POST) and lazy imports that avoid a
 # circular dependency with strix.telemetry / strix.interface.viewer.report_pdf.
-"strix/interface/viewer/server.py" = ["N802", "PLC0415", "BLE001"]
+"strix/interface/viewer/server.py" = ["N802", "PLC0415", "BLE001", "RUF100"]
 # Lazy telemetry import to avoid importing PostHog before the viewer starts.
 "strix/interface/viewer/cli.py" = ["PLC0415"]
 # Lazy imports inside functions to avoid circular dependency with
@@ -301,7 +301,7 @@ ignore = [
 "strix/config/codex.py" = ["PLC0415"]
 # Interface utility branches per scope-mode / target-type combination;
 # splitting would obscure the decision tree without simplifying it.
-"strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415"]
+"strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415", "RUF100"]
 # CLI / TUI / main keep extensive lazy imports + broad exception
 # swallows for resilience around terminal-rendering errors.
 "strix/interface/cli.py" = ["BLE001", "PLC0415"]
@@ -311,6 +311,22 @@ ignore = [
 "strix/interface/viewer/transcript.py" = ["PLC0415"]
 "strix/runtime/session_manager.py" = ["BLE001"]
 "strix/core/execution.py" = ["PLR0912"]
+
+# Upstream v1.5.2 interface modules restored after product code moved to lyrashield/interface.
+"strix/interface/cli_args.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
+"strix/interface/environment.py" = ["PLC0415", "PLR0912", "PLR0915"]
+"strix/interface/interactive.py" = ["PLC0415"]
+"strix/interface/scan_setup.py" = ["PLC0415", "PLR0912", "PLR0915"]
+"strix/interface/tui/backend/*.py" = ["PLC0415", "RUF100"]
+
+# Product modules moved from strix/ to lyrashield/.
+"lyrashield/artifacts/*.py" = ["PLR0912", "PLR0915", "PLC0415", "TC003"]
+"lyrashield/interface/*.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
+"lyrashield/interface/tui/app.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "SIM105"]
+"lyrashield/interface/tui/renderers/*.py" = ["PLC0415"]
+"lyrashield/interface/viewer/*.py" = ["PLC0415", "BLE001"]
+"lyrashield/tools/agents_graph/tools.py" = ["PLR0911", "PLC0415"]
+"lyrashield/tools/output_store.py" = ["PLC0415"]
 
 [tool.ruff.lint.isort]
 force-single-line = false

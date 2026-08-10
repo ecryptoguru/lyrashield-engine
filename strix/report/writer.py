@@ -1,4 +1,3 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Artifact writers for Strix scan reports."""
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from pygments.lexers import get_lexer_by_name, guess_lexer
+from pygments.lexers import PythonLexer, get_lexer_by_name, guess_lexer
 from pygments.lexers.special import TextLexer
 from pygments.util import ClassNotFound
 
@@ -75,10 +74,10 @@ def resolve_lexer(language: str | None, code: str) -> Lexer:
     try:
         lexer = guess_lexer(code)
     except ClassNotFound:
-        return get_lexer_by_name("python")
+        return cast("Lexer", PythonLexer())
     # ``guess_lexer`` returns the plain-text lexer when it can't detect anything.
     if isinstance(lexer, TextLexer):
-        return get_lexer_by_name("python")
+        return cast("Lexer", PythonLexer())
     return lexer
 
 
@@ -104,7 +103,7 @@ def read_run_record(run_dir: Path) -> dict[str, Any]:
         raise RuntimeError(f"run.json at {path} is unreadable: {exc}") from exc
     if not isinstance(data, dict):
         raise TypeError(f"run.json at {path} is not an object")
-    return cast("dict[str, Any]", data)
+    return data
 
 
 def write_run_record(run_dir: Path, run_record: dict[str, Any]) -> None:
@@ -199,16 +198,15 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:  # noqa: PLR0912, PL
         f"**Found:** {report.get('timestamp', 'unknown')}",
     ]
 
-    dep_meta_raw: Any = report.get("dependency_metadata") or {}
-    dep_meta: dict[str, Any] = (
-        cast("dict[str, Any]", dep_meta_raw) if isinstance(dep_meta_raw, dict) else {}
-    )
+    dep_meta = report.get("dependency_metadata") or {}
     metadata: list[tuple[str, Any]] = [
         ("Target", report.get("target")),
         ("Package", dep_meta.get("package_name")),
         ("Ecosystem", dep_meta.get("package_ecosystem")),
         ("Installed Version", dep_meta.get("installed_version")),
         ("Fixed Version", dep_meta.get("fixed_version")),
+        ("Introduced By", dep_meta.get("introduced_by")),
+        ("Dependency Chain", dep_meta.get("dependency_path")),
         ("Endpoint", report.get("endpoint")),
         ("Method", report.get("method")),
         ("CVE", report.get("cve")),

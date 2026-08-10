@@ -639,7 +639,7 @@ def _install_openrouter_stream_cost_capture() -> None:
         OpenrouterConfig,
     )
 
-    from strix.report.state import streamed_openrouter_costs
+    from lyrashield.artifacts.state import streamed_openrouter_costs
 
     class _StrixOpenRouterStreamingHandler(OpenRouterChatCompletionStreamingHandler):
         def chunk_parser(self, chunk: dict[str, Any]) -> Any:
@@ -728,7 +728,7 @@ def _register_openai_client_with_headers(llm: LlmSettings, headers: dict[str, st
 def _register_litellm_cost_callback() -> None:
     import litellm
 
-    from strix.report.state import litellm_cost_callback
+    from lyrashield.artifacts.state import litellm_cost_callback
 
     for bucket_name in ("success_callback", "_async_success_callback"):
         bucket = getattr(litellm, bucket_name, None)

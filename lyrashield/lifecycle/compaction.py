@@ -17,12 +17,12 @@ from agents.models.interface import ModelTracing
 from litellm.exceptions import BadRequestError, ContextWindowExceededError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
-from strix.config import load_settings
-from lyrashield.policy.models import StrixProvider
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.lifecycle.sessions import replace_session_items, session_write_lock
+from lyrashield.policy.models import StrixProvider
+from lyrashield.utils.redaction import redact_text
+from strix.config import load_settings
 from strix.llm.context_budget import context_window, count_tokens, output_limit
-from strix.utils.redaction import redact_text
 
 
 if TYPE_CHECKING:
@@ -321,7 +321,7 @@ async def _summarize(
     settings: Settings | None = None,
 ) -> str | None:
     if settings is None:
-        settings = cast(Settings, load_settings())
+        settings = cast("Settings", load_settings())
     if model_provider is None:
         model_provider = StrixProvider()
     llm = settings.llm
@@ -371,7 +371,7 @@ async def maybe_compact(
     check (used after a provider context-overflow error).
     """
     if settings is None:
-        settings = cast(Settings, load_settings())
+        settings = cast("Settings", load_settings())
     context = settings.context
     if not context.auto_compact and not force:
         return False

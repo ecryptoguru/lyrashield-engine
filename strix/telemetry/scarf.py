@@ -1,29 +1,29 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 from __future__ import annotations
 
 import logging
-import os
 import urllib.parse
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from strix.config import load_settings
 from strix.telemetry._common import (
+    SEND_TIMEOUT,
     SESSION_ID,
-    ReportState,
     base_props,
     get_version,
     is_first_run,
 )
 
 
+if TYPE_CHECKING:
+    from strix.report.state import ReportState
+
+
 logger = logging.getLogger(__name__)
 
-
-def _scarf_endpoint() -> str:
-    return os.environ.get("STRIX_SCARF_ENDPOINT", "")
+_SCARF_ENDPOINT = "https://strix.gateway.scarf.sh"
 
 
 def _is_enabled() -> bool:
@@ -34,10 +34,6 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
     if not _is_enabled():
         logger.debug("scarf disabled; skipping event %s", event)
         return False
-    endpoint = _scarf_endpoint()
-    if not endpoint:
-        logger.debug("scarf endpoint not configured; skipping event %s", event)
-        return False
     try:
         props = dict(properties)
         version = str(props.pop("strix_version", get_version()) or "unknown")
@@ -45,10 +41,11 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
         query = urllib.parse.urlencode(
             {k: ("" if v is None else str(v)) for k, v in props.items()},
         )
-        url = f"{endpoint}{path}"
+        url = f"{_SCARF_ENDPOINT}{path}"
         if query:
             url = f"{url}?{query}"
-        requests.post(url, timeout=10)
+        with requests.post(url, timeout=SEND_TIMEOUT):
+            pass
     except Exception:  # noqa: BLE001
         logger.debug("scarf send failed for event %s", event, exc_info=True)
         return False
@@ -130,13 +127,14 @@ def end(report_state: ReportState, exit_reason: str = "completed") -> None:
     llm_props: dict[str, int | float] = {}
     try:
         usage = report_state.get_total_llm_usage()
-        llm_props = {
-            "llm_requests": int(usage.get("requests") or 0),
-            "llm_input_tokens": int(usage.get("input_tokens") or 0),
-            "llm_output_tokens": int(usage.get("output_tokens") or 0),
-            "llm_tokens": int(usage.get("total_tokens") or 0),
-            "llm_cost": float(usage.get("cost") or 0.0),
-        }
+        if isinstance(usage, dict):
+            llm_props = {
+                "llm_requests": int(usage.get("requests") or 0),
+                "llm_input_tokens": int(usage.get("input_tokens") or 0),
+                "llm_output_tokens": int(usage.get("output_tokens") or 0),
+                "llm_tokens": int(usage.get("total_tokens") or 0),
+                "llm_cost": float(usage.get("cost") or 0.0),
+            }
     except (TypeError, ValueError, AttributeError):
         pass
 

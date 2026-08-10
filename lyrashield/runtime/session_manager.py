@@ -14,11 +14,11 @@ from agents.sandbox.entries import BaseEntry, LocalDir
 from agents.sandbox.manifest import EnvEntry, Environment, EnvValue, Manifest
 from agents.sandbox.workspace_paths import SandboxPathGrant
 
-from strix.config import load_settings
-from strix.runtime.backends import get_backend
 from lyrashield.runtime.caido_bootstrap import bootstrap_caido
 from lyrashield.runtime.docker_client import host_gateway_enabled
 from lyrashield.runtime.local_dir_staging import stage_symlink_safe_dir
+from strix.config import load_settings
+from strix.runtime.backends import get_backend
 
 
 logger = logging.getLogger(__name__)
