@@ -146,6 +146,12 @@
 - Updated `tests/test_agent_tool_registration.py` to assert the proxy overrides are registered.
 - Verification: `uv run ruff check .` passes; `uv run mypy lyrashield/tools/proxy/tools.py lyrashield/tools/proxy/caido_api.py lyrashield_adapter/cli.py` passes; `uv run pytest tests/test_agent_tool_registration.py` passes (15 tests).
 
+### Phase 4: agent graph tool override (deferred)
+
+- `strix/tools/agents_graph/tools.py` was attempted as a tool-override move, but the v1.5.2 upstream version imports `notify_parent_on_terminal` from `strix.core.execution` and calls `coordinator.claim_parent_notice`, neither of which exist in the product fork of `strix/core/execution.py` and `strix/core/agents.py`.
+- Decision: keep the product `strix/tools/agents_graph/tools.py` in place until `strix/core/execution.py` and `strix/core/agents.py` are reset to v1.5.2 (or their product seams are moved to `lyrashield/`).
+- `lyrashield/tools/agents_graph/` and its CLI/test registrations were removed; no net change to committed files for this slice.
+
 ## Resume Instructions
 
 1. Read `task_plan.md` and `findings.md` fully.

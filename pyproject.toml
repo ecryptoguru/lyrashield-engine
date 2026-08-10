@@ -248,6 +248,7 @@ ignore = [
 "strix/tools/reporting/tool.py" = ["PLC0415", "TC002"]
 "strix/tools/**/*.py" = [
     "ARG001", # Unused function argument (tools may have unused args for interface consistency)
+    "RUF100", # Upstream v1.5.2 retains noqa directives for rules we do not enable
 ]
 "strix/tools/web_search/tool.py" = ["PLC0415", "RUF100"]
 "lyrashield/tools/web_search/tool.py" = ["PLC0415"]

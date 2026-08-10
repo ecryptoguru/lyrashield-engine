@@ -204,6 +204,7 @@ def _register_lyrashield_tool_overrides() -> None:
 
     register_tool_override("web_search", lyra_web_search)
     register_tool_override("respond_to_user", lyra_respond_to_user)
+
     register_tool_override("list_requests", list_requests)
     register_tool_override("view_request", view_request)
     register_tool_override("repeat_request", repeat_request)
