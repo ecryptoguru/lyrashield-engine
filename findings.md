@@ -66,7 +66,7 @@ The worker treats partial findings and terminal reasons as security-sensitive pr
 ## Functional Disposition
 
 | Area | Intended disposition |
-|---|---|
+| --- | --- |
 | CLI branding/version/bootstrap | `lyrashield_adapter` |
 | Environment translation and early side-effect policy | `lyrashield_adapter` |
 | GPT-5.6/provider/product policy | `lyrashield/policy` |
@@ -112,7 +112,7 @@ The complete matrix is in `MIGRATION_MATRIX.md`. It assigns every changed `strix
 ## Technical Decisions
 
 | Decision | Rationale |
-|---|---|
+| --- | --- |
 | First milestone is byte-identical upstream `strix/**` | It directly removes overlap conflicts while preserving the option to improve dependency packaging later. |
 | Dependency vs vendored source remains an evidence-gated choice | PyInstaller, skills, viewer assets, and Docker packaging must be proven. |
 | Generic hooks default to unchanged Strix behavior | Makes upstream acceptance and safe rebasing more likely. |
@@ -142,7 +142,7 @@ The complete matrix is in `MIGRATION_MATRIX.md`. It assigns every changed `strix
 ## Issues Encountered
 
 | Issue | Resolution |
-|---|---|
+| --- | --- |
 | No existing planning files were present | Created a fresh repository-root planning set for this migration. |
 | `UPGRADES.md` claims a stale `Current upstream base` of `8157ccba...` (2026-07-26) while `.lyrashield-upstream-base` is `2e7040240d...` | Documented in `findings.md`; reconciliation deferred until the final architecture/pin is chosen (Phase 8). |
 | `upstream-sync-2e70402.md` and `LYRASHIELD_DIFF_REPORT.md` contain superseded fork HEADs | Treat as historical artifacts; the definitive current baseline is now this Phase 0 refresh. |

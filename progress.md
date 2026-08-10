@@ -33,7 +33,7 @@
 ## Test Results
 
 | Test | Expected | Actual | Status |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `bash scripts/verify-controlled-derivative.sh` | Current source baseline passes | 953 passed, 1 skipped; Ruff, format, mypy, Bandit passed; footprint 68/+5486/-1297 under budget | Pass |
 | `bash scripts/verify-worker-contract.sh /Users/defiankit/Desktop/lyrashieldai` | CLI and worker contract pass | 2 test files and 68 tests passed | Pass |
 | `uv run lyrashield --version` | Prints version | `lyrashield 1.2.0` | Pass |
@@ -48,13 +48,13 @@
 ## Error Log
 
 | Timestamp | Error | Attempt | Resolution |
-|---|---|---:|---|
+| --- | --- | ---: | --- |
 | 2026-08-10 | None during handoff creation | 1 | N/A |
 
 ## 5-Question Reboot Check
 
 | Question | Answer |
-|---|---|
+| --- | --- |
 | Where am I? | Handoff complete; Phase 0 implementation is the next phase. |
 | Where am I going? | Exact upstream Strix source plus external LyraShield policy/adapter modules. |
 | What's the goal? | Make future Strix updates routine without breaking LyraShield contracts. |

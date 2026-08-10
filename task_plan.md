@@ -267,7 +267,7 @@ For Docker and live scans, use the repository's current documented commands afte
 ## Decisions Made
 
 | Decision | Rationale |
-|---|---|
+| --- | --- |
 | Optimize for an immutable upstream tree, not merely fewer banners | Future update cost depends on eliminating overlapping edits, not renaming their location. |
 | Keep bootstrap separate from product implementation | A one-file adapter containing lifecycle, reporting, tools, and policy would become another fork-shaped maintenance problem. |
 | Upstream generic fixes | Generic correctness and security patches should disappear from the local delta once released upstream. |
@@ -278,7 +278,7 @@ For Docker and live scans, use the repository's current documented commands afte
 ## Errors Encountered
 
 | Error | Attempt | Resolution |
-|---|---:|---|
+| --- | ---: | --- |
 | None during plan creation | 1 | N/A |
 
 ## Agent Handoff Rules
