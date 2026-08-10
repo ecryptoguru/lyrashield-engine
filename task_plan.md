@@ -290,4 +290,3 @@ For Docker and live scans, use the repository's current documented commands afte
 - Re-fetch upstream before making current-state claims.
 - Preserve unrelated worktree changes and branches.
 - Do not merge, publish, deploy, force-push, or open consequential upstream PRs without user approval.
-
