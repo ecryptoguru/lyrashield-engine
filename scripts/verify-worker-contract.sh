@@ -46,5 +46,9 @@ done
 (
   cd "$app_checkout"
   corepack pnpm install --frozen-lockfile
+  DATABASE_URL="postgresql://lyrashield:lyrashield@127.0.0.1:5432/lyrashield?schema=public" \
+  BETTER_AUTH_SECRET="dummy-ci-only-secret-not-a-real-credential-32chars" \
+  BETTER_AUTH_URL="http://127.0.0.1:3100" \
+  NEXT_PUBLIC_APP_URL="http://127.0.0.1:3100" \
   corepack pnpm exec vitest run "${contract_tests[@]}"
 )
