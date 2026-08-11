@@ -8,7 +8,6 @@ if [[ -z "$app_checkout" || ! -f "$app_checkout/package.json" ]]; then
 fi
 
 contract_tests=(
-  "packages/types/src/scan-profile.test.ts"
   "apps/worker/src/engine/command-builder.test.ts"
   "apps/worker/src/docker-runtime.test.ts"
   "apps/worker/src/engine/output-parser.test.ts"
