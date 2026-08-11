@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
 DOCKERFILE = Path(__file__).parents[1] / "containers" / "Dockerfile"
 DOCKERIGNORE = Path(__file__).parents[1] / ".dockerignore"
+NPM_TOOLS = Path(__file__).parents[1] / "containers" / "npm-tools"
 
 
 def test_gitleaks_install_is_version_and_checksum_pinned() -> None:
@@ -62,5 +64,15 @@ def test_wapiti_install_refreshes_rolling_package_index() -> None:
 def test_engine_build_context_excludes_tests_and_frontend_source() -> None:
     ignored = set(DOCKERIGNORE.read_text(encoding="utf-8").splitlines())
 
+    assert "**/node_modules" in ignored
     assert "tests" in ignored
     assert "**/interface/viewer/frontend" in ignored
+
+
+def test_sandbox_uses_supported_javascript_analyzer() -> None:
+    package = json.loads((NPM_TOOLS / "package.json").read_text(encoding="utf-8"))
+    lock = (NPM_TOOLS / "package-lock.json").read_text(encoding="utf-8")
+
+    assert package["dependencies"]["eslint"] == "10.8.1"
+    assert "jshint" not in package["dependencies"]
+    assert '"node_modules/jshint"' not in lock

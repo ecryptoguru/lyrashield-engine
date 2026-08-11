@@ -17,39 +17,7 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/lyrashield-sandbox
 
 jobs:
-  smoke:
-    name: Non-root smoke (${{ matrix.platform }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [linux/amd64, linux/arm64]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-      - name: Build the exact platform image
-        run: >-
-          docker buildx build --platform ${{ matrix.platform }} --load
-          --tag lyrashield-sandbox:smoke-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
-          --file containers/Dockerfile .
-      - name: Prove non-root scanner capability and Caido startup
-        run: |
-          image="lyrashield-sandbox:smoke-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}"
-          docker run --rm "$image" sh -lc '
-            test "$(id -u)" != "0" &&
-            test ! -S /var/run/docker.sock &&
-            getcap /usr/lib/nmap/nmap | grep -q "cap_net_raw" &&
-            nmap -sn 127.0.0.1 >/dev/null &&
-            status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
-            case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
-          '
-
   publish:
-    needs: smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -63,7 +31,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-      - name: Publish only the smoke-qualified source revision
+      - name: Build and push an unqualified candidate
         id: image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
@@ -71,14 +39,40 @@ jobs:
           file: containers/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:candidate-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           provenance: mode=max
           sbom: true
+      - name: Smoke the exact candidate digest
+        run: |
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
+          for platform in linux/amd64 linux/arm64; do
+            docker run --rm --platform "$platform" "$image" sh -lc '
+              test "$(id -u)" != "0" &&
+              test ! -S /var/run/docker.sock &&
+              getcap /usr/lib/nmap/nmap | grep -q "cap_net_raw" &&
+              nmap -sn 127.0.0.1 >/dev/null &&
+              status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
+              case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
+            '
+          done
+      - name: Promote the smoke-qualified digest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
+          docker buildx imagetools create \
+            --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$RELEASE_TAG" \
+            --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+            "$image"
+
+          for tag in "$RELEASE_TAG" "${{ github.sha }}"; do
+            promoted_digest="$(docker buildx imagetools inspect \
+              "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$tag" | awk '/^Digest:/ { print $2; exit }')"
+            test "$promoted_digest" = "${{ steps.image.outputs.digest }}"
+          done
       - name: Generate an SPDX SBOM for the published digest
         id: sbom
         uses: anchore/sbom-action@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.20.0

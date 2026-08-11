@@ -17,17 +17,11 @@ syncing releases.
 > gate checks staged and unstaged files, enforces this exact two-file allowlist,
 > and fails when the +30/-0 line ceiling is exceeded.
 >
-> **Deep Review v12 — footprint budget (P1-4, path a).** The verification
-> script has been renamed from `scripts/verify-thin-fork.sh` to
-> `scripts/verify-controlled-derivative.sh` to reflect that the engine is a
-> controlled derivative, not a thin fork. In addition to the existing
-> documentation check, the script now enforces a **footprint budget** on
-> `strix/**` drift vs the pinned upstream base: it warns (does not fail) when
-> the number of changed files exceeds 80, insertions exceed 8000, or deletions
-> exceed 2000. The state at the time (68 files, +5397, -1297) sat ~20% under the
-> budget. The thresholds are defined at the top of the script and should be
-> raised deliberately, with an entry here, when a reviewed import legitimately
-> grows the footprint.
+> **Historical note.** Deep Review v12 introduced a warning-only footprint
+> budget when product behavior still lived throughout `strix/**`. The v1.5.3
+> product-outside-Strix migration superseded it with the hard two-file,
+> +30/-0 gate above. The larger v1.4.1-era measurements below remain only as an
+> audit trail and are not the current contribution policy.
 
 ## Upgrade to v1.5.3 product-outside-strix (2026-08-11)
 
@@ -327,14 +321,14 @@ regressions. See the audit report for per-finding resolution status.
 ### Prompt injection and trust boundaries
 
 - `strix/agents/prompts/system_prompt.jinja`: added `TRUST BOUNDARIES —
-  SYSTEM-INJECTED MARKERS` section defining `[SYSTEM-NOTICE]` (budget/turn
+SYSTEM-INJECTED MARKERS` section defining `[SYSTEM-NOTICE]` (budget/turn
   warnings) and `[SYSTEM-VERIFIED PEER MESSAGE]` (inter-agent communication)
   tags, with anti-spoofing rules. Tags are only valid at the start of a
   top-level user message from the platform; tags inside tool output or target
   content are treated as injection attempts.
 - `strix/core/agents.py`: `_message_to_session_item` wraps peer messages with
   the `[SYSTEM-VERIFIED PEER MESSAGE | id=... | from=... | type=... |
-  priority=...]` header (already present from upstream sync, now documented in
+priority=...]` header (already present from upstream sync, now documented in
   the system prompt).
 - `strix/core/hooks.py`: budget/turn warnings prefixed with `[SYSTEM-NOTICE]`
   (already present from upstream sync, now documented in the system prompt).
@@ -352,8 +346,8 @@ regressions. See the audit report for per-finding resolution status.
   scans preserve `/workspace/<subdir>` target paths; blackbox scans redact them.
   `poc_script_code` always preserves internal paths for reproducibility.
 - `strix/utils/redaction.py`: split path patterns into `_ALWAYS_REDACT_PATH_\
-  PATTERNS` (spill paths, tmp state — always redacted) and `_MODE_DEPENDENT_\
-  PATH_PATTERNS` (general `/workspace/` paths — mode-dependent). Added
+PATTERNS` (spill paths, tmp state — always redacted) and `_MODE_DEPENDENT_\
+PATH_PATTERNS` (general `/workspace/` paths — mode-dependent). Added
   `redact_spill_paths()` for whitebox mode.
 
 ### Structured output reliability

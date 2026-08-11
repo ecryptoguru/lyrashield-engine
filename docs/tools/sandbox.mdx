@@ -7,18 +7,21 @@ The engine uses an upstream-derived Kali Linux-based Docker sandbox with securit
 
 <Warning>
 The checked-in list describes the upstream sandbox capability surface. Production must pin and inspect the actual image digest; documentation alone does not prove a tool version, execution, coverage, or isolation property.
+
+The build creates a fresh internal EC certificate authority for each image, so two clean builds of the same source are not expected to be byte-for-byte identical. The release workflow therefore qualifies one pushed candidate digest, smokes that exact digest on both supported architectures, and promotes the same manifest without rebuilding it. Reproducibility here means pinned source inputs plus immutable tested-artifact continuity, not independently regenerated digest equality.
+
 </Warning>
 
 ## Security and provenance
 
 The engine does not add `NET_ADMIN` or `NET_RAW` to sandbox containers by default. Set `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1` only for authorized workflows that require advanced raw-socket operations such as SYN scans. The legacy disable variable remains supported for compatibility.
 
-| Variable | Default | Effect |
-| --- | --- | --- |
-| `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES` | unset | Set to `1`/`true`/`yes` to add `NET_ADMIN`/`NET_RAW`; otherwise both remain omitted. |
-| `STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES` | unset | Legacy compatibility switch. It is consulted only when the enable variable is unset. |
-| `STRIX_IMAGE_DIGEST` | unset | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |
-| `LYRASHIELD_IMAGE` | `strix-sandbox:dev` | Image reference. Production must use the immutable `ghcr.io/ecryptoguru/lyrashield-sandbox@sha256:…` digest emitted by the verified release workflow, not an upstream image or a tag. |
+| Variable                                     | Default             | Effect                                                                                                                                                                                                                       |
+| -------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES`  | unset               | Set to `1`/`true`/`yes` to add `NET_ADMIN`/`NET_RAW`; otherwise both remain omitted.                                                                                                                                         |
+| `STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES` | unset               | Legacy compatibility switch. It is consulted only when the enable variable is unset.                                                                                                                                         |
+| `STRIX_IMAGE_DIGEST`                         | unset               | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |
+| `LYRASHIELD_IMAGE`                           | `strix-sandbox:dev` | Image reference. Production must use the immutable `ghcr.io/ecryptoguru/lyrashield-sandbox@sha256:…` digest emitted by the verified release workflow, not an upstream image or a tag.                                        |
 
 `STRIX_SANDBOX_ALLOW_HOST_GATEWAY` remains opt-in; do not enable it unless an explicitly authorized local workflow requires `host.docker.internal` access.
 
@@ -51,7 +54,6 @@ Production workers use an isolated remote Docker endpoint (`ssh://` or TLS-prote
 | [Nuclei](https://github.com/projectdiscovery/nuclei) | Template-based vulnerability scanner               |
 | [SQLMap](https://sqlmap.org)                         | Automatic SQL injection detection and exploitation |
 | [Wapiti](https://wapiti-scanner.github.io)           | Web application vulnerability scanner              |
-| [ZAP](https://zaproxy.org)                           | OWASP Zed Attack Proxy                             |
 
 ## JavaScript Analysis
 
@@ -62,22 +64,21 @@ Production workers use an isolated remote Docker endpoint (`ssh://` or TLS-prote
 | [Retire.js](https://retirejs.github.io/retire.js)        | Detect vulnerable JS libraries |
 | [ESLint](https://eslint.org)                             | JavaScript static analysis     |
 | [js-beautify](https://github.com/beautifier/js-beautify) | JavaScript deobfuscation       |
-| [JSHint](https://jshint.com)                             | JavaScript code quality tool   |
 
 ## Source-Aware Analysis
 
-| Tool                                                    | Description                                   |
-| ------------------------------------------------------- | --------------------------------------------- |
-| [Semgrep](https://github.com/semgrep/semgrep)          | Fast SAST and custom rule matching            |
-| [ast-grep](https://ast-grep.github.io)                 | Structural AST/CST-aware code search (`sg`)   |
+| Tool                                                      | Description                                                                                             |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| [Semgrep](https://github.com/semgrep/semgrep)             | Fast SAST and custom rule matching                                                                      |
+| [ast-grep](https://ast-grep.github.io)                    | Structural AST/CST-aware code search (`sg`)                                                             |
 | [Tree-sitter](https://tree-sitter.github.io/tree-sitter/) | Syntax tree parsing and symbol extraction (Java/JS/TS/Python/Go/Bash/JSON/YAML grammars pre-configured) |
-| [Bandit](https://bandit.readthedocs.io)                | Python security linter                        |
+| [Bandit](https://bandit.readthedocs.io)                   | Python security linter                                                                                  |
 
 ## Secret Detection
 
-| Tool                                                        | Description                           |
-| ----------------------------------------------------------- | ------------------------------------- |
-| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Find secrets in code and history      |
+| Tool                                                        | Description                              |
+| ----------------------------------------------------------- | ---------------------------------------- |
+| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Find secrets in code and history         |
 | [Gitleaks](https://github.com/gitleaks/gitleaks)            | Detect hardcoded secrets in repositories |
 
 ## Authentication Testing
@@ -89,8 +90,8 @@ Production workers use an isolated remote Docker endpoint (`ssh://` or TLS-prote
 
 ## Container & Supply Chain
 
-| Tool                       | Description                                    |
-| -------------------------- | ---------------------------------------------- |
+| Tool                       | Description                                                                       |
+| -------------------------- | --------------------------------------------------------------------------------- |
 | [Trivy](https://trivy.dev) | Filesystem/container scanning for vulns, misconfigurations, secrets, and licenses |
 
 ## HTTP Proxy
@@ -106,5 +107,6 @@ Production workers use an isolated remote Docker endpoint (`ssh://` or TLS-prote
 | [Playwright](https://playwright.dev) | Headless browser automation |
 
 <Note>
-  All tools are pre-configured and ready to use. The agent selects the appropriate tool based on the vulnerability being tested.
+  All tools are pre-configured and ready to use. The agent selects the
+  appropriate tool based on the vulnerability being tested.
 </Note>

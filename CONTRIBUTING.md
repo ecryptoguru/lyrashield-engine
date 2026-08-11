@@ -1,6 +1,6 @@
 # Contributing to LyraShield Engine
 
-LyraShield Engine is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.4.1, pinned at upstream base `2e70402` and modified under Apache-2.0. See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger. This guide covers changes to the engine itself; the [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai) owns product UX, worker, evidence state, and reporting.
+LyraShield Engine is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.5.3, pinned at upstream base `7cc9fa9faa0179fc7e35111102fe3d20a9028393` and modified under Apache-2.0. See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger. This guide covers changes to the engine itself; the [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai) owns product UX, worker, evidence state, and reporting.
 
 ## Development setup
 
@@ -36,7 +36,7 @@ LyraShield Engine is a controlled derivative of [Strix](https://github.com/usest
    export LLM_API_BASE="https://<approved-endpoint>"
    ```
 
-   Only GPT-5.6 Terra and Luna deployments are accepted at the product boundary. Anthropic, Bedrock, Vertex, OpenRouter, Novita, local models, Perplexity, Parallel, and ChatGPT subscription-backed models are unsupported and rejected. See the [configuration reference](docs/advanced/configuration.mdx).
+   Metered scans accept GPT-5.6 Terra and Luna deployments from the supported provider allowlist. Authenticated `chatgpt/*` subscription runs are also supported by default and can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`. See the [configuration reference](docs/advanced/configuration.mdx) for the exact routes and accounting behavior.
 
 4. **Run the engine against an authorized repository target**
 
@@ -44,7 +44,7 @@ LyraShield Engine is a controlled derivative of [Strix](https://github.com/usest
    uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
    ```
 
-   The production entry point is `lyrashield`, not the upstream `strix` executable. The adapter (`lyrashield_adapter`) forces telemetry off, disables the upstream self-update check, rejects `chatgpt/` subscription models, and sets `LYRASHIELD_PRODUCT_BOUNDARY` so configuration is re-validated after `--config` is applied.
+   The production entry point is `lyrashield`, not the upstream `strix` executable. The adapter (`lyrashield_adapter`) forces telemetry off, disables the upstream self-update check, applies product aliases and provider policy, and sets `LYRASHIELD_PRODUCT_BOUNDARY` so configuration is re-validated after `--config` is applied.
 
 ## Ownership boundary
 
@@ -61,7 +61,7 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
 1. Branch from `main`; never push directly to `main`.
 2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.
 3. Put LyraShield model, budget, lifecycle, identity, evidence, and artifact behavior behind explicit reviewed boundaries.
-4. Preserve the one-line LyraShield modification banner on every changed `strix/` source file:
+4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The current hard allowlist contains only `strix/config/loader.py` and `strix/skills/__init__.py`. Preserve the one-line LyraShield modification banner on those files:
 
    ```python
    # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
@@ -75,9 +75,13 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
    git diff --check
    ```
 
-   The gate runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It also diffs `strix/**` against the pinned upstream base and fails on any file that lacks both the attribution banner and a `UPGRADES.md` entry, preventing undocumented `strix/` drift. A **footprint budget** check warns (does not fail) when `strix/**` drift exceeds the configured thresholds (max 80 files, +8000 insertions, -2000 deletions), so accumulated drift stays visible.
+   The gate runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It diffs `strix/**` against the pinned v1.5.3 base and fails on any path outside the two-file allowlist, more than 30 insertions, or any deletion. It also validates attribution and the `UPGRADES.md` ledger.
 
-7. Require human approval and green Engine CI before merge. Engine CI (`.github/workflows/ci.yml`) now enforces the same quality gates as pre-commit on every pull request and push to `main`: Ruff lint and format check, Mypy type check, Bandit security scan, and the full pytest test suite (597 tests). Using `--no-verify` to skip pre-commit hooks no longer bypasses quality gates — CI will catch the same issues and block the merge.
+7. Require human approval and green Engine CI before merge. Engine CI (`.github/workflows/ci.yml`) enforces the same quality gates on every pull request and push to `main`. Test counts are intentionally omitted because the executable gate is authoritative.
+
+## Dependency updates
+
+Use `uv sync --frozen` for normal development. LiteLLM is a direct, exactly pinned dependency because LyraShield imports its routing, cost, cache, and provider-validation APIs; change that pin only in a focused upgrade with the full controlled-derivative and worker-contract gates. `certifi` is a transitive public CA bundle used by the HTTP stack and should not be promoted to a direct dependency unless LyraShield imports it. Review both `pyproject.toml` and `uv.lock` diffs, including hashes and newly introduced packages, in every dependency PR.
 
 ## Pull request guidelines
 
@@ -89,7 +93,7 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
 
 ## Contributing skills
 
-Skills are structured knowledge packages that give engine agents task-specific vulnerability, technology, and testing context. The catalog lives under `strix/skills/` and is part of the controlled derivative. See [docs/advanced/skills.mdx](docs/advanced/skills.mdx) for the catalog and structure.
+Skills are structured knowledge packages that give engine agents task-specific vulnerability, technology, and testing context. Inherited skills live under `strix/skills/`; LyraShield additions and overrides live under `lyrashield/skills/` and are registered through the supported seam. See [docs/advanced/skills.mdx](docs/advanced/skills.mdx) for the catalog and structure.
 
 When changing skills:
 
@@ -100,13 +104,9 @@ When changing skills:
 
 ## Local viewer SPA
 
-`lyrashield view` (inherited from upstream `strix view`) serves a prebuilt web UI whose source lives in `strix/interface/viewer/frontend/` (a Vite + React project) and whose built output is committed to `strix/interface/viewer/static/` and shipped in the package. End users never run a JS build. If you change anything under `strix/interface/viewer/frontend/`, rebuild and commit the output:
+`lyrashield view` (inherited from upstream `strix view`) serves a prebuilt web UI whose source lives in `strix/interface/viewer/frontend/` and whose built output lives in `strix/interface/viewer/static/`. Treat both as upstream substrate: viewer changes may enter only through an approved upstream-base update documented in `UPGRADES.md`. Product-specific UI belongs outside `strix/**`; do not edit or commit inherited viewer source or generated output directly.
 
-```bash
-make viewer   # or: cd strix/interface/viewer/frontend && npm ci && npm run build
-```
-
-Commit both the source change and the regenerated `strix/interface/viewer/static/`.
+When an approved upstream-base update changes the viewer, retain the upstream source and generated output exactly as imported and let the controlled-derivative gate verify the resulting tree.
 
 ## Reporting issues
 
