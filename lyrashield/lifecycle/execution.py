@@ -15,6 +15,7 @@ from agents import RunConfig, Runner
 from agents.exceptions import AgentsException, MaxTurnsExceeded, UserError
 from agents.sandbox.errors import ExecTransportError
 from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
+from httpx import TransportError
 from openai import (
     APIConnectionError,
     APIError,
@@ -165,7 +166,13 @@ def _is_transient_model_error(exc: BaseException) -> bool:
     if _is_content_filter_error(exc):
         return False
     if isinstance(
-        exc, APITimeoutError | APIConnectionError | TimeoutError | ConnectionError | OSError
+        exc,
+        APITimeoutError
+        | APIConnectionError
+        | TransportError
+        | TimeoutError
+        | ConnectionError
+        | OSError,
     ):
         return True
     # Azure's Responses API can return a `response.failed` terminal event for
@@ -279,6 +286,44 @@ async def run_agent_loop(
             )
 
     if not interactive:
+        # Root completion ends an autonomous scan. Completed/stopped children,
+        # however, may receive follow-up validation from their coordinator.
+        # Keep their runner attached so a queued message has an execution loop
+        # to consume it; scan teardown cancels the parked task.
+        if context.get("parent_id") is None:
+            return result
+        while await coordinator.get_status(agent_id) in {"completed", "stopped"}:
+            try:
+                await coordinator.wait_for_message(agent_id)
+            except asyncio.CancelledError:
+                return result
+            if coordinator.budget_stopped:
+                await coordinator.set_status(agent_id, "stopped")
+                raise BudgetExceededError("scan budget reached")
+            if coordinator.reserve_stopped:
+                await coordinator.set_status(agent_id, "stopped")
+                raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
+            current_status = await coordinator.get_status(agent_id)
+            if current_status in {"completed", "stopped"}:
+                # A message can race with agent_finish: send() observes the child
+                # as running, then the child completes before this loop wakes.
+                await coordinator.mark_running(agent_id)
+            elif current_status not in {"running", "waiting"}:
+                return result
+            await coordinator.consume_pending(agent_id)
+            result = await _run_until_lifecycle(
+                agent,
+                coordinator,
+                agent_id,
+                initial_input=[],
+                run_config=run_config,
+                context=context,
+                max_turns=max_turns,
+                session=session,
+                interactive=False,
+                event_sink=event_sink,
+                hooks=hooks,
+            )
         return result
 
     while True:
@@ -359,6 +404,7 @@ async def spawn_child_agent(
     task: str,
     skills: list[str],
     parent_history: list[Any],
+    model_name: str | None = None,
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
     server_conversation: bool = False,
@@ -396,6 +442,7 @@ async def spawn_child_agent(
             parent_id=parent_id,
             task=task,
             parent_history=parent_history,
+            model_name=model_name,
         ),
         event_sink=event_sink,
         hooks=hooks,

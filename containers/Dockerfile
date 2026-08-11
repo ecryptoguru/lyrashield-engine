@@ -59,8 +59,6 @@ RUN apt-get update && \
     chromium fonts-liberation
 
 
-RUN setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip $(which nmap)
-
 USER pentester
 RUN openssl ecparam -name prime256v1 -genkey -noout -out /app/certs/ca.key && \
     openssl req -x509 -new -key /app/certs/ca.key \
@@ -173,7 +171,8 @@ RUN set -eux; \
 
 RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
-RUN apt-get install -y wapiti
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wapiti
 
 USER pentester
 
@@ -242,6 +241,7 @@ RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/p
     echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:/app/.venv/bin:$PATH"' >> /home/pentester/.profile
 
 USER root
+RUN setcap cap_net_raw,cap_net_bind_service+eip /usr/lib/nmap/nmap
 COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

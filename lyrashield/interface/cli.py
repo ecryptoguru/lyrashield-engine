@@ -116,7 +116,8 @@ async def run_cli(args: Any) -> None:
     }
 
     report_state = ReportState(args.run_name)
-    report_state.hydrate_from_run_dir()
+    if getattr(args, "resume", None):
+        report_state.hydrate_from_run_dir()
     report_state.set_scan_config(scan_config)
     report_state.save_run_data()
 
@@ -198,6 +199,7 @@ async def run_cli(args: Any) -> None:
             interactive=bool(getattr(args, "interactive", False)),
             max_budget_usd=getattr(args, "max_budget_usd", None),
             max_turns=getattr(args, "max_turns", DEFAULT_MAX_TURNS),
+            resume=bool(getattr(args, "resume", None)),
         )
 
     try:

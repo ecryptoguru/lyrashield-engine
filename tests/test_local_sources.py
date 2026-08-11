@@ -169,6 +169,19 @@ def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path)
     assert argv[3] == repo_url
 
 
+def test_clone_repository_checks_out_the_requested_branch(tmp_path: Path) -> None:
+    with (
+        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(interface_utils.subprocess, "run") as run,
+    ):
+        clone_repository("https://github.com/org/repo", "branch-run", branch="release/2026.08")
+
+    argv = run.call_args.args[0]
+    assert argv[:5] == ["/usr/bin/git", "clone", "--branch", "release/2026.08", "--single-branch"]
+    assert argv[5] == "--"
+
+
 def test_build_mount_targets_info_for_valid_dir(tmp_path: Path) -> None:
     result = build_mount_targets_info([str(tmp_path)])
     assert len(result) == 1

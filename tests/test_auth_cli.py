@@ -37,6 +37,11 @@ def test_help_returns_zero() -> None:
     assert auth_cli.run_auth(["--help"]) == 0
 
 
+def test_auth_logo_is_packaged_product_asset() -> None:
+    assert auth_cli._LOGO_PATH.parts[-4:] == ("interface", "viewer", "static", "logo.png")
+    assert auth_cli._LOGO_PATH.is_file()
+
+
 def test_status_not_signed_in() -> None:
     assert auth_cli.run_auth(["status"]) == 1
 

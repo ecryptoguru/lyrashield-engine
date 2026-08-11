@@ -713,8 +713,16 @@ def litellm_cost_callback(
     _end_time: Any = None,
 ) -> None:
     """LiteLLM ``success_callback`` adapter; forwards observed cost to the active scan."""
-    cost: float | None = None
     kwargs_dict = _as_dict(kwargs)
+    model = kwargs_dict.get("model") if kwargs_dict is not None else None
+    if isinstance(model, str) and model.strip().lower().split("/")[-1] in {
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    }:
+        # Azure's LiteLLM response_cost can be stale for GPT-5.6. The usage
+        # ledger prices the provider token receipt with the pinned rate card.
+        return
+    cost: float | None = None
     if kwargs_dict is not None:
         raw = kwargs_dict.get("response_cost")
         if isinstance(raw, int | float) and raw > 0:

@@ -167,5 +167,5 @@ uv sync --frozen --extra viewer
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest -W error::pydantic.PydanticDeprecatedSince211
-uv run mypy strix lyrashield_adapter
-uv run bandit -c pyproject.toml -r strix lyrashield_adapter -q
+uv run mypy strix lyrashield_adapter lyrashield
+uv run bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q

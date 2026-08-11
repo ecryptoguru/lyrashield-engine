@@ -268,13 +268,31 @@ def _history_groups(items: list[Any]) -> list[list[Any]]:
     tool_group: list[Any] | None = None
     for item in items:
         item_type = _item_type(item)
+        item_role = (
+            str(item.get("role") or "").lower()
+            if isinstance(item, dict)
+            else str(getattr(item, "role", "") or "").lower()
+        )
         is_output = item_type == "tool" or item_type.endswith("_output")
         is_call = item_type.endswith("_call") and not is_output
-        if is_call:
+        if item_type == "reasoning":
+            # Responses reasoning IDs are tied to the next model-emitted call.
+            # Splitting between them produces an invalid replay on Azure/OpenAI.
+            tool_group = [item]
+            groups.append(tool_group)
+        elif is_call:
             if tool_group is None:
                 tool_group = []
                 groups.append(tool_group)
             tool_group.append(item)
+        elif (
+            item_type == "message"
+            and item_role == "assistant"
+            and tool_group is not None
+            and _item_type(tool_group[0]) == "reasoning"
+        ):
+            tool_group.append(item)
+            tool_group = None
         elif is_output:
             if tool_group is None:
                 # A pre-existing orphan cannot be sent as a protocol item. Preserve

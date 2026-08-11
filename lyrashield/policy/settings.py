@@ -24,6 +24,10 @@ ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "
 
 _BASE_CONFIG = SettingsConfigDict(
     case_sensitive=False,
+    # Docker Compose commonly injects optional variables as empty strings. Ignore
+    # those placeholders so an earlier generic alias cannot mask a configured
+    # provider-specific alias later in AliasChoices.
+    env_ignore_empty=True,
     populate_by_name=True,
     extra="ignore",
 )

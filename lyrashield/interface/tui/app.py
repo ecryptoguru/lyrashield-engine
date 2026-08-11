@@ -49,9 +49,9 @@ from lyrashield.interface.utils import build_tui_stats_text
 from lyrashield.lifecycle.hooks import BudgetExceededError
 from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
 from lyrashield.lifecycle.runner import run_strix_scan
+from lyrashield.policy.models import is_recommended_or_frontier_model
+from lyrashield.runtime import session_manager
 from strix.config import load_settings
-from strix.config.models import is_recommended_or_frontier_model
-from strix.runtime import session_manager
 
 
 logger = logging.getLogger(__name__)
@@ -792,7 +792,8 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.scan_config = self._build_scan_config(args)
 
         self.report_state = ReportState(self.scan_config["run_name"])
-        self.report_state.hydrate_from_run_dir()
+        if getattr(args, "resume", None):
+            self.report_state.hydrate_from_run_dir()
         self.report_state.set_scan_config(self.scan_config)
         self.report_state.save_run_data()
         set_global_report_state(self.report_state)
@@ -803,7 +804,8 @@ class StrixTUIApp(App):  # type: ignore[misc]
             )
 
         self.live_view = TuiLiveView()
-        self.live_view.hydrate_from_run_dir(self.report_state.get_run_dir())
+        if getattr(args, "resume", None):
+            self.live_view.hydrate_from_run_dir(self.report_state.get_run_dir())
         self._agent_graph_sync_future: Any | None = None
 
         from lyrashield.lifecycle.agents import AgentCoordinator
@@ -1531,6 +1533,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                                 interactive=True,
                                 max_budget_usd=getattr(self.args, "max_budget_usd", None),
                                 max_turns=getattr(self.args, "max_turns", DEFAULT_MAX_TURNS),
+                                resume=bool(getattr(self.args, "resume", None)),
                                 event_sink=self._capture_sdk_event,
                             ),
                         )

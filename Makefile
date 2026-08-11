@@ -53,12 +53,12 @@ lint-check:
 
 type-check:
 	@echo "🔍 Type checking with mypy..."
-	uv run mypy strix lyrashield_adapter
+	uv run mypy strix lyrashield_adapter lyrashield
 	@echo "✅ Type checking complete!"
 
 security:
 	@echo "🔒 Running security checks with bandit..."
-	uv run bandit -r strix lyrashield_adapter -q -c pyproject.toml
+	uv run bandit -r strix lyrashield_adapter lyrashield -q -c pyproject.toml
 	@echo "✅ Security checks complete!"
 
 check-all: format-check lint-check type-check security

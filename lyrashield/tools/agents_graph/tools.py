@@ -128,8 +128,10 @@ async def send_message_to_agent(
 ) -> str:
     """Send a message to another agent's inbox — sparingly.
 
-    Inter-agent messages are appended to the target's SDK session and
-    interrupt any active target turn so the next run cycle sees them.
+    Inter-agent messages are appended to the target's SDK session. Interactive
+    targets can be interrupted; non-interactive scan agents consume queued
+    messages when their current run cycle ends. Check ``pending_counts`` in
+    ``view_agent_graph`` before sending and do not stack equivalent follow-ups.
     Use only when essential:
 
     - Sharing a discovered finding/credential another agent needs.
@@ -141,7 +143,8 @@ async def send_message_to_agent(
     target already has (children inherit parent history), or when
     parent/child completion via ``agent_finish`` already covers the
     flow. Messages to any registered agent wake it, regardless of
-    status, so a follow-up can restart a completed/stopped/failed agent.
+    status. Follow-up work restarts completed or stopped agents; failed and
+    crashed agents remain parked until a user explicitly resumes them.
 
     Args:
         target_agent_id: Recipient's 8-char id.

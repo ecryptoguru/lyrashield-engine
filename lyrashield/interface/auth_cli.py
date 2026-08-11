@@ -322,7 +322,7 @@ def _print_success(console: Console) -> None:
     console.print()
 
 
-_LOGO_PATH = Path(__file__).resolve().parent.parent / "viewer" / "static" / "logo.png"
+_LOGO_PATH = Path(__file__).resolve().parent / "viewer" / "static" / "logo.png"
 
 
 def _logo_img_tag() -> str:

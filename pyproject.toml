@@ -82,12 +82,23 @@ asyncio_mode = "auto"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+exclude = ["/.coverage"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["strix", "lyrashield_adapter", "lyrashield"]
-# The prebuilt viewer bundle under strix/interface/viewer/static/ ships automatically
+# The prebuilt viewer bundle under lyrashield/interface/viewer/static/ ships automatically
 # (hatchling includes non-.py files under the package). The Vite SOURCE lives
-# under the package dir too (strix/interface/viewer/frontend/) but must never ship in the wheel.
-exclude = ["strix/interface/viewer/frontend", "strix/interface/viewer/frontend/**"]
+# under the package dir too but must never ship in the wheel.
+exclude = [
+    "strix/interface/viewer/frontend",
+    "strix/interface/viewer/frontend/**",
+    "lyrashield/interface/viewer/frontend",
+    "lyrashield/interface/viewer/frontend/**",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/tests/**"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

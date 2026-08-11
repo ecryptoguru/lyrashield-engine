@@ -6,10 +6,15 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from agents.sandbox.sandboxes.docker import DockerSandboxClient
 from docker import errors as docker_errors
 
 from lyrashield.interface.utils import validate_run_name
-from lyrashield.runtime.docker_client import StrixDockerSandboxClient, network_capabilities_enabled
+from lyrashield.runtime.docker_client import (
+    StrixDockerSandboxClient,
+    assert_sdk_docker_compatibility,
+    network_capabilities_enabled,
+)
 
 
 main_module = import_module("lyrashield.interface.main")
@@ -71,6 +76,18 @@ def test_invalid_delegate_model_exits_before_sandbox_setup(
 
 def test_docker_client_has_no_shared_bind_mount_default() -> None:
     assert "strix_bind_mounts" not in StrixDockerSandboxClient.__dict__
+
+
+def test_docker_adapter_rejects_an_incompatible_sdk_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def incompatible_create_container(_self: object, _image: str) -> object:
+        return object()
+
+    monkeypatch.setattr(DockerSandboxClient, "_create_container", incompatible_create_container)
+
+    with pytest.raises(RuntimeError, match="unsupported OpenAI Agents SDK Docker adapter"):
+        assert_sdk_docker_compatibility()
 
 
 @pytest.mark.asyncio

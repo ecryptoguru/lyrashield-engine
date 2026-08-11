@@ -13,6 +13,7 @@ from lyrashield.lifecycle.hooks import (
     ReportUsageHooks,
     SubagentBudgetReservedError,
     _compact_item,
+    _history_groups,
     recomputed_budget_flags,
 )
 
@@ -511,6 +512,30 @@ def test_compact_item_keeps_whole_multibyte_characters(
     head, _, tail = content.partition("...[older item compacted]...")
     assert "😀" in head
     assert "😀" in tail
+
+
+def test_history_groups_keep_reasoning_with_its_function_call() -> None:
+    reasoning = {"type": "reasoning", "id": "rs-1", "summary": []}
+    call = {"type": "function_call", "id": "fc-1", "call_id": "call-1"}
+    output = {"type": "function_call_output", "call_id": "call-1", "output": "ok"}
+
+    groups = _history_groups([reasoning, call, output, {"role": "user", "content": "next"}])
+
+    assert groups == [[reasoning, call, output], [{"role": "user", "content": "next"}]]
+
+
+def test_history_groups_keep_reasoning_with_its_assistant_message() -> None:
+    reasoning = {"type": "reasoning", "id": "rs-1", "summary": []}
+    message = {
+        "type": "message",
+        "id": "msg-1",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "done"}],
+    }
+
+    groups = _history_groups([reasoning, message, {"role": "user", "content": "next"}])
+
+    assert groups == [[reasoning, message], [{"role": "user", "content": "next"}]]
 
 
 @pytest.mark.asyncio

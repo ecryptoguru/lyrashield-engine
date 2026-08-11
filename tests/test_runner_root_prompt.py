@@ -139,6 +139,41 @@ async def test_root_prompt_options_flow_into_root_agent(
 
 
 @pytest.mark.asyncio
+async def test_runner_uses_stable_prompt_cache_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    captured = _patch_engine_scaffold(monkeypatch, tmp_path, {"scope": "built-in"})
+    settings_calls: list[dict[str, Any]] = []
+
+    def _make_model_settings(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        settings_calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(runner, "make_model_settings", _make_model_settings)
+    monkeypatch.setattr(
+        runner,
+        "prompt_cache_options_for_model",
+        lambda _model: {"mode": "explicit", "ttl": "30m"},
+    )
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "standard"},
+        scan_id="scan-specific-id",
+        image="img",
+        coordinator=AgentCoordinator(),
+    )
+
+    assert captured["kwargs"]["is_root"] is True
+    cache_keys = [call["prompt_cache_key"] for call in settings_calls]
+    assert len(cache_keys) == 2
+    assert all(key.startswith("lyrashield:v2:") for key in cache_keys)
+    assert all(len(key) <= 64 for key in cache_keys)
+    assert all("scan-specific-id" not in key for key in cache_keys)
+    assert cache_keys[0] != cache_keys[1]
+
+
+@pytest.mark.asyncio
 async def test_extra_system_prompt_context_cannot_override_scope_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
@@ -178,6 +213,25 @@ async def test_root_prompt_options_default_to_none(
     assert kwargs["instructions_override"] is not None
     assert "You are Strix" in kwargs["instructions_override"]
     assert kwargs["system_prompt_context"] == {"scope": "built-in"}
+
+
+@pytest.mark.asyncio
+async def test_fresh_run_ignores_leftover_resume_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """A reused run name is fresh unless the caller explicitly requests resume."""
+    (tmp_path / "agents.json").write_text("{}", encoding="utf-8")
+    captured = _patch_engine_scaffold(monkeypatch, tmp_path, {"scope": "built-in"})
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-fresh",
+        image="img",
+        coordinator=AgentCoordinator(),
+    )
+
+    assert captured["kwargs"]["is_root"] is True
 
 
 def test_sanitize_prompt_value_strips_jinja_tags() -> None:

@@ -337,6 +337,7 @@ def child_initial_input(
     parent_id: str,
     task: str,
     parent_history: list[Any],
+    model_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build the initial input for a child agent as a single user message.
 
@@ -371,5 +372,23 @@ def child_initial_input(
         "Maintain your own identity. Call agent_finish when your task "
         "is complete.",
     )
-    parts.append(task)
-    return [{"role": "user", "content": "\n\n".join(parts)}]
+    stable = "\n\n".join(parts)
+    if not _prompt_cache_explicit_enabled(model_name):
+        return [{"role": "user", "content": f"{stable}\n\n{task}"}]
+
+    # The inherited context and identity are replayed on every delegate turn;
+    # keep the unique assignment after the breakpoint so sibling delegates can
+    # reuse the shared system/tool prefix without changing their task contract.
+    return [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": stable,
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
+                {"type": "input_text", "text": task},
+            ],
+        }
+    ]

@@ -20,13 +20,15 @@ deltas:
 3. Optionally add ``host.docker.internal`` → host-gateway to ``extra_hosts``
    when ``STRIX_SANDBOX_ALLOW_HOST_GATEWAY`` is explicitly enabled.
 
-Pinned to ``openai-agents==0.14.6``. Bumping the SDK requires
-re-merging the parent body. Track upstream for an injection hook.
+Pinned to the OpenAI Agents SDK revision declared in ``pyproject.toml`` and
+``uv.lock``. Bumping the SDK requires re-merging the parent body. Track
+upstream for an injection hook.
 """
 
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import os
 import uuid
@@ -57,6 +59,20 @@ logger = logging.getLogger(__name__)
 
 _SANDBOX_NETWORK_ENV = "STRIX_DOCKER_SANDBOX_NETWORK"
 _SANDBOX_HOST_GATEWAY_ENV = "STRIX_SANDBOX_ALLOW_HOST_GATEWAY"
+_REQUIRED_CREATE_CONTAINER_PARAMETERS = frozenset(
+    {"self", "image", "manifest", "exposed_ports", "session_id"},
+)
+
+
+def assert_sdk_docker_compatibility() -> None:
+    """Fail before a scan if the private SDK hook we mirror has changed."""
+    parameters = set(inspect.signature(DockerSandboxClient._create_container).parameters)
+    if _REQUIRED_CREATE_CONTAINER_PARAMETERS.issubset(parameters):
+        return
+    raise RuntimeError(
+        "unsupported OpenAI Agents SDK Docker adapter signature. "
+        "Install the LyraShield Engine pinned dependency set before running a scan."
+    )
 
 
 def host_gateway_enabled() -> bool:

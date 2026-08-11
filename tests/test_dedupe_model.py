@@ -51,6 +51,12 @@ def test_dedupe_endpoint_sent_per_call() -> None:
     assert (settings.extra_args or {})["api_key"] == "dedupe-key"
 
 
+def test_dedupe_omits_parallel_tool_setting_for_azure_gpt56() -> None:
+    """Azure GPT-5.6 rejects ``parallel_tool_calls`` even when false."""
+    settings = _dedupe_model_settings(DedupeSettings(), "azure_ai/gpt-5.6-luna", 300)
+    assert settings.parallel_tool_calls is None
+
+
 def test_dedicated_dedupe_model_uses_own_headers_not_main() -> None:
     dedupe = DedupeSettings(
         STRIX_DEDUPE_MODEL="deepseek/cheap",

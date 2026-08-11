@@ -487,8 +487,6 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     delete_note,
     create_vulnerability_report,
     create_dependency_report,
-    list_reports,
-    get_report,
     list_requests,
     view_request,
     repeat_request,
@@ -498,6 +496,11 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     send_message_to_agent,
     wait_for_agents,
 )
+
+# Scan-wide finding review is coordinator-only. Specialists file their own
+# evidence and return; carrying these schemas on every leaf wastes context and
+# contradicts the system-prompt contract.
+_REPORT_REVIEW_TOOLS: tuple[Tool, ...] = (list_reports, get_report)
 
 
 _ROOT_ORCHESTRATION_TOOLS: tuple[Tool, ...] = (
@@ -544,6 +547,7 @@ def register_agent_tools(*tools: Tool) -> None:
     _ensure_unique_tool_names(
         [
             *_BASE_TOOLS,
+            *_REPORT_REVIEW_TOOLS,
             *_ROOT_ORCHESTRATION_TOOLS,
             *_EXTRA_TOOLS,
             *new_tools,
@@ -671,6 +675,7 @@ def build_strix_agent(
     if is_root:
         tools: list[Tool] = [
             *_BASE_TOOLS,
+            *_REPORT_REVIEW_TOOLS,
             *_ROOT_ORCHESTRATION_TOOLS,
             *agent_tools,
             finish_scan,

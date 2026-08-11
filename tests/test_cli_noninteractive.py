@@ -82,6 +82,7 @@ async def test_non_interactive_scan_bypasses_live_display() -> None:
 
     run_scan.assert_awaited_once()
     cleanup.assert_awaited_once_with("scan-test")
+    report_state.hydrate_from_run_dir.assert_not_called()
 
 
 @pytest.mark.parametrize(

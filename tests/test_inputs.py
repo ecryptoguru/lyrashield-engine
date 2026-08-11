@@ -45,6 +45,23 @@ def test_child_initial_input_single_message_with_history() -> None:
     assert "Audit the login flow." in content
 
 
+def test_child_initial_input_marks_the_stable_prefix_for_explicit_gpt56_cache(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
+
+    result = child_initial_input(
+        **_child_kwargs([{"role": "assistant", "content": "previous work"}]),
+        model_name="azure_ai/gpt-5.6-luna",
+    )
+
+    content = result[0]["content"]
+    assert isinstance(content, list)
+    assert content[0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert "Inherited context from parent" in content[0]["text"]
+    assert "Audit the login flow." in content[1]["text"]
+
+
 @pytest.mark.parametrize(
     "parent_history",
     [[], [{"role": "assistant", "content": "previous work"}]],

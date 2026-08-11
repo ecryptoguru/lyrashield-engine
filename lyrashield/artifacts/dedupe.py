@@ -17,12 +17,12 @@ from openai.types.responses import ResponseOutputMessage
 from pydantic import BaseModel, Field, ValidationError
 
 from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy.loader import load_settings
 from lyrashield.policy.models import (
     StrixProvider,
     configure_sdk_model_defaults,
 )
-from strix.core.inputs import make_model_settings
 
 
 if TYPE_CHECKING:
@@ -239,8 +239,7 @@ async def _request_dedupe_judgement(
     reserves explicitly. Without a reservation, dedupe traffic is only counted
     after the fact and a scan can overshoot ``max_budget_usd``.
     """
-    # Lazy import: strix.core.hooks imports lyrashield.artifacts.state, so a
-    # module-level import here would close a cycle.
+    # Lazy import avoids the lifecycle-hooks/artifact-state import cycle.
     from lyrashield.lifecycle.hooks import get_active_hooks
 
     hooks = get_active_hooks()
