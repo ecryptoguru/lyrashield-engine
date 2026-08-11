@@ -37,7 +37,7 @@ classifiers = [
 ]
 dependencies = [
   "openai-agents[litellm] @ git+https://github.com/openai/openai-agents-python.git@f663a06aea23c859be8e8555c005ac912bd58337",
-  "openai>=2.48.0,<2.49",
+  "openai>=2.48.0,<2.54",
   "litellm==1.90.1",
   "pydantic>=2.11.3",
   "pydantic-settings>=2.13.0",
