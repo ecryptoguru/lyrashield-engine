@@ -31,9 +31,12 @@ ARG INTERACTSH_COMMIT=810180a230fe2265385ed45695a6635b5026452a
 RUN mkdir -p /out/bin && \
     go install -v github.com/projectdiscovery/httpx/cmd/httpx@${HTTPX_COMMIT} && \
     go install -v github.com/projectdiscovery/katana/cmd/katana@${KATANA_COMMIT} && \
-    go install -v github.com/projectdiscovery/cvemap/cmd/vulnx@${CVEMAP_COMMIT} && \
     go install -v github.com/jaeles-project/gospider@${GOSPIDER_COMMIT} && \
-    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@${INTERACTSH_COMMIT}
+    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@${INTERACTSH_COMMIT} && \
+    git clone --filter=blob:none https://github.com/projectdiscovery/cvemap.git /tmp/cvemap && \
+    git -C /tmp/cvemap checkout --detach "${CVEMAP_COMMIT}" && \
+    cd /tmp/cvemap && go build -o /out/bin/vulnx ./cmd/vulnx && \
+    rm -rf /tmp/cvemap
 
 # ---------------------------------------------------------------------------
 # Runtime stage
