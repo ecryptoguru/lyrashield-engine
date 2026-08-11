@@ -62,7 +62,7 @@ RUN mkdir -p /home/pentester/tools /app/certs && \
     chown -R pentester:pentester /app/certs /home/pentester/tools
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    apt-get install -y --allow-downgrades --no-install-recommends \
     wget curl git vim nano unzip tar \
     apt-transport-https ca-certificates gnupg lsb-release \
     software-properties-common \
