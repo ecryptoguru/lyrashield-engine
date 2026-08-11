@@ -25,8 +25,8 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
     assert "FROM kalilinux/kali-rolling@sha256:" in content
     assert "ARG KALI_APT_SUITE=kali-last-snapshot" in content
     assert "ARG KALI_APT_INRELEASE_SHA256=" in content
-    assert "ARG KALI_PERL_BASE_VERSION=" in content
-    assert '"perl-base=${KALI_PERL_BASE_VERSION}"' in content
+    assert "Pin-Priority: 1001" in content
+    assert "apt-get full-upgrade -y" in content
     assert "archive.kali.org/kali" in content
     assert "@latest" not in content
     assert "curl -LsSf https://astral.sh/uv/install.sh" not in content

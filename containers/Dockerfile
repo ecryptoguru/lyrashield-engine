@@ -10,17 +10,17 @@ FROM kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec75
 
 ARG KALI_APT_SUITE=kali-last-snapshot
 ARG KALI_APT_INRELEASE_SHA256=6e298f996675e302bd5465a826ebd246f15b6ebcf71c2839287840be1b4277ee
-ARG KALI_PERL_BASE_VERSION=5.40.1-7+b1
 # The pinned InRelease hash and its APT signature authenticate this immutable
 # archive snapshot; the base image predates the archive's current TLS chain.
 RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+    printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
     apt-get update && \
     echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
-    apt-get install -y --allow-downgrades "perl-base=${KALI_PERL_BASE_VERSION}" && \
+    apt-get full-upgrade -y && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
-    apt-get install -y --allow-downgrades --no-install-recommends golang-go git ca-certificates
+    apt-get install -y --no-install-recommends golang-go git ca-certificates
 
 ENV GOBIN=/out/bin
 ARG HTTPX_COMMIT=811409809ea2b1706c49452149ab454861543138
@@ -44,12 +44,12 @@ LABEL description="AI Agent Penetration Testing Environment with Comprehensive A
 
 ARG KALI_APT_SUITE=kali-last-snapshot
 ARG KALI_APT_INRELEASE_SHA256=6e298f996675e302bd5465a826ebd246f15b6ebcf71c2839287840be1b4277ee
-ARG KALI_PERL_BASE_VERSION=5.40.1-7+b1
 RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+    printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
     apt-get update && \
     echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
-    apt-get install -y --allow-downgrades "perl-base=${KALI_PERL_BASE_VERSION}" && \
+    apt-get full-upgrade -y && \
     apt-get install -y kali-archive-keyring sudo && \
     apt-get update
 
@@ -62,7 +62,7 @@ RUN mkdir -p /home/pentester/tools /app/certs && \
     chown -R pentester:pentester /app/certs /home/pentester/tools
 
 RUN apt-get update && \
-    apt-get install -y --allow-downgrades --no-install-recommends \
+    apt-get install -y --no-install-recommends \
     wget curl git vim nano unzip tar \
     apt-transport-https ca-certificates gnupg lsb-release \
     software-properties-common \
