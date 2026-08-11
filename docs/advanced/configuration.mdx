@@ -9,28 +9,43 @@ Configure LyraShield Engine with environment variables or a JSON config file. Th
 Only approved GPT-5.6 Terra or Luna deployments from supported LiteLLM/Strix providers are accepted as the main model. The current allow-list is OpenAI, Azure/Azure AI, and Bedrock Mantle. ChatGPT subscription-backed models are supported by default; run `lyrashield auth login chatgpt` and use `chatgpt/<model>` for `LYRASHIELD_LLM`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported as LLM endpoints until LiteLLM's cost map lists `gpt-5.6` for their provider markers.
 
 Parallel Search may be used as an optional `web_search` tool when explicitly enabled with `LYRASHIELD_WEB_SEARCH_ENABLED=1` and `PARALLEL_API_KEY` or `LYRASHIELD_WEB_SEARCH_API_KEY`. It is not a model route and never replaces the GPT-5.6 main model.
+
 </Warning>
 
 ## LLM configuration
 
 <ParamField path="LYRASHIELD_LLM" type="string" required>
-  Primary model in LiteLLM format. Must identify a GPT-5.6 Terra or Luna deployment from a supported provider: `openai` (e.g. `openai/gpt-5.6-luna`), `azure` or `azure_ai` (e.g. `azure/eu/gpt-5.6-terra`, `azure_ai/gpt-5.6-luna`), `bedrock_mantle` (e.g. `bedrock_mantle/openai.gpt-5.6-luna`), or `chatgpt` with an authenticated subscription (e.g. `chatgpt/gpt-4o`). Alias of `STRIX_LLM`.
+  Primary model in LiteLLM format. Must identify a GPT-5.6 Terra or Luna
+  deployment from a supported provider: `openai` (e.g. `openai/gpt-5.6-luna`),
+  `azure` or `azure_ai` (e.g. `azure/eu/gpt-5.6-terra`,
+  `azure_ai/gpt-5.6-luna`), `bedrock_mantle` (e.g.
+  `bedrock_mantle/openai.gpt-5.6-luna`), or `chatgpt` with an authenticated
+  subscription (e.g. `chatgpt/gpt-4o`). Alias of `STRIX_LLM`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">
-  Bounded specialist tier model for Deep scans. The Terra/medium root owns coordination and cross-file judgment; Luna/medium child specialists handle focused tasks. Must identify a GPT-5.6 Terra or Luna deployment. Alias of `STRIX_DELEGATE_LLM`.
+  Bounded specialist tier model for Deep scans. The Terra/medium root owns
+  coordination and cross-file judgment; Luna/high child specialists handle
+  focused tasks. Must identify a GPT-5.6 Terra or Luna deployment. Alias of
+  `STRIX_DELEGATE_LLM`.
 </ParamField>
 
 <ParamField path="LLM_API_KEY" type="string">
-  API key for the LLM provider. Also accepted: `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_AI_API_KEY`. Not required when the approved endpoint supplies authentication by another controlled mechanism.
+  API key for the LLM provider. Also accepted: `OPENAI_API_KEY`,
+  `AZURE_OPENAI_API_KEY`, `AZURE_AI_API_KEY`. Not required when the approved
+  endpoint supplies authentication by another controlled mechanism.
 </ParamField>
 
 <ParamField path="LLM_API_BASE" type="string">
-  Custom API base URL. Also accepted: `OPENAI_API_BASE`, `OPENAI_BASE_URL`, `LITELLM_BASE_URL`, `OLLAMA_API_BASE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_BASE`, `AZURE_AI_API_BASE`. Azure AI Foundry endpoints are normalized to their `/openai/v1/` base.
+  Custom API base URL. Also accepted: `OPENAI_API_BASE`, `OPENAI_BASE_URL`,
+  `LITELLM_BASE_URL`, `OLLAMA_API_BASE`, `AZURE_OPENAI_ENDPOINT`,
+  `AZURE_OPENAI_API_BASE`, `AZURE_AI_API_BASE`. Azure AI Foundry endpoints are
+  normalized to their `/openai/v1/` base.
 </ParamField>
 
 <ParamField path="LLM_API_VERSION" type="string">
-  Azure API version. Also accepted: `AZURE_API_VERSION`, `AZURE_OPENAI_API_VERSION`.
+  Azure API version. Also accepted: `AZURE_API_VERSION`,
+  `AZURE_OPENAI_API_VERSION`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION" default="true" type="boolean">
@@ -46,11 +61,19 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
 </ParamField>
 
 <ParamField path="LYRASHIELD_REASONING_EFFORT" default="medium" type="string">
-  Control thinking effort for reasoning models. Valid values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The application worker owns reasoning selection in production; use this only for operator-controlled local execution. Alias of `STRIX_REASONING_EFFORT`.
+  Control thinking effort for reasoning models. Valid values: `none`, `minimal`,
+  `low`, `medium`, `high`, `xhigh`, `max`. The application worker owns reasoning
+  selection in production; use this only for operator-controlled local
+  execution. Alias of `STRIX_REASONING_EFFORT`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_DELEGATE_REASONING_EFFORT" default="medium" type="string">
-  Reasoning effort for the bounded specialist tier. Same valid values as above. Alias of `STRIX_DELEGATE_REASONING_EFFORT`.
+<ParamField
+  path="LYRASHIELD_DELEGATE_REASONING_EFFORT"
+  default="medium"
+  type="string"
+>
+  Reasoning effort for the bounded specialist tier. Same valid values as above.
+  Alias of `STRIX_DELEGATE_REASONING_EFFORT`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_PROMPT_CACHE" default="true" type="boolean">
@@ -58,29 +81,49 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
 </ParamField>
 
 <ParamField path="LYRASHIELD_PROMPT_CACHE_EXPLICIT" default="1" type="boolean">
-  Enable GPT-5.6 explicit cache breakpoints for prompt-cache reads and writes. Unsupported models ignore this setting.
+  Enable GPT-5.6 explicit cache breakpoints for prompt-cache reads and writes.
+  Unsupported routes ignore this setting. Stable coordinator and delegate cache
+  keys are scoped to the prompt bundle and scan role; usage artifacts separately
+  record cache-read and cache-write tokens when the provider reports them.
 </ParamField>
 
 <ParamField path="LLM_DISABLE_STREAMING" default="false" type="boolean">
   Disable streaming on LLM calls. Alias: `LYRASHIELD_DISABLE_STREAMING`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_FORCE_REQUIRED_TOOL_CHOICE" default="false" type="boolean">
-  Force required tool choice on model requests. Alias of `STRIX_FORCE_REQUIRED_TOOL_CHOICE`.
+<ParamField
+  path="LYRASHIELD_FORCE_REQUIRED_TOOL_CHOICE"
+  default="false"
+  type="boolean"
+>
+  Force required tool choice on model requests. Alias of
+  `STRIX_FORCE_REQUIRED_TOOL_CHOICE`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_MAX_OUTPUT_TOKENS" type="integer">
-  Hard cap on tokens generated per request. Unset keeps the per-scan-mode default chosen by the runner; when set it replaces that default for every agent (delegates stay separately clamped). Also tightens the pre-request budget reservation. Alias of `STRIX_MAX_OUTPUT_TOKENS`.
+  Hard cap on tokens generated per request. Unset keeps the per-scan-mode
+  default chosen by the runner; when set it replaces that default for every
+  agent (delegates stay separately clamped). Also tightens the pre-request
+  budget reservation. Alias of `STRIX_MAX_OUTPUT_TOKENS`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_MAX_INPUT_TOKENS" type="integer">
-  Ceiling that history compaction keeps a request's input under. This is not a hard reject: exceeding it compacts older history rather than failing the request. Clamped below the GPT-5.6 long-context boundary, above which input is billed at 2x — the clamp is what stops this knob from raising cost. Alias of `STRIX_MAX_INPUT_TOKENS`.
+  Ceiling that history compaction keeps a request's input under. This is not a
+  hard reject: exceeding it compacts older history rather than failing the
+  request. Clamped below the GPT-5.6 long-context boundary, above which input is
+  billed at 2x — the clamp is what stops this knob from raising cost. Alias of
+  `STRIX_MAX_INPUT_TOKENS`.
 </ParamField>
 
 ### Programmatic tool calling (opt-in gate)
 
 <ParamField path="LYRASHIELD_PROGRAMMATIC_TOOL_CALLING" type="string">
-  Leave unset unless the capability gate succeeds against the exact deployment. The configured Azure AI Foundry GPT-5.6 endpoint supports baseline Responses requests and `previous_response_id`, but rejects the Responses `programmatic_tool_calling` tool type. Use direct JSON function tools in production. Set to `1` only after `uv run lyrashield provider-contract --require-programmatic-tool-calling` passes; set to `0` to force it off.
+  Leave unset unless the capability gate succeeds against the exact deployment.
+  The configured Azure AI Foundry GPT-5.6 endpoint supports baseline Responses
+  requests and `previous_response_id`, but rejects the Responses
+  `programmatic_tool_calling` tool type. Use direct JSON function tools in
+  production. Set to `1` only after `uv run lyrashield provider-contract
+  --require-programmatic-tool-calling` passes; set to `0` to force it off.
 </ParamField>
 
 ## Dedicated deduplication model
@@ -88,7 +131,8 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
 Finding deduplication is a cheap, structured classification task. By default it runs on the main model, but you can route it to a smaller/cheaper model without affecting the agents that do the actual testing.
 
 <ParamField path="LYRASHIELD_DEDUPE_MODEL" type="string">
-  Model used to judge whether a candidate finding duplicates an existing report. Falls back to `LYRASHIELD_LLM` when unset. Alias of `STRIX_DEDUPE_MODEL`.
+  Model used to judge whether a candidate finding duplicates an existing report.
+  Falls back to `LYRASHIELD_LLM` when unset. Alias of `STRIX_DEDUPE_MODEL`.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_API_KEY" type="string">
@@ -96,7 +140,8 @@ Finding deduplication is a cheap, structured classification task. By default it 
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_API_BASE" type="string">
-  Optional custom API base URL for the deduplication model. Use when the dedupe model runs on a different endpoint than the main model.
+  Optional custom API base URL for the deduplication model. Use when the dedupe
+  model runs on a different endpoint than the main model.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_EXTRA_HEADERS" type="string">
@@ -104,7 +149,9 @@ Finding deduplication is a cheap, structured classification task. By default it 
 </ParamField>
 
 <ParamField path="LYRASHIELD_DEDUPE_REASONING_EFFORT" type="string">
-  Reasoning effort for the deduplication model. Defaults to the model's own baseline when unset. Same valid values as `LYRASHIELD_REASONING_EFFORT`. Alias of `STRIX_DEDUPE_REASONING_EFFORT`.
+  Reasoning effort for the deduplication model. Defaults to the model's own
+  baseline when unset. Same valid values as `LYRASHIELD_REASONING_EFFORT`. Alias
+  of `STRIX_DEDUPE_REASONING_EFFORT`.
 </ParamField>
 
 ## Web search (optional)
@@ -112,67 +159,113 @@ Finding deduplication is a cheap, structured classification task. By default it 
 The optional `web_search` tool queries Parallel Search for real-time public security information. It does not replace the main LLM; it is a research tool available to agents during reconnaissance and validation.
 
 <ParamField path="LYRASHIELD_WEB_SEARCH_ENABLED" default="false" type="boolean">
-  Enable the `web_search` tool. When disabled, agents cannot invoke the tool. Alias of `STRIX_WEB_SEARCH_ENABLED`.
+  Enable the `web_search` tool. When disabled, agents cannot invoke the tool.
+  Alias of `STRIX_WEB_SEARCH_ENABLED`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_WEB_SEARCH_API_KEY" type="string">
-  Parallel Search API key. Also accepted as `PARALLEL_API_KEY` or `STRIX_WEB_SEARCH_API_KEY`.
+  Parallel Search API key. Also accepted as `PARALLEL_API_KEY` or
+  `STRIX_WEB_SEARCH_API_KEY`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_WEB_SEARCH_MODE" default="turbo" type="string">
-  Default Parallel Search mode. Valid values: `turbo` (fastest/cheapest), `basic` (deeper context), `advanced` (multi-hop). Alias of `STRIX_WEB_SEARCH_MODE`.
+  Default Parallel Search mode. Valid values: `turbo` (fastest/cheapest),
+  `basic` (deeper context), `advanced` (multi-hop). Alias of
+  `STRIX_WEB_SEARCH_MODE`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_WEB_SEARCH_MAX_RESULTS" default="5" type="integer">
   Maximum results returned per search. Alias of `STRIX_WEB_SEARCH_MAX_RESULTS`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_WEB_SEARCH_MAX_CALLS_PER_SCAN" default="50" type="integer">
-  Hard cap on `web_search` calls per scan. Set to `0` to disable. Alias of `STRIX_WEB_SEARCH_MAX_CALLS_PER_SCAN`.
+<ParamField
+  path="LYRASHIELD_WEB_SEARCH_MAX_CALLS_PER_SCAN"
+  default="50"
+  type="integer"
+>
+  Hard cap on `web_search` calls per scan. Set to `0` to disable. Alias of
+  `STRIX_WEB_SEARCH_MAX_CALLS_PER_SCAN`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_WEB_SEARCH_BUDGET_USD" default="1.0" type="float">
-  Separate per-scan web search budget in USD. Alias of `STRIX_WEB_SEARCH_BUDGET_USD`.
+  Separate per-scan web search budget in USD. Alias of
+  `STRIX_WEB_SEARCH_BUDGET_USD`.
 </ParamField>
 
 ## Context-window management
 
-<ParamField path="LYRASHIELD_CONTEXT_AUTO_COMPACT" default="true" type="boolean">
+<ParamField
+  path="LYRASHIELD_CONTEXT_AUTO_COMPACT"
+  default="true"
+  type="boolean"
+>
   Enable automatic history compaction. Alias of `STRIX_CONTEXT_AUTO_COMPACT`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_CONTEXT_BUFFER_TOKENS" default="20000" type="integer">
-  Buffer tokens retained during compaction. Alias of `STRIX_CONTEXT_BUFFER_TOKENS`.
+<ParamField
+  path="LYRASHIELD_CONTEXT_BUFFER_TOKENS"
+  default="20000"
+  type="integer"
+>
+  Buffer tokens retained during compaction. Alias of
+  `STRIX_CONTEXT_BUFFER_TOKENS`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_CONTEXT_KEEP_TOKENS" default="8000" type="integer">
-  Tokens kept verbatim at the head of compacted history. Alias of `STRIX_CONTEXT_KEEP_TOKENS`.
+  Tokens kept verbatim at the head of compacted history. Alias of
+  `STRIX_CONTEXT_KEEP_TOKENS`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_CONTEXT_FALLBACK_TOKENS" default="200000" type="integer">
-  Fallback context-window size when the model's reported window is unavailable. Alias of `STRIX_CONTEXT_FALLBACK_TOKENS`.
+<ParamField
+  path="LYRASHIELD_CONTEXT_FALLBACK_TOKENS"
+  default="200000"
+  type="integer"
+>
+  Fallback context-window size when the model's reported window is unavailable.
+  Alias of `STRIX_CONTEXT_FALLBACK_TOKENS`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_CONTEXT_SUMMARY_TOKENS" default="4096" type="integer">
-  Maximum tokens for a compaction summary. Alias of `STRIX_CONTEXT_SUMMARY_TOKENS`.
+<ParamField
+  path="LYRASHIELD_CONTEXT_SUMMARY_TOKENS"
+  default="4096"
+  type="integer"
+>
+  Maximum tokens for a compaction summary. Alias of
+  `STRIX_CONTEXT_SUMMARY_TOKENS`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_TOOL_OUTPUT_MAX_TOKENS" default="8000" type="integer">
+<ParamField
+  path="LYRASHIELD_TOOL_OUTPUT_MAX_TOKENS"
+  default="8000"
+  type="integer"
+>
   Per-tool-output token cap. Alias of `STRIX_TOOL_OUTPUT_MAX_TOKENS`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_TOOL_OUTPUT_MAX_LINES" default="2000" type="integer">
+<ParamField
+  path="LYRASHIELD_TOOL_OUTPUT_MAX_LINES"
+  default="2000"
+  type="integer"
+>
   Per-tool-output line cap. Alias of `STRIX_TOOL_OUTPUT_MAX_LINES`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_TOOL_OUTPUT_MAX_BYTES" default="51200" type="integer">
-  Per-tool-output byte cap (floor above the truncation-notice size so a preview always fits). Alias of `STRIX_TOOL_OUTPUT_MAX_BYTES`.
+<ParamField
+  path="LYRASHIELD_TOOL_OUTPUT_MAX_BYTES"
+  default="51200"
+  type="integer"
+>
+  Per-tool-output byte cap (floor above the truncation-notice size so a preview
+  always fits). Alias of `STRIX_TOOL_OUTPUT_MAX_BYTES`.
 </ParamField>
 
 ## Runtime and sandbox
 
 <ParamField path="LYRASHIELD_IMAGE" default="strix-sandbox:dev" type="string">
-  Docker image to use for the sandbox container. Alias of `STRIX_IMAGE`. In production, use the immutable `ghcr.io/ecryptoguru/lyrashield-sandbox@sha256:…` reference emitted by the verified sandbox release workflow; never use a tag or an upstream Strix image.
+  Docker image to use for the sandbox container. Alias of `STRIX_IMAGE`. In
+  production, use the immutable
+  `ghcr.io/ecryptoguru/lyrashield-sandbox@sha256:…` reference emitted by the
+  verified sandbox release workflow; never use a tag or an upstream Strix image.
 </ParamField>
 
 <ParamField path="LYRASHIELD_RUNTIME_BACKEND" default="docker" type="string">
@@ -180,56 +273,87 @@ The optional `web_search` tool queries Parallel Search for real-time public secu
 </ParamField>
 
 <ParamField path="LYRASHIELD_MAX_LOCAL_COPY_MB" default="1024" type="integer">
-  Maximum size (in MB) of a local directory target that the engine will copy into the sandbox file-by-file. Larger targets exit early with a suggestion to use `--mount` instead. Set to `0` to disable the check. Alias of `STRIX_MAX_LOCAL_COPY_MB`.
+  Maximum size (in MB) of a local directory target that the engine will copy
+  into the sandbox file-by-file. Larger targets exit early with a suggestion to
+  use `--mount` instead. Set to `0` to disable the check. Alias of
+  `STRIX_MAX_LOCAL_COPY_MB`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_MAX_CONTEXT_IMAGES" default="3" type="integer">
-  Max screenshot/image tool outputs kept live per agent context (`0` = none). Alias of `STRIX_MAX_CONTEXT_IMAGES`.
+  Max screenshot/image tool outputs kept live per agent context (`0` = none).
+  Alias of `STRIX_MAX_CONTEXT_IMAGES`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_SERVER_CONVERSATION" default="false" type="boolean">
-  Use OpenAI server-managed conversations (`OpenAIConversationsSession`) instead of the local `SQLiteSession`. Requires an endpoint that supports the conversations API and is off by default until endpoint capability is proven. Alias of `STRIX_SERVER_CONVERSATION`.
+<ParamField
+  path="LYRASHIELD_SERVER_CONVERSATION"
+  default="false"
+  type="boolean"
+>
+  Use OpenAI server-managed conversations (`OpenAIConversationsSession`) instead
+  of the local `SQLiteSession`. Requires an endpoint that supports the
+  conversations API and is off by default until endpoint capability is proven.
+  Alias of `STRIX_SERVER_CONVERSATION`.
 </ParamField>
 
 <ParamField path="DOCKER_HOST" type="string">
-  Docker endpoint. Development may use a local socket. Production workers require an isolated `ssh://` endpoint or a TLS-protected `tcp://` endpoint (`DOCKER_TLS_VERIFY=1`); never expose a shared host Docker socket to the worker.
+  Docker endpoint. Development may use a local socket. Production workers
+  require an isolated `ssh://` endpoint or a TLS-protected `tcp://` endpoint
+  (`DOCKER_TLS_VERIFY=1`); never expose a shared host Docker socket to the
+  worker.
 </ParamField>
 
 ### Sandbox capabilities and image pinning
 
 The engine omits `NET_ADMIN` and `NET_RAW` by default. Add them only for authorized workflows that require advanced raw-socket operations such as SYN scans.
 
-| Variable | Default | Effect |
-| --- | --- | --- |
-| `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES` | unset | Set to `1`/`true`/`yes` to add `NET_ADMIN`/`NET_RAW`; otherwise both remain omitted. |
-| `STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES` | unset | Legacy compatibility switch. It is consulted only when the enable variable is unset. |
-| `STRIX_IMAGE_DIGEST` | unset | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |
-| `STRIX_SANDBOX_ALLOW_HOST_GATEWAY` | unset | Opt-in `host.docker.internal` access. Do not enable unless an explicitly authorized local workflow requires it. |
+| Variable                                     | Default | Effect                                                                                                                                                                                                                       |
+| -------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES`  | unset   | Set to `1`/`true`/`yes` to add `NET_ADMIN`/`NET_RAW`; otherwise both remain omitted.                                                                                                                                         |
+| `STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES` | unset   | Legacy compatibility switch. It is consulted only when the enable variable is unset.                                                                                                                                         |
+| `STRIX_IMAGE_DIGEST`                         | unset   | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |
+| `STRIX_SANDBOX_ALLOW_HOST_GATEWAY`           | unset   | Opt-in `host.docker.internal` access. Do not enable unless an explicitly authorized local workflow requires it.                                                                                                              |
 
-The `publish-sandbox` workflow builds the two supported architectures, runs the non-root capability smoke tests, then publishes the image digest with an SPDX SBOM and signed provenance attestations. Promote that digest as one release unit with its worker configuration.
+The `publish-sandbox` workflow pushes one multi-architecture candidate, runs the non-root capability smoke tests against that exact digest on both supported architectures, and only then promotes the same digest to release tags. It emits an SPDX SBOM plus signed provenance/SBOM attestations for that digest. Promote the digest, never a tag, as one release unit with its worker configuration.
 
 ## Telemetry
 
 <ParamField path="LYRASHIELD_TELEMETRY" default="false" type="boolean">
-  Telemetry toggle. The `lyrashield` adapter forces `STRIX_TELEMETRY=0`, so telemetry is off in production regardless of this setting. The inherited PostHog and Scarf clients are disabled; no remote analytics are sent. Alias of `STRIX_TELEMETRY`.
+  Telemetry toggle. The `lyrashield` adapter forces `STRIX_TELEMETRY=0`, so
+  telemetry is off in production regardless of this setting. The inherited
+  PostHog and Scarf clients are disabled; no remote analytics are sent. Alias of
+  `STRIX_TELEMETRY`.
 </ParamField>
 
 <ParamField path="STRIX_POSTHOG_API_KEY" type="string">
-  PostHog public API key. Read lazily at call time, not at import. Only used when telemetry is enabled (which the LyraShield adapter forces off). No hardcoded key in source.
+  PostHog public API key. Read lazily at call time, not at import. Only used
+  when telemetry is enabled (which the LyraShield adapter forces off). No
+  hardcoded key in source.
 </ParamField>
 
-<ParamField path="STRIX_POSTHOG_HOST" default="https://us.i.posthog.com" type="string">
-  PostHog host URL. Read lazily at call time. Only used when telemetry is enabled.
+<ParamField
+  path="STRIX_POSTHOG_HOST"
+  default="https://us.i.posthog.com"
+  type="string"
+>
+  PostHog host URL. Read lazily at call time. Only used when telemetry is
+  enabled.
 </ParamField>
 
 <ParamField path="STRIX_SCARF_ENDPOINT" type="string">
-  Scarf endpoint URL. Read lazily at call time. Only used when telemetry is enabled.
+  Scarf endpoint URL. Read lazily at call time. Only used when telemetry is
+  enabled.
 </ParamField>
 
 ## Viewer
 
-<ParamField path="LYRASHIELD_APP_URL" default="https://app.strix.ai" type="string">
-  Base URL of the relay the local viewer proxies to for email verification and encrypted report delivery. The browser never talks to the relay directly; the local server is the only caller. Alias of `STRIX_APP_URL`.
+<ParamField
+  path="LYRASHIELD_APP_URL"
+  default="https://app.strix.ai"
+  type="string"
+>
+  Base URL of the relay the local viewer proxies to for email verification and
+  encrypted report delivery. The browser never talks to the relay directly; the
+  local server is the only caller. Alias of `STRIX_APP_URL`.
 </ParamField>
 
 ## Config file

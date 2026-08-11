@@ -5,14 +5,16 @@ description: "Engine modes and application routing"
 
 The engine exposes `quick`, `standard`, and `deep`. The LyraShield application owns the user-facing preset, model, reasoning effort, and protected budget.
 
-| Application workflow | Engine mode | Model route | Reasoning | Intended scope |
-| --- | --- | --- | --- | --- |
-| Release Check / Safe | `quick`-class bounded execution | GPT-5.6 Luna | medium | Fast release-oriented repository review |
-| Code Review / Standard | `standard` | GPT-5.6 Luna | medium | Broader routine repository review |
-| Deep Security Review / Deep | `deep` | GPT-5.6 Terra coordinator + GPT-5.6 Luna specialists | medium | Authorized deeper repository analysis |
+| Application workflow         | Engine mode | Model route                                          | Reasoning               | Hard budget |                           Wall clock |
+| ---------------------------- | ----------- | ---------------------------------------------------- | ----------------------- | ----------: | -----------------------------------: |
+| Release Check / Safe / Quick | `quick`     | GPT-5.6 Luna                                         | medium                  |       $1.20 | 15 min total: 12 engine + 3 scanners |
+| Code Review / Standard       | `standard`  | GPT-5.6 Luna                                         | medium                  |       $3.20 | 15 min total: 12 engine + 3 scanners |
+| Deep Security Review / Deep  | `deep`      | GPT-5.6 Terra coordinator + GPT-5.6 Luna specialists | Terra medium, Luna high |       $5.00 | 45 min total: 40 engine + 5 scanners |
 
-`CUSTOM` is an application-level approval-gated mode; it does not add a fourth engine CLI value. Deep/Custom routing is deterministic: the Terra/medium root owns final judgment and delegates bounded focused work to Luna/medium specialists.
+`SAFE` and legacy `QUICK` resolve to the same repository profile. `CUSTOM` resolves to the Deep profile and does not add a fourth engine CLI value. A positive workspace policy can lower a cap or duration, but cannot raise the profile ceiling. Deep routing is deterministic: the Terra/medium root owns final judgment and delegates bounded focused work to Luna/high specialists.
 
-Duration is target-, environment-, model-, and limit-dependent. Do not promise fixed minutes or completeness. Every run can end completed, failed, cancelled, timed out, or stopped by a protected limit, and the application preserves those distinctions.
+These are ceilings, not promised completion times or expected charges. Unused scanner reserve returns to the total wall-clock budget, but the engine never exceeds its own profile ceiling. Every run can end completed, failed, cancelled, timed out, or stopped by a protected limit, and the application preserves those distinctions.
+
+Web-app and API targets do not invoke this AI engine. The application routes them through target-specific deterministic profiles with a $0 AI budget; its capability registry is the source of truth for their request, byte, and time bounds.
 
 Diff scope narrows repository context for suitable CI/headless work. It is a scope statement, not proof that unchanged code or deployed behavior is safe.

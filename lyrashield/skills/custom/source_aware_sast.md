@@ -150,10 +150,8 @@ eslint --no-config-lookup --rule '{"no-eval":2,"no-implied-eval":2}' \
 ```
 
 When you hit a minified bundle, run `js-beautify <file>` for a readable
-view before greppping — and use `jshint --reporter=unix <file>` as a
-lighter syntax/anti-pattern check when ESLint is over-eager. The
-`JS-Snooper` / `jsniper.sh` tools (in `katana.md`) are the right next
-step to mine those bundles for endpoint candidates.
+view before grepping. The `JS-Snooper` / `jsniper.sh` tools (in `katana.md`)
+are the right next step to mine those bundles for endpoint candidates.
 
 ## Converting Static Signals Into Exploits
 
