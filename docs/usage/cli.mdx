@@ -3,7 +3,7 @@ title: "CLI Reference"
 description: "Command-line options for the LyraShield Engine entry point"
 ---
 
-The production entry point is `lyrashield`, provided by the `lyrashield_adapter` package. The adapter forces telemetry off, disables the upstream self-update check, rejects ChatGPT subscription-backed models, and re-validates configuration after `--config` is applied. The bare upstream `strix` executable is not shipped in this distribution.
+The production entry point is `lyrashield`, provided by the `lyrashield_adapter` package. The adapter forces telemetry off, disables the upstream self-update check, supports the authenticated `chatgpt/<model>` subscription route by default, and re-validates configuration after `--config` is applied. The bare upstream `strix` executable is not shipped in this distribution.
 
 ## Basic usage
 
@@ -28,7 +28,7 @@ Leave `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` unset unless the programmatic-tool-
 
 ### `auth`
 
-Inherited upstream model-subscription sign-in helper. Exits without target, Docker, or scan setup. The LyraShield production worker does not use subscription auth; this subcommand is retained only for upstream compatibility.
+ChatGPT subscription sign-in helper. It exits without target, Docker, or scan setup. Authenticate with `lyrashield auth login chatgpt`, then configure the supported `chatgpt/<model>` main-model route. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` only when subscription auth must be disabled.
 
 ### `view`
 
