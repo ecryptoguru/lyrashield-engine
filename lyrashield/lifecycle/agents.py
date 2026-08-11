@@ -322,6 +322,13 @@ class AgentCoordinator:
                 logger.debug("agent.send dropped unknown target=%s", target_agent_id)
                 return False
             runtime = self.runtimes.setdefault(target_agent_id, AgentRuntime())
+            # Follow-up work is valid after a child has reported completion.
+            # Without reactivation the sender can wait forever on a mailbox no
+            # execution loop will ever consume.
+            if self.statuses[target_agent_id] in {"completed", "stopped"}:
+                self.statuses[target_agent_id] = "running"
+                self.errors.pop(target_agent_id, None)
+                runtime.user_wake_required = False
             runtime.mailbox.append(dict(message))
             self.pending_counts[target_agent_id] = self.pending_counts.get(target_agent_id, 0) + 1
             if from_user:

@@ -1,32 +1,28 @@
 # Strix Migration Matrix
 
-- Target upstream: `v1.5.2` (`597aae67159636ee794a02a3cc1694138d619c44`)
-- Fork HEAD: `5f3093e4ae5eea2b59b826669d1f0cad7720dee2`
-- Changed `strix/` paths: 4 files (4 unique paths), covering 72 insertions and 720 deletions relative to `v1.5.2`.
+- Target upstream: `v1.5.3` (`7cc9fa9faa0179fc7e35111102fe3d20a9028393`)
+- Working branch: `codex/upstream-v1.5.3`
+- Changed `strix/` paths: 2 files, +24/-0 lines relative to `v1.5.3`.
 
 ## Summary
 
-`strix/**` has been reset to the upstream `v1.5.2` tree. All product-specific code, prompts, tools, lifecycle hooks, policies, runtime, and interface extensions now live under `lyrashield/**`.
+`strix/**` has been advanced to the upstream `v1.5.3` tree. All product-specific code, prompts, tools, lifecycle hooks, policies, runtime, and interface extensions live under `lyrashield/**`.
 
-The only remaining drift in `strix/` is four documented, generic, upstream-compatible seams:
+The only remaining drift in `strix/` is two documented generic patches:
 
-1. `strix/agents/factory.py` — re-exports `lyrashield.agents.factory` and provides the generic `register_tool_override` / `register_agent_tools` seam.
-2. `strix/agents/prompt.py` — re-exports `lyrashield.agents.prompt` (`render_system_prompt`, `_resolve_skills`) and provides a skill-directory-aware prompt-loading seam.
-3. `strix/config/loader.py` — generic `register_settings_loader` / `load_settings` seam so product settings can be returned without upstream importing `lyrashield`.
-4. `strix/skills/__init__.py` — telemetry-off gate in `_track_skill_loaded()` plus the existing `register_skill_dir()` seam.
+1. `strix/config/loader.py` — generic `register_settings_loader` / `load_settings` seam so product settings can be returned without upstream importing `lyrashield`.
+2. `strix/skills/__init__.py` — telemetry-off gate in `_track_skill_loaded()`; v1.5.3 already supplies `register_skill_dir()`.
 
-Every other `strix/` path is byte-identical to `v1.5.2`.
+Every other `strix/` path is byte-identical to `v1.5.3`. In particular, `strix/agents/factory.py` and `strix/agents/prompt.py` are no longer local dispatchers.
 
 ## Matrix
 
 | File | Purpose | Disposition |
 |------|---------|-------------|
-| `strix/agents/factory.py` | Re-exports `lyrashield.agents.factory` and exposes generic tool/agent registration seams (`register_agent_tools`, `register_tool_override`). | generic seam |
-| `strix/agents/prompt.py` | Re-exports `lyrashield.agents.prompt` (`render_system_prompt`, `_resolve_skills`) and searches registered skill directories before built-in prompt templates. | generic seam |
 | `strix/config/loader.py` | Generic `register_settings_loader` / `load_settings` seam; product settings are returned transparently. | generic seam |
-| `strix/skills/__init__.py` | Telemetry-off gate in `_track_skill_loaded()` and the existing `register_skill_dir()` seam. | generic seam |
+| `strix/skills/__init__.py` | Telemetry-off gate in `_track_skill_loaded()`; the directory registry itself is upstream. | generic fix |
 
-All remaining `strix/` files are reset to `v1.5.2`.
+All remaining `strix/` files are byte-identical to `v1.5.3`.
 
 ## LyraShield product directories
 

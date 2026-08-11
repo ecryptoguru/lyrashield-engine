@@ -14,11 +14,11 @@ from agents.sandbox.entries import BaseEntry, LocalDir
 from agents.sandbox.manifest import EnvEntry, Environment, EnvValue, Manifest
 from agents.sandbox.workspace_paths import SandboxPathGrant
 
+from lyrashield.runtime.backends import get_backend
 from lyrashield.runtime.caido_bootstrap import bootstrap_caido
 from lyrashield.runtime.docker_client import host_gateway_enabled
 from lyrashield.runtime.local_dir_staging import stage_symlink_safe_dir
 from strix.config import load_settings
-from strix.runtime.backends import get_backend
 
 
 logger = logging.getLogger(__name__)
@@ -234,19 +234,17 @@ async def create_or_reuse(
     return bundle
 
 
-async def cleanup(scan_id: str) -> None:
+async def cleanup(scan_id: str) -> bool:
     """Tear down ``scan_id``'s container and drop its cache entry.
 
-    Best-effort: any error during ``client.delete`` is logged and
-    swallowed. We never want a cleanup failure to prevent the next
-    scan from starting; the worst case is a stranded container that
-    Docker's normal reaping will catch on next ``docker prune``.
+    Cleanup remains non-fatal for scan results, but the return value makes a
+    stranded container observable to the receipt and worker event paths.
     """
     async with _CACHE_LOCK:
         bundle = _SESSION_CACHE.pop(scan_id, None)
     if bundle is None:
         logger.debug("cleanup(%s): no cached session", scan_id)
-        return
+        return True
 
     caido_client = bundle.get("caido_client")
     if caido_client is not None:
@@ -256,10 +254,12 @@ async def cleanup(scan_id: str) -> None:
             logger.debug("cleanup(%s): caido_client.aclose() raised", scan_id, exc_info=True)
 
     client = bundle["client"]
+    sandbox_removed = True
     try:
         await client.delete(bundle["session"])
         logger.info("Cleaned up sandbox session for scan %s", scan_id)
     except Exception:
+        sandbox_removed = False
         logger.exception(
             "cleanup(%s): client.delete raised; container may need manual reaping",
             scan_id,
@@ -271,3 +271,4 @@ async def cleanup(scan_id: str) -> None:
             docker_client.close()
         except Exception:
             logger.debug("cleanup(%s): docker_client.close() raised", scan_id, exc_info=True)
+    return sandbox_removed

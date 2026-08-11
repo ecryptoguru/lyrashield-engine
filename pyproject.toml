@@ -38,7 +38,7 @@ classifiers = [
 dependencies = [
   "openai-agents[litellm] @ git+https://github.com/openai/openai-agents-python.git@f663a06aea23c859be8e8555c005ac912bd58337",
   "openai>=2.48.0,<2.49",
-  "litellm",
+  "litellm==1.90.1",
   "pydantic>=2.11.3",
   "pydantic-settings>=2.13.0",
   "rich",
@@ -82,12 +82,27 @@ asyncio_mode = "auto"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+exclude = ["/.coverage"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["strix", "lyrashield_adapter", "lyrashield"]
-# The prebuilt viewer bundle under strix/interface/viewer/static/ ships automatically
+# The prebuilt viewer bundle under lyrashield/interface/viewer/static/ ships automatically
 # (hatchling includes non-.py files under the package). The Vite SOURCE lives
-# under the package dir too (strix/interface/viewer/frontend/) but must never ship in the wheel.
-exclude = ["strix/interface/viewer/frontend", "strix/interface/viewer/frontend/**"]
+# under the package dir too but must never ship in the wheel.
+exclude = [
+    "strix/interface/viewer/frontend",
+    "strix/interface/viewer/frontend/**",
+    "lyrashield/interface/viewer/frontend",
+    "lyrashield/interface/viewer/frontend/**",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/tests/**",
+    "/strix/interface/viewer/frontend/**",
+    "/lyrashield/interface/viewer/frontend/**",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -252,7 +267,7 @@ ignore = [
 "strix/tools/reporting/tool.py" = ["PLC0415", "TC002"]
 "strix/tools/**/*.py" = [
     "ARG001", # Unused function argument (tools may have unused args for interface consistency)
-    "RUF100", # Upstream v1.5.2 retains noqa directives for rules we do not enable
+    "RUF100", # Upstream v1.5.3 retains noqa directives for rules we do not enable
 ]
 "strix/tools/web_search/tool.py" = ["PLC0415", "RUF100"]
 "lyrashield/tools/web_search/tool.py" = ["PLC0415"]
@@ -313,7 +328,7 @@ ignore = [
 "strix/runtime/session_manager.py" = ["BLE001"]
 "strix/core/execution.py" = ["PLR0912"]
 
-# Upstream v1.5.2 interface modules restored after product code moved to lyrashield/interface.
+# Upstream v1.5.3 interface modules restored after product code moved to lyrashield/interface.
 "strix/interface/cli_args.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
 "strix/interface/environment.py" = ["PLC0415", "PLR0912", "PLR0915"]
 "strix/interface/interactive.py" = ["PLC0415"]

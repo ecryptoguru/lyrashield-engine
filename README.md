@@ -1,6 +1,6 @@
 # LyraShield Engine
 
-LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.1.0, pinned at `8157ccba276c8fdd5eaa07a1a9d8d686315f6bd1` and modified under Apache-2.0. It is not a thin wrapper: LyraShield intentionally owns product-critical policy inside the derivative while retaining reviewed upstream sandbox, tool, and agent-SDK plumbing.
+LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.5.3, pinned at `7cc9fa9faa0179fc7e35111102fe3d20a9028393` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only at two small, gated registration seams.
 
 See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
 
@@ -120,9 +120,9 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-controlled-derivative.sh
 ```
 
-The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It also enforces a **footprint budget** on `strix/**` drift vs the pinned upstream base — warning (not failing) when the number of changed files, insertions, or deletions exceeds the configured thresholds, so accumulated drift stays visible.
+The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), mypy, Bandit, and the public worker contract. It also enforces a hard **footprint budget** on `strix/**` drift versus the pinned upstream base: at most two changed files, 30 insertions, and no deletions. Any other Strix path or change type fails the gate.
 
-Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`: Ruff lint and format check, Mypy type check, Bandit security scan, and the full pytest test suite (597 tests), in addition to controlled-derivative verification, CLI build, and worker contract checks. This closes the gap where pre-commit hooks only ran locally.
+Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`, in addition to CLI/native build, sandbox smoke, and cross-repository worker contract checks. Test counts are intentionally not copied here because the executable gate is the source of truth.
 
 Budget enforcement now falls back to LiteLLM's `model_cost` table and then to conservative default rates for non-GPT-5.6 models, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-5.6 Terra/Luna deployments before scan start.
 

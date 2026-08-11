@@ -110,6 +110,16 @@ def test_cost_callback_ignores_upstream_cost_for_non_byok_responses() -> None:
     report_state.record_observed_llm_cost.assert_called_once_with(0.05)
 
 
+def test_cost_callback_defers_gpt56_cost_to_the_token_rate_card() -> None:
+    report_state = MagicMock()
+    response = SimpleNamespace(usage=SimpleNamespace(cost=0.01), _hidden_params={})
+
+    with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
+        litellm_cost_callback({"model": "azure_ai/gpt-5.6-luna", "response_cost": 0.01}, response)
+
+    report_state.record_observed_llm_cost.assert_not_called()
+
+
 def test_cost_callback_estimates_cost_with_provider_prefixed_model() -> None:
     report_state = MagicMock()
     response = {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}

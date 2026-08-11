@@ -1489,7 +1489,16 @@ def _print_clone_error(console: Console, message: str) -> None:
     console.print()
 
 
-def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None) -> str:
+def _is_full_git_commit_sha(value: str) -> bool:
+    return bool(re.fullmatch(r"[0-9a-fA-F]{40}", value))
+
+
+def clone_repository(
+    repo_url: str,
+    run_name: str,
+    dest_name: str | None = None,
+    branch: str | None = None,
+) -> str:
     console = Console()
 
     git_executable = _git_executable()
@@ -1518,18 +1527,29 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
         with console.status(f"[bold cyan]Cloning repository {repo_url}...", spinner="dots"):
             # Controlled subprocess boundary: Git path is resolved, shell=False,
             # and -- terminates option parsing before the user-controlled repository URL.
+            clone_args = [git_executable, "clone"]
+            if branch and _is_full_git_commit_sha(branch):
+                # A full commit SHA is an immutable revision, not a remote branch. Clone the
+                # repository normally so reachable refs are fetched, then detach at that revision.
+                # ``git clone --branch <sha> --single-branch`` fails because a SHA is not an
+                # advertised branch name.
+                clone_args.append("--no-checkout")
+            elif branch:
+                clone_args.extend(["--branch", branch, "--single-branch"])
+            clone_args.extend(["--", repo_url, str(clone_path)])
             subprocess.run(  # noqa: S603  # nosec B603
-                [
-                    git_executable,
-                    "clone",
-                    "--",
-                    repo_url,
-                    str(clone_path),
-                ],
+                clone_args,
                 capture_output=True,
                 text=True,
                 check=True,
             )
+            if branch and _is_full_git_commit_sha(branch):
+                subprocess.run(  # noqa: S603  # nosec B603
+                    [git_executable, "-C", str(clone_path), "checkout", "--detach", branch],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
 
         return str(clone_path.absolute())
 

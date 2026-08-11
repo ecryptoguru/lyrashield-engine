@@ -136,6 +136,18 @@ def test_select_split_handles_parallel_calls(monkeypatch: pytest.MonkeyPatch) ->
     assert not _has_orphan_tool_output(items[split:])
 
 
+def test_select_split_keeps_reasoning_with_its_function_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(compaction, "count_tokens", lambda _m, _t: 1)
+    reasoning = {"type": "reasoning", "id": "rs-1", "summary": []}
+    items = [_user("old"), reasoning, _call("a"), _output("a")]
+
+    split = compaction._select_split("m", items, keep_tokens=2)
+
+    assert items[split:] == [reasoning, _call("a"), _output("a")]
+
+
 def _patch_budget(monkeypatch: pytest.MonkeyPatch, *, keep_tokens: int, window: int) -> None:
     monkeypatch.setattr(compaction, "count_tokens", lambda _m, t: len(t))
     monkeypatch.setattr(compaction, "context_window", lambda _m: window)

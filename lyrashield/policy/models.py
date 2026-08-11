@@ -771,6 +771,11 @@ def model_supports_reasoning(model_name: str) -> bool:
     import litellm
 
     name = model_name.strip().lower()
+    # LyraShield validates this product-owned model family before execution.
+    # LiteLLM's bundled cost map can lag a newly approved deployment, so it is
+    # not authoritative for the GPT-5.6 capability contract.
+    if is_gpt56_model(name):
+        return True
     for prefix in ("litellm/", "any-llm/", "openai/"):
         if name.startswith(prefix):
             name = name[len(prefix) :]

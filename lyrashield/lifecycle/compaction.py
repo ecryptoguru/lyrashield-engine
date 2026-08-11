@@ -228,6 +228,14 @@ def _select_split(model: str, items: list[Any], keep_tokens: int) -> int:
     # provider input (an output with no preceding call), so fold them into head.
     while split < len(items) and _is_tool_output(items[split]):
         split += 1
+    # Responses reasoning items are protocol-bound to the next model-emitted
+    # call/message. Never retain that item while compacting away its reasoning.
+    while (
+        split > 0
+        and isinstance(items[split - 1], dict)
+        and items[split - 1].get("type") == "reasoning"
+    ):
+        split -= 1
     return split
 
 

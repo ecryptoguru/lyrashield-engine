@@ -91,7 +91,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.10.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Build sandbox image
         run: |
@@ -103,7 +103,7 @@ jobs:
 
       - name: Smoke sandbox image
         run: |
-          docker run --rm --cap-add NET_ADMIN --cap-add NET_RAW lyrashield-sandbox:ci sh -lc '
+          docker run --rm lyrashield-sandbox:ci sh -lc '
             test "$(id -u)" != "0" &&
             test "$(pwd)" = "/workspace" &&
             test -f /app/certs/ca.p12 &&
@@ -112,7 +112,9 @@ jobs:
             test "$HTTP_PROXY" = "http://127.0.0.1:48080" &&
             caido-cli --version &&
             command -v nmap >/dev/null &&
+            getcap /usr/lib/nmap/nmap | grep -q "cap_net_raw" &&
             nmap --version >/dev/null 2>&1 &&
+            nmap -sn 127.0.0.1 >/dev/null &&
             /app/.venv/bin/python -c "import caido_api" &&
             status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
             case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac

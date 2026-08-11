@@ -116,7 +116,8 @@ async def run_cli(args: Any) -> None:
     }
 
     report_state = ReportState(args.run_name)
-    report_state.hydrate_from_run_dir()
+    if getattr(args, "resume", None):
+        report_state.hydrate_from_run_dir()
     report_state.set_scan_config(scan_config)
     report_state.save_run_data()
 
@@ -198,6 +199,8 @@ async def run_cli(args: Any) -> None:
             interactive=bool(getattr(args, "interactive", False)),
             max_budget_usd=getattr(args, "max_budget_usd", None),
             max_turns=getattr(args, "max_turns", DEFAULT_MAX_TURNS),
+            resume=bool(getattr(args, "resume", None)),
+            artifact_state=report_state,
         )
 
     try:
@@ -206,7 +209,12 @@ async def run_cli(args: Any) -> None:
                 await execute_scan()
             finally:
                 with contextlib.suppress(Exception):
-                    await session_manager.cleanup(args.run_name)
+                    # This outer cleanup is the last owner to run before the worker reads
+                    # run.json. Persist its outcome so the worker can fail closed when a
+                    # sandbox is stranded, including when the lifecycle cleanup already
+                    # released the session cache.
+                    sandbox_removed = await session_manager.cleanup(args.run_name)
+                    report_state.set_sandbox_cleanup_status(sandbox_removed is not False)
         else:
             console.print()
             with Live(

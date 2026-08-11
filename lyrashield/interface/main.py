@@ -582,6 +582,24 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _repository_branch(value: str) -> str:
+    branch = value.strip()
+    invalid = (
+        not branch
+        or len(branch) > 255
+        or branch.startswith(("-", "/", "."))
+        or branch.endswith(("/", "."))
+        or ".." in branch
+        or "//" in branch
+        or "@{" in branch
+        or any(char.isspace() or ord(char) < 32 or char in "~^:?*[\\" for char in branch)
+        or any(part.endswith(".lock") for part in branch.split("/"))
+    )
+    if invalid:
+        raise argparse.ArgumentTypeError("must be a valid Git branch name")
+    return branch
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Strix Multi-Agent Cybersecurity Penetration Testing Tool",
@@ -654,6 +672,15 @@ Examples:
         metavar="PATH",
         help="Path to a file containing targets, one per non-empty, non-comment line. "
         "Can be specified multiple times and combined with --target.",
+    )
+    parser.add_argument(
+        "--repository-branch",
+        type=_repository_branch,
+        metavar="BRANCH",
+        help=(
+            "Git branch to clone for repository targets. "
+            "Intended for orchestrators that pin a target branch."
+        ),
     )
     parser.add_argument(
         "--mount",
@@ -1234,7 +1261,12 @@ def main() -> None:
             if target_info["type"] == "repository":
                 repo_url = target_info["details"]["target_repo"]
                 dest_name = target_info["details"].get("workspace_subdir")
-                cloned_path = clone_repository(repo_url, args.run_name, dest_name)
+                cloned_path = clone_repository(
+                    repo_url,
+                    args.run_name,
+                    dest_name,
+                    args.repository_branch,
+                )
                 target_info["details"]["cloned_repo_path"] = cloned_path
 
         args.local_sources = collect_local_sources(args.targets_info)

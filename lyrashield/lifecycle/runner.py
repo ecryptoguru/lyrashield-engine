@@ -10,6 +10,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -78,6 +79,28 @@ _DEFAULT_OUTPUT_TOKENS = 8_192
 # Ceiling applied to delegate agents regardless of the coordinator's budget, so
 # raising the coordinator cap does not silently multiply spend across children.
 DELEGATE_OUTPUT_TOKEN_CEILING = 8_192
+
+
+def _model_routing_policy(
+    coordinator_model: str,
+    coordinator_effort: ReasoningEffort,
+    delegate_model: str,
+    delegate_effort: ReasoningEffort,
+) -> str:
+    """Return a receipt label derived from the route that actually ran."""
+    return (
+        f"coordinator={coordinator_model}@{coordinator_effort};"
+        f"delegate={delegate_model}@{delegate_effort};v=1"
+    )
+
+
+def _stable_prompt_cache_key(role: str, material: str) -> str:
+    """Return an Azure-compatible, non-sensitive key for an exact prompt family."""
+    fingerprint = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    # Azure Responses accepts at most 64 characters. The longest current role
+    # ("coordinator") leaves 38 hexadecimal characters: 152 bits of routing
+    # entropy, while retaining a recognizable product/version prefix.
+    return f"lyrashield:v2:{role}:{fingerprint[:38]}"
 
 
 def resolve_max_output_tokens(scan_mode: str, configured: int | None) -> int:
@@ -183,7 +206,9 @@ async def run_strix_scan(
     max_turns: int = DEFAULT_MAX_TURNS,
     max_budget_usd: float | None = None,
     model: str | None = None,
+    resume: bool = False,
     cleanup_on_exit: bool = True,
+    artifact_state: Any | None = None,
     event_sink: StreamEventSink | None = None,
     root_instructions_override: str | None = None,
     extra_system_prompt_context: dict[str, Any] | None = None,
@@ -208,7 +233,7 @@ async def run_strix_scan(
 
     agents_path = state_dir / "agents.json"
     agents_db = state_dir / "agents.db"
-    is_resume = agents_path.exists()
+    is_resume = resume
 
     logger.info(
         "%s Strix scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
@@ -253,11 +278,10 @@ async def run_strix_scan(
     from lyrashield.tools.todo.tools import hydrate_todos_from_disk
     from strix.tools.notes.tools import hydrate_notes_from_disk
 
-    hydrate_todos_from_disk(state_dir)
-    hydrate_notes_from_disk(state_dir)
-
     root_id: str | None = None
     if is_resume:
+        hydrate_todos_from_disk(state_dir)
+        hydrate_notes_from_disk(state_dir)
         if agents_path.is_symlink() or not agents_path.is_file():
             raise RuntimeError(
                 f"Cannot resume scan {scan_id}: agents.json is not a regular file",
@@ -336,12 +360,29 @@ async def run_strix_scan(
         is_whitebox = any(t.get("type") == "local_code" for t in targets)
         skills = list(scan_config.get("skills") or [])
         root_task = build_root_task(scan_config)
+        scope_context = build_scope_context(scan_config)
+        root_context = _merge_root_prompt_context(scope_context, extra_system_prompt_context)
+        root_instructions = _compose_root_instructions_override(
+            root_instructions_override,
+            skills=skills,
+            scan_mode=scan_mode,
+            is_whitebox=is_whitebox,
+            interactive=interactive,
+            system_prompt_context=root_context,
+        )
+        cache_enabled = bool(llm_settings.prompt_cache)
+        root_cache_options = (
+            prompt_cache_options_for_model(resolved_model) if cache_enabled else None
+        )
+        delegate_cache_options = (
+            prompt_cache_options_for_model(delegate_model) if cache_enabled else None
+        )
         initial_input: Any = (
             []
             if is_resume
             else build_root_initial_input(
                 scan_config,
-                model_name=resolved_model,
+                model_name=resolved_model if root_cache_options else None,
             )
         )
         max_output_tokens = resolve_max_output_tokens(
@@ -354,20 +395,47 @@ async def run_strix_scan(
             force_required_tool_choice=llm_settings.force_required_tool_choice,
             request_timeout=llm_settings.timeout,
             max_output_tokens=max_output_tokens,
-            prompt_cache_key=f"lyrashield:{scan_id}:coordinator",
-            prompt_cache_options=prompt_cache_options_for_model(resolved_model),
-            prompt_cache=llm_settings.prompt_cache,
+            prompt_cache_key=(
+                _stable_prompt_cache_key(
+                    "coordinator",
+                    json.dumps(
+                        {"model": resolved_model, "instructions": root_instructions},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+                if root_cache_options
+                else None
+            ),
+            prompt_cache_options=root_cache_options,
+            prompt_cache=cache_enabled,
             extra_headers=llm_settings.extra_headers,
         )
         delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
+        delegate_cache_material = json.dumps(
+            {
+                "model": delegate_model,
+                "scan_mode": scan_mode,
+                "is_whitebox": is_whitebox,
+                "interactive": interactive,
+                "scope_context": scope_context,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         delegate_model_settings = make_model_settings(
             delegate_reasoning_effort,
             model_name=delegate_model,
             force_required_tool_choice=llm_settings.force_required_tool_choice,
             request_timeout=llm_settings.timeout,
             max_output_tokens=delegate_max_output_tokens,
-            prompt_cache_key=f"lyrashield:{scan_id}:delegates",
-            prompt_cache=llm_settings.prompt_cache,
+            prompt_cache_key=(
+                _stable_prompt_cache_key("delegates", delegate_cache_material)
+                if delegate_cache_options
+                else None
+            ),
+            prompt_cache_options=delegate_cache_options,
+            prompt_cache=cache_enabled,
             extra_headers=llm_settings.extra_headers,
         )
         run_config = RunConfig(
@@ -394,16 +462,6 @@ async def run_strix_scan(
             if is_resume and coordinator.budget_paused:
                 await coordinator.resume_from_budget_pause()
 
-        scope_context = build_scope_context(scan_config)
-        root_context = _merge_root_prompt_context(scope_context, extra_system_prompt_context)
-        root_instructions = _compose_root_instructions_override(
-            root_instructions_override,
-            skills=skills,
-            scan_mode=scan_mode,
-            is_whitebox=is_whitebox,
-            interactive=interactive,
-            system_prompt_context=root_context,
-        )
         report_state = get_global_report_state()
         if report_state is not None:
             report_state.run_record.update(
@@ -412,11 +470,22 @@ async def run_strix_scan(
                     "prompt_bundle_hash": hashlib.sha256(
                         root_instructions.encode("utf-8")
                     ).hexdigest(),
+                    "prompt_cache": {
+                        "enabled": cache_enabled,
+                        "mode": root_cache_options["mode"] if root_cache_options else None,
+                        "ttl": root_cache_options["ttl"] if root_cache_options else None,
+                        "routing": "stable-prompt-v2" if root_cache_options else None,
+                    },
                     "model": resolved_model,
                     "reasoning_effort": llm_settings.reasoning_effort,
                     "delegate_model": delegate_model,
                     "delegate_reasoning_effort": delegate_reasoning_effort,
-                    "model_routing_policy": "coordinator-terra-med-delegate-luna-high-v3",
+                    "model_routing_policy": _model_routing_policy(
+                        resolved_model,
+                        llm_settings.reasoning_effort,
+                        delegate_model,
+                        delegate_reasoning_effort,
+                    ),
                     "max_output_tokens": max_output_tokens,
                     # Record the thresholds actually in force (post-clamp) so
                     # "was a cap applied to this scan?" is answerable from the run
@@ -475,6 +544,7 @@ async def run_strix_scan(
                 event_sink=event_sink,
                 hooks=hooks,
                 server_conversation=server_conversation,
+                model_name=delegate_model if delegate_cache_options else None,
                 **kwargs,
             )
 
@@ -616,8 +686,21 @@ async def run_strix_scan(
                 force_required_tool_choice=llm_settings.force_required_tool_choice,
                 request_timeout=llm_settings.timeout,
                 max_output_tokens=min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING),
-                prompt_cache_key=f"lyrashield:{scan_id}:coordinator-fallback",
-                prompt_cache_options=None,
+                prompt_cache_key=(
+                    _stable_prompt_cache_key(
+                        "fallback",
+                        json.dumps(
+                            {"model": delegate_model, "instructions": root_instructions},
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    )
+                    if delegate_cache_options
+                    else None
+                ),
+                prompt_cache_options=delegate_cache_options,
+                prompt_cache=cache_enabled,
+                extra_headers=llm_settings.extra_headers,
             )
             fallback_agent = build_strix_agent(
                 name="Strix",
@@ -632,11 +715,16 @@ async def run_strix_scan(
                 model=delegate_model,
                 model_settings=fallback_model_settings,
             )
+            fallback_run_config = replace(
+                run_config,
+                model=delegate_model,
+                model_settings=fallback_model_settings,
+            )
             try:
                 result = await run_agent_loop(
                     agent=fallback_agent,
-                    initial_input=initial_input,
-                    run_config=run_config,
+                    initial_input=[],
+                    run_config=fallback_run_config,
                     context=context,
                     max_turns=max_turns,
                     coordinator=coordinator,
@@ -749,6 +837,9 @@ async def run_strix_scan(
             await coordinator.maybe_snapshot()
         if cleanup_on_exit:
             logger.info("Tearing down sandbox session for scan %s", scan_id)
-            await session_manager.cleanup(scan_id)
+            sandbox_removed = await session_manager.cleanup(scan_id)
+            state = artifact_state or get_global_report_state()
+            if state is not None:
+                state.set_sandbox_cleanup_status(sandbox_removed is not False)
         logger.info("Strix scan %s done", scan_id)
         teardown_logging()

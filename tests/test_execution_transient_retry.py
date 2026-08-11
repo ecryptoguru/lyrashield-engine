@@ -69,6 +69,11 @@ def test_dns_and_connection_errors_are_transient() -> None:
     assert execution._is_transient_model_error(TimeoutError("timed out")) is True
 
 
+def test_httpx_transport_errors_are_transient() -> None:
+    error = httpx.RemoteProtocolError("peer disconnected", request=_request())
+    assert execution._is_transient_model_error(error) is True
+
+
 def test_content_guardrail_is_not_retried() -> None:
     guardrail = APIError(
         "This content was flagged for possible cybersecurity risk",

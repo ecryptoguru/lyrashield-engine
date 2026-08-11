@@ -68,6 +68,25 @@ def test_parse_arguments_combines_target_and_target_list(
     ]
 
 
+def test_parse_arguments_accepts_repository_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_settings(monkeypatch)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "strix",
+            "--target",
+            "https://github.com/org/repo",
+            "--repository-branch",
+            "release/2026.08",
+        ],
+    )
+
+    args = cli_main.parse_arguments()
+
+    assert args.repository_branch == "release/2026.08"
+
+
 def test_parse_arguments_rejects_resume_with_target_list(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

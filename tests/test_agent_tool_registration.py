@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from agents.tool import FunctionTool
 
+from lyrashield.agents import factory
 from lyrashield_adapter.cli import _register_lyrashield_tool_overrides
-from strix.agents import factory
 
 
 if TYPE_CHECKING:
@@ -123,6 +123,18 @@ def test_wait_for_agents_is_available_in_both_modes() -> None:
     for interactive in (True, False):
         agent = factory.build_strix_agent(is_root=True, interactive=interactive)
         assert "wait_for_agents" in [t.name for t in agent.tools]
+
+
+def test_report_review_tools_are_root_only() -> None:
+    """Leaf agents file evidence; only the coordinator reviews scan-wide reports."""
+    root = factory.build_strix_agent(is_root=True)
+    child = factory.build_strix_agent(is_root=False)
+
+    root_names = [tool.name for tool in root.tools]
+    child_names = [tool.name for tool in child.tools]
+
+    assert {"list_reports", "get_report"} <= set(root_names)
+    assert {"list_reports", "get_report"}.isdisjoint(child_names)
 
 
 def test_register_tool_override_replaces_base_tool() -> None:

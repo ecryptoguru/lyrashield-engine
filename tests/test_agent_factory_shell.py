@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 from agents.tool import CustomTool, FunctionTool
 
-from strix.agents import factory
+from lyrashield.agents import factory
 from strix.config import load_settings
 
 

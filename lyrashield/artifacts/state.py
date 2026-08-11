@@ -511,6 +511,11 @@ class ReportState:
         if self.run_record.get("status") != "completed":
             self.run_record["terminal_reason"] = reason
 
+    def set_sandbox_cleanup_status(self, sandbox_removed: bool) -> None:
+        """Persist whether the owned sandbox was removed before process exit."""
+        self.run_record["cleanup"] = {"sandbox_removed": sandbox_removed}
+        self.save_run_data()
+
     def cleanup(self, status: str = "stopped") -> None:
         self.save_run_data(status=status)
 
@@ -713,8 +718,16 @@ def litellm_cost_callback(
     _end_time: Any = None,
 ) -> None:
     """LiteLLM ``success_callback`` adapter; forwards observed cost to the active scan."""
-    cost: float | None = None
     kwargs_dict = _as_dict(kwargs)
+    model = kwargs_dict.get("model") if kwargs_dict is not None else None
+    if isinstance(model, str) and model.strip().lower().split("/")[-1] in {
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    }:
+        # Azure's LiteLLM response_cost can be stale for GPT-5.6. The usage
+        # ledger prices the provider token receipt with the pinned rate card.
+        return
+    cost: float | None = None
     if kwargs_dict is not None:
         raw = kwargs_dict.get("response_cost")
         if isinstance(raw, int | float) and raw > 0:

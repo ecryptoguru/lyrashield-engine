@@ -12,6 +12,13 @@ from agents.usage import Usage, deserialize_usage, serialize_usage
 logger = logging.getLogger(__name__)
 
 
+_GPT56_USD_PER_MILLION: dict[str, tuple[float, float, float, float]] = {
+    "gpt-5.6-terra": (2.0, 0.2, 2.5, 12.0),
+    "gpt-5.6-luna": (0.2, 0.02, 0.25, 1.2),
+}
+_GPT56_LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
+
+
 class LLMUsageLedger:
     """Aggregate SDK ``Usage`` objects and attach best-effort cost estimates."""
 
@@ -48,16 +55,18 @@ class LLMUsageLedger:
         if model:
             metadata["model"] = model
 
-        if not self.zero_cost and not _is_litellm_routed(model):
-            estimated = _estimate_litellm_cost(usage, model)
+        if not self.zero_cost:
+            estimated = _estimate_gpt56_cost(usage, model)
+            if estimated is None and not _is_litellm_routed(model):
+                estimated = _estimate_litellm_cost(usage, model)
             if estimated:
                 self._total_cost += estimated
                 self._has_cost = True
 
         return True
 
-    def record_observed_cost(self, cost: Any) -> None:
-        if self.zero_cost:
+    def record_observed_cost(self, cost: Any, *, model: str | None = None) -> None:
+        if self.zero_cost or _gpt56_rate(model) is not None:
             return
         try:
             numeric_cost = float(cost)
@@ -181,6 +190,42 @@ def _is_litellm_routed(model: str | None) -> bool:
     if "/" not in name:
         return False
     return not name.startswith("openai/")
+
+
+def _gpt56_rate(model: str | None) -> tuple[float, float, float, float] | None:
+    if not model:
+        return None
+    return _GPT56_USD_PER_MILLION.get(model.strip().lower().split("/")[-1])
+
+
+def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
+    rate = _gpt56_rate(model)
+    if rate is None:
+        return None
+    entries: list[Any] = list(usage.request_usage_entries or [])
+    if not entries and usage.requests == 1:
+        entries = [usage]
+    if not entries:
+        return None
+    total = 0.0
+    for entry in entries:
+        input_tokens = _int_or_zero(getattr(entry, "input_tokens", 0))
+        output_tokens = _int_or_zero(getattr(entry, "output_tokens", 0))
+        if input_tokens + output_tokens <= 0:
+            continue
+        details = _details_to_dict(getattr(entry, "input_tokens_details", None))
+        cached = min(_int_or_zero(details.get("cached_tokens")), input_tokens)
+        cache_write = min(_int_or_zero(details.get("cache_write_tokens")), input_tokens - cached)
+        uncached = input_tokens - cached - cache_write
+        multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS else 1.0
+        output_multiplier = 1.5 if multiplier > 1 else 1.0
+        total += (
+            uncached * rate[0] * multiplier
+            + cached * rate[1] * multiplier
+            + cache_write * rate[2] * multiplier
+            + output_tokens * rate[3] * output_multiplier
+        ) / 1_000_000
+    return _round_cost(total)
 
 
 def _usage_has_activity(usage: Usage) -> bool:

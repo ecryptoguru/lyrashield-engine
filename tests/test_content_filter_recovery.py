@@ -14,7 +14,7 @@ import types
 from typing import Any, cast
 
 import pytest
-from agents import RunConfig, Runner
+from agents import ModelSettings, RunConfig, Runner
 from agents.exceptions import ModelBehaviorError
 from agents.memory import SQLiteSession
 
@@ -460,7 +460,7 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
             force_required_tool_choice=False,
             timeout=300,
             prompt_cache=True,
-            extra_headers=None,
+            extra_headers={"X-Test": "fallback"},
         ),
         runtime=types.SimpleNamespace(max_context_images=3),
     )
@@ -485,16 +485,27 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
     monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
     monkeypatch.setattr(runner, "build_root_initial_input", lambda _config, **_kw: "task")
     monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: "")
-    monkeypatch.setattr(runner, "make_model_settings", lambda *_a, **_kw: {})
+    model_setting_calls: list[dict[str, Any]] = []
+
+    def _make_model_settings(effort: str, *_args: Any, **kwargs: Any) -> ModelSettings:
+        model_setting_calls.append(kwargs)
+        return ModelSettings(metadata={"reasoning_effort": effort})
+
+    monkeypatch.setattr(runner, "make_model_settings", _make_model_settings)
+    monkeypatch.setattr(
+        runner,
+        "prompt_cache_options_for_model",
+        lambda model: {"mode": "explicit", "ttl": "30m"} if model.endswith("mini") else None,
+    )
     monkeypatch.setattr(runner, "build_strix_agent", lambda **_kw: object())
     monkeypatch.setattr(runner, "make_child_factory", lambda **_kw: lambda **_k: object())
     monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db, **_kw: object())
 
-    call_count = {"n": 0}
+    calls: list[dict[str, Any]] = []
 
     async def _run_agent_loop(*_args: Any, **_kwargs: Any) -> Any:
-        call_count["n"] += 1
-        if call_count["n"] == 1:
+        calls.append(_kwargs)
+        if len(calls) == 1:
             raise _content_filter_model_error()
         return types.SimpleNamespace(final_output='{"scan_completed": true}')
 
@@ -509,7 +520,19 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
     )
 
     assert result is not None
-    assert call_count["n"] == 2  # One coordinator failure + one delegate success
+    assert len(calls) == 2  # One coordinator failure + one delegate success
+    assert calls[0]["run_config"].model == "openai/gpt-4o"
+    assert calls[1]["run_config"].model == "openai/gpt-4o-mini"
+    assert calls[1]["run_config"].model_settings == ModelSettings(
+        metadata={"reasoning_effort": "medium"}
+    )
+    assert calls[1]["initial_input"] == []
+    assert model_setting_calls[-1]["prompt_cache_options"] == {
+        "mode": "explicit",
+        "ttl": "30m",
+    }
+    assert model_setting_calls[-1]["prompt_cache"] is True
+    assert model_setting_calls[-1]["extra_headers"] == {"X-Test": "fallback"}
 
 
 @pytest.mark.asyncio

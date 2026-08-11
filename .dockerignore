@@ -15,3 +15,5 @@ dist
 *.log
 strix_runs
 agent_runs
+tests
+**/interface/viewer/frontend

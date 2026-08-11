@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from strix.agents.prompt import render_system_prompt
+from lyrashield.agents.prompt import render_system_prompt
 from strix.skills import _EXTRA_SKILL_DIRS, load_skills, register_skill_dir
 
 

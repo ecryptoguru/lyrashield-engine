@@ -45,6 +45,23 @@ def test_child_initial_input_single_message_with_history() -> None:
     assert "Audit the login flow." in content
 
 
+def test_child_initial_input_marks_the_stable_prefix_for_explicit_gpt56_cache(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
+
+    result = child_initial_input(
+        **_child_kwargs([{"role": "assistant", "content": "previous work"}]),
+        model_name="azure_ai/gpt-5.6-luna",
+    )
+
+    content = result[0]["content"]
+    assert isinstance(content, list)
+    assert content[0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert "Inherited context from parent" in content[0]["text"]
+    assert "Audit the login flow." in content[1]["text"]
+
+
 @pytest.mark.parametrize(
     "parent_history",
     [[], [{"role": "assistant", "content": "previous work"}]],
@@ -130,12 +147,10 @@ def test_prompt_cache_kept_for_non_bedrock_claude_even_if_unmapped(monkeypatch: 
 
 
 def test_max_reasoning_effort_sent_as_raw_body_field() -> None:
-    # "max" is absent from the OpenAI SDK's Reasoning enum, and LiteLLM's DeepSeek
-    # mapping collapses every effort to thinking-enabled, so it has to ride along
-    # as a raw body field to reach the provider.
-    settings = make_model_settings(
-        "max", model_name="deepseek/deepseek-v4-flash", request_timeout=30
-    )
+    # "max" is absent from the OpenAI SDK's Reasoning enum, so it has to ride
+    # along as a raw body field to reach an approved GPT-5.6 deployment even
+    # when LiteLLM's bundled metadata predates that model family.
+    settings = make_model_settings("max", model_name="azure_ai/gpt-5.6-terra", request_timeout=30)
     assert settings.reasoning is None
     assert settings.extra_args == {"timeout": 30, "extra_body": {"reasoning_effort": "max"}}
 

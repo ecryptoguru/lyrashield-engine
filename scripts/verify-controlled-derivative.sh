@@ -3,15 +3,9 @@ set -euo pipefail
 
 # Verify the controlled-derivative invariants:
 # - pinned upstream base exists and is fetchable
-# - every strix/** change vs the pinned upstream base is documented
-#   (attribution banner or UPGRADES.md entry)
-# - added files in strix/ are forbidden (new files must not be added to
-#   upstream tree)
-# - deleted files in strix/ are expected when product code moves out of strix/
-#   into lyrashield/** or lyrashield_adapter/**
-# - footprint budget check: warns (does not fail) if strix/** drift vs the
-#   pinned base exceeds the configured thresholds, so accumulated drift stays
-#   visible without blocking legitimate work
+# - the working strix/** tree differs only at the two reviewed generic seams
+# - added, deleted, renamed, copied, or otherwise changed upstream files fail
+# - the micro-fork footprint is a hard invariant
 # - lint, format, tests, types, and security checks pass
 
 BASE_FILE=".lyrashield-upstream-base"
@@ -47,117 +41,60 @@ if ! git cat-file -t "$BASE" >/dev/null 2>&1; then
   fi
 fi
 
-has_banner_or_ledger() {
-  local f=$1
-  if head -n 2 "$f" | grep -qEi "LyraShield.*(modification|seam|controlled)"; then
-    return 0
-  fi
-  if grep -qF "$f" UPGRADES.md; then
-    return 0
-  fi
-  return 1
-}
+ALLOWED_MODIFIED=(
+  "strix/config/loader.py"
+  "strix/skills/__init__.py"
+)
+unexpected=()
 
-missing=()
-added=()
-other=()
-
-# Compare strix/** directly against the pinned upstream base.
-# Statuses:
-#   D = deleted (product file moved out of strix; expected)
-#   A = added (forbidden)
-#   M = modified (must have banner or UPGRADES.md entry)
-#   R/C/T = rename/copy/type change (unexpected; treated as error)
+# Compare the actual working tree, including staged and unstaged changes.
 while IFS=$'\t' read -r status path dest; do
   [[ -z "$status" ]] && continue
-  case "$status" in
-    D)
-      echo "info: deleted $path (product file moved out of strix; expected)"
-      ;;
-    A)
-      added+=("$path")
-      ;;
-    M)
-      if ! has_banner_or_ledger "$path"; then
-        missing+=("$path")
-      fi
-      ;;
-    R*|C*)
-      added+=("$dest (renamed/copied from $path)")
-      if ! has_banner_or_ledger "$dest"; then
-        missing+=("$dest")
-      fi
-      ;;
-    *)
-      other+=("$path (status $status)")
-      ;;
-  esac
-done < <(git diff --name-status "$BASE..HEAD" -- strix/)
+  if [[ "$status" != "M" ]] || [[ ! " ${ALLOWED_MODIFIED[*]} " =~ " ${path} " ]]; then
+    unexpected+=("$path (status $status${dest:+, destination $dest})")
+  fi
+done < <(git diff --name-status "$BASE" -- strix/)
 
-if [[ ${#added[@]} -gt 0 ]]; then
-  echo "error: new files must not be added to strix/:" >&2
-  for f in "${added[@]}"; do
+if [[ ${#unexpected[@]} -gt 0 ]]; then
+  echo "error: strix/** differs outside the reviewed micro-fork allowlist:" >&2
+  for f in "${unexpected[@]}"; do
     echo "  $f" >&2
   done
-fi
-
-if [[ ${#missing[@]} -gt 0 ]]; then
-  echo "error: undocumented strix/ modifications (add banner or UPGRADES.md entry):" >&2
-  for f in "${missing[@]}"; do
-    echo "  $f" >&2
-  done
-fi
-
-if [[ ${#other[@]} -gt 0 ]]; then
-  echo "error: unexpected strix/ diff status:" >&2
-  for f in "${other[@]}"; do
-    echo "  $f" >&2
-  done
-fi
-
-if [[ ${#added[@]} -gt 0 || ${#missing[@]} -gt 0 || ${#other[@]} -gt 0 ]]; then
   exit 1
 fi
 
 # ---------------------------------------------------------------------------
-# Footprint budget: measure strix/** drift vs the pinned upstream base and
-# warn (not fail) when the delta exceeds the configured thresholds. This keeps
-# accumulated drift visible without blocking legitimate work.
-#
-# v1.5.2 reset state: 4 files changed, 76 insertions(+), 720 deletions(-).
-# The four generic seams (strix/agents/factory.py, strix/agents/prompt.py,
-# strix/config/loader.py, strix/skills/__init__.py) account for the entire
-# footprint. Thresholds include a small headroom for reviewed seam work.
+# Hard footprint invariant for the v1.5.3 micro-fork.
 # ---------------------------------------------------------------------------
-MAX_FILES=6
-MAX_INSERTIONS=100
-MAX_DELETIONS=900
+MAX_FILES=2
+MAX_INSERTIONS=30
+MAX_DELETIONS=0
 
 # git diff --shortstat prints a single line like:
 #   " 4 files changed, 76 insertions(+), 720 deletions(-)"
 # (deletions are omitted when zero, so guard each parse).
-SHORTSTAT=$(git diff --shortstat "$BASE..HEAD" -- strix/)
+SHORTSTAT=$(git diff --shortstat "$BASE" -- strix/)
 FP_FILES=$(echo "$SHORTSTAT" | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' || echo 0)
 FP_INSERTIONS=$(echo "$SHORTSTAT" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
 FP_DELETIONS=$(echo "$SHORTSTAT" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
 
-echo "Footprint: ${FP_FILES} files, +${FP_INSERTIONS}/-${FP_DELETIONS} lines (budget: ${MAX_FILES} files, +${MAX_INSERTIONS}/-${MAX_DELETIONS})"
+echo "Footprint: ${FP_FILES} files, +${FP_INSERTIONS}/-${FP_DELETIONS} lines (maximum: ${MAX_FILES} files, +${MAX_INSERTIONS}/-${MAX_DELETIONS})"
 
-budget_warned=false
+footprint_failed=false
 if (( FP_FILES > MAX_FILES )); then
-  echo "warning: footprint budget exceeded — ${FP_FILES} files changed (max ${MAX_FILES})" >&2
-  budget_warned=true
+  echo "error: footprint exceeds ${MAX_FILES} changed files" >&2
+  footprint_failed=true
 fi
 if (( FP_INSERTIONS > MAX_INSERTIONS )); then
-  echo "warning: footprint budget exceeded — ${FP_INSERTIONS} insertions (max ${MAX_INSERTIONS})" >&2
-  budget_warned=true
+  echo "error: footprint exceeds ${MAX_INSERTIONS} insertions" >&2
+  footprint_failed=true
 fi
 if (( FP_DELETIONS > MAX_DELETIONS )); then
-  echo "warning: footprint budget exceeded — ${FP_DELETIONS} deletions (max ${MAX_DELETIONS})" >&2
-  budget_warned=true
+  echo "error: footprint exceeds ${MAX_DELETIONS} deletions" >&2
+  footprint_failed=true
 fi
-if [[ "$budget_warned" == true ]]; then
-  echo "warning: strix/** drift exceeds the footprint budget; review whether this drift is intentional and document it in UPGRADES.md" >&2
+if [[ "$footprint_failed" == true ]]; then
+  exit 1
 fi
 
 # The PDF tests import pypdf and must run to exercise the viewer code path.
@@ -167,5 +104,5 @@ uv sync --frozen --extra viewer
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest -W error::pydantic.PydanticDeprecatedSince211
-uv run mypy strix lyrashield_adapter
-uv run bandit -c pyproject.toml -r strix lyrashield_adapter -q
+uv run mypy strix lyrashield_adapter lyrashield
+uv run bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q

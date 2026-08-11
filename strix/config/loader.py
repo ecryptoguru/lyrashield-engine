@@ -1,4 +1,3 @@
-# 2026 LyraShield --- controlled-derivative seam: allows a product settings loader to be registered.
 """Settings loader, override switch, and disk persistence."""
 
 from __future__ import annotations
@@ -27,31 +26,23 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PATH: Path = Path.home() / ".strix" / "cli-config.json"
 _override: Path | None = None
 _cached: Settings | None = None
-_SETTINGS_LOADER: ModuleType | None = None
+_settings_loader: ModuleType | None = None
 
 
 def register_settings_loader(loader: ModuleType) -> None:
-    """Register a product settings loader to be used by ``strix.config.load_settings``.
-
-    This is a neutral seam: upstream ``strix.config.loader`` falls back to its
-    own implementation when no loader is registered, and product adapters can
-    register a loader that returns product-specific settings.
-    """
-    global _SETTINGS_LOADER  # noqa: PLW0603
-    _SETTINGS_LOADER = loader
-    logger.info("registered settings loader: %s", getattr(loader, "__name__", loader))
+    """Use an alternate settings loader at the public config boundary."""
+    global _settings_loader  # noqa: PLW0603
+    _settings_loader = loader
 
 
 def load_settings() -> Settings:
     """Resolve settings from env + JSON file + defaults. Memoized.
 
-    If a product loader is registered, it is used instead. Otherwise the
-    upstream ``Settings`` class is instantiated from ``strix.config.settings``.
-
     Precedence: env vars win, then the JSON file, then field defaults.
     """
-    if _SETTINGS_LOADER is not None:
-        return _SETTINGS_LOADER.load_settings()  # type: ignore[no-any-return]
+    if _settings_loader is not None:
+        return _settings_loader.load_settings()  # type: ignore[no-any-return]
+
     global _cached  # noqa: PLW0603
     if _cached is None:
         source_path = _override or _DEFAULT_PATH
@@ -68,9 +59,10 @@ def load_settings() -> Settings:
 
 def apply_config_override(path: Path) -> None:
     """Switch the JSON source to ``path`` and invalidate the cache."""
-    if _SETTINGS_LOADER is not None and hasattr(_SETTINGS_LOADER, "apply_config_override"):
-        _SETTINGS_LOADER.apply_config_override(path)
+    if _settings_loader is not None and hasattr(_settings_loader, "apply_config_override"):
+        _settings_loader.apply_config_override(path)
         return
+
     global _override, _cached  # noqa: PLW0603
     _override = path
     _cached = None
@@ -79,9 +71,10 @@ def apply_config_override(path: Path) -> None:
 
 def persist_current() -> None:
     """Write currently-set env vars to the active config file (0o600)."""
-    if _SETTINGS_LOADER is not None and hasattr(_SETTINGS_LOADER, "persist_current"):
-        _SETTINGS_LOADER.persist_current()
+    if _settings_loader is not None and hasattr(_settings_loader, "persist_current"):
+        _settings_loader.persist_current()
         return
+
     s = load_settings()
     target = _override or _DEFAULT_PATH
     target.parent.mkdir(parents=True, exist_ok=True)

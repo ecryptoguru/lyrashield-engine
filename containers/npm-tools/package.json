@@ -1,0 +1,14 @@
+{
+  "name": "lyrashield-sandbox-npm-tools",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@ast-grep/cli": "0.45.1",
+    "agent-browser": "0.26.0",
+    "eslint": "10.8.1",
+    "jshint": "2.13.6",
+    "js-beautify": "2.0.3",
+    "retire": "5.4.3",
+    "tree-sitter-cli": "0.26.12"
+  }
+}

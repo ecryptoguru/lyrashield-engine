@@ -1,4 +1,3 @@
-# 2026 LyraShield --- controlled-derivative seam: delegates prompt resolution and rendering.
 """Jinja-based system-prompt renderer."""
 
 from __future__ import annotations
@@ -6,13 +5,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from lyrashield.agents.prompt import _resolve_skills as _lyra_resolve_skills
-from lyrashield.agents.prompt import render_system_prompt as _lyra_render_system_prompt
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from strix.skills import get_available_skills, load_skills, skill_search_dirs
+from strix.utils.resource_paths import get_strix_resource_path
 
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["_resolve_skills", "render_system_prompt"]
+
+_PROMPT_DIRNAME = "prompts"
 
 
 def _resolve_skills(
@@ -36,12 +38,23 @@ def _resolve_skills(
        guidance for delegating to specialist subagents.
     6. Whitebox-specific skills if applicable.
     """
-    return _lyra_resolve_skills(
-        requested=requested,
-        scan_mode=scan_mode,
-        is_whitebox=is_whitebox,
-        is_root=is_root,
-    )
+    ordered: list[str] = list(requested or [])
+    ordered.append(f"scan_modes/{scan_mode}")
+    ordered.append("tooling/agent_browser")
+    ordered.append("tooling/python")
+    if is_root:
+        ordered.append("coordination/root_agent")
+    if is_whitebox:
+        ordered.append("coordination/source_aware_whitebox")
+        ordered.append("custom/source_aware_sast")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for skill in ordered:
+        if skill and skill not in seen:
+            deduped.append(skill)
+            seen.add(skill)
+    return deduped
 
 
 def render_system_prompt(
@@ -55,14 +68,43 @@ def render_system_prompt(
 ) -> str:
     """Render the system prompt. Returns empty string on template failure."""
     try:
-        return _lyra_render_system_prompt(
-            skills=skills,
+        prompt_dir = get_strix_resource_path("agents", _PROMPT_DIRNAME)
+        loader_dirs = [prompt_dir, *skill_search_dirs()]
+        env = Environment(
+            loader=FileSystemLoader(loader_dirs),
+            autoescape=select_autoescape(
+                enabled_extensions=(),
+                default_for_string=False,
+            ),
+        )
+
+        skills_to_load = _resolve_skills(
+            requested=skills,
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
             is_root=is_root,
-            interactive=interactive,
-            system_prompt_context=system_prompt_context,
         )
-    except RuntimeError:
+        skill_content = load_skills(skills_to_load)
+        env.globals["get_skill"] = lambda name: skill_content.get(name, "")
+
+        rendered = env.get_template("system_prompt.jinja").render(
+            loaded_skill_names=list(skill_content.keys()),
+            available_skills=get_available_skills(),
+            interactive=interactive,
+            is_root=is_root,
+            system_prompt_context=system_prompt_context or {},
+            **skill_content,
+        )
+    except Exception:
         logger.exception("render_system_prompt failed; returning empty prompt")
         return ""
+    else:
+        logger.debug(
+            "render_system_prompt: scan_mode=%s root=%s whitebox=%s skills=%d prompt_len=%d",
+            scan_mode,
+            is_root,
+            is_whitebox,
+            len(skill_content),
+            len(rendered),
+        )
+        return str(rendered)

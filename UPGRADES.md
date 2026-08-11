@@ -6,18 +6,16 @@ model, lifecycle, budget, result, and worker-contract behavior is intentionally
 owned within modified upstream modules. Preserve this reviewed boundary while
 syncing releases.
 
-> **Migration to v1.5.2 product-outside-strix (2026-08-10).** The `strix/**`
-> tree has been reset to upstream release v1.5.2
-> (`597aae67159636ee794a02a3cc1694138d619c44`). Product-specific behavior has
-> moved to `lyrashield/**` and `lyrashield_adapter/**`. Only four generic seams
-> remain in `strix/`: `strix/agents/factory.py`, `strix/agents/prompt.py`,
-> `strix/config/loader.py`, and `strix/skills/__init__.py`. The verification
-> script now diffs `strix/**` directly against the pinned upstream base, expects
-> `D` files (product files moved out), forbids `A` files, and requires a LyraShield
-> banner or an UPGRADES.md entry for every `M` file. The footprint budget is
-> reset to 4 files, +76/-720 lines (thresholds: 6 files, +100/-900 lines) with a
-> small headroom for reviewed seam work. Prior `strix/**` product-ownership
-> claims in this ledger are superseded by this migration.
+> **Upgrade to v1.5.3 product-outside-strix (2026-08-11).** The `strix/**`
+> substrate is pinned to upstream release v1.5.3
+> (`7cc9fa9faa0179fc7e35111102fe3d20a9028393`). Product-specific behavior lives
+> in `lyrashield/**` and `lyrashield_adapter/**`. Only two generic fixes remain:
+> `strix/config/loader.py` provides the settings-loader composition seam and
+> `strix/skills/__init__.py` avoids starting telemetry threads when telemetry is
+> disabled. The agent factory and prompt renderer now remain exact upstream;
+> product callers use their LyraShield implementations directly. The verification
+> gate checks staged and unstaged files, enforces this exact two-file allowlist,
+> and fails when the +30/-0 line ceiling is exceeded.
 >
 > **Deep Review v12 — footprint budget (P1-4, path a).** The verification
 > script has been renamed from `scripts/verify-thin-fork.sh` to
@@ -31,39 +29,31 @@ syncing releases.
 > raised deliberately, with an entry here, when a reviewed import legitimately
 > grows the footprint.
 
-## Migration to v1.5.2 product-outside-strix (2026-08-10)
+## Upgrade to v1.5.3 product-outside-strix (2026-08-11)
 
-The controlled derivative was reset to upstream release v1.5.2
-(`597aae67159636ee794a02a3cc1694138d619c44`) and all product-specific behavior
-was moved out of `strix/**` into `lyrashield/**` and `lyrashield_adapter/**`.
-Only four neutral generic seams remain in `strix/` to dispatch product work:
+The vendored substrate was advanced to upstream release v1.5.3
+(`7cc9fa9faa0179fc7e35111102fe3d20a9028393`). All product-specific behavior
+remains outside `strix/**` in `lyrashield/**` and `lyrashield_adapter/**`.
+Only two generic patches remain:
 
-- `strix/agents/factory.py`: re-exports the product agent factory and tool
-  registration from `lyrashield.agents.factory`.
-- `strix/agents/prompt.py`: forwards skill resolution and prompt rendering to
-  `lyrashield.agents.prompt`.
 - `strix/config/loader.py`: registers a pluggable product settings loader and
   falls back to the upstream `Settings` class when none is registered.
-- `strix/skills/__init__.py`: provides product skill directory registration
-  (`register_skill_dir` / `registered_skill_dirs` / `skill_search_dirs`) that
-  lets the product tree add and override skill files without editing the package.
+- `strix/skills/__init__.py`: skips telemetry-thread creation when the resolved
+  settings disable telemetry. v1.5.3 already provides skill-directory
+  registration, so that extension no longer requires a local patch.
 
-The footprint vs v1.5.2 is four modified files with roughly +76 insertions and
-720 deletions (the deletion mass comes from product logic removed from the
-`strix/**` tree and from the four seams being reduced to thin dispatchers).
-The `scripts/verify-controlled-derivative.sh` gate now compares `strix/**`
-directly against the pinned upstream base, allows `D` (deletion) statuses for
-files that moved to the product tree, forbids `A` (addition) and rename/copy
-statuses, and requires a LyraShield attribution banner in the first two lines
-or a documented entry here for every `M` (modification). The budget thresholds
-are 6 files, +100/-900 lines with a small headroom for reviewed seam work.
+The footprint vs v1.5.3 is two modified files with +24/-0 lines. The
+`scripts/verify-controlled-derivative.sh` gate compares the actual working tree
+to the pin, including staged and unstaged changes. Added, deleted, renamed, and
+unlisted modified files fail; exceeding two files, 30 insertions, or any
+deletions also fails.
 
 Prior `strix/**` product-ownership claims in this ledger (e.g., product behavior
 in `strix/core/hooks.py`, `strix/core/inputs.py`, `strix/config/settings.py`,
 `strix/agents/prompts/system_prompt.jinja`, and the other files listed in the
 v1.4.1 merge section below) are superseded by this migration. The product now
 owns that behavior in `lyrashield/**` and `lyrashield_adapter/**`, while
-`strix/**` tracks upstream v1.5.2 with only the four documented seams modified.
+`strix/**` tracks upstream v1.5.3 with only the two documented generic patches.
 
 ## LyraShield-owned contract
 
@@ -123,15 +113,15 @@ owns that behavior in `lyrashield/**` and `lyrashield_adapter/**`, while
 
 ## Current upstream base
 
-`597aae67159636ee794a02a3cc1694138d619c44` (upstream `v1.5.2`, reset on
-2026-08-10).
+`7cc9fa9faa0179fc7e35111102fe3d20a9028393` (upstream `v1.5.3`, reset on
+2026-08-11).
 
-This is a hard reset of the `strix/**` tree to upstream v1.5.2, not a merge:
+This is a subtree replacement with upstream v1.5.3, not a history merge:
 this fork's history is a squashed sync with no shared merge base, so
 `git merge` reports spurious add/add conflicts on files both sides created
 independently. All product behavior has been moved out of `strix/**` into
-`lyrashield/**` and `lyrashield_adapter/**`; only the four generic seams
-documented in the "Migration to v1.5.2 product-outside-strix" section remain
+`lyrashield/**` and `lyrashield_adapter/**`; only the two generic seams
+documented in the "Upgrade to v1.5.3 product-outside-strix" section remain
 modified. The `strix/**` files that previously carried product behavior
 (e.g., `strix/core/hooks.py`, `strix/core/inputs.py`, `strix/config/settings.py`)
 were restored to upstream content and any prior product claims about them are

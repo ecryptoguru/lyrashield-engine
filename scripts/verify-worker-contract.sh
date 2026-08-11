@@ -8,8 +8,13 @@ if [[ -z "$app_checkout" || ! -f "$app_checkout/package.json" ]]; then
 fi
 
 contract_tests=(
+  "packages/types/src/scan-profile.test.ts"
   "apps/worker/src/engine/command-builder.test.ts"
+  "apps/worker/src/docker-runtime.test.ts"
   "apps/worker/src/engine/output-parser.test.ts"
+  "apps/worker/src/engine/result-integrity.test.ts"
+  "apps/worker/src/engine/runner.test.ts"
+  "apps/worker/src/jobs/run-scan.job.test.ts"
 )
 for test_path in "${contract_tests[@]}"; do
   if [[ ! -f "$app_checkout/$test_path" ]]; then
@@ -41,7 +46,6 @@ done
 
 (
   cd "$app_checkout"
-  corepack enable
-  pnpm install --frozen-lockfile
-  pnpm exec vitest run "${contract_tests[@]}"
+  corepack pnpm install --frozen-lockfile
+  corepack pnpm exec vitest run "${contract_tests[@]}"
 )

@@ -1,6 +1,12 @@
-"""LyraShield product-specific policy package.
+"""LyraShield product package.
 
-This package is the long-term home for product-critical policy that is
-currently implemented inside the controlled ``strix/`` derivative. See
-``UPGRADES.md`` for the ownership boundary and migration plan.
+Prefer LiteLLM's bundled model metadata so imports never depend on GitHub
+availability. LyraShield owns its billable GPT-5.6 rate table separately.
 """
+
+from __future__ import annotations
+
+import os
+
+
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")

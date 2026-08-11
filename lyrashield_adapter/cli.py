@@ -173,6 +173,7 @@ def _register_lyrashield_skills() -> None:
 
 
 def _register_lyrashield_tool_overrides() -> None:
+    from lyrashield.agents.factory import register_tool_override  # noqa: PLC0415
     from lyrashield.tools.agents_graph.tools import (  # noqa: PLC0415
         agent_finish,
         create_agent,
@@ -209,7 +210,6 @@ def _register_lyrashield_tool_overrides() -> None:
     from lyrashield.tools.web_search.tool import (  # noqa: PLC0415
         web_search as lyra_web_search,
     )
-    from strix.agents.factory import register_tool_override  # noqa: PLC0415
 
     register_tool_override("agent_finish", agent_finish)
     register_tool_override("create_agent", create_agent)
@@ -240,10 +240,10 @@ def _register_lyrashield_tool_overrides() -> None:
 
 
 def _register_lyrashield_model_policy() -> None:
+    from lyrashield.agents.factory import register_model_policy  # noqa: PLC0415
     from lyrashield.policy.models import (  # noqa: PLC0415
         model_supports_programmatic_tool_calling,
     )
-    from strix.agents.factory import register_model_policy  # noqa: PLC0415
 
     register_model_policy(
         "model_supports_programmatic_tool_calling",
