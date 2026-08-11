@@ -59,14 +59,16 @@ jobs:
             '
           done
       - name: Promote the smoke-qualified digest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
           docker buildx imagetools create \
-            --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}" \
+            --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$RELEASE_TAG" \
             --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             "$image"
 
-          for tag in "${{ github.ref_name }}" "${{ github.sha }}"; do
+          for tag in "$RELEASE_TAG" "${{ github.sha }}"; do
             promoted_digest="$(docker buildx imagetools inspect \
               "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$tag" | awk '/^Digest:/ { print $2; exit }')"
             test "$promoted_digest" = "${{ steps.image.outputs.digest }}"

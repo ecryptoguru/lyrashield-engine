@@ -15,12 +15,12 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
 ## LLM configuration
 
 <ParamField path="LYRASHIELD_LLM" type="string" required>
-  Primary model in LiteLLM format. Must identify a GPT-5.6 Terra or Luna
-  deployment from a supported provider: `openai` (e.g. `openai/gpt-5.6-luna`),
-  `azure` or `azure_ai` (e.g. `azure/eu/gpt-5.6-terra`,
-  `azure_ai/gpt-5.6-luna`), `bedrock_mantle` (e.g.
-  `bedrock_mantle/openai.gpt-5.6-luna`), or `chatgpt` with an authenticated
-  subscription (e.g. `chatgpt/gpt-4o`). Alias of `STRIX_LLM`.
+  Primary model in LiteLLM format. Metered `openai`, `azure`, `azure_ai`, and
+  `bedrock_mantle` routes must identify a GPT-5.6 Terra or Luna deployment (for
+  example `openai/gpt-5.6-luna` or `azure_ai/gpt-5.6-terra`). An authenticated
+  subscription-backed `chatgpt/<model>` route is exempt from the Terra/Luna
+  name requirement and follows the subscription accounting rules below. Alias
+  of `STRIX_LLM`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">

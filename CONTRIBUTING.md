@@ -104,13 +104,9 @@ When changing skills:
 
 ## Local viewer SPA
 
-`lyrashield view` (inherited from upstream `strix view`) serves a prebuilt web UI whose source lives in `strix/interface/viewer/frontend/` and whose built output lives in `strix/interface/viewer/static/`. Treat both as upstream substrate: import a reviewed upstream change or migrate product-specific UI outside `strix/**`; do not edit the inherited viewer directly. If a reviewed upstream import changes the viewer, regenerate its committed output with the upstream build:
+`lyrashield view` (inherited from upstream `strix view`) serves a prebuilt web UI whose source lives in `strix/interface/viewer/frontend/` and whose built output lives in `strix/interface/viewer/static/`. Treat both as upstream substrate: viewer changes may enter only through an approved upstream-base update documented in `UPGRADES.md`. Product-specific UI belongs outside `strix/**`; do not edit or commit inherited viewer source or generated output directly.
 
-```bash
-make viewer   # or: cd strix/interface/viewer/frontend && npm ci && npm run build
-```
-
-Commit both the source change and the regenerated `strix/interface/viewer/static/`.
+When an approved upstream-base update changes the viewer, retain the upstream source and generated output exactly as imported and let the controlled-derivative gate verify the resulting tree.
 
 ## Reporting issues
 

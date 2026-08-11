@@ -13,7 +13,7 @@ The engine exposes `quick`, `standard`, and `deep`. The LyraShield application o
 
 `SAFE` and legacy `QUICK` resolve to the same repository profile. `CUSTOM` resolves to the Deep profile and does not add a fourth engine CLI value. A positive workspace policy can lower a cap or duration, but cannot raise the profile ceiling. Deep routing is deterministic: the Terra/medium root owns final judgment and delegates bounded focused work to Luna/high specialists.
 
-These are ceilings, not promised completion times or expected charges. Unused scanner reserve returns to the total wall-clock budget, but the engine never exceeds its own profile ceiling. Every run can end completed, failed, cancelled, timed out, or stopped by a protected limit, and the application preserves those distinctions.
+These are ceilings, not promised completion times or expected charges. The application worker enforces both the total wall-clock deadline and the fixed 12- or 40-minute engine deadline. Engine time saved can extend the deterministic-scanner phase up to `SCANNER_PHASE_TIMEOUT_MS` and the total deadline; scanner reserve never extends the engine deadline. Terminal outcomes include completed, failed, cancelled, timed out, protected-limit stops, `engine_stopped`, and `content_filter_stopped`, and the application preserves those distinctions.
 
 Web-app and API targets do not invoke this AI engine. The application routes them through target-specific deterministic profiles with a $0 AI budget; its capability registry is the source of truth for their request, byte, and time bounds.
 
