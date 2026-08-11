@@ -17,7 +17,7 @@ RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-f
     rm -f /etc/apt/sources.list.d/* && \
     apt-get update && \
     echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
-    apt-get full-upgrade -y && \
+    apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
     apt-get install -y --no-install-recommends golang-go git ca-certificates
@@ -49,7 +49,7 @@ RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-f
     rm -f /etc/apt/sources.list.d/* && \
     apt-get update && \
     echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
-    apt-get full-upgrade -y && \
+    apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring sudo && \
     apt-get update
 
