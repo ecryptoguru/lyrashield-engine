@@ -3,32 +3,58 @@
 # module/build caches never reach the runtime image. The resulting binaries are
 # statically linked and copied into the final stage.
 # ---------------------------------------------------------------------------
-FROM kalilinux/kali-rolling:latest AS gobuilder
+# The manifest-list digest is pinned so amd64 and arm64 select the exact base
+# image tested by the release workflow. Refresh it only through the sandbox
+# release process, never by rebuilding against a moving tag.
+FROM kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec7544537bcec1493277096 AS gobuilder
 
-RUN apt-get update && \
+ARG KALI_APT_SUITE=kali-last-snapshot
+ARG KALI_APT_INRELEASE_SHA256=6e298f996675e302bd5465a826ebd246f15b6ebcf71c2839287840be1b4277ee
+# The pinned InRelease hash and its APT signature authenticate this immutable
+# archive snapshot; the base image predates the archive's current TLS chain.
+RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+    printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
+    rm -f /etc/apt/sources.list.d/* && \
+    apt-get update && \
+    echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
+    apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
     apt-get install -y --no-install-recommends golang-go git ca-certificates
 
 ENV GOBIN=/out/bin
+ARG HTTPX_COMMIT=811409809ea2b1706c49452149ab454861543138
+ARG KATANA_COMMIT=e82a2b803d9a9703b614fae492f648cca926b15b
+ARG CVEMAP_COMMIT=08c124da690a5c6acba802998931be13d6ca78ba
+ARG GOSPIDER_COMMIT=f6cc9a78d709e088e55ce62e5e92ab063f1a184b
+ARG INTERACTSH_COMMIT=810180a230fe2265385ed45695a6635b5026452a
 RUN mkdir -p /out/bin && \
-    go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && \
-    go install -v github.com/projectdiscovery/katana/cmd/katana@latest && \
-    go install -v github.com/projectdiscovery/cvemap/cmd/vulnx@latest && \
-    go install -v github.com/jaeles-project/gospider@latest && \
-    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest
+    go install -v github.com/projectdiscovery/httpx/cmd/httpx@${HTTPX_COMMIT} && \
+    go install -v github.com/projectdiscovery/katana/cmd/katana@${KATANA_COMMIT} && \
+    go install -v github.com/jaeles-project/gospider@${GOSPIDER_COMMIT} && \
+    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@${INTERACTSH_COMMIT} && \
+    git clone --filter=blob:none https://github.com/projectdiscovery/cvemap.git /tmp/cvemap && \
+    git -C /tmp/cvemap checkout --detach "${CVEMAP_COMMIT}" && \
+    cd /tmp/cvemap && go build -o /out/bin/vulnx ./cmd/vulnx && \
+    rm -rf /tmp/cvemap
 
 # ---------------------------------------------------------------------------
 # Runtime stage
 # ---------------------------------------------------------------------------
-FROM kalilinux/kali-rolling:latest
+FROM kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec7544537bcec1493277096
 
 LABEL description="AI Agent Penetration Testing Environment with Comprehensive Automated Tools"
 
-RUN apt-get update && \
-    apt-get install -y kali-archive-keyring sudo && \
+ARG KALI_APT_SUITE=kali-last-snapshot
+ARG KALI_APT_INRELEASE_SHA256=6e298f996675e302bd5465a826ebd246f15b6ebcf71c2839287840be1b4277ee
+RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+    printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
+    rm -f /etc/apt/sources.list.d/* && \
     apt-get update && \
-    apt-get upgrade -y
+    echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
+    apt-get full-upgrade -y --allow-downgrades && \
+    apt-get install -y kali-archive-keyring sudo && \
+    apt-get update
 
 RUN useradd -m -s /bin/bash pentester && \
     usermod -aG sudo pentester && \
@@ -59,8 +85,6 @@ RUN apt-get update && \
     chromium fonts-liberation
 
 
-RUN setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip $(which nmap)
-
 USER pentester
 RUN openssl ecparam -name prime256v1 -genkey -noout -out /app/certs/ca.key && \
     openssl req -x509 -new -key /app/certs/ca.key \
@@ -83,53 +107,49 @@ USER root
 RUN cp /app/certs/ca.crt /usr/local/share/ca-certificates/ca.crt && \
     update-ca-certificates
 
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
-
 USER pentester
 WORKDIR /tmp
 
 # Go tools are built in the gobuilder stage; copy the static binaries only.
 COPY --from=gobuilder --chown=pentester:pentester /out/bin/ /home/pentester/go/bin/
 
-RUN nuclei -update-templates
+ARG NUCLEI_TEMPLATES_COMMIT=166dcb625c297785f461a567e73885e8c1ae5cf3
+RUN mkdir -p /home/pentester/.local && \
+    git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git /home/pentester/.local/nuclei-templates && \
+    git -C /home/pentester/.local/nuclei-templates fetch --depth 1 origin "${NUCLEI_TEMPLATES_COMMIT}" && \
+    git -C /home/pentester/.local/nuclei-templates checkout --detach "${NUCLEI_TEMPLATES_COMMIT}"
 
-RUN pipx install arjun && \
-    pipx install dirsearch && \
-    pipx inject dirsearch 'setuptools<81' && \
-    pipx install wafw00f
-
-ENV NPM_CONFIG_PREFIX=/home/pentester/.npm-global
-RUN mkdir -p /home/pentester/.npm-global
-
-RUN npm install -g retire@latest && \
-    npm install -g eslint@latest && \
-    npm install -g js-beautify@latest && \
-    npm install -g @ast-grep/cli@latest && \
-    npm install -g tree-sitter-cli@latest && \
-    npm install -g agent-browser@0.26.0 && \
+COPY --chown=pentester:pentester containers/npm-tools/package.json containers/npm-tools/package-lock.json /home/pentester/.npm-tools/
+RUN npm ci --omit=dev --prefix /home/pentester/.npm-tools && \
     npm cache clean --force && \
     # ast-grep ships two identical binaries (`ast-grep` and `sg`); dedupe (~52MB)
-    ln -sf ast-grep /home/pentester/.npm-global/lib/node_modules/@ast-grep/cli/sg
+    ln -sf ast-grep /home/pentester/.npm-tools/node_modules/@ast-grep/cli/sg
 
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV AGENT_BROWSER_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 ENV AGENT_BROWSER_ARGS="--disable-blink-features=AutomationControlled,--no-first-run,--no-default-browser-check,--lang=en-US"
 ENV AGENT_BROWSER_SCREENSHOT_DIR=/workspace/.agent-browser-screenshots
-RUN /home/pentester/.npm-global/bin/agent-browser doctor --offline --quick
+RUN /home/pentester/.npm-tools/node_modules/.bin/agent-browser doctor --offline --quick
 
+ARG TREE_SITTER_JAVA_COMMIT=e10607b45ff745f5f876bfa3e94fbcc6b44bdc11
+ARG TREE_SITTER_JAVASCRIPT_COMMIT=58404d8cf191d69f2674a8fd507bd5776f46cb11
+ARG TREE_SITTER_PYTHON_COMMIT=26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64
+ARG TREE_SITTER_GO_COMMIT=2346a3ab1bb3857b48b29d779a1ef9799a248cd7
+ARG TREE_SITTER_BASH_COMMIT=a06c2e4415e9bc0346c6b86d401879ffb44058f7
+ARG TREE_SITTER_JSON_COMMIT=001c28d7a29832b06b0e831ec77845553c89b56d
+ARG TREE_SITTER_YAML_COMMIT=a1c4812a73ec5e089de8e441fdea3a921e8d5079
+ARG TREE_SITTER_TYPESCRIPT_COMMIT=75b3874edb2dc714fb1fd77a32013d0f8699989f
 RUN set -eux; \
     TS_PARSER_DIR="/home/pentester/.tree-sitter/parsers"; \
     mkdir -p "${TS_PARSER_DIR}"; \
-    for repo in tree-sitter-java tree-sitter-javascript tree-sitter-python tree-sitter-go tree-sitter-bash tree-sitter-json tree-sitter-yaml tree-sitter-typescript; do \
-        if [ "$repo" = "tree-sitter-yaml" ]; then \
-            repo_url="https://github.com/tree-sitter-grammars/${repo}.git"; \
-        else \
-            repo_url="https://github.com/tree-sitter/${repo}.git"; \
-        fi; \
-        if [ ! -d "${TS_PARSER_DIR}/${repo}" ]; then \
-            git clone --depth 1 "${repo_url}" "${TS_PARSER_DIR}/${repo}"; \
-        fi; \
-    done; \
+    git clone --depth 1 https://github.com/tree-sitter/tree-sitter-java.git "${TS_PARSER_DIR}/tree-sitter-java" && git -C "${TS_PARSER_DIR}/tree-sitter-java" fetch --depth 1 origin "${TREE_SITTER_JAVA_COMMIT}" && git -C "${TS_PARSER_DIR}/tree-sitter-java" checkout --detach "${TREE_SITTER_JAVA_COMMIT}"; \
+    git clone --depth 1 https://github.com/tree-sitter/tree-sitter-javascript.git "${TS_PARSER_DIR}/tree-sitter-javascript" && git -C "${TS_PARSER_DIR}/tree-sitter-javascript" fetch --depth 1 origin "${TREE_SITTER_JAVASCRIPT_COMMIT}" && git -C "${TS_PARSER_DIR}/tree-sitter-javascript" checkout --detach "${TREE_SITTER_JAVASCRIPT_COMMIT}"; \
+    git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git "${TS_PARSER_DIR}/tree-sitter-python" && git -C "${TS_PARSER_DIR}/tree-sitter-python" fetch --depth 1 origin "${TREE_SITTER_PYTHON_COMMIT}" && git -C "${TS_PARSER_DIR}/tree-sitter-python" checkout --detach "${TREE_SITTER_PYTHON_COMMIT}"; \
+    git clone --depth 1 https://github.com/tree-sitter/tree-sitter-go.git "${TS_PARSER_DIR}/tree-sitter-go" && git -C "${TS_PARSER_DIR}/tree-sitter-go" fetch --depth 1 origin "${TREE_SITTER_GO_COMMIT}" && git -C "${TS_PARSER_DIR}/tree-sitter-go" checkout --detach "${TREE_SITTER_GO_COMMIT}"; \
+    git clone --depth 1 https://github.com/tree-sitter/tree-sitter-bash.git "${TS_PARSER_DIR}/tree-sitter-bash" && git -C "${TS_PARSER_DIR}/tree-sitter-bash" fetch --depth 1 origin "${TREE_SITTER_BASH_COMMIT}" && git -C "${TS_PARSER_DIR}/tree-sitter-bash" checkout --detach "${TREE_SITTER_BASH_COMMIT}"; \
+    git clone --depth 1 https://github.com/tree-sitter/tree-sitter-json.git "${TS_PARSER_DIR}/tree-sitter-json" && git -C "${TS_PARSER_DIR}/tree-sitter-json" fetch --depth 1 origin "${TREE_SITTER_JSON_COMMIT}" && git -C "${TS_PARSER_DIR}/tree-sitter-json" checkout --detach "${TREE_SITTER_JSON_COMMIT}"; \
+    git clone --depth 1 https://github.com/tree-sitter-grammars/tree-sitter-yaml.git "${TS_PARSER_DIR}/tree-sitter-yaml" && git -C "${TS_PARSER_DIR}/tree-sitter-yaml" fetch --depth 1 origin "${TREE_SITTER_YAML_COMMIT}" && git -C "${TS_PARSER_DIR}/tree-sitter-yaml" checkout --detach "${TREE_SITTER_YAML_COMMIT}"; \
+    git clone --depth 1 https://github.com/tree-sitter/tree-sitter-typescript.git "${TS_PARSER_DIR}/tree-sitter-typescript" && git -C "${TS_PARSER_DIR}/tree-sitter-typescript" fetch --depth 1 origin "${TREE_SITTER_TYPESCRIPT_COMMIT}" && git -C "${TS_PARSER_DIR}/tree-sitter-typescript" checkout --detach "${TREE_SITTER_TYPESCRIPT_COMMIT}"; \
     if [ -d "${TS_PARSER_DIR}/tree-sitter-typescript/typescript" ]; then \
         ln -sfn "${TS_PARSER_DIR}/tree-sitter-typescript/typescript" "${TS_PARSER_DIR}/tree-sitter-typescript-typescript"; \
     fi; \
@@ -145,16 +165,39 @@ RUN set -eux; \
     mv "${TMP_CFG}" "${TS_CONFIG}"
 
 WORKDIR /home/pentester/tools
-RUN git clone https://github.com/aravind0x7/JS-Snooper.git && \
+ARG JS_SNOOPER_COMMIT=932704cbce1a04ebe89a558f395a6e474e01b15b
+ARG JSNIPER_COMMIT=65d0b508dc88e6de3dfe6ac60e6d89eca22be686
+ARG JWT_TOOL_COMMIT=3bc7407cf2222d6a821dcc19c776e5a1b1cb9a9b
+RUN git clone --depth 1 https://github.com/aravind0x7/JS-Snooper.git && \
+    git -C JS-Snooper fetch --depth 1 origin "${JS_SNOOPER_COMMIT}" && \
+    git -C JS-Snooper checkout --detach "${JS_SNOOPER_COMMIT}" && \
     chmod +x JS-Snooper/js_snooper.sh && \
-    git clone https://github.com/xchopath/jsniper.sh.git && \
+    git clone --depth 1 https://github.com/xchopath/jsniper.sh.git && \
+    git -C jsniper.sh fetch --depth 1 origin "${JSNIPER_COMMIT}" && \
+    git -C jsniper.sh checkout --detach "${JSNIPER_COMMIT}" && \
     chmod +x jsniper.sh/jsniper.sh && \
-    git clone https://github.com/ticarpi/jwt_tool.git && \
+    git clone --depth 1 https://github.com/ticarpi/jwt_tool.git && \
+    git -C jwt_tool fetch --depth 1 origin "${JWT_TOOL_COMMIT}" && \
+    git -C jwt_tool checkout --detach "${JWT_TOOL_COMMIT}" && \
     chmod +x jwt_tool/jwt_tool.py
 
 USER root
 
-RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+ARG TRUFFLEHOG_VERSION=3.96.0
+ARG TRUFFLEHOG_LINUX_X64_SHA256=7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0
+ARG TRUFFLEHOG_LINUX_ARM64_SHA256=50acd4c7a3b8ebfe5083d8350956057030c44be3515dedd55b45263495c490b2
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64) TRUFFLEHOG_ARCH="amd64"; TRUFFLEHOG_SHA256="$TRUFFLEHOG_LINUX_X64_SHA256" ;; \
+        aarch64|arm64) TRUFFLEHOG_ARCH="arm64"; TRUFFLEHOG_SHA256="$TRUFFLEHOG_LINUX_ARM64_SHA256" ;; \
+        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${TRUFFLEHOG_ARCH}.tar.gz" -o /tmp/trufflehog.tgz; \
+    echo "${TRUFFLEHOG_SHA256}  /tmp/trufflehog.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/trufflehog.tgz -C /tmp; \
+    install -m 0755 /tmp/trufflehog /usr/local/bin/trufflehog; \
+    rm -f /tmp/trufflehog /tmp/trufflehog.tgz
 ARG GITLEAKS_VERSION=8.30.1
 ARG GITLEAKS_LINUX_X64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 ARG GITLEAKS_LINUX_ARM64_SHA256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
@@ -171,16 +214,26 @@ RUN set -eux; \
     install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks; \
     rm -f /tmp/gitleaks /tmp/gitleaks.tgz
 
-RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+ARG TRIVY_VERSION=0.73.0
+ARG TRIVY_LINUX_X64_SHA256=2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b
+ARG TRIVY_LINUX_ARM64_SHA256=13833d97e8a1a5367471c372a173180157f593bece570e20d5d925fef552f5dd
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64) TRIVY_ARCH="64bit"; TRIVY_SHA256="$TRIVY_LINUX_X64_SHA256" ;; \
+        aarch64|arm64) TRIVY_ARCH="ARM64"; TRIVY_SHA256="$TRIVY_LINUX_ARM64_SHA256" ;; \
+        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" -o /tmp/trivy.tgz; \
+    echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/trivy.tgz -C /tmp; \
+    install -m 0755 /tmp/trivy /usr/local/bin/trivy; \
+    rm -f /tmp/trivy /tmp/trivy.tgz
 
-RUN apt-get install -y wapiti
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wapiti
 
 USER pentester
-
-RUN pipx install semgrep && \
-    pipx install bandit
-
-RUN npm install -g jshint
 
 USER root
 
@@ -193,37 +246,37 @@ RUN apt-get autoremove -y && \
     # Remove package documentation and man pages not needed at runtime (~95MB)
     rm -rf /usr/share/doc/* /usr/share/doc-base/* /usr/share/man/*
 
-ENV PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:/app/.venv/bin:$PATH"
+ENV PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"
 ENV VIRTUAL_ENV="/app/.venv"
 
 WORKDIR /app
 
 ARG CAIDO_VERSION=0.56.0
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then \
-        CAIDO_ARCH="x86_64"; \
-    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-        CAIDO_ARCH="aarch64"; \
-    else \
-        echo "Unsupported architecture: $ARCH" && exit 1; \
-    fi && \
-    wget -O caido-cli.tar.gz "https://caido.download/releases/v${CAIDO_VERSION}/caido-cli-v${CAIDO_VERSION}-linux-${CAIDO_ARCH}.tar.gz" && \
-    tar -xzf caido-cli.tar.gz && \
-    chmod +x caido-cli && \
-    rm caido-cli.tar.gz && \
-    mv caido-cli /usr/local/bin/
+ARG CAIDO_LINUX_X64_SHA256=1bc13f1ad558cd333924890d9d09b73f1cdf6726b7855265cd4c4ddece0211d3
+ARG CAIDO_LINUX_ARM64_SHA256=5fe8c37ac0435ce5924014cf035902686051be86831824744e435636a62d3689
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64) CAIDO_ARCH="x86_64"; CAIDO_SHA256="$CAIDO_LINUX_X64_SHA256" ;; \
+        aarch64|arm64) CAIDO_ARCH="aarch64"; CAIDO_SHA256="$CAIDO_LINUX_ARM64_SHA256" ;; \
+        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://caido.download/releases/v${CAIDO_VERSION}/caido-cli-v${CAIDO_VERSION}-linux-${CAIDO_ARCH}.tar.gz" -o /tmp/caido-cli.tgz; \
+    echo "${CAIDO_SHA256}  /tmp/caido-cli.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/caido-cli.tgz -C /tmp; \
+    install -m 0755 /tmp/caido-cli /usr/local/bin/caido-cli; \
+    rm -f /tmp/caido-cli /tmp/caido-cli.tgz
 
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 
+COPY --chown=pentester:pentester containers/python-requirements.txt /tmp/python-requirements.txt
+
 USER pentester
 RUN python3 -m venv /app/.venv && \
-    /app/.venv/bin/pip install --no-cache-dir caido-sdk-client && \
-    /app/.venv/bin/pip install --no-cache-dir \
-        requests httpx beautifulsoup4 lxml pyjwt cryptography && \
-    /app/.venv/bin/pip install --no-cache-dir -r /home/pentester/tools/jwt_tool/requirements.txt && \
+    /app/.venv/bin/pip install --no-cache-dir --require-hashes -r /tmp/python-requirements.txt && \
     printf '%s\n' \
         '#!/bin/bash' \
         'exec /app/.venv/bin/python /home/pentester/tools/jwt_tool/jwt_tool.py "$@"' \
@@ -238,10 +291,11 @@ ENV PYTHONPATH=/opt/strix-python
 # directories here — including /app/.venv/bin — so `python3`/`pip` resolve to
 # the venv (which ships requests, httpx, bs4, lxml, pyjwt, cryptography, and the
 # Caido SDK) instead of the externally-managed system interpreter.
-RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:/app/.venv/bin:$PATH"' >> /home/pentester/.bashrc && \
-    echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:/app/.venv/bin:$PATH"' >> /home/pentester/.profile
+RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"' >> /home/pentester/.bashrc && \
+    echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"' >> /home/pentester/.profile
 
 USER root
+RUN setcap cap_net_raw,cap_net_bind_service+eip /usr/lib/nmap/nmap
 COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

@@ -9,7 +9,11 @@ fi
 
 contract_tests=(
   "apps/worker/src/engine/command-builder.test.ts"
+  "apps/worker/src/docker-runtime.test.ts"
   "apps/worker/src/engine/output-parser.test.ts"
+  "apps/worker/src/engine/result-integrity.test.ts"
+  "apps/worker/src/engine/runner.test.ts"
+  "apps/worker/src/jobs/run-scan.job.test.ts"
 )
 for test_path in "${contract_tests[@]}"; do
   if [[ ! -f "$app_checkout/$test_path" ]]; then
@@ -41,7 +45,10 @@ done
 
 (
   cd "$app_checkout"
-  corepack enable
-  pnpm install --frozen-lockfile
-  pnpm exec vitest run "${contract_tests[@]}"
+  corepack pnpm install --frozen-lockfile
+  DATABASE_URL="postgresql://lyrashield:lyrashield@127.0.0.1:5432/lyrashield?schema=public" \
+  BETTER_AUTH_SECRET="dummy-ci-only-secret-not-a-real-credential-32chars" \
+  BETTER_AUTH_URL="http://127.0.0.1:3100" \
+  NEXT_PUBLIC_APP_URL="http://127.0.0.1:3100" \
+  corepack pnpm exec vitest run "${contract_tests[@]}"
 )

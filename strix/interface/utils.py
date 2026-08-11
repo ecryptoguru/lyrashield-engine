@@ -1,6 +1,3 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
-# Controlled subprocess boundary: all subprocess calls below resolve Git and use shell=False.
-import argparse
 import ipaddress
 import json
 import logging
@@ -8,13 +5,13 @@ import os
 import re
 import secrets
 import shutil
-import subprocess  # nosec B404
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
-from urllib.parse import urlparse
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import docker
 import requests
@@ -24,18 +21,10 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import load_settings
+from strix.utils.api_spec import detect_spec_format
 
 
 logger = logging.getLogger(__name__)
-_WILDCARD_IPV4_HOST = str(ipaddress.IPv4Address(0))
-
-
-def _as_str_dict(value: Any) -> dict[str, Any]:
-    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
-
-
-def _as_str_or_none(value: Any) -> str | None:
-    return value if isinstance(value, str) else None
 
 
 def get_severity_color(severity: str) -> str:
@@ -120,10 +109,10 @@ def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR091
         text.append("CVE: ", style=field_style)
         text.append(cve)
 
-    cvss_breakdown = _as_str_dict(report.get("cvss_breakdown"))
+    cvss_breakdown = report.get("cvss_breakdown", {})
     if cvss_breakdown:
         text.append("\n\n")
-        cvss_parts: list[str] = []
+        cvss_parts = []
         if cvss_breakdown.get("attack_vector"):
             cvss_parts.append(f"AV:{cvss_breakdown['attack_vector']}")
         if cvss_breakdown.get("attack_complexity"):
@@ -230,7 +219,7 @@ def _build_vulnerability_stats(stats_text: Text, report_state: Any) -> None:
 
         stats_text.append("Vulnerabilities  ", style="bold red")
 
-        severity_parts: list[Text] = []
+        severity_parts = []
         for severity in ["critical", "high", "medium", "low", "info"]:
             count = severity_counts[severity]
             if count > 0:
@@ -259,22 +248,20 @@ def _build_vulnerability_stats(stats_text: Text, report_state: Any) -> None:
 def _llm_usage(report_state: Any) -> dict[str, Any]:
     if hasattr(report_state, "get_total_llm_usage"):
         usage = report_state.get_total_llm_usage()
-        return _as_str_dict(usage)
+        return usage if isinstance(usage, dict) else {}
     usage = getattr(report_state, "run_record", {}).get("llm_usage")
-    return _as_str_dict(usage)
+    return usage if isinstance(usage, dict) else {}
 
 
-def _is_subscription(report_state: Any) -> bool:
+def is_subscription_run(report_state: Any) -> bool:
     """Whether this run uses a model subscription (no metered cost).
 
     Prefers the run record so it's correct for hydrated/resumed runs; falls back
     to current settings.
     """
     record = getattr(report_state, "run_record", None)
-    if isinstance(record, dict):
-        record = _as_str_dict(record)
-        if record.get("auth_mode"):
-            return record.get("auth_mode") == "subscription"
+    if isinstance(record, dict) and record.get("auth_mode"):
+        return record.get("auth_mode") == "subscription"
     from strix.config import codex
 
     return codex.auth_mode(load_settings().llm.model) == "subscription"
@@ -298,11 +285,15 @@ def _float_stat(usage: dict[str, Any], key: str) -> float:
 def _detail_value(usage: dict[str, Any], detail_key: str, value_key: str) -> int:
     details = usage.get(detail_key)
     if isinstance(details, list):
-        details = _as_str_dict(details[0]) if details and isinstance(details[0], dict) else {}
+        details = details[0] if details and isinstance(details[0], dict) else {}
     if not isinstance(details, dict):
         return 0
-    details = _as_str_dict(details)
     return _int_stat(details, value_key)
+
+
+def has_model_response(report_state: Any) -> bool:
+    usage = _llm_usage(report_state)
+    return bool(usage) and _int_stat(usage, "requests") > 0
 
 
 def _build_llm_usage_stats(
@@ -311,7 +302,7 @@ def _build_llm_usage_stats(
     *,
     live: bool = False,
 ) -> None:
-    subscription = _is_subscription(report_state)
+    subscription = is_subscription_run(report_state)
     usage = _llm_usage(report_state)
     if not usage or _int_stat(usage, "requests") <= 0:
         stats_text.append("\n")
@@ -375,7 +366,7 @@ def build_live_stats_text(report_state: Any) -> Text:
     model = load_settings().llm.model or "unknown"
     stats_text.append("Model ", style="dim")
     stats_text.append(str(model), style="white")
-    if _is_subscription(report_state):
+    if is_subscription_run(report_state):
         stats_text.append("  ·  ", style="dim white")
         stats_text.append("ChatGPT subscription", style="#22c55e")
     stats_text.append("\n")
@@ -391,7 +382,7 @@ def build_live_stats_text(report_state: Any) -> Text:
             if severity in severity_counts:
                 severity_counts[severity] += 1
 
-        severity_parts: list[Text] = []
+        severity_parts = []
         for severity in ["critical", "high", "medium", "low", "info"]:
             count = severity_counts[severity]
             if count > 0:
@@ -420,7 +411,7 @@ def build_tui_stats_text(report_state: Any) -> Text:
 
     model = load_settings().llm.model or "unknown"
     stats_text.append(str(model), style="white")
-    subscription = _is_subscription(report_state)
+    subscription = is_subscription_run(report_state)
     if subscription:
         stats_text.append("\n")
         stats_text.append("ChatGPT subscription", style="#22c55e")
@@ -458,17 +449,17 @@ def _slugify_for_run_name(text: str, max_length: int = 32) -> str:
     return text or "pentest"
 
 
-def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None) -> str:
+def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None) -> str:  # noqa: PLR0911
     if not targets_info:
         return "pentest"
 
     first = targets_info[0]
-    target_type = str(first.get("type") or "")
-    details = _as_str_dict(first.get("details"))
-    original = str(first.get("original", "") or "")
+    target_type = first.get("type")
+    details = first.get("details", {}) or {}
+    original = first.get("original", "") or ""
 
     if target_type == "web_application":
-        url = str(details.get("target_url", original) or original)
+        url = details.get("target_url", original)
         try:
             parsed = urlparse(url)
             return str(parsed.netloc or parsed.path or url)
@@ -476,7 +467,7 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
             return str(url)
 
     if target_type == "repository":
-        repo = str(details.get("target_repo", original) or original)
+        repo = details.get("target_repo", original)
         parsed = urlparse(repo)
         path = parsed.path or repo
         name = path.rstrip("/").split("/")[-1] or path
@@ -485,15 +476,23 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
         return str(name)
 
     if target_type == "local_code":
-        path_str = str(details.get("target_path", original) or original)
+        path_str = details.get("target_path", original)
         try:
             return str(Path(path_str).name or path_str)
         except Exception:
             return str(path_str)
 
     if target_type == "ip_address":
-        ip_value = str(details.get("target_ip", original) or original)
-        return ip_value or original or "pentest"
+        return str(details.get("target_ip", original) or original)
+
+    if target_type == "api_spec":
+        if details.get("source") == "postman_api":
+            return "postman-collection"
+        spec_path = details.get("target_spec", original)
+        try:
+            return str(Path(spec_path).stem or spec_path)
+        except Exception:
+            return str(spec_path)
 
     return str(original or "pentest")
 
@@ -530,7 +529,7 @@ class RepoDiffScope:
     renamed_files: list[dict[str, Any]]
     deleted_files: list[str]
     analyzable_files: list[str]
-    truncated_sections: dict[str, bool] = field(default_factory=dict[str, bool])
+    truncated_sections: dict[str, bool] = field(default_factory=dict)
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -557,38 +556,27 @@ class DiffScopeResult:
     active: bool
     mode: str
     instruction_block: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict[str, Any])
-
-
-def _git_executable() -> str:
-    executable = shutil.which("git")
-    if executable is None:
-        raise FileNotFoundError("Git executable not found in PATH")
-    return executable
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _run_git_command(
     repo_path: Path, args: list[str], check: bool = True
 ) -> subprocess.CompletedProcess[str]:
-    # Controlled subprocess boundary: Git path is resolved and shell is disabled.
-    return subprocess.run(  # noqa: S603  # nosec B603
-        [_git_executable(), "-C", str(repo_path), *args],
+    return subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo_path), *args],  # noqa: S607
         capture_output=True,
         text=True,
         check=check,
-        timeout=5,
     )
 
 
 def _run_git_command_raw(
     repo_path: Path, args: list[str], check: bool = True
 ) -> subprocess.CompletedProcess[bytes]:
-    # Controlled subprocess boundary: Git path is resolved and shell is disabled.
-    return subprocess.run(  # noqa: S603  # nosec B603
-        [_git_executable(), "-C", str(repo_path), *args],
+    return subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo_path), *args],  # noqa: S607
         capture_output=True,
         check=check,
-        timeout=5,
     )
 
 
@@ -867,11 +855,9 @@ def _truncate_file_list(
 def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:
     lines = [
         "The user is requesting a review of a Pull Request.",
-        (
-            "Instruction: Direct your analysis primarily at the changes in the listed files. "
-            "You may reference other files in the repository for context (imports, definitions, "
-            "usage), but report findings only if they relate to the listed changes."
-        ),
+        "Instruction: Direct your analysis primarily at the changes in the listed files. "
+        "You may reference other files in the repository for context (imports, definitions, "
+        "usage), but report findings only if they relate to the listed changes.",
         "For Added files, review the entire file content.",
         "For Modified files, focus primarily on the changed areas.",
     ]
@@ -912,10 +898,10 @@ def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:
                 )
 
         if scope.renamed_files:
-            rename_lines: list[str] = []
+            rename_lines = []
             for rename in scope.renamed_files:
-                old_path = str(rename.get("old_path") or "unknown")
-                new_path = str(rename.get("new_path") or "unknown")
+                old_path = rename.get("old_path") or "unknown"
+                new_path = rename.get("new_path") or "unknown"
                 similarity = rename.get("similarity")
                 if isinstance(similarity, int):
                     rename_lines.append(f"- {old_path} -> {new_path} (similarity {similarity}%)")
@@ -1116,16 +1102,16 @@ def resolve_diff_scope_context(
 def _is_http_git_repo(url: str) -> bool:
     check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
     try:
-        resp = requests.get(check_url, headers={"User-Agent": "git/strix"}, timeout=10)
+        with requests.get(check_url, headers={"User-Agent": "git/2.43.0"}, timeout=10) as resp:
+            if resp.status_code >= 400:
+                return resp.status_code == 401
+            return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
     except (requests.RequestException, ValueError):
         return False
-    if resp.status_code >= 400:
-        return resp.status_code == 401
-    return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
 
 
-def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
-    if not target:
+def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911
+    if not target or not isinstance(target, str):
         raise ValueError("Target must be a non-empty string")
 
     target = target.strip()
@@ -1137,6 +1123,24 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
         return "repository", {"target_repo": target}
 
     parsed = urlparse(target)
+    if parsed.scheme == "postman":
+        collection_uid = f"{parsed.netloc}{parsed.path}".strip("/")
+        if not collection_uid:
+            raise ValueError(
+                f"Missing Postman collection id in '{target}' (expected postman://<collection-uid>)"
+            )
+        details = {
+            "target_spec": target,
+            "spec_format": "postman",
+            "source": "postman_api",
+            "collection_uid": collection_uid,
+        }
+        query = parse_qs(parsed.query)
+        env_uid = (query.get("env") or query.get("environment") or [""])[0].strip()
+        if env_uid:
+            details["environment_uid"] = env_uid
+        return "api_spec", details
+
     if parsed.scheme in ("http", "https"):
         if parsed.username or parsed.password:
             return "repository", {"target_repo": target}
@@ -1160,7 +1164,14 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
     try:
         if path.exists():
             if path.is_dir():
+                check_mountable_dir(path)
                 return "local_code", {"target_path": str(path.resolve())}
+            spec_format = detect_spec_format(path)
+            if spec_format is not None:
+                return "api_spec", {
+                    "target_spec": str(path.resolve()),
+                    "spec_format": spec_format,
+                }
             raise ValueError(f"Path exists but is not a directory: {target}")
     except (OSError, RuntimeError) as e:
         raise ValueError(f"Invalid path: {target} - {e!s}") from e
@@ -1187,6 +1198,9 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
         "- A valid URL (http:// or https://)\n"
         "- A Git repository URL (https://host/org/repo or git@host:org/repo.git)\n"
         "- A local directory path\n"
+        "- An API spec file (OpenAPI/Swagger .json/.yaml or a Postman collection)\n"
+        "- A Postman collection by id (postman://<collection-uid>[?env=<environment-uid>], "
+        "needs POSTMAN_API_KEY)\n"
         "- A domain name (e.g., example.com)\n"
         "- An IP address (e.g., 192.168.1.10)"
     )
@@ -1220,21 +1234,7 @@ def read_target_list_file(path_str: str) -> list[str]:
 
 def sanitize_name(name: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9._-]", "-", name.strip())
-    if not sanitized or sanitized in {".", ".."}:
-        return "target"
-    return sanitized
-
-
-def validate_run_name(value: str) -> str:
-    if ".." in value or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value):
-        raise argparse.ArgumentTypeError("run name must be a safe 1-128 character identifier")
-    # Reject names that start with a dot to prevent confusion with hidden
-    # directories (e.g. .git, .ssh) in the runs folder. The regex above already
-    # requires the first character to be alphanumeric, so this is a belt-and-
-    # suspenders guard for clarity.
-    if value.startswith("."):
-        raise argparse.ArgumentTypeError("run name must not start with a dot")
-    return value
+    return sanitized or "target"
 
 
 def derive_repo_base_name(repo_url: str) -> str:
@@ -1265,14 +1265,14 @@ def assign_workspace_subdirs(targets_info: list[dict[str, Any]]) -> None:
     name_counts: dict[str, int] = {}
 
     for target in targets_info:
-        target_type = str(target.get("type") or "")
-        details = _as_str_dict(target.get("details"))
+        target_type = target["type"]
+        details = target["details"]
 
         base_name: str | None = None
         if target_type == "repository":
-            base_name = derive_repo_base_name(str(details.get("target_repo") or ""))
+            base_name = derive_repo_base_name(details["target_repo"])
         elif target_type == "local_code":
-            base_name = derive_local_base_name(str(details.get("target_path") or "local"))
+            base_name = derive_local_base_name(details.get("target_path", "local"))
 
         if base_name is None:
             continue
@@ -1294,157 +1294,160 @@ def collect_local_sources(targets_info: list[dict[str, Any]]) -> list[dict[str, 
     local_sources: list[dict[str, Any]] = []
 
     for target_info in targets_info:
-        details = _as_str_dict(target_info.get("details"))
-        workspace_subdir = _as_str_or_none(details.get("workspace_subdir"))
+        details = target_info["details"]
+        workspace_subdir = details.get("workspace_subdir")
 
-        if target_info.get("type") == "local_code" and "target_path" in details:
+        if target_info["type"] == "local_code" and "target_path" in details:
             local_sources.append(
                 {
-                    "source_path": str(details["target_path"]),
+                    "source_path": details["target_path"],
                     "workspace_subdir": workspace_subdir,
-                    "mount": bool(details.get("mount", False)),
+                    "protect_metadata": True,
                 }
             )
 
-        elif target_info.get("type") == "repository" and "cloned_repo_path" in details:
+        elif target_info["type"] == "repository" and "cloned_repo_path" in details:
             local_sources.append(
                 {
-                    "source_path": str(details["cloned_repo_path"]),
+                    "source_path": details["cloned_repo_path"],
                     "workspace_subdir": workspace_subdir,
-                    "mount": False,
+                    "protect_metadata": False,
                 }
             )
 
     return local_sources
 
 
-def directory_size_bytes(path: Path) -> int:
-    """Total size in bytes of regular files under ``path`` (symlinks not followed).
+# Refused along with everything under them.
+_FORBIDDEN_MOUNT_TREES = frozenset(
+    {
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/etc",
+        "/lib",
+        "/lib64",
+        "/nix/store",
+        "/run/current-system/sw",
+        "/Applications",
+        "/Library",
+        "/System",
+        "/dev",
+        "/boot",
+        "/proc",
+        "/sys",
+    }
+)
 
-    Best-effort: files that disappear or can't be stat'd mid-walk are skipped.
-    Used as a cheap (stat-only) pre-flight to estimate the cost of streaming a
-    local target into the sandbox before we actually try to copy it.
+# Refused themselves, but they hold projects too, so their contents are fine.
+_FORBIDDEN_MOUNT_ROOTS = frozenset(
+    {
+        "/",
+        "/private",
+        "/var",
+        "/opt",
+        "/home",
+        "/root",
+        "/srv",
+        "/Users",
+        "/Volumes",
+    }
+)
 
-    Directories that can't be listed (e.g. permission denied) are logged and
-    skipped rather than silently dropped — so an under-count is at least
-    visible — but the returned total then excludes their contents.
-    """
+_FORBIDDEN_WINDOWS_TREE_NAMES = frozenset(
+    {"windows", "program files", "program files (x86)", "programdata"}
+)
 
-    def _on_walk_error(error: OSError) -> None:
-        logger.warning("Could not read %s while measuring size: %s", error.filename, error)
-
-    total = 0
-    for root, _dirs, files in os.walk(path, followlinks=False, onerror=_on_walk_error):
-        for name in files:
-            file_path = os.path.join(root, name)  # noqa: PTH118
-            try:
-                if os.path.islink(file_path):  # noqa: PTH114
-                    continue
-                total += os.path.getsize(file_path)  # noqa: PTH202
-            except OSError:
-                continue
-    return total
-
-
-def find_oversized_local_targets(
-    targets_info: list[dict[str, Any]], max_bytes: int
-) -> list[tuple[str, int]]:
-    """Return ``(path, size_bytes)`` for non-mounted local targets over ``max_bytes``.
-
-    Mounted targets are bind-mounted rather than copied, so their size is
-    irrelevant and they are excluded. A ``max_bytes`` of zero or less disables
-    the check entirely (returns no targets).
-    """
-    if max_bytes <= 0:
-        return []
-    oversized: list[tuple[str, int]] = []
-    for target in targets_info:
-        if target.get("type") != "local_code":
-            continue
-        details = _as_str_dict(target.get("details"))
-        if details.get("mount"):
-            continue
-        target_path = str(details.get("target_path") or "")
-        if not target_path:
-            continue
-        size = directory_size_bytes(Path(target_path))
-        if size > max_bytes:
-            oversized.append((target_path, size))
-    return oversized
+_FORBIDDEN_MOUNT_DIR_NAMES = frozenset(
+    {
+        ".ssh",
+        ".tsh",
+        ".brev",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".kube",
+        ".docker",
+        ".config",
+        ".npm",
+        ".pki",
+        ".terraform.d",
+    }
+)
 
 
-def build_mount_targets_info(mount_paths: list[str]) -> list[dict[str, Any]]:
-    """Build ``targets_info`` entries for ``--mount`` directories.
+def _is_within(path: Path, ancestor: Path) -> bool:
+    ancestor_parts = [part.casefold() for part in ancestor.parts]
+    path_parts = [part.casefold() for part in path.parts]
+    return path_parts[: len(ancestor_parts)] == ancestor_parts
 
-    Each path must be an existing local directory; it is bind-mounted into the
-    sandbox (read-only) instead of being copied file-by-file. Raises
-    ``ValueError`` for an empty path, or one that does not exist or is not a
-    directory.
-    """
-    targets_info: list[dict[str, Any]] = []
-    for raw in mount_paths:
-        if not raw or not raw.strip():
-            raise ValueError("--mount path must not be empty.")
-        path = Path(raw).expanduser()
-        try:
-            resolved = path.resolve()
-            is_dir = resolved.is_dir()
-        except (OSError, RuntimeError) as e:
-            raise ValueError(f"Invalid mount path '{raw}': {e!s}") from e
-        if not is_dir:
-            raise ValueError(
-                f"Mount path '{raw}' is not an existing directory. "
-                "--mount requires a path to a local directory."
-            )
-        targets_info.append(
-            {
-                "type": "local_code",
-                "details": {"target_path": str(resolved), "mount": True},
-                "original": str(resolved),
-            }
+
+def check_mountable_dir(path: Path) -> None:
+    resolved = path.resolve()
+    if not resolved.is_dir():
+        raise ValueError(f"'{path}' is not an existing directory.")
+
+    # Both the literal and the resolved form: macOS reaches /etc through the
+    # /private/etc symlink, and only the resolved path is compared below.
+    exact = {str(Path(root)).casefold() for root in _FORBIDDEN_MOUNT_ROOTS}
+    exact |= {str(Path(root).resolve()).casefold() for root in _FORBIDDEN_MOUNT_ROOTS}
+    exact.add(str(Path.home().resolve()).casefold())
+    tree_roots = set(_FORBIDDEN_MOUNT_TREES)
+    if os.name == "nt":
+        drive = Path(resolved.anchor)
+        tree_roots |= {str(drive / name) for name in _FORBIDDEN_WINDOWS_TREE_NAMES}
+        exact.add(str(drive / "Users").casefold())
+    trees = [Path(root) for root in tree_roots] + [Path(root).resolve() for root in tree_roots]
+    if (
+        str(resolved).casefold() in exact
+        or resolved.parent == resolved
+        or any(_is_within(resolved, tree) for tree in trees)
+    ):
+        raise ValueError(
+            f"Refusing to mount '{resolved}' into the sandbox: it is a system "
+            "or home directory, not a codebase. Point the target at the "
+            "project directory you want tested."
         )
-    return targets_info
+
+    credential = next(
+        (part for part in resolved.parts if part.casefold() in _FORBIDDEN_MOUNT_DIR_NAMES), None
+    )
+    if credential is not None:
+        raise ValueError(
+            f"Refusing to mount '{resolved}' into the sandbox: '{credential}' "
+            "holds credentials, not code."
+        )
 
 
 def dedupe_local_targets(targets_info: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Collapse local_code targets that resolve to the same path.
-
-    When a directory is supplied both as a copied ``--target`` and via
-    ``--mount`` (or as duplicate values of either), keep one entry and prefer
-    the bind-mounted one — so the same tree is never both streamed in and
-    mounted. Order is preserved; non-local targets pass through untouched.
-    """
     result: list[dict[str, Any]] = []
-    index_by_path: dict[str, int] = {}
+    seen_paths: set[str] = set()
     for target in targets_info:
-        details = _as_str_dict(target.get("details"))
-        path = str(details.get("target_path") or "")
+        details = target.get("details") or {}
+        path = details.get("target_path")
         if target.get("type") != "local_code" or not path:
             result.append(target)
             continue
-        existing = index_by_path.get(path)
-        if existing is None:
-            index_by_path[path] = len(result)
+        if path not in seen_paths:
+            seen_paths.add(path)
             result.append(target)
-        elif details.get("mount") and not _as_str_dict(result[existing].get("details")).get(
-            "mount"
-        ):
-            result[existing] = target  # bind mount supersedes the copied entry
     return result
 
 
 def _is_localhost_host(host: str) -> bool:
     host_lower = host.lower().strip("[]")
 
-    if host_lower in ("localhost", _WILDCARD_IPV4_HOST, "::1"):
+    if host_lower in ("localhost", "0.0.0.0", "::1"):  # nosec B104
         return True
 
     try:
         ip = ipaddress.ip_address(host_lower)
+        if isinstance(ip, ipaddress.IPv4Address):
+            return ip.is_loopback  # 127.0.0.0/8
+        if isinstance(ip, ipaddress.IPv6Address):
+            return ip.is_loopback  # ::1
     except ValueError:
         pass
-    else:
-        return ip.is_loopback
 
     return False
 
@@ -1453,11 +1456,11 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
     from yarl import URL
 
     for target_info in targets_info:
-        target_type = str(target_info.get("type") or "")
-        details = _as_str_dict(target_info.get("details"))
+        target_type = target_info.get("type")
+        details = target_info.get("details", {})
 
         if target_type == "web_application":
-            target_url = str(details.get("target_url") or "")
+            target_url = details.get("target_url", "")
             try:
                 url = URL(target_url)
             except (ValueError, TypeError):
@@ -1467,48 +1470,82 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
                 details["target_url"] = str(url.with_host(host_gateway))
 
         elif target_type == "ip_address":
-            target_ip = str(details.get("target_ip") or "")
+            target_ip = details.get("target_ip", "")
             if target_ip and _is_localhost_host(target_ip):
                 details["target_ip"] = host_gateway
 
 
-def _print_clone_error(console: Console, message: str) -> None:
-    error_text = Text()
-    error_text.append("REPOSITORY CLONE FAILED", style="bold red")
-    error_text.append("\n\n", style="white")
-    error_text.append(f"{message}\n", style="white")
-    panel = Panel(
-        error_text,
-        title="[bold white]STRIX",
-        title_align="left",
-        border_style="red",
-        padding=(1, 2),
-    )
-    console.print("\n")
-    console.print(panel)
-    console.print()
+#: API spec targets are copied into one workspace directory rather than mounted
+#: from wherever they happen to live on the host.
+API_SPEC_WORKSPACE_SUBDIR = "api-specs"
+
+
+def write_fetched_collection(collection: dict[str, Any], collection_uid: str) -> str:
+    """Write a collection fetched from the Postman API to a local file.
+
+    Returns the file path, so a ``postman://`` target continues as an ordinary
+    spec file from here on and the API key never leaves the host.
+    """
+    staging = Path(tempfile.gettempdir()) / "strix_api_specs" / "fetched"
+    staging.mkdir(parents=True, exist_ok=True)
+    path = staging / f"{sanitize_name(collection_uid)}.postman_collection.json"
+    path.write_text(json.dumps(collection, indent=2), encoding="utf-8")
+    return str(path)
+
+
+def stage_api_specs(targets_info: list[dict[str, Any]], run_name: str) -> list[dict[str, Any]]:
+    """Copy every ``api_spec`` target into one directory for the sandbox.
+
+    A spec is a single file the agent reads, not a tree it works in, so it is
+    copied to a per-run staging directory that is exposed at
+    ``/workspace/api-specs`` instead of mounting its host location. Each target's
+    ``workspace_path`` records where the agent will find it.
+    """
+    specs = [t for t in targets_info if t.get("type") == "api_spec"]
+    if not specs:
+        return []
+
+    staging = Path(tempfile.gettempdir()) / "strix_api_specs" / run_name
+    staging.mkdir(parents=True, exist_ok=True)
+
+    used: set[str] = set()
+    for target in specs:
+        details = target["details"]
+        source = Path(str(details["target_spec"]))
+        name = source.name
+        stem, suffix = source.stem, source.suffix
+        count = 1
+        while name in used:
+            count += 1
+            name = f"{stem}-{count}{suffix}"
+        used.add(name)
+        shutil.copy2(source, staging / name)
+        details["workspace_path"] = f"/workspace/{API_SPEC_WORKSPACE_SUBDIR}/{name}"
+
+    return [
+        {
+            "source_path": str(staging),
+            "workspace_subdir": API_SPEC_WORKSPACE_SUBDIR,
+            "protect_metadata": False,
+        }
+    ]
 
 
 def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None) -> str:
     console = Console()
 
-    git_executable = _git_executable()
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        raise FileNotFoundError("Git executable not found in PATH")
+
+    temp_dir = Path(tempfile.gettempdir()) / "strix_repos" / run_name
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
     if dest_name:
         repo_name = dest_name
     else:
         repo_name = Path(repo_url).stem if repo_url.endswith(".git") else Path(repo_url).name
 
-    if not repo_name or repo_name in {".", ".."} or "/" in repo_name or "\\" in repo_name:
-        _print_clone_error(
-            console,
-            f"The repository destination name {repo_name!r} is not a safe subdirectory.",
-        )
-        sys.exit(1)
-
-    base = Path(tempfile.gettempdir()) / "strix_repos"
-    base.mkdir(parents=True, exist_ok=True)
-    temp_dir = Path(tempfile.mkdtemp(prefix=f"repo_{run_name}_", dir=base))
     clone_path = temp_dir / repo_name
 
     if clone_path.exists():
@@ -1516,13 +1553,10 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
 
     try:
         with console.status(f"[bold cyan]Cloning repository {repo_url}...", spinner="dots"):
-            # Controlled subprocess boundary: Git path is resolved, shell=False,
-            # and -- terminates option parsing before the user-controlled repository URL.
-            subprocess.run(  # noqa: S603  # nosec B603
+            subprocess.run(  # noqa: S603
                 [
                     git_executable,
                     "clone",
-                    "--",
                     repo_url,
                     str(clone_path),
                 ],
@@ -1534,43 +1568,13 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
         return str(clone_path.absolute())
 
     except subprocess.CalledProcessError as e:
-        error_text = Text()
-        error_text.append("REPOSITORY CLONE FAILED", style="bold red")
-        error_text.append("\n\n", style="white")
-        error_text.append(f"Could not clone repository: {repo_url}\n", style="white")
-        error_text.append(
-            f"Error: {e.stderr if hasattr(e, 'stderr') and e.stderr else str(e)}", style="dim red"
-        )
-
-        panel = Panel(
-            error_text,
-            title="[bold white]STRIX",
-            title_align="left",
-            border_style="red",
-            padding=(1, 2),
-        )
-        console.print("\n")
-        console.print(panel)
-        console.print()
-        sys.exit(1)
-    except FileNotFoundError:
-        error_text = Text()
-        error_text.append("GIT NOT FOUND", style="bold red")
-        error_text.append("\n\n", style="white")
-        error_text.append("Git is not installed or not available in PATH.\n", style="white")
-        error_text.append("Please install Git to clone repositories.\n", style="white")
-
-        panel = Panel(
-            error_text,
-            title="[bold white]STRIX",
-            title_align="left",
-            border_style="red",
-            padding=(1, 2),
-        )
-        console.print("\n")
-        console.print(panel)
-        console.print()
-        sys.exit(1)
+        detail = e.stderr if hasattr(e, "stderr") and e.stderr else str(e)
+        raise ValueError(f"Could not clone repository {repo_url}: {detail}") from e
+    except FileNotFoundError as e:
+        raise ValueError(
+            "Git is not installed or not available in PATH. "
+            "Please install Git to clone repositories."
+        ) from e
 
 
 def check_docker_connection() -> Any:
@@ -1670,7 +1674,6 @@ def validate_config_file(config_path: str) -> Path:
     if not isinstance(data, dict):
         console.print("[bold red]Error:[/] Config file must contain a JSON object")
         sys.exit(1)
-    data = _as_str_dict(data)
 
     if "env" not in data or not isinstance(data.get("env"), dict):
         console.print("[bold red]Error:[/] Config file must have an 'env' object")

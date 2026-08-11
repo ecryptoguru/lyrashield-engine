@@ -13,6 +13,8 @@ from typing import Any, Literal, get_args
 from agents import RunContextWrapper, function_tool
 
 from strix.core.agents import Status, coordinator_from_context
+from strix.core.execution import notify_parent_on_terminal
+from strix.core.hooks import LLM_TURN_KEY
 from strix.skills import validate_requested_skills
 
 
@@ -223,10 +225,11 @@ _WAIT_DEFAULT_TIMEOUT_S = 300
 # ``timeout_seconds`` the model asks for. One second of headroom lets the
 # tool's own timeout fire first and return a clean result.
 _WAIT_HARD_CEILING_S = _WAIT_DEFAULT_TIMEOUT_S + 1
+_WAITED_TURN_KEY = "waited_llm_turn"
 
 
 @function_tool(timeout=_WAIT_HARD_CEILING_S)
-async def wait_for_agents(
+async def wait_for_agents(  # noqa: PLR0911
     ctx: RunContextWrapper,
     reason: str = "Waiting for messages from other agents",
     timeout_seconds: int = _WAIT_DEFAULT_TIMEOUT_S,
@@ -237,6 +240,11 @@ async def wait_for_agents(
     responds — typically after spawning subagents and you want their
     completion reports. You resume the instant any message arrives, so
     size ``timeout_seconds`` to the work you're awaiting.
+
+    **Issue exactly one wait, then stop and react to what it returns.**
+    This call blocks and resumes on its own; it is not a poll you repeat.
+    Do not write out a wait/check loop ahead of time — a second wait in
+    the same turn returns immediately without waiting.
 
     **This tool is only for waiting on other agents.** Two things it is
     NOT for:
@@ -288,6 +296,24 @@ async def wait_for_agents(
             ensure_ascii=False,
             default=str,
         )
+
+    turn = inner.get(LLM_TURN_KEY)
+    if turn is not None and inner.get(_WAITED_TURN_KEY) == turn:
+        return json.dumps(
+            {
+                "success": True,
+                "wait_outcome": "already_waited",
+                "reason": reason,
+                "note": (
+                    "You already waited in this turn. A single wait_for_agents blocks and "
+                    "resumes on its own, so queueing more waits only strands you — issue one "
+                    "wait, then react to what it returns."
+                ),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    inner[_WAITED_TURN_KEY] = turn
 
     async with coordinator._lock:
         stopped = coordinator.statuses.get(me) == "stopped"
@@ -383,7 +409,7 @@ async def create_agent(
     ctx: RunContextWrapper,
     name: str,
     task: str,
-    inherit_context: bool = False,
+    inherit_context: bool = True,
     skills: list[str] | None = None,
 ) -> str:
     """Spawn a specialist child agent to run in parallel.
@@ -420,9 +446,9 @@ async def create_agent(
             ``send_message_to_agent`` flows).
         task: Specific objective. Be concrete — what to test, what
             success looks like, any constraints.
-        inherit_context: Default ``False``. The focused task and system-owned
-            scope are sufficient for most specialists. Set ``True`` only when
-            prior conversation evidence is essential to the child.
+        inherit_context: Default ``True``. The child receives the
+            parent's input history as background; only set ``False``
+            when starting a clean-slate task.
         skills: List of skill names (e.g. ``["xss", "sql_injection"]``).
             Max 5; prefer 1-3.
     """
@@ -442,16 +468,6 @@ async def create_agent(
             {
                 "success": False,
                 "error": "Scan runner did not provide a child-agent spawner in context",
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-    if not await coordinator.can_spawn_agent():
-        return json.dumps(
-            {
-                "success": False,
-                "error": f"Scan agent limit reached ({coordinator.max_agents})",
-                "agent_id": None,
             },
             ensure_ascii=False,
             default=str,
@@ -568,7 +584,7 @@ async def agent_finish(
         )
 
     parent_notified = False
-    if report_to_parent:
+    if report_to_parent and await coordinator.claim_parent_notice(me):
         async with coordinator._lock:
             agent_name = coordinator.names.get(me, me)
         report = _render_completion_report(
@@ -592,6 +608,11 @@ async def agent_finish(
         )
         parent_notified = True
 
+    await coordinator.set_status(me, "completed")
+    if not parent_notified:
+        # Silence here would leave a parent waiting on a report that is never coming.
+        await notify_parent_on_terminal(coordinator, me, "completed")
+
     logger.info(
         "agent_finish: %s success=%s findings=%d parent_notified=%s",
         me,
@@ -599,7 +620,6 @@ async def agent_finish(
         len(findings or []),
         parent_notified,
     )
-    await coordinator.set_status(me, "completed")
 
     return json.dumps(
         {
@@ -690,9 +710,16 @@ async def stop_agent(
         )
 
     if cascade:
-        await coordinator.cancel_descendants_graceful(target_agent_id)
+        stopped = await coordinator.cancel_descendants_graceful(target_agent_id)
     else:
         await coordinator.request_stop(target_agent_id)
+        stopped = [target_agent_id]
+
+    # The stopper knows what it just did; anyone else waiting on those agents does not.
+    async with coordinator._lock:
+        orphaned = [aid for aid in stopped if coordinator.parent_of.get(aid) not in (None, me)]
+    for aid in orphaned:
+        await notify_parent_on_terminal(coordinator, aid, "stopped")
 
     logger.info(
         "stop_agent: target=%s cascade=%s reason=%r",

@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from strix.report.dedupe import _check_dependency_duplicate, check_duplicate
-from strix.report.state import ReportState, set_global_report_state
-from strix.tools.finish.tool import finish_scan
-from strix.tools.reporting.tool import (
+from lyrashield.artifacts.dedupe import _check_dependency_duplicate, check_duplicate
+from lyrashield.artifacts.state import ReportState, set_global_report_state
+from lyrashield.tools.finish.tool import finish_scan
+from lyrashield.tools.reporting.tool import (
     _do_create,
     _do_create_dependency,
     create_dependency_report,
@@ -228,7 +228,7 @@ async def test_dependency_report_dedupe_candidate_includes_dependency_metadata(
         captured["existing"] = existing
         return {"is_duplicate": False}
 
-    monkeypatch.setattr("strix.report.dedupe.check_duplicate", fake_check_duplicate)
+    monkeypatch.setattr("lyrashield.artifacts.dedupe.check_duplicate", fake_check_duplicate)
     report_state.vulnerability_reports.append(
         {
             "id": "vuln-0001",

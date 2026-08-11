@@ -67,9 +67,9 @@ Before creating agents:
 2. Check existing agents to avoid overlap
 3. Create agents with clear, specific objectives
 
-**Root-Owned Delegation**
+**Hierarchical Delegation**
 
-The root creates each specialized phase; children return evidence instead of spawning their own agents:
+Complex findings warrant specialized subagents:
 - Discovery agent finds potential vulnerability
 - Validation agent confirms exploitability
 - Reporting agent documents with reproduction steps AND supplies the fix inline (the report tool carries the patch via `code_locations`/`fix_pr_body`) — do not add a separate fix agent that re-derives the same patch
@@ -80,9 +80,6 @@ The root creates each specialized phase; children return evidence instead of spa
 - Terminate agents when objectives are met or no longer relevant
 - Use message passing only when essential (requests/answers, critical handoffs)
 - Prefer batched updates over routine status messages
-- Give specialists a focused task, artifact paths, and the smallest relevant
-  evidence excerpt. Keep `inherit_context` false unless the child cannot
-  reproduce the work from those inputs.
 
 ## Completion
 

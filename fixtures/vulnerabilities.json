@@ -1,0 +1,52 @@
+[
+  {
+    "id": "vuln-0001",
+    "title": "Sanitized example finding",
+    "severity": "medium",
+    "timestamp": "2026-08-10T00:00:00+00:00",
+    "target": "https://example.test",
+    "endpoint": "/api/example",
+    "method": "POST",
+    "cve": "",
+    "cwe": "CWE-89",
+    "cvss": 5.3,
+    "cvss_breakdown": {
+      "AV": "N",
+      "AC": "L",
+      "PR": "N",
+      "UI": "N",
+      "S": "U",
+      "C": "L",
+      "I": "N",
+      "A": "N"
+    },
+    "description": "Sanitized description for fixture.",
+    "impact": "Sanitized impact.",
+    "technical_analysis": "Sanitized analysis.",
+    "evidence": "Sanitized evidence.",
+    "assumptions": "Sanitized assumptions.",
+    "fix_effort": "low",
+    "finding_class": "vulnerability",
+    "dependency_metadata": {},
+    "poc_description": "Sanitized PoC description.",
+    "poc_script_code": "",
+    "remediation_steps": "Sanitized remediation.",
+    "control_ids": [
+      1,
+      2
+    ],
+    "code_locations": [
+      {
+        "file": "src/app.py",
+        "start_line": 10,
+        "end_line": 12,
+        "label": "example",
+        "snippet": "example = request.get_json()",
+        "fix_before": "example = request.get_json()",
+        "fix_after": "example = validate_input(request.get_json())"
+      }
+    ],
+    "agent_id": "agent-0001",
+    "agent_name": "Example Agent"
+  }
+]

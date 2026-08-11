@@ -38,7 +38,7 @@ classifiers = [
 dependencies = [
   "openai-agents[litellm] @ git+https://github.com/openai/openai-agents-python.git@f663a06aea23c859be8e8555c005ac912bd58337",
   "openai>=2.48.0,<2.49",
-  "litellm",
+  "litellm==1.90.1",
   "pydantic>=2.11.3",
   "pydantic-settings>=2.13.0",
   "rich",
@@ -82,12 +82,27 @@ asyncio_mode = "auto"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+exclude = ["/.coverage"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["strix", "lyrashield_adapter", "lyrashield"]
-# The prebuilt viewer bundle under strix/interface/viewer/static/ ships automatically
+# The prebuilt viewer bundle under lyrashield/interface/viewer/static/ ships automatically
 # (hatchling includes non-.py files under the package). The Vite SOURCE lives
-# under the package dir too (strix/interface/viewer/frontend/) but must never ship in the wheel.
-exclude = ["strix/interface/viewer/frontend", "strix/interface/viewer/frontend/**"]
+# under the package dir too but must never ship in the wheel.
+exclude = [
+    "strix/interface/viewer/frontend",
+    "strix/interface/viewer/frontend/**",
+    "lyrashield/interface/viewer/frontend",
+    "lyrashield/interface/viewer/frontend/**",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/tests/**",
+    "/strix/interface/viewer/frontend/**",
+    "/lyrashield/interface/viewer/frontend/**",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -103,7 +118,7 @@ strict = true
 # TUI is not yet clean under strict mypy; keep it out of the gate until it is.
 # Tests are also excluded because the strict gate in the verify script only
 # covers source packages; test-only type issues are tracked by pytest + ruff.
-exclude = ["strix/interface/tui", "tests"]
+exclude = ["strix/interface/tui", "lyrashield/interface/tui", "lyrashield/interface/viewer", "tests"]
 strict_optional = true
 warn_redundant_casts = false
 warn_unused_ignores = true
@@ -137,10 +152,15 @@ module = [
     "pydantic_settings.*",
     "reportlab.*",
     "pypdf.*",
+    "yaml.*",
     "pygments.*",
 ]
 ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
+
+[[tool.mypy.overrides]]
+module = ["strix.tools.web_search.tool", "strix.telemetry.posthog"]
+disable_error_code = ["arg-type"]
 
 # ============================================================================
 # Ruff Configuration (Fast Python Linter & Formatter)
@@ -231,13 +251,13 @@ ignore = [
 "tests/test_viewer_auth.py" = ["S105", "S106", "ARG001"]
 "tests/test_codex_auth.py" = ["S105", "S106", "SLF001"]
 # Stdlib HTTP handler overrides (do_GET/do_POST).
-"strix/interface/auth_cli.py" = ["N802", "BLE001"]
+"strix/interface/auth_cli.py" = ["N802", "BLE001", "RUF100"]
 "tests/test_codex_streaming.py" = ["N802"]
 "tests/test_disable_streaming.py" = ["N802"]
 "tests/test_report_pdf.py" = ["S105", "S106", "E402", "I001"]
 # Stdlib HTTP handler overrides (do_GET/do_POST) and lazy imports that avoid a
 # circular dependency with strix.telemetry / strix.interface.viewer.report_pdf.
-"strix/interface/viewer/server.py" = ["N802", "PLC0415", "BLE001"]
+"strix/interface/viewer/server.py" = ["N802", "PLC0415", "BLE001", "RUF100"]
 # Lazy telemetry import to avoid importing PostHog before the viewer starts.
 "strix/interface/viewer/cli.py" = ["PLC0415"]
 # Lazy imports inside functions to avoid circular dependency with
@@ -247,8 +267,21 @@ ignore = [
 "strix/tools/reporting/tool.py" = ["PLC0415", "TC002"]
 "strix/tools/**/*.py" = [
     "ARG001", # Unused function argument (tools may have unused args for interface consistency)
+    "RUF100", # Upstream v1.5.3 retains noqa directives for rules we do not enable
 ]
-"strix/tools/web_search/tool.py" = ["PLC0415"]
+"strix/tools/web_search/tool.py" = ["PLC0415", "RUF100"]
+"lyrashield/tools/web_search/tool.py" = ["PLC0415"]
+"lyrashield/tools/reporting/tool.py" = ["PLC0415"]
+"lyrashield/tools/finish/tool.py" = ["PLC0415", "TC002"]
+"lyrashield/tools/proxy/caido_api.py" = ["ARG001"]
+"lyrashield/policy/models.py" = ["PLC0415"]
+"lyrashield/lifecycle/*.py" = ["PLR0912", "PLR0915", "PLC0415", "RUF100"]
+"lyrashield/runtime/*.py" = ["BLE001", "TC002", "TC003"]
+"strix/core/**/*.py" = ["RUF100"]
+"strix/runtime/**/*.py" = ["RUF100"]
+"strix/llm/**/*.py" = ["RUF100"]
+"lyrashield/policy/codex.py" = ["PLC0415"]
+"lyrashield/policy/loader.py" = ["PLC0415"]
 # Custom Docker subclass duplicates parent body; some imports are for annotations.
 # Backend factories import their backend's deps lazily so deployments
 # that pick a different backend don't need every backend's libs installed.
@@ -284,22 +317,37 @@ ignore = [
 "strix/config/codex.py" = ["PLC0415"]
 # Interface utility branches per scope-mode / target-type combination;
 # splitting would obscure the decision tree without simplifying it.
-"strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415"]
+"strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415", "RUF100"]
 # CLI / TUI / main keep extensive lazy imports + broad exception
 # swallows for resilience around terminal-rendering errors.
 "strix/interface/cli.py" = ["BLE001", "PLC0415"]
 "strix/interface/tui/app.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "SIM105"]
 "strix/interface/main.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
 "strix/interface/tui/renderers/agent_message_renderer.py" = ["PLC0415"]
-"strix/interface/update_check.py" = ["BLE001"]
 "strix/interface/viewer/transcript.py" = ["PLC0415"]
 "strix/runtime/session_manager.py" = ["BLE001"]
 "strix/core/execution.py" = ["PLR0912"]
 
+# Upstream v1.5.3 interface modules restored after product code moved to lyrashield/interface.
+"strix/interface/cli_args.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
+"strix/interface/environment.py" = ["PLC0415", "PLR0912", "PLR0915"]
+"strix/interface/interactive.py" = ["PLC0415"]
+"strix/interface/scan_setup.py" = ["PLC0415", "PLR0912", "PLR0915"]
+"strix/interface/tui/backend/*.py" = ["PLC0415", "RUF100"]
+
+# Product modules moved from strix/ to lyrashield/.
+"lyrashield/artifacts/*.py" = ["PLR0912", "PLR0915", "PLC0415", "TC003"]
+"lyrashield/interface/*.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
+"lyrashield/interface/tui/app.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "SIM105"]
+"lyrashield/interface/tui/renderers/*.py" = ["PLC0415"]
+"lyrashield/interface/viewer/*.py" = ["PLC0415", "BLE001"]
+"lyrashield/tools/agents_graph/tools.py" = ["PLR0911", "PLC0415"]
+"lyrashield/tools/output_store.py" = ["PLC0415"]
+
 [tool.ruff.lint.isort]
 force-single-line = false
 lines-after-imports = 2
-known-first-party = ["strix"]
+known-first-party = ["strix", "lyrashield"]
 known-third-party = ["pydantic"]
 
 [tool.ruff.lint.pylint]
@@ -379,7 +427,7 @@ include_trailing_comma = true
 force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
-known_first_party = ["strix"]
+known_first_party = ["strix", "lyrashield"]
 known_third_party = ["pydantic", "litellm"]
 
 # ============================================================================
@@ -388,5 +436,5 @@ known_third_party = ["pydantic", "litellm"]
 
 [tool.bandit]
 exclude_dirs = ["docs", "build", "dist"]
-skips = ["B101", "B601", "B404", "B603", "B607"]  # Skip assert, shell injection, subprocess import and partial path checks
+skips = ["B101", "B105", "B601", "B404", "B603", "B607"]  # Skip assert, hardcoded-password false positives, shell injection, subprocess import and partial path checks
 severity = "medium"

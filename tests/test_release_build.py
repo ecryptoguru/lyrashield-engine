@@ -1,3 +1,6 @@
+import shutil
+import subprocess
+import tarfile
 from pathlib import Path
 
 
@@ -36,6 +39,44 @@ def test_binary_uses_product_adapter_entrypoint() -> None:
     assert "['strix/interface/main.py']" not in spec
 
 
+def test_binary_bundles_product_runtime_resources() -> None:
+    spec = (ROOT / "strix.spec").read_text()
+    assert "lyrashield_root = project_root / 'lyrashield'" in spec
+    assert "for package_root in (strix_root, lyrashield_root):" in spec
+    assert "'lyrashield.interface.tui.app'" in spec
+    assert "'lyrashield.interface.viewer.server'" in spec
+
+
+def test_python_archives_exclude_build_only_artifacts() -> None:
+    config = (ROOT / "pyproject.toml").read_text()
+    assert 'exclude = ["/.coverage"]' in config
+    assert '"lyrashield/interface/viewer/frontend/**"' in config
+
+
+def test_source_archive_excludes_tests() -> None:
+    config = (ROOT / "pyproject.toml").read_text()
+    assert "[tool.hatch.build.targets.sdist]" in config
+    assert '"/tests/**"' in config
+
+
+def test_built_source_archive_excludes_test_and_frontend_source(tmp_path: Path) -> None:
+    uv = shutil.which("uv")
+    assert uv is not None
+    subprocess.run(  # noqa: S603 - fixed local build command
+        [uv, "build", "--sdist", "--out-dir", str(tmp_path)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    archive = next(tmp_path.glob("*.tar.gz"))
+    with tarfile.open(archive, "r:gz") as source_dist:
+        names = source_dist.getnames()
+
+    forbidden = ("/tests/", "/interface/viewer/frontend/", "/.env")
+    assert not [name for name in names if any(marker in name for marker in forbidden)]
+
+
 def test_product_adapter_can_run_as_a_script() -> None:
     adapter = (ROOT / "lyrashield_adapter/cli.py").read_text()
     assert 'if __name__ == "__main__":' in adapter
@@ -52,6 +93,8 @@ def test_binary_does_not_request_missing_hidden_imports() -> None:
     for module in (
         "xmltodict",
         "defusedxml",
+        "strix.interface.tui.app",
+        "strix.interface.tui.renderers.registry",
         "strix.tools.proxy._calls",
         "strix.tools.python.tool",
     ):
@@ -60,6 +103,8 @@ def test_binary_does_not_request_missing_hidden_imports() -> None:
 
 def test_build_script_fails_when_binary_smoke_test_fails() -> None:
     script = (ROOT / "scripts/build.sh").read_text()
+    smoke = (ROOT / "scripts/smoke_release.py").read_text()
     assert 'scripts/smoke_release.py "$RELEASE_DIR/$BINARY_NAME" "$VERSION"' in script
     assert '"$RELEASE_DIR/$BINARY_NAME" --help' not in script
     assert 'echo -e "${RED}Binary test failed${NC}"; exit 1' in script
+    assert '(["--help"], "--scope-mode", False)' in smoke

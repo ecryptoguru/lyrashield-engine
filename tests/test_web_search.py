@@ -11,11 +11,11 @@ import httpx
 import pytest
 from agents.tool_context import ToolContext
 
-from strix.config import load_settings
-from strix.config import loader as config_loader
-from strix.core.hooks import BudgetExceededError, ReportUsageHooks
-from strix.report.state import ReportState, set_global_report_state
-from strix.tools.web_search.tool import (
+from lyrashield.artifacts.state import ReportState, set_global_report_state
+from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
+from lyrashield.policy import loader as config_loader
+from lyrashield.policy.loader import load_settings
+from lyrashield.tools.web_search.tool import (
     _build_objective,
     _estimate_cost,
     _query_to_keywords,

@@ -10,16 +10,16 @@ import pytest
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
-from strix.config.models import (
-    _configure_litellm_compatibility,
-    _install_openrouter_stream_cost_capture,
-)
-from strix.report.state import (
+from lyrashield.artifacts.state import (
     ReportState,
     litellm_cost_callback,
     openrouter_stream_cost,
     set_global_report_state,
     streamed_openrouter_costs,
+)
+from lyrashield.policy.models import (
+    _configure_litellm_compatibility,
+    _install_openrouter_stream_cost_capture,
 )
 
 
@@ -31,7 +31,7 @@ def _clear_streamed_costs() -> None:
 def test_streaming_logging_stays_enabled_for_cost_callback() -> None:
     with (
         patch.object(litellm, "disable_streaming_logging", new=True),
-        patch("strix.config.models._register_litellm_cost_callback") as register,
+        patch("lyrashield.policy.models._register_litellm_cost_callback") as register,
     ):
         _configure_litellm_compatibility()
         assert litellm.disable_streaming_logging is False
@@ -45,7 +45,7 @@ def test_cost_callback_reads_openrouter_stream_usage_cost() -> None:
         _hidden_params={},
     )
 
-    with patch("strix.report.state.get_global_report_state", return_value=report_state):
+    with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({"response_cost": None}, response)
 
     report_state.record_observed_llm_cost.assert_called_once_with(1.2345)
@@ -55,7 +55,7 @@ def test_cost_callback_reads_usage_cost_from_mapping_response() -> None:
     report_state = MagicMock()
     response = {"usage": {"cost": 0.125}}
 
-    with patch("strix.report.state.get_global_report_state", return_value=report_state):
+    with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({}, response)
 
     report_state.record_observed_llm_cost.assert_called_once_with(0.125)
@@ -72,7 +72,7 @@ def test_cost_callback_reads_byok_upstream_inference_cost() -> None:
         _hidden_params={},
     )
 
-    with patch("strix.report.state.get_global_report_state", return_value=report_state):
+    with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({"response_cost": None}, response)
 
     report_state.record_observed_llm_cost.assert_called_once_with(6.75e-06)
@@ -88,7 +88,7 @@ def test_cost_callback_sums_usage_cost_and_upstream_inference_cost() -> None:
         }
     }
 
-    with patch("strix.report.state.get_global_report_state", return_value=report_state):
+    with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({}, response)
 
     report_state.record_observed_llm_cost.assert_called_once_with(pytest.approx(0.21))
@@ -104,10 +104,20 @@ def test_cost_callback_ignores_upstream_cost_for_non_byok_responses() -> None:
         }
     }
 
-    with patch("strix.report.state.get_global_report_state", return_value=report_state):
+    with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({}, response)
 
     report_state.record_observed_llm_cost.assert_called_once_with(0.05)
+
+
+def test_cost_callback_defers_gpt56_cost_to_the_token_rate_card() -> None:
+    report_state = MagicMock()
+    response = SimpleNamespace(usage=SimpleNamespace(cost=0.01), _hidden_params={})
+
+    with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
+        litellm_cost_callback({"model": "azure_ai/gpt-5.6-luna", "response_cost": 0.01}, response)
+
+    report_state.record_observed_llm_cost.assert_not_called()
 
 
 def test_cost_callback_estimates_cost_with_provider_prefixed_model() -> None:
@@ -125,7 +135,7 @@ def test_cost_callback_estimates_cost_with_provider_prefixed_model() -> None:
         raise ValueError(kwargs["model"])
 
     with (
-        patch("strix.report.state.get_global_report_state", return_value=report_state),
+        patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state),
         patch("litellm.completion_cost", side_effect=fake_completion_cost),
     ):
         litellm_cost_callback(kwargs, response)
@@ -148,7 +158,7 @@ def test_cost_callback_estimates_cost_with_bare_model_fallback() -> None:
         raise ValueError(kwargs["model"])
 
     with (
-        patch("strix.report.state.get_global_report_state", return_value=report_state),
+        patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state),
         patch("litellm.completion_cost", side_effect=fake_completion_cost),
     ):
         litellm_cost_callback(kwargs, response)
@@ -161,7 +171,7 @@ def test_cost_callback_records_nothing_when_no_cost_available() -> None:
     response = {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
 
     with (
-        patch("strix.report.state.get_global_report_state", return_value=report_state),
+        patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state),
         patch("litellm.completion_cost", side_effect=ValueError("unknown model")),
     ):
         litellm_cost_callback({"response_cost": None, "model": "x/y"}, response)
@@ -189,7 +199,7 @@ def test_cost_callback_recovers_streamed_openrouter_cost_by_response_id() -> Non
     response = SimpleNamespace(id="gen-abc", usage=SimpleNamespace(cost=None), _hidden_params={})
 
     with (
-        patch("strix.report.state.get_global_report_state", return_value=report_state),
+        patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state),
         patch("litellm.completion_cost", side_effect=ValueError("unknown model")),
     ):
         litellm_cost_callback({"response_cost": None, "model": "moonshotai/kimi-k3"}, response)
@@ -209,7 +219,7 @@ def test_streamed_openrouter_cost_prefers_provider_report_over_estimate() -> Non
     )
 
     with (
-        patch("strix.report.state.get_global_report_state", return_value=report_state),
+        patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state),
         patch("litellm.completion_cost", return_value=0.1) as estimate,
     ):
         litellm_cost_callback({"response_cost": None, "model": "moonshotai/kimi-k3"}, response)

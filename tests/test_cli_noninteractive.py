@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from strix.interface import cli
+from lyrashield.interface import cli
 
 
-main_module = import_module("strix.interface.main")
+main_module = import_module("lyrashield.interface.main")
 
 
 class _ProviderFailureError(RuntimeError):
@@ -73,7 +73,7 @@ async def test_non_interactive_scan_bypasses_live_display() -> None:
         patch.object(cli, "set_global_report_state"),
         patch.object(cli, "_resolve_sandbox_image", return_value="sandbox@sha256:test"),
         patch.object(cli, "run_strix_scan", new=AsyncMock()) as run_scan,
-        patch.object(cli.session_manager, "cleanup", new=AsyncMock()) as cleanup,
+        patch.object(cli.session_manager, "cleanup", new=AsyncMock(return_value=True)) as cleanup,
         patch.object(cli, "Live", side_effect=AssertionError("Live must not be created")),
         patch.object(cli.atexit, "register"),
         patch.object(cli.signal, "signal"),
@@ -82,6 +82,8 @@ async def test_non_interactive_scan_bypasses_live_display() -> None:
 
     run_scan.assert_awaited_once()
     cleanup.assert_awaited_once_with("scan-test")
+    assert report_state.set_sandbox_cleanup_status.call_args.args == (True,)
+    report_state.hydrate_from_run_dir.assert_not_called()
 
 
 @pytest.mark.parametrize(

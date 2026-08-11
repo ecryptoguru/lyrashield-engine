@@ -1163,7 +1163,7 @@ requires-dist = [
     { name = "cvss", specifier = ">=3.2" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
-    { name = "litellm" },
+    { name = "litellm", specifier = "==1.90.1" },
     { name = "openai", specifier = ">=2.48.0,<2.49" },
     { name = "openai-agents", extras = ["litellm"], git = "https://github.com/openai/openai-agents-python.git?rev=f663a06aea23c859be8e8555c005ac912bd58337" },
     { name = "pydantic", specifier = ">=2.11.3" },

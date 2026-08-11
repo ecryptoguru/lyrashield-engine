@@ -6,11 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from strix.core import execution
-from strix.core.agents import AgentCoordinator, WaitKind
-from strix.core.execution import _start_child_runner, run_agent_loop
-from strix.core.hooks import BudgetExceededError, ReportUsageHooks
-from strix.core.sessions import open_agent_session
+from lyrashield.lifecycle import execution
+from lyrashield.lifecycle.agents import AgentCoordinator, WaitKind
+from lyrashield.lifecycle.execution import _start_child_runner, run_agent_loop
+from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
+from lyrashield.lifecycle.sessions import open_agent_session
 
 
 if TYPE_CHECKING:
@@ -151,7 +151,7 @@ async def test_full_budget_lifecycle_reserve_then_cap(  # noqa: PLR0915
             root_exc.append(exc)
             raise
 
-    with patch("strix.core.hooks.get_global_report_state", return_value=ledger):
+    with patch("lyrashield.lifecycle.hooks.get_global_report_state", return_value=ledger):
         root_task = asyncio.create_task(_root_loop())
         await asyncio.sleep(0.05)
 
@@ -247,7 +247,7 @@ async def test_respawned_children_after_reserve_never_spend(
     monkeypatch.setattr(execution, "Runner", _fake_runner(ledger, restored))
 
     sessions: list[Any] = []
-    with patch("strix.core.hooks.get_global_report_state", return_value=ledger):
+    with patch("lyrashield.lifecycle.hooks.get_global_report_state", return_value=ledger):
         await _start_child_runner(
             parent_ctx={"agent_id": "root", "parent_id": None},
             coordinator=restored,
@@ -293,7 +293,7 @@ async def test_resumed_parked_root_after_reserve_is_renotified_and_finalizes(
     monkeypatch.setattr(execution, "Runner", _fake_runner(ledger, restored))
 
     root_session = open_agent_session("root", tmp_path / "agents.sqlite")
-    with patch("strix.core.hooks.get_global_report_state", return_value=ledger):
+    with patch("lyrashield.lifecycle.hooks.get_global_report_state", return_value=ledger):
         root_task = asyncio.create_task(
             run_agent_loop(
                 agent=MagicMock(),
@@ -335,7 +335,7 @@ async def test_interactive_budget_pause_then_user_message_extends_and_resumes(
     await coordinator.register("root", "strix", parent_id=None)
     root_session = open_agent_session("root", tmp_path / "agents.sqlite")
 
-    with patch("strix.core.hooks.get_global_report_state", return_value=ledger):
+    with patch("lyrashield.lifecycle.hooks.get_global_report_state", return_value=ledger):
         root_task = asyncio.create_task(
             run_agent_loop(
                 agent=MagicMock(),

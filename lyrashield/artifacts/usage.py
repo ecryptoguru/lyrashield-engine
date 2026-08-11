@@ -1,0 +1,413 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
+"""SDK-native LLM usage aggregation for scan reports."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, cast
+
+from agents.usage import Usage, deserialize_usage, serialize_usage
+
+
+logger = logging.getLogger(__name__)
+
+
+_GPT56_USD_PER_MILLION: dict[str, tuple[float, float, float, float]] = {
+    "gpt-5.6-terra": (2.0, 0.2, 2.5, 12.0),
+    "gpt-5.6-luna": (0.2, 0.02, 0.25, 1.2),
+}
+_GPT56_LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
+
+
+class LLMUsageLedger:
+    """Aggregate SDK ``Usage`` objects and attach best-effort cost estimates."""
+
+    def __init__(self) -> None:
+        self._total_usage = Usage()
+        self._agent_usage: dict[str, Usage] = {}
+        self._agent_metadata: dict[str, dict[str, str]] = {}
+        self._request_usage_entries: list[dict[str, Any]] = []
+        self._total_cost = 0.0
+        self._has_cost = False
+        # When True, tokens are still tracked but cost stays $0 — the run is on a
+        # model subscription, so there is no metered per-token charge to report.
+        self.zero_cost = False
+
+    def record(
+        self,
+        *,
+        agent_id: str,
+        usage: Usage | None,
+        agent_name: str | None = None,
+        model: str | None = None,
+    ) -> bool:
+        if usage is None or not _usage_has_activity(usage):
+            return False
+
+        normalized_agent_id = str(agent_id or "unknown")
+        self._total_usage.add(usage)
+        self._agent_usage.setdefault(normalized_agent_id, Usage()).add(usage)
+        self._request_usage_entries.extend(_serialize_request_usage_entries(usage, model=model))
+
+        metadata = self._agent_metadata.setdefault(normalized_agent_id, {})
+        if agent_name:
+            metadata["agent_name"] = agent_name
+        if model:
+            metadata["model"] = model
+
+        if not self.zero_cost:
+            estimated = _estimate_gpt56_cost(usage, model)
+            if estimated is None and not _is_litellm_routed(model):
+                estimated = _estimate_litellm_cost(usage, model)
+            if estimated:
+                self._total_cost += estimated
+                self._has_cost = True
+
+        return True
+
+    def record_observed_cost(self, cost: Any, *, model: str | None = None) -> None:
+        if self.zero_cost or _gpt56_rate(model) is not None:
+            return
+        try:
+            numeric_cost = float(cost)
+        except (TypeError, ValueError):
+            return
+        if numeric_cost > 0:
+            self._total_cost += numeric_cost
+            self._has_cost = True
+
+    @property
+    def total_cost(self) -> float:
+        return _round_cost(self._total_cost)
+
+    def to_record(self) -> dict[str, Any]:
+        record = serialize_usage(self._total_usage)
+        # ``Usage.add`` reconstructs SDK request entries from aggregate detail
+        # models, which can drop provider extension fields such as
+        # ``cache_write_tokens``. Preserve each original response receipt so
+        # the worker can price it exactly when the provider exposed every
+        # billable dimension.
+        if self._request_usage_entries:
+            record["request_usage_entries"] = list(self._request_usage_entries)
+        elif self._total_usage.requests != 1:
+            # The SDK may synthesize one request entry from a multi-request
+            # aggregate. It has no per-call cache buckets, so it cannot be
+            # used for exact pricing.
+            record.pop("request_usage_entries", None)
+        if self._has_cost or self.zero_cost:
+            record["cost"] = _round_cost(self._total_cost)
+        if self.zero_cost:
+            record["subscription"] = True
+        agents: list[dict[str, Any]] = []
+
+        agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}
+        total_tokens = sum(agent_tokens.values())
+        for agent_id in sorted(self._agent_usage):
+            usage = self._agent_usage[agent_id]
+            metadata = self._agent_metadata.get(agent_id, {})
+            agent_cost = (
+                self._total_cost * (agent_tokens[agent_id] / total_tokens) if total_tokens else 0.0
+            )
+
+            agent_record = serialize_usage(usage)
+            agent_record.update(
+                {
+                    "agent_id": agent_id,
+                    "agent_name": metadata.get("agent_name") or agent_id,
+                    "model": metadata.get("model"),
+                }
+            )
+            if self._has_cost:
+                agent_record["cost"] = _round_cost(agent_cost)
+            agents.append(agent_record)
+
+        record["agents"] = agents
+        return record
+
+    def hydrate(self, raw_usage: Any) -> None:
+        self._total_usage = Usage()
+        self._agent_usage.clear()
+        self._agent_metadata.clear()
+        self._request_usage_entries.clear()
+        self._total_cost = 0.0
+        self._has_cost = False
+
+        if not isinstance(raw_usage, dict):
+            return
+        raw_usage = cast("dict[str, Any]", raw_usage)
+
+        try:
+            self._total_usage = deserialize_usage(raw_usage)
+        except Exception:
+            logger.exception("Failed to hydrate aggregate llm_usage from run.json")
+            self._total_usage = Usage()
+
+        if "cost" in raw_usage:
+            self._total_cost = _float_or_zero(raw_usage.get("cost"))
+            self._has_cost = True
+        self._request_usage_entries = _hydrate_request_usage_entries(
+            raw_usage.get("request_usage_entries")
+        )
+
+        raw_agents = raw_usage.get("agents")
+        if isinstance(raw_agents, list):
+            for raw in raw_agents:
+                if not isinstance(raw, dict):
+                    continue
+                raw_agent = cast("dict[str, Any]", raw)
+                agent_id = str(raw_agent.get("agent_id") or "").strip()
+                if not agent_id:
+                    continue
+                try:
+                    self._agent_usage[agent_id] = deserialize_usage(raw_agent)
+                except Exception:
+                    logger.exception("Failed to hydrate llm_usage for agent %s", agent_id)
+                    self._agent_usage[agent_id] = Usage()
+
+                metadata: dict[str, str] = {}
+                agent_name = raw_agent.get("agent_name")
+                model = raw_agent.get("model")
+                if isinstance(agent_name, str) and agent_name:
+                    metadata["agent_name"] = agent_name
+                if isinstance(model, str) and model:
+                    metadata["model"] = model
+                self._agent_metadata[agent_id] = metadata
+
+
+def _resolve_total_tokens(usage: Usage) -> int:
+    total = max(0, int(usage.total_tokens or 0))
+    if total > 0:
+        return total
+    prompt = _int_or_zero(getattr(usage, "input_tokens", 0))
+    completion = _int_or_zero(getattr(usage, "output_tokens", 0))
+    return prompt + completion
+
+
+def _is_litellm_routed(model: str | None) -> bool:
+    if not model:
+        return False
+    name = model.strip().lower()
+    if "/" not in name:
+        return False
+    return not name.startswith("openai/")
+
+
+def _gpt56_rate(model: str | None) -> tuple[float, float, float, float] | None:
+    if not model:
+        return None
+    return _GPT56_USD_PER_MILLION.get(model.strip().lower().split("/")[-1])
+
+
+def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
+    rate = _gpt56_rate(model)
+    if rate is None:
+        return None
+    entries: list[Any] = list(usage.request_usage_entries or [])
+    if not entries and usage.requests == 1:
+        entries = [usage]
+    if not entries:
+        return None
+    total = 0.0
+    for entry in entries:
+        input_tokens = _int_or_zero(getattr(entry, "input_tokens", 0))
+        output_tokens = _int_or_zero(getattr(entry, "output_tokens", 0))
+        if input_tokens + output_tokens <= 0:
+            continue
+        details = _details_to_dict(getattr(entry, "input_tokens_details", None))
+        cached = min(_int_or_zero(details.get("cached_tokens")), input_tokens)
+        cache_write = min(_int_or_zero(details.get("cache_write_tokens")), input_tokens - cached)
+        uncached = input_tokens - cached - cache_write
+        multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS else 1.0
+        output_multiplier = 1.5 if multiplier > 1 else 1.0
+        total += (
+            uncached * rate[0] * multiplier
+            + cached * rate[1] * multiplier
+            + cache_write * rate[2] * multiplier
+            + output_tokens * rate[3] * output_multiplier
+        ) / 1_000_000
+    return _round_cost(total)
+
+
+def _usage_has_activity(usage: Usage) -> bool:
+    return bool(
+        usage.requests
+        or usage.input_tokens
+        or usage.output_tokens
+        or usage.total_tokens
+        or usage.request_usage_entries
+    )
+
+
+def _estimate_litellm_cost(usage: Usage, model: str | None) -> float | None:
+    litellm_model = _litellm_model_name(model)
+    if not litellm_model:
+        return None
+
+    entries = list(usage.request_usage_entries or [])
+    if not entries:
+        return _estimate_litellm_entry_cost(usage, litellm_model)
+
+    total = 0.0
+    estimated_any = False
+    for entry in entries:
+        cost = _estimate_litellm_entry_cost(entry, litellm_model)
+        if cost is None:
+            continue
+        total += cost
+        estimated_any = True
+
+    return total if estimated_any else None
+
+
+def _estimate_litellm_entry_cost(entry: Any, model: str) -> float | None:
+    prompt_tokens = _int_or_zero(getattr(entry, "input_tokens", 0))
+    completion_tokens = _int_or_zero(getattr(entry, "output_tokens", 0))
+    total_tokens = _int_or_zero(getattr(entry, "total_tokens", 0))
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    if total_tokens <= 0:
+        return None
+
+    usage_payload: dict[str, Any] = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+    prompt_details = _details_to_dict(getattr(entry, "input_tokens_details", None))
+    completion_details = _details_to_dict(getattr(entry, "output_tokens_details", None))
+    if prompt_details:
+        usage_payload["prompt_tokens_details"] = prompt_details
+    if completion_details:
+        usage_payload["completion_tokens_details"] = completion_details
+
+    from litellm import completion_cost
+
+    candidates = [model]
+    if "/" in model:
+        candidates.append(model.split("/", 1)[-1])
+
+    cost: Any = None
+    for candidate in candidates:
+        try:
+            cost = completion_cost(
+                completion_response={"model": candidate, "usage": usage_payload},
+                model=model,
+            )
+            break
+        except Exception:  # nosec B112  # noqa: BLE001, S112
+            continue
+
+    if cost is None:
+        logger.debug("LiteLLM cost estimate unavailable for model %s", model)
+        return None
+
+    return cost if isinstance(cost, int | float) and cost >= 0 else None
+
+
+def _litellm_model_name(model: str | None) -> str | None:
+    if not model:
+        return None
+    normalized = model.strip()
+    for prefix in ("litellm/", "any-llm/", "openai/"):
+        if normalized.startswith(prefix):
+            normalized = normalized.removeprefix(prefix)
+            break
+    return normalized or None
+
+
+def _details_to_dict(details: Any) -> dict[str, Any]:
+    if details is None:
+        return {}
+    if isinstance(details, list):
+        for item in details:
+            result = _details_to_dict(item)
+            if result:
+                return result
+        return {}
+    if hasattr(details, "model_dump"):
+        return _details_to_dict(details.model_dump())
+    if not isinstance(details, dict):
+        return {}
+    return {str(k): v for k, v in details.items() if v is not None}
+
+
+def _serialize_request_usage_entries(
+    usage: Usage,
+    *,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    entries: list[Any] = list(usage.request_usage_entries or [])
+    # An aggregate covering more than one request is not a billable receipt:
+    # its cache buckets may differ per call. Keep it out of the exact-pricing
+    # path until the provider supplies the individual records.
+    if not entries and usage.requests == 1 and _usage_has_activity(usage):
+        entries = [usage]
+    serialized = [_serialize_request_usage_entry(entry) for entry in entries]
+    if model:
+        for entry in serialized:
+            entry["model"] = model
+    return serialized
+
+
+def _serialize_request_usage_entry(entry: Any) -> dict[str, Any]:
+    input_tokens = _int_or_zero(getattr(entry, "input_tokens", 0))
+    output_tokens = _int_or_zero(getattr(entry, "output_tokens", 0))
+    total_tokens = _int_or_zero(getattr(entry, "total_tokens", 0))
+    input_details = _details_to_dict(getattr(entry, "input_tokens_details", None))
+    details: dict[str, int] = {
+        "cached_tokens": _int_or_zero(input_details.get("cached_tokens")),
+    }
+    cache_write_tokens = input_details.get("cache_write_tokens")
+    if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
+        details["cache_write_tokens"] = cache_write_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens or input_tokens + output_tokens,
+        "input_tokens_details": details,
+    }
+
+
+def _hydrate_request_usage_entries(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        entry = cast("dict[str, Any]", entry)
+        serialized = _serialize_request_usage_entry(_UsageEntryAdapter(entry))
+        model = entry.get("model")
+        if isinstance(model, str) and model:
+            serialized["model"] = model
+        entries.append(serialized)
+    return entries
+
+
+class _UsageEntryAdapter:
+    """Adapter for preserving bounded serialized receipts during resume."""
+
+    def __init__(self, entry: dict[str, Any]) -> None:
+        self.input_tokens = entry.get("input_tokens")
+        self.output_tokens = entry.get("output_tokens")
+        self.total_tokens = entry.get("total_tokens")
+        self.input_tokens_details = entry.get("input_tokens_details")
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        result = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return result if result >= 0 else 0.0
+
+
+def _round_cost(cost: float) -> float:
+    return round(max(0.0, cost), 10)

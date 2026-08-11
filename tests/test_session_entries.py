@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from agents.sandbox.entries import LocalDir
 
-from strix.runtime import session_manager
-from strix.runtime.session_manager import (
+from lyrashield.runtime import session_manager
+from lyrashield.runtime.session_manager import (
     build_sandbox_environment,
     build_session_entries,
     get_sandbox_container_ip,

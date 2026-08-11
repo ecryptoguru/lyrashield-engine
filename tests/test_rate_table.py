@@ -1,14 +1,14 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Pin the exact Azure GPT-5.6 rate values so a future transposition is caught.
 
-The rate table in :mod:`strix.core.hooks` is the single source of truth for
+The rate table in :mod:`lyrashield.lifecycle.hooks` is the single source of truth for
 scan billing.  A silent swap of two digits would misbill every scan and still
 pass CI unless these values are asserted here.
 """
 
 from __future__ import annotations
 
-from strix.core.hooks import _GPT56_CACHED_RATES, _GPT56_RATES
+from lyrashield.lifecycle.hooks import _GPT56_CACHED_RATES, _GPT56_RATES
 
 
 def test_terra_rates() -> None:

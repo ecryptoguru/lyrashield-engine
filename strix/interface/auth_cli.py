@@ -1,4 +1,3 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """`strix auth` — ChatGPT subscription sign-in (login / status / logout).
 
 Signing in only stores OAuth tokens (``~/.strix/subscription-auth.json``); model
@@ -23,10 +22,6 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import codex, load_settings
-from strix.config.settings import (
-    is_chatgpt_subscription_allowed,
-    is_lyrashield_product,
-)
 
 
 if TYPE_CHECKING:
@@ -49,11 +44,6 @@ _USAGE = "Usage:\n  strix auth login chatgpt [--manual]\n  strix auth status\n  
 def run_auth(argv: list[str]) -> int:
     """Entry point for ``strix auth …``. Returns a process exit code."""
     console = Console()
-    if is_lyrashield_product() and not is_chatgpt_subscription_allowed():
-        console.print(
-            "[bold red]LyraShield does not support ChatGPT subscription authentication.[/]"
-        )
-        return 1
     # Bare `strix auth` (no subcommand) defaults to login.
     subcommand = argv[0] if argv else "login"
     rest = argv[1:]
@@ -142,7 +132,7 @@ def _run_oauth_flow(
     if not manual:
         try:
             webbrowser.open(authorize_url)
-        except Exception:
+        except Exception:  # noqa: BLE001 - opening a browser is best-effort
             logger.debug("could not open browser", exc_info=True)
 
     if server is not None:
@@ -218,7 +208,7 @@ def _try_start_callback_server() -> _CallbackServer | None:
     holder: dict[str, Any] = {}
 
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002  # silence default stderr logging
+        def log_message(self, *args: Any) -> None:  # silence default stderr logging
             pass
 
         def do_GET(self) -> None:

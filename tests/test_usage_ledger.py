@@ -3,7 +3,7 @@ from __future__ import annotations
 from agents.usage import Usage
 from openai.types.responses.response_usage import InputTokensDetails
 
-from strix.report.usage import LLMUsageLedger
+from lyrashield.artifacts.usage import LLMUsageLedger
 
 
 def test_usage_ledger_preserves_provider_cache_write_receipts() -> None:
@@ -58,16 +58,16 @@ def test_usage_ledger_omits_zero_cache_write_tokens() -> None:
     }
 
 
-def test_usage_ledger_omits_unavailable_native_provider_cost() -> None:
+def test_usage_ledger_prices_gpt56_without_a_provider_cost_receipt() -> None:
     usage = Usage(requests=1, input_tokens=100, output_tokens=10, total_tokens=110)
     ledger = LLMUsageLedger()
 
     assert ledger.record(agent_id="agent-1", usage=usage, model="azure/gpt-5.6-luna")
 
     record = ledger.to_record()
-    assert "cost" not in record
-    assert "cost" not in record["agents"][0]
-    assert ledger.total_cost == 0
+    assert record["cost"] == 0.000032
+    assert record["agents"][0]["cost"] == 0.000032
+    assert ledger.total_cost == 0.000032
 
 
 def test_usage_ledger_retains_observed_provider_cost() -> None:
@@ -77,6 +77,24 @@ def test_usage_ledger_retains_observed_provider_cost() -> None:
 
     assert ledger.to_record()["cost"] == 0.25
     assert ledger.total_cost == 0.25
+
+
+def test_usage_ledger_prices_gpt56_and_ignores_incorrect_litellm_cost() -> None:
+    details = InputTokensDetails.model_validate({"cached_tokens": 20, "cache_write_tokens": 5})
+    usage = Usage(
+        requests=1,
+        input_tokens=100,
+        output_tokens=10,
+        total_tokens=110,
+        input_tokens_details=details,
+    )
+    ledger = LLMUsageLedger()
+
+    assert ledger.record(agent_id="agent-1", usage=usage, model="azure_ai/gpt-5.6-luna")
+    ledger.record_observed_cost(0.01, model="azure_ai/gpt-5.6-luna")
+
+    assert ledger.total_cost == 0.00002865
+    assert ledger.to_record()["cost"] == 0.00002865
 
 
 def test_usage_ledger_does_not_treat_multi_request_aggregate_as_a_receipt() -> None:

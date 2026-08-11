@@ -62,4 +62,5 @@ Failure recovery:
 - If scan stalls, tighten scope (`-p` or smaller `--top-ports`) and lower retries.
 - If scripts run too long, add `--script-timeout`.
 
-If uncertain, use `nmap --help` and retain the installed-version output.
+If uncertain, query web_search with:
+`site:nmap.org/book nmap <flag>`

@@ -19,7 +19,7 @@ from agents.sandbox.sandboxes.docker import DockerSandboxClient
 from docker import errors as docker_errors
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
-from strix.runtime.docker_client import StrixDockerSandboxClient
+from lyrashield.runtime.docker_client import StrixDockerSandboxClient
 
 
 def _client_with_kill_error(exc: Exception) -> StrixDockerSandboxClient:

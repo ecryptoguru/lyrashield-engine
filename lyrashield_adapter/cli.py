@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 
 from pydantic import AliasChoices, BaseModel
 
-from strix.config.settings import (
+from lyrashield.policy import loader as _lyra_loader  # noqa: F401
+from lyrashield.policy.settings import (
     PRODUCT_BOUNDARY_ENV_VAR,
     Settings,
     is_chatgpt_subscription_allowed,
@@ -137,7 +138,7 @@ def _reject_unsupported_gpt56_providers(env: MutableMapping[str, str]) -> None:
     ``bedrock_mantle`` for ``gpt-5.6-*``. The Azure alias ``azure_ai`` and the
     ChatGPT subscription route ``chatgpt/`` are also allowed.
     """
-    from strix.config.models import (  # noqa: PLC0415
+    from lyrashield.policy.models import (  # noqa: PLC0415
         is_gpt56_model,
         is_gpt56_supported_provider,
     )
@@ -165,10 +166,95 @@ def get_version() -> str:
         return "unknown"
 
 
-def _run_upstream() -> None:
-    from strix.interface.main import main as upstream_main  # noqa: PLC0415
+def _register_lyrashield_skills() -> None:
+    from strix.skills import register_skill_dir  # noqa: PLC0415
 
-    upstream_main()
+    register_skill_dir(Path(__file__).resolve().parents[1] / "lyrashield" / "skills")
+
+
+def _register_lyrashield_tool_overrides() -> None:
+    from lyrashield.agents.factory import register_tool_override  # noqa: PLC0415
+    from lyrashield.tools.agents_graph.tools import (  # noqa: PLC0415
+        agent_finish,
+        create_agent,
+        send_message_to_agent,
+        stop_agent,
+        view_agent_graph,
+        wait_for_agents,
+    )
+    from lyrashield.tools.proxy.tools import (  # noqa: PLC0415
+        list_requests,
+        list_sitemap,
+        repeat_request,
+        scope_rules,
+        view_request,
+        view_sitemap_entry,
+    )
+    from lyrashield.tools.reporting.tool import (  # noqa: PLC0415
+        create_dependency_report,
+        create_vulnerability_report,
+        get_report,
+        list_reports,
+    )
+    from lyrashield.tools.respond.tool import (  # noqa: PLC0415
+        respond_to_user as lyra_respond_to_user,
+    )
+    from lyrashield.tools.todo.tools import (  # noqa: PLC0415
+        create_todo,
+        delete_todo,
+        list_todos,
+        mark_todo_done,
+        mark_todo_pending,
+        update_todo,
+    )
+    from lyrashield.tools.web_search.tool import (  # noqa: PLC0415
+        web_search as lyra_web_search,
+    )
+
+    register_tool_override("agent_finish", agent_finish)
+    register_tool_override("create_agent", create_agent)
+    register_tool_override("send_message_to_agent", send_message_to_agent)
+    register_tool_override("stop_agent", stop_agent)
+    register_tool_override("view_agent_graph", view_agent_graph)
+    register_tool_override("wait_for_agents", wait_for_agents)
+
+    register_tool_override("web_search", lyra_web_search)
+    register_tool_override("respond_to_user", lyra_respond_to_user)
+
+    register_tool_override("list_requests", list_requests)
+    register_tool_override("view_request", view_request)
+    register_tool_override("repeat_request", repeat_request)
+    register_tool_override("list_sitemap", list_sitemap)
+    register_tool_override("view_sitemap_entry", view_sitemap_entry)
+    register_tool_override("scope_rules", scope_rules)
+    register_tool_override("create_vulnerability_report", create_vulnerability_report)
+    register_tool_override("create_dependency_report", create_dependency_report)
+    register_tool_override("list_reports", list_reports)
+    register_tool_override("get_report", get_report)
+    register_tool_override("create_todo", create_todo)
+    register_tool_override("list_todos", list_todos)
+    register_tool_override("update_todo", update_todo)
+    register_tool_override("mark_todo_done", mark_todo_done)
+    register_tool_override("mark_todo_pending", mark_todo_pending)
+    register_tool_override("delete_todo", delete_todo)
+
+
+def _register_lyrashield_model_policy() -> None:
+    from lyrashield.agents.factory import register_model_policy  # noqa: PLC0415
+    from lyrashield.policy.models import (  # noqa: PLC0415
+        model_supports_programmatic_tool_calling,
+    )
+
+    register_model_policy(
+        "model_supports_programmatic_tool_calling",
+        model_supports_programmatic_tool_calling,
+    )
+
+
+def _run_upstream() -> None:
+    from lyrashield.interface.main import main as product_main  # noqa: PLC0415
+
+    product_main()
 
 
 def main() -> None:
@@ -179,6 +265,9 @@ def main() -> None:
         # Caller-supplied env vars must win over a local .env file.
         load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
     prepare_environment()
+    _register_lyrashield_skills()
+    _register_lyrashield_tool_overrides()
+    _register_lyrashield_model_policy()
     _run_upstream()
 
 

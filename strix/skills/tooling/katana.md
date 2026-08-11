@@ -87,7 +87,8 @@ Failure recovery:
 - If headless fails with Chrome errors, drop `-sc` or install system Chrome.
 - If output is noisy, tighten scope and add `-ef` filters.
 
-If uncertain, use `katana -h` and retain the installed-version output.
+If uncertain, query web_search with:
+`site:docs.projectdiscovery.io katana <flag> usage`
 
 Complementary crawlers / JS endpoint extractors in the sandbox:
 - `gospider -s https://target.tld -d 3 -c 10 -t 20` — alternate crawler;

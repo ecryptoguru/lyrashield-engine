@@ -1,4 +1,3 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """ChatGPT (Codex) subscription auth: OAuth login, token refresh, and the OpenAI
 client that routes inference through the ChatGPT backend.
 
@@ -21,9 +20,11 @@ import threading
 import time
 import urllib.parse
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import requests
+
+from strix.utils.secret_files import write_secret_text
 
 
 if TYPE_CHECKING:
@@ -59,37 +60,21 @@ _refresh_lock = threading.Lock()
 AUTH_PATH = Path.home() / ".strix" / "subscription-auth.json"
 
 
-def _as_str_mapping(value: Any) -> dict[str, Any] | None:
-    """Return value cast to dict[str, Any] if it is a dict."""
-    if isinstance(value, dict):
-        return cast("dict[str, Any]", value)
-    return None
-
-
 def _read_store() -> dict[str, Any]:
     try:
         data = json.loads(AUTH_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    if not isinstance(data, dict):
-        return {}
-    return cast("dict[str, Any]", data)
+    return data if isinstance(data, dict) else {}
 
 
 def _write_store(data: dict[str, Any]) -> None:
-    AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = AUTH_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    with contextlib.suppress(OSError):
-        tmp.chmod(0o600)
-    tmp.replace(AUTH_PATH)
-    with contextlib.suppress(OSError):
-        AUTH_PATH.chmod(0o600)
+    write_secret_text(AUTH_PATH, json.dumps(data, indent=2))
 
 
 def read_record() -> dict[str, Any] | None:
-    record = _as_str_mapping(_read_store().get(PROVIDER))
-    if record is None or record.get("type") != "oauth":
+    record = _read_store().get(PROVIDER)
+    if not isinstance(record, dict) or record.get("type") != "oauth":
         return None
     if not (record.get("access") and record.get("refresh") and record.get("account_id")):
         return None
@@ -198,8 +183,8 @@ def build_authorize_url(challenge: str, state: str) -> str:
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "state": state,
-        "id_token_add_organizations": "true",  # nosec B105
-        "codex_cli_simplified_flow": "true",  # nosec B105
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
         "originator": ORIGINATOR,
     }
     return f"{AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
@@ -231,23 +216,26 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
 
 
 def _post_form(payload: dict[str, str]) -> dict[str, Any]:
-
+    detail = ""
     try:
-        response = requests.post(
+        with requests.post(
             TOKEN_URL,
             data=payload,
             headers={"Accept": "application/json"},
             timeout=_TOKEN_TIMEOUT,
-        )
+        ) as response:
+            status_code = response.status_code
+            body = response.content
+            if status_code >= 400:
+                detail = response.text[:300]
     except requests.RequestException as exc:
         raise CodexAuthError("unavailable", str(exc)) from exc
-    if response.status_code >= 400:
-        detail = response.text[:300]
-        raise CodexAuthError("token_http_error", f"HTTP {response.status_code}: {detail}")
-    data = json.loads(response.content or b"{}")
+    if status_code >= 400:
+        raise CodexAuthError("token_http_error", f"HTTP {status_code}: {detail}")
+    data = json.loads(body or b"{}")
     if not isinstance(data, dict):
         raise CodexAuthError("bad_response", "token endpoint returned non-object")
-    return cast("dict[str, Any]", data)
+    return data
 
 
 def _record_from_token_response(
@@ -314,19 +302,16 @@ def _account_id_from_jwt(token: str | None) -> str | None:
         return None
     if not isinstance(payload, dict):
         return None
-    payload = cast("dict[str, Any]", payload)
-    auth = _as_str_mapping(payload.get(_ACCOUNT_CLAIM))
-    if auth:
+    auth = payload.get(_ACCOUNT_CLAIM)
+    if isinstance(auth, dict):
         account_id = auth.get("chatgpt_account_id")
         if isinstance(account_id, str) and account_id:
             return account_id
     organizations = payload.get("organizations")
-    if isinstance(organizations, list) and organizations:
-        first_org = _as_str_mapping(organizations[0])
-        if first_org:
-            org_id = first_org.get("id")
-            if isinstance(org_id, str) and org_id:
-                return org_id
+    if isinstance(organizations, list) and organizations and isinstance(organizations[0], dict):
+        org_id = organizations[0].get("id")
+        if isinstance(org_id, str) and org_id:
+            return org_id
     return None
 
 

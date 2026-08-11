@@ -8,6 +8,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify-worker-contract.sh"
 REQUIRED_FLAGS = "--non-interactive --target --scan-mode --instruction --max-budget-usd"
+CONTRACT_TESTS = (
+    "packages/types/src/scan-profile.test.ts",
+    "apps/worker/src/engine/command-builder.test.ts",
+    "apps/worker/src/docker-runtime.test.ts",
+    "apps/worker/src/engine/output-parser.test.ts",
+    "apps/worker/src/engine/result-integrity.test.ts",
+    "apps/worker/src/engine/runner.test.ts",
+    "apps/worker/src/jobs/run-scan.job.test.ts",
+)
 
 
 def executable(path: Path, body: str) -> Path:
@@ -22,16 +31,19 @@ def make_fake_app(tmp_path: Path) -> tuple[Path, Path, Path]:
     app.mkdir()
     bin_dir.mkdir()
     (app / "package.json").write_text('{"name":"fixture"}\n', encoding="utf-8")
-    for relative in (
-        "apps/worker/src/engine/command-builder.test.ts",
-        "apps/worker/src/engine/output-parser.test.ts",
-    ):
+    for relative in CONTRACT_TESTS:
         target = app / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("// fixture\n", encoding="utf-8")
     args_file = tmp_path / "pnpm.args"
-    executable(bin_dir / "corepack", "exit 0")
-    executable(bin_dir / "pnpm", f"printf '%s\\n' \"$*\" >> '{args_file}'")
+    executable(
+        bin_dir / "corepack",
+        (
+            '[[ "${1:-}" == "pnpm" ]] || { echo "global corepack mutation" >&2; exit 42; }; '
+            f"shift; printf '%s\\n' \"$*\" >> '{args_file}'"
+        ),
+    )
+    executable(bin_dir / "pnpm", 'echo "unpinned pnpm invocation" >&2; exit 43')
     return app, bin_dir, args_file
 
 
@@ -59,7 +71,7 @@ def test_rejects_help_without_required_flag(tmp_path: Path) -> None:
     assert "--non-interactive" in result.stderr
 
 
-def test_runs_focused_worker_tests(tmp_path: Path) -> None:
+def test_runs_focused_worker_tests_without_global_corepack_mutation(tmp_path: Path) -> None:
     app, bin_dir, args_file = make_fake_app(tmp_path)
     result = run_contract(app, bin_dir, tmp_path, help_text=REQUIRED_FLAGS)
     assert result.returncode == 0, result.stderr
@@ -67,6 +79,8 @@ def test_runs_focused_worker_tests(tmp_path: Path) -> None:
     assert "install --frozen-lockfile" in calls
     assert "command-builder.test.ts" in calls
     assert "output-parser.test.ts" in calls
+    assert "result-integrity.test.ts" in calls
+    assert "run-scan.job.test.ts" in calls
 
 
 def test_rejects_checkout_without_worker_contract_tests(tmp_path: Path) -> None:

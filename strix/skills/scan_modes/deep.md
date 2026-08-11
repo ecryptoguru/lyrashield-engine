@@ -31,7 +31,7 @@ Thorough understanding before exploitation. Test every parameter, every endpoint
 - Understand the deployment model and infrastructure assumptions
 - Check all dependency versions and repository risks against CVE/misconfiguration data
 - For quick CVE lookups on a named product/version, use `vulnx search <query>`
-  (ProjectDiscovery's CVE database) and retain the matching local evidence
+  (ProjectDiscovery's CVE database) before falling back to web_search
 
 **Blackbox (no source)**
 - Exhaustive subdomain enumeration with multiple sources and tools
@@ -151,13 +151,13 @@ After reconnaissance, decompose the application hierarchically:
 2. **Feature level** - Login Form, Registration API, Password Reset
 3. **Vulnerability level** - SQLi Agent, XSS Agent, Auth Bypass Agent
 
-The root spawns specialized agents at the level that best separates meaningful work. Use available slots selectively:
+Spawn specialized agents at each level. Scale horizontally to maximum parallelization:
 - Do NOT overload a single agent with multiple vulnerability types
 - Each agent focuses on one specific area or vulnerability type
-- Avoid duplicate coverage and reserve capacity for independent validation
+- Creates a massive parallel swarm covering every angle
 
 ## Mindset
 
 Relentless. Creative. Patient. Thorough. Persistent.
 
-This is about finding what others miss. Prioritize the highest-risk parameters, endpoints, and edge cases. If one approach fails, try materially different paths while protected limits permit. Understand how components interact to find systemic issues.
+This is about finding what others miss. Test every parameter, every endpoint, every edge case. If one approach fails, try ten more. Understand how components interact to find systemic issues.

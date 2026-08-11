@@ -15,14 +15,14 @@ from agents.memory import SQLiteSession
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
 
-from strix.core import execution
-from strix.core.agents import AgentCoordinator
-from strix.core.execution import (
+from lyrashield.lifecycle import execution
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.lifecycle.execution import (
     _notify_parent_on_terminal,
     _notify_root_on_budget_reserve,
 )
-from strix.core.sessions import seed_initial_input
-from strix.tools.finish.tool import finish_scan
+from lyrashield.lifecycle.sessions import seed_initial_input
+from lyrashield.tools.finish.tool import finish_scan
 
 
 _NO_STREAM_EVENTS: list[Any] = []
@@ -421,6 +421,20 @@ async def test_non_user_send_does_not_resume_budget_pause(tmp_path: Any) -> None
 
 
 @pytest.mark.asyncio
+async def test_send_reactivates_completed_agent_for_follow_up_work() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.set_status("child", "completed")
+
+    delivered = await coordinator.send("child", {"from": "root", "content": "validate this"})
+
+    assert delivered is True
+    assert coordinator.statuses["child"] == "running"
+    assert coordinator.pending_counts["child"] == 1
+
+
+@pytest.mark.asyncio
 async def test_reset_budget_stops_clears_pause_and_normalizes_statuses() -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
@@ -687,7 +701,7 @@ async def test_structured_provider_refusal_fails_interactive_agent(
     refusal = "This request was blocked under the provider's usage policy."
     stream = _StructuredRefusalStream(refusal)
     monkeypatch.setattr(
-        "strix.core.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
+        "lyrashield.lifecycle.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
     )
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
@@ -719,7 +733,7 @@ async def test_structured_provider_refusal_fails_noninteractive_child(
     refusal = "This request was blocked under the provider's usage policy."
     stream = _StructuredRefusalStream(refusal)
     monkeypatch.setattr(
-        "strix.core.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
+        "lyrashield.lifecycle.execution.Runner.run_streamed", lambda *_args, **_kwargs: stream
     )
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
@@ -786,6 +800,96 @@ async def test_run_agent_loop_seeds_identity_before_first_cycle(
     stored = await session.get_items()
     assert any("recon" in str(cast("dict[str, Any]", i).get("content", "")) for i in stored)
     session.close()
+
+
+@pytest.mark.asyncio
+async def test_noninteractive_completed_child_runs_follow_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    calls: list[Any] = []
+    follow_up_ran = asyncio.Event()
+
+    async def _complete(*_args: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs["initial_input"])
+        await coordinator.set_status("child", "completed")
+        if len(calls) == 2:
+            follow_up_ran.set()
+        return MagicMock(final_output="done")
+
+    monkeypatch.setattr(execution, "_run_until_lifecycle", _complete)
+    task = asyncio.create_task(
+        execution.run_agent_loop(
+            agent=object(),
+            initial_input="initial task",
+            run_config=MagicMock(),
+            context={"agent_id": "child", "parent_id": "root"},
+            max_turns=5,
+            coordinator=coordinator,
+            agent_id="child",
+            interactive=False,
+        )
+    )
+
+    await asyncio.sleep(0)
+    assert not task.done()
+    await coordinator.send("child", {"from": "root", "content": "validate this"})
+    await asyncio.wait_for(follow_up_ran.wait(), timeout=1.0)
+
+    assert calls == ["initial task", []]
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_noninteractive_child_runs_follow_up_queued_before_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    first_cycle_started = asyncio.Event()
+    finish_first_cycle = asyncio.Event()
+    follow_up_ran = asyncio.Event()
+    calls = 0
+
+    async def _complete(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        await coordinator.mark_running("child")
+        if calls == 1:
+            first_cycle_started.set()
+            await finish_first_cycle.wait()
+        await coordinator.set_status("child", "completed")
+        if calls == 2:
+            follow_up_ran.set()
+        return MagicMock(final_output="done")
+
+    monkeypatch.setattr(execution, "_run_until_lifecycle", _complete)
+    task = asyncio.create_task(
+        execution.run_agent_loop(
+            agent=object(),
+            initial_input="initial task",
+            run_config=MagicMock(),
+            context={"agent_id": "child", "parent_id": "root"},
+            max_turns=5,
+            coordinator=coordinator,
+            agent_id="child",
+            interactive=False,
+        )
+    )
+
+    await asyncio.wait_for(first_cycle_started.wait(), timeout=1.0)
+    await coordinator.send("child", {"from": "root", "content": "validate this"})
+    finish_first_cycle.set()
+    await asyncio.wait_for(follow_up_ran.wait(), timeout=1.0)
+
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
 
 def _scripted_cycle(

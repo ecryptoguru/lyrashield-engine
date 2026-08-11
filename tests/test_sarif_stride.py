@@ -1,4 +1,4 @@
-"""STRIDE-leg tagging in the SARIF emitter (strix.report.sarif).
+"""STRIDE-leg tagging in the SARIF emitter (lyrashield.artifacts.sarif).
 
 Every finding's SARIF rule (and, by inheritance via ``ruleId``, its results)
 carries one or more ``stride:<leg>`` tags derived from the finding's CWE, so the
@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import pytest
 
-from strix.report.sarif import (
+from lyrashield.artifacts.sarif import (
     _CWE_TO_STRIDE,
     _DEFAULT_STRIDE_LEGS,
     _stride_legs_for_cwe,

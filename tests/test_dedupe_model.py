@@ -9,11 +9,8 @@ from typing import Any, cast
 
 import pytest
 
-from strix.config import loader
-from strix.config.settings import DedupeSettings
-from strix.core import hooks as hooks_module
-from strix.report import dedupe as dedupe_module
-from strix.report.dedupe import (
+from lyrashield.artifacts import dedupe as dedupe_module
+from lyrashield.artifacts.dedupe import (
     _MAX_EXISTING_REPORTS_CHARS,
     DedupeJudgement,
     _bound_existing_reports,
@@ -21,6 +18,9 @@ from strix.report.dedupe import (
     _extract_balanced_json,
     _parse_dedupe_response,
 )
+from lyrashield.lifecycle import hooks as hooks_module
+from lyrashield.policy import loader
+from lyrashield.policy.settings import DedupeSettings
 
 
 def test_dedupe_key_sent_per_call_not_via_global_env() -> None:
@@ -49,6 +49,12 @@ def test_dedupe_endpoint_sent_per_call() -> None:
     # process-wide base URL, so it can't clobber the main model's endpoint.
     assert (settings.extra_args or {})["api_base"] == "https://dedupe.example/v1"
     assert (settings.extra_args or {})["api_key"] == "dedupe-key"
+
+
+def test_dedupe_omits_parallel_tool_setting_for_azure_gpt56() -> None:
+    """Azure GPT-5.6 rejects ``parallel_tool_calls`` even when false."""
+    settings = _dedupe_model_settings(DedupeSettings(), "azure_ai/gpt-5.6-luna", 300)
+    assert settings.parallel_tool_calls is None
 
 
 def test_dedicated_dedupe_model_uses_own_headers_not_main() -> None:
@@ -251,7 +257,7 @@ async def test_dedupe_works_without_active_hooks() -> None:
 
 def test_runner_clears_active_hooks_on_every_exit_path() -> None:
     """A stale hooks registration would let a later scan reserve against a dead budget."""
-    runner = Path("strix/core/runner.py").read_text(encoding="utf-8")
+    runner = Path("lyrashield/lifecycle/runner.py").read_text(encoding="utf-8")
     assert "set_active_hooks(hooks)" in runner
     # The clear must live in the `finally` so it runs on success, failure, and cancel.
     finally_block = runner.split("\n    finally:\n", 1)[1]

@@ -1,20 +1,15 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """SDK-native vulnerability-report deduplication."""
 
 from __future__ import annotations
 
 import json
 import logging
-import math
 import re
-from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any
 
-from agents.agent_output import AgentOutputSchema
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
-from pydantic import BaseModel, Field, ValidationError
 
 from strix.config import load_settings
 from strix.config.models import (
@@ -28,13 +23,13 @@ from strix.report.state import get_global_report_state
 if TYPE_CHECKING:
     from agents.items import ModelResponse
 
-    from strix.config.settings import DedupeSettings, Settings
+    from strix.config.settings import DedupeSettings
 
 
 logger = logging.getLogger(__name__)
 
 
-def dedupe_extra_args(dedupe: DedupeSettings) -> dict[str, str]:
+def _dedupe_extra_args(dedupe: DedupeSettings) -> dict[str, str]:
     """Per-call credential + endpoint for the dedupe model.
 
     Provider env vars and the global base URL are process-wide, so a
@@ -54,13 +49,10 @@ def dedupe_extra_args(dedupe: DedupeSettings) -> dict[str, str]:
 
 
 def _dedupe_model_settings(
-    dedupe: DedupeSettings,
-    model_name: str,
-    request_timeout: float | None,
-    settings: Settings | None = None,
+    dedupe: DedupeSettings, model_name: str, request_timeout: float | None
 ) -> ModelSettings:
-    llm = settings.llm if settings is not None else load_settings().llm
-    model_settings = make_model_settings(
+    llm = load_settings().llm
+    settings = make_model_settings(
         dedupe.reasoning_effort,
         model_name=model_name,
         force_required_tool_choice=False,
@@ -70,11 +62,12 @@ def _dedupe_model_settings(
         # must never receive the main endpoint's credentials. A dedicated model
         # gets its own DEDUPE_LLM_EXTRA_HEADERS instead.
         extra_headers=dedupe.extra_headers if dedupe.model else llm.extra_headers,
+        has_tools=False,
     )
-    extra = dedupe_extra_args(dedupe)
+    extra = _dedupe_extra_args(dedupe)
     if extra:
-        model_settings = model_settings.resolve(ModelSettings(extra_args=extra))
-    return model_settings
+        settings = settings.resolve(ModelSettings(extra_args=extra))
+    return settings
 
 
 DEDUPE_SYSTEM_PROMPT = """You are an expert vulnerability report deduplication judge.
@@ -162,7 +155,7 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
         "dependency_metadata",
     ]
 
-    cleaned: dict[str, Any] = {}
+    cleaned = {}
     for field in relevant_fields:
         if report.get(field):
             value = report[field]
@@ -173,190 +166,10 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-# Upper bound on the serialized existing-report payload sent to the dedupe
-# model. Per-report fields are already truncated at 8k chars, but the report
-# COUNT is unbounded — every new finding compares against all prior ones, so a
-# long scan's dedupe calls would otherwise grow without limit (and each token is
-# metered). ~200k chars keeps the request well under the long-context pricing
-# boundary while fitting hundreds of typical reports.
-_MAX_EXISTING_REPORTS_CHARS = 200_000
-
-_TRUNCATION_MARKER = "...[truncated]"
-
-# Per-item cost of the enclosing JSON list: the separator plus the indentation
-# the encoder adds to each nested line. Small and deliberately generous — the
-# budget must never be under-counted.
-_PER_ITEM_ENCODING_OVERHEAD = 8
-
-# Output allowance reserved for a dedupe reply. The response is a small fixed
-# JSON object, so this is deliberately generous rather than tuned.
-_DEDUPE_MAX_OUTPUT_TOKENS = 512
-
-
-class DedupeJudgement(BaseModel):
-    """Enforced response schema for the LLM deduplication judge.
-
-    The model is asked to return only this object; ``AgentOutputSchema`` turns
-    the definition into a provider-level ``response_format`` so the output is
-    constrained to these fields and no surrounding prose.
-    """
-
-    is_duplicate: bool
-    duplicate_id: str = ""
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    reason: str = ""
-
-
-_DEDUPE_OUTPUT_SCHEMA: AgentOutputSchema = AgentOutputSchema(
-    DedupeJudgement,
-    strict_json_schema=True,
-)
-
-# Conservative chars-per-token ratio for sizing the reservation. Under-counting
-# would let the reservation understate real spend, so round pessimistically.
-_CHARS_PER_TOKEN = 3.5
-
-
-def _estimate_reservation_tokens(*parts: str) -> int:
-    """Rough upper-bound token count for the reservation.
-
-    The exact count is only known after the provider responds; the reservation
-    just needs to be a safe over-estimate that is released immediately after.
-    """
-    return max(1, math.ceil(sum(len(part) for part in parts) / _CHARS_PER_TOKEN))
-
-
-async def _request_dedupe_judgement(
-    *,
-    model: Any,
-    model_name: str,
-    model_settings: ModelSettings,
-    user_msg: str,
-) -> ModelResponse:
-    """Run the dedupe model call under a scan-budget reservation.
-
-    This call is metered but does not flow through the agent run hooks, so it
-    reserves explicitly. Without a reservation, dedupe traffic is only counted
-    after the fact and a scan can overshoot ``max_budget_usd``.
-    """
-    # Lazy import: strix.core.hooks imports strix.report.state, so a
-    # module-level import here would close a cycle.
-    from strix.core.hooks import get_active_hooks
-
-    hooks = get_active_hooks()
-    reservation_key = f"dedupe:{uuid4().hex}"
-    if hooks is not None:
-        await hooks.reserve_out_of_band_request(
-            key=reservation_key,
-            model=model_name,
-            input_tokens=_estimate_reservation_tokens(DEDUPE_SYSTEM_PROMPT, user_msg),
-            max_output_tokens=_DEDUPE_MAX_OUTPUT_TOKENS,
-        )
-    response: ModelResponse | None = None
-    try:
-        response = await model.get_response(
-            system_instructions=DEDUPE_SYSTEM_PROMPT,
-            input=user_msg,
-            model_settings=model_settings,
-            tools=[],
-            output_schema=_DEDUPE_OUTPUT_SCHEMA,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=None,
-            prompt=None,
-        )
-    finally:
-        # Always release: a failed request must not strand its reservation and
-        # shrink the remaining budget for the rest of the scan.
-        if hooks is not None:
-            await hooks.release_out_of_band_request(
-                key=reservation_key,
-                model=model_name,
-                usage=response.usage if response is not None else None,
-            )
-    if response is None:
-        raise RuntimeError("Dedupe model call did not return a response")
-    return response
-
-
-def _truncate_report_to_budget(report: dict[str, Any], budget: int) -> dict[str, Any] | None:
-    """Shrink one report's longest text fields until it encodes within ``budget``.
-
-    Applies to a single report large enough to blow the whole budget on its own.
-    Identity fields (``id``, ``target``, ``endpoint``, ``method``) are never
-    truncated — they are what the model compares on — so a report is dropped
-    outright if even those exceed the budget.
-    """
-    identity_fields = {"id", "target", "endpoint", "method"}
-    trimmed = dict(report)
-    while _encoded_size(trimmed) > budget:
-        longest = max(
-            (f for f in trimmed if f not in identity_fields and isinstance(trimmed[f], str)),
-            key=lambda f: len(trimmed[f]),
-            default=None,
-        )
-        if longest is None:
-            return None
-        excess = _encoded_size(trimmed) - budget
-        keep = len(trimmed[longest]) - excess - len(_TRUNCATION_MARKER)
-        if keep <= 0:
-            del trimmed[longest]
-        else:
-            trimmed[longest] = trimmed[longest][:keep] + _TRUNCATION_MARKER
-    return trimmed
-
-
-def _encoded_size(report: dict[str, Any]) -> int:
-    """Encoded length of one report as it appears in the transmitted payload.
-
-    Matches ``json.dumps(..., indent=2)`` at the call site: indentation and the
-    enclosing list's separators are what actually reach the model, so a compact
-    estimate would under-count and let the payload exceed the cap.
-    """
-    return len(json.dumps(report, indent=2)) + _PER_ITEM_ENCODING_OVERHEAD
-
-
-def _bound_existing_reports(cleaned: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep the most recent cleaned reports within the payload budget.
-
-    Newest-first retention: a fresh candidate most often duplicates a recent
-    finding from the same testing phase, and deterministic identity checks have
-    already run against the full report list before the LLM is consulted.
-
-    The budget is a hard limit on the encoded payload. A newest report that
-    exceeds it alone is truncated rather than passed through, so a single
-    oversized finding cannot defeat the cost guard.
-    """
-    total = 0
-    kept_reversed: list[dict[str, Any]] = []
-    for report in reversed(cleaned):
-        size = _encoded_size(report)
-        if total + size > _MAX_EXISTING_REPORTS_CHARS:
-            if kept_reversed:
-                break
-            truncated = _truncate_report_to_budget(report, _MAX_EXISTING_REPORTS_CHARS)
-            if truncated is None:
-                break
-            kept_reversed.append(truncated)
-            logger.info("Dedupe comparison payload bounded: truncated an oversized report")
-            break
-        total += size
-        kept_reversed.append(report)
-    if len(kept_reversed) < len(cleaned):
-        logger.info(
-            "Dedupe comparison payload bounded: keeping %d of %d existing reports",
-            len(kept_reversed),
-            len(cleaned),
-        )
-    return list(reversed(kept_reversed))
-
-
 def _dependency_identity(report: dict[str, Any]) -> tuple[str, str, str] | None:
     metadata = report.get("dependency_metadata")
     if not isinstance(metadata, dict):
         return None
-    metadata = cast("dict[str, Any]", metadata)
 
     raw_cve = report.get("cve")
     raw_package = metadata.get("package_name")
@@ -369,6 +182,24 @@ def _dependency_identity(report: dict[str, Any]) -> tuple[str, str, str] | None:
     if not cve or not package_name:
         return None
     return cve, ecosystem, package_name
+
+
+def _manifest_path(report: dict[str, Any]) -> str:
+    metadata = report.get("dependency_metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("manifest_path") or "").strip()
+
+
+def _distinct_manifest_paths(candidate: dict[str, Any], report: dict[str, Any]) -> bool:
+    """Same CVE/package observed in two different manifests is two findings.
+
+    Only applies when both sides carry a manifest_path; a missing path keeps
+    the legacy CVE/package/ecosystem identity.
+    """
+    candidate_path = _manifest_path(candidate)
+    report_path = _manifest_path(report)
+    return bool(candidate_path and report_path and candidate_path != report_path)
 
 
 def _report_cve(report: dict[str, Any]) -> str:
@@ -416,6 +247,8 @@ def _check_dependency_duplicate(
             report_cve, report_ecosystem, report_package_name = report_identity
             if (report_cve, report_package_name) != (cve, package_name):
                 continue
+            if _distinct_manifest_paths(candidate, report):
+                continue
             if report_ecosystem == ecosystem:
                 return {
                     "is_duplicate": True,
@@ -459,130 +292,31 @@ def _check_dependency_duplicate(
     }
 
 
-def _normalized_text(value: Any) -> str:
-    return " ".join(str(value or "").lower().split())
-
-
-def _dynamic_identity(report: dict[str, Any]) -> tuple[str, ...] | None:
-    locations = report.get("code_locations")
-    primary_location = ""
-    if isinstance(locations, list) and locations and isinstance(locations[0], dict):
-        first = cast("dict[str, Any]", locations[0])
-        primary_location = ":".join(
-            [
-                _normalized_text(first.get("file")),
-                str(first.get("start_line") or ""),
-                str(first.get("end_line") or ""),
-            ]
-        )
-    endpoint = _normalized_text(report.get("endpoint"))
-    target = _normalized_text(report.get("target"))
-    if not endpoint and not primary_location:
-        return None
-    return (
-        target,
-        endpoint,
-        _normalized_text(report.get("method")),
-        primary_location,
-        _normalized_text(report.get("cwe")),
-        _normalized_text(report.get("title")),
-    )
-
-
-def _first_unquoted_brace(text: str) -> int:
-    """Return the index of the first '{' that is not inside a JSON string."""
-    in_string = False
-    escape = False
-    for i, ch in enumerate(text):
-        if in_string:
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"':
-            in_string = True
-            continue
-        if ch == "{":
-            return i
-
-    return -1
-
-
-def _extract_balanced_json(text: str) -> str:
-    """Return the first top-level JSON object from text, accounting for nesting."""
-    text = text.strip()
+def _parse_dedupe_response(content: str) -> dict[str, Any]:
+    text = content.strip()
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
             text = text[4:]
         text = text.strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError(f"No JSON object found in dedupe response: {content[:500]}")
+    parsed = json.loads(text[start : end + 1])
 
-    start = _first_unquoted_brace(text)
-    if start == -1:
-        raise ValueError(f"No JSON object found in dedupe response: {text[:500]}")
-
-    brace_depth = 0
-    in_string = False
-    escape = False
-    for i, ch in enumerate(text[start:], start=start):
-        if in_string:
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"':
-            in_string = True
-            continue
-        if ch == "{":
-            brace_depth += 1
-        elif ch == "}":
-            brace_depth -= 1
-            if brace_depth == 0:
-                return text[start : i + 1]
-
-    raise ValueError(f"No balanced JSON object found in dedupe response: {text[:500]}")
-
-
-def _parse_dedupe_response(content: str) -> dict[str, Any]:
-    """Parse and validate the dedupe model's JSON response.
-
-    First tries strict Pydantic validation against ``DedupeJudgement``. If the
-    provider returned malformed or extra-prose output (e.g. during a fallback
-    path), fall back to the older lenient parser so the scan isn't blocked.
-    """
-    json_text = _extract_balanced_json(content)
+    duplicate_id = str(parsed.get("duplicate_id") or "")[:64]
+    reason = str(parsed.get("reason") or "")[:500]
     try:
-        judgement = DedupeJudgement.model_validate_json(json_text)
-    except (ValidationError, ValueError):
-        logger.warning("Dedupe response failed schema validation; falling back to lenient parser")
-        parsed = json.loads(json_text)
-        duplicate_id = str(parsed.get("duplicate_id") or "")[:64]
-        reason = str(parsed.get("reason") or "")[:500]
-        try:
-            confidence = float(parsed.get("confidence", 0.0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        return {
-            "is_duplicate": bool(parsed.get("is_duplicate", False)),
-            "duplicate_id": duplicate_id,
-            "confidence": confidence,
-            "reason": reason,
-        }
+        confidence = float(parsed.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+
     return {
-        "is_duplicate": judgement.is_duplicate,
-        "duplicate_id": judgement.duplicate_id[:64],
-        "confidence": judgement.confidence,
-        "reason": judgement.reason[:500],
+        "is_duplicate": bool(parsed.get("is_duplicate", False)),
+        "duplicate_id": duplicate_id,
+        "confidence": confidence,
+        "reason": reason,
     }
 
 
@@ -613,23 +347,6 @@ async def check_duplicate(
     if dependency_duplicate is not None:
         return dependency_duplicate
 
-    candidate_identity = _dynamic_identity(candidate)
-    if candidate_identity is not None:
-        for report in existing_reports:
-            if _dynamic_identity(report) == candidate_identity:
-                return {
-                    "is_duplicate": True,
-                    "duplicate_id": str(report.get("id") or "")[:64],
-                    "confidence": 1.0,
-                    "reason": "Exact target, location, weakness, and title identity",
-                }
-        return {
-            "is_duplicate": False,
-            "duplicate_id": "",
-            "confidence": 1.0,
-            "reason": "No exact deterministic report identity matched",
-        }
-
     try:
         settings = load_settings()
         dedupe = settings.dedupe
@@ -643,9 +360,7 @@ async def check_duplicate(
             }
 
         candidate_cleaned = _prepare_report_for_comparison(candidate)
-        existing_cleaned = _bound_existing_reports(
-            [_prepare_report_for_comparison(r) for r in existing_reports]
-        )
+        existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]
         comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
 
         user_msg = (
@@ -656,14 +371,18 @@ async def check_duplicate(
 
         configure_sdk_model_defaults(settings)
         resolved_model = model_name.strip()
-        dedupe_settings = _dedupe_model_settings(
-            dedupe, resolved_model, settings.llm.timeout, settings=settings
-        )
-        response = await _request_dedupe_judgement(
-            model=StrixProvider(settings=settings).get_model(resolved_model),
-            model_name=resolved_model,
-            model_settings=dedupe_settings,
-            user_msg=user_msg,
+        model = StrixProvider().get_model(resolved_model)
+        response = await model.get_response(
+            system_instructions=DEDUPE_SYSTEM_PROMPT,
+            input=user_msg,
+            model_settings=_dedupe_model_settings(dedupe, resolved_model, settings.llm.timeout),
+            tools=[],
+            output_schema=None,
+            handoffs=[],
+            tracing=ModelTracing.DISABLED,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
         )
         report_state = get_global_report_state()
         if report_state is not None:

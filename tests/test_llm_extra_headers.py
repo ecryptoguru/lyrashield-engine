@@ -9,16 +9,25 @@ import litellm
 import pytest
 from agents.models import _openai_shared
 
-from strix.config import loader
-from strix.config.loader import load_settings
-from strix.config.models import configure_sdk_model_defaults, reset_sdk_model_defaults
+from lyrashield.policy import loader
+from lyrashield.policy.loader import load_settings
+from lyrashield.policy.models import configure_sdk_model_defaults, reset_sdk_model_defaults
 
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-_ENV_KEYS = ["STRIX_LLM", "LLM_API_KEY", "LLM_API_BASE", "LLM_EXTRA_HEADERS"]
+_ENV_KEYS = [
+    "STRIX_LLM",
+    "LLM_API_KEY",
+    "LLM_API_BASE",
+    "LLM_API_VERSION",
+    "AZURE_AI_API_KEY",
+    "AZURE_AI_API_BASE",
+    "AZURE_API_VERSION",
+    "LLM_EXTRA_HEADERS",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +51,24 @@ def test_extra_headers_parsed_from_json_env(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("LLM_EXTRA_HEADERS", json.dumps({"X-A": "1", "X-B": "2"}))
     settings = load_settings()
     assert settings.llm.extra_headers == {"X-A": "1", "X-B": "2"}
+
+
+def test_empty_generic_aliases_do_not_mask_azure_ai_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compose may inject empty generic variables alongside Azure AI variables."""
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_API_BASE", "")
+    monkeypatch.setenv("LLM_API_VERSION", "")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-key")
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://example.services.ai.azure.com")
+    monkeypatch.setenv("AZURE_API_VERSION", "2024-12-01-preview")
+
+    settings = load_settings()
+
+    assert settings.llm.api_key == "azure-key"
+    assert settings.llm.api_base == "https://example.services.ai.azure.com"
+    assert settings.llm.api_version == "2024-12-01-preview"
 
 
 def test_extra_headers_merged_into_litellm_headers(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,21 +1,22 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Settings loader, override switch, and disk persistence."""
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from pydantic import AliasChoices, BaseModel
 
 from strix.config.settings import Settings
+from strix.utils.secret_files import write_secret_text
 
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from pydantic.fields import FieldInfo
 
 
@@ -25,6 +26,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PATH: Path = Path.home() / ".strix" / "cli-config.json"
 _override: Path | None = None
 _cached: Settings | None = None
+_settings_loader: ModuleType | None = None
+
+
+def register_settings_loader(loader: ModuleType) -> None:
+    """Use an alternate settings loader at the public config boundary."""
+    global _settings_loader  # noqa: PLW0603
+    _settings_loader = loader
 
 
 def load_settings() -> Settings:
@@ -32,6 +40,9 @@ def load_settings() -> Settings:
 
     Precedence: env vars win, then the JSON file, then field defaults.
     """
+    if _settings_loader is not None:
+        return _settings_loader.load_settings()  # type: ignore[no-any-return]
+
     global _cached  # noqa: PLW0603
     if _cached is None:
         source_path = _override or _DEFAULT_PATH
@@ -48,6 +59,10 @@ def load_settings() -> Settings:
 
 def apply_config_override(path: Path) -> None:
     """Switch the JSON source to ``path`` and invalidate the cache."""
+    if _settings_loader is not None and hasattr(_settings_loader, "apply_config_override"):
+        _settings_loader.apply_config_override(path)
+        return
+
     global _override, _cached  # noqa: PLW0603
     _override = path
     _cached = None
@@ -56,12 +71,16 @@ def apply_config_override(path: Path) -> None:
 
 def persist_current() -> None:
     """Write currently-set env vars to the active config file (0o600)."""
+    if _settings_loader is not None and hasattr(_settings_loader, "persist_current"):
+        _settings_loader.persist_current()
+        return
+
     s = load_settings()
     target = _override or _DEFAULT_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
 
     env_block: dict[str, str] = {}
-    for sub_name in type(s).model_fields:
+    for sub_name in s.model_fields:
         sub_model = getattr(s, sub_name)
         if not isinstance(sub_model, BaseModel):
             continue
@@ -72,9 +91,7 @@ def persist_current() -> None:
                     env_block[alias.upper()] = value
                     break
 
-    target.write_text(json.dumps({"env": env_block}, indent=2), encoding="utf-8")
-    with contextlib.suppress(OSError):
-        target.chmod(0o600)
+    write_secret_text(target, json.dumps({"env": env_block}, indent=2))
 
 
 def _aliases_for(finfo: FieldInfo) -> list[str]:
@@ -102,13 +119,9 @@ def _read_json_overrides(path: Path) -> dict[str, dict[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
-    if not isinstance(data, dict):
-        return {}
-    data = cast("dict[str, Any]", data)
-    env_block = data.get("env", {})
+    env_block = data.get("env", {}) if isinstance(data, dict) else {}
     if not isinstance(env_block, dict):
         return {}
-    env_block = cast("dict[str, Any]", env_block)
 
     env_block_upper = {str(k).upper(): v for k, v in env_block.items()}
     env_present = {k.upper() for k in os.environ}

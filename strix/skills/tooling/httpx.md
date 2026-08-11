@@ -73,7 +73,8 @@ Failure recovery:
 - If output is noisy, add `-fc` filters or `-fd` duplicate filtering.
 - If HTTPS-only probing misses HTTP services, rerun with `-nf` (and avoid `-nfs`).
 
-If uncertain, use `httpx -h` and retain the installed-version output.
+If uncertain, query web_search with:
+`site:docs.projectdiscovery.io httpx <flag> usage`
 
 Companion: `wafw00f <url>` fingerprints the WAF/CDN in front of a target
 (Cloudflare, Akamai, AWS WAF, etc.). Run it once after httpx confirms the

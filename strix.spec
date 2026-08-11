@@ -6,31 +6,22 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 project_root = Path(SPECPATH)
 strix_root = project_root / 'strix'
+lyrashield_root = project_root / 'lyrashield'
 
 datas = []
 
-for md_file in strix_root.rglob('skills/**/*.md'):
-    rel_path = md_file.relative_to(project_root)
-    datas.append((str(md_file), str(rel_path.parent)))
+for package_root in (strix_root, lyrashield_root):
+    for pattern in ('skills/**/*.md', '**/*.jinja', '**/*.xml', '**/*.tcss'):
+        for data_file in package_root.rglob(pattern):
+            rel_path = data_file.relative_to(project_root)
+            datas.append((str(data_file), str(rel_path.parent)))
 
-for jinja_file in strix_root.rglob('agents/**/*.jinja'):
-    rel_path = jinja_file.relative_to(project_root)
-    datas.append((str(jinja_file), str(rel_path.parent)))
-
-for xml_file in strix_root.rglob('*.xml'):
-    rel_path = xml_file.relative_to(project_root)
-    datas.append((str(xml_file), str(rel_path.parent)))
-
-for tcss_file in strix_root.rglob('*.tcss'):
-    rel_path = tcss_file.relative_to(project_root)
-    datas.append((str(tcss_file), str(rel_path.parent)))
-
-# Prebuilt local-viewer SPA (served by `strix view`).
-viewer_static = strix_root / 'interface' / 'viewer' / 'static'
-for asset in viewer_static.rglob('*'):
-    if asset.is_file():
-        rel_path = asset.relative_to(project_root)
-        datas.append((str(asset), str(rel_path.parent)))
+    # Prebuilt local-viewer SPA (served by `lyrashield view`).
+    viewer_static = package_root / 'interface' / 'viewer' / 'static'
+    for asset in viewer_static.rglob('*'):
+        if asset.is_file():
+            rel_path = asset.relative_to(project_root)
+            datas.append((str(asset), str(rel_path.parent)))
 
 datas += collect_data_files('textual')
 
@@ -120,22 +111,8 @@ hiddenimports = [
     'strix.interface.main',
     'strix.interface.cli',
     'strix.interface.tui',
-    'strix.interface.tui.app',
     'strix.interface.tui.history',
     'strix.interface.tui.live_view',
-    'strix.interface.tui.messages',
-    'strix.interface.tui.renderers',
-    'strix.interface.tui.renderers.agent_message_renderer',
-    'strix.interface.tui.renderers.agents_graph_renderer',
-    'strix.interface.tui.renderers.base_renderer',
-    'strix.interface.tui.renderers.finish_renderer',
-    'strix.interface.tui.renderers.notes_renderer',
-    'strix.interface.tui.renderers.proxy_renderer',
-    'strix.interface.tui.renderers.registry',
-    'strix.interface.tui.renderers.reporting_renderer',
-    'strix.interface.tui.renderers.thinking_renderer',
-    'strix.interface.tui.renderers.todo_renderer',
-    'strix.interface.tui.renderers.user_message_renderer',
     'strix.interface.utils',
     'strix.agents',
     'strix.agents.factory',
@@ -184,6 +161,14 @@ hiddenimports = [
     'strix.tools.thinking.tool',
     'strix.tools.todo.tools',
     'strix.skills',
+
+    # LyraShield product modules with runtime-loaded resources.
+    'lyrashield.agents.factory',
+    'lyrashield.agents.prompt',
+    'lyrashield.interface.tui.app',
+    'lyrashield.interface.tui.renderers',
+    'lyrashield.interface.viewer.server',
+    'lyrashield.skills',
 ]
 
 hiddenimports += collect_submodules('textual')

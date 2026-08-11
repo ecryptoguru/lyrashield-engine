@@ -1,4 +1,3 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Build SandboxAgents for root + child Strix runs."""
 
 from __future__ import annotations
@@ -7,26 +6,17 @@ import inspect
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from agents.agent import ToolsToFinalOutputResult
 from agents.sandbox import SandboxAgent
 from agents.sandbox.capabilities import Filesystem, Shell
 from agents.sandbox.errors import InvalidManifestPathError
-from agents.tool import (
-    ApplyPatchTool,
-    CustomTool,
-    FunctionTool,
-    ProgrammaticToolCallingTool,
-    ShellTool,
-    Tool,
-    ToolCaller,
-)
+from agents.tool import CustomTool, FunctionTool, Tool
 from pydantic import ValidationError
 
 from strix.agents.prompt import render_system_prompt
 from strix.config import load_settings
-from strix.config.models import model_supports_programmatic_tool_calling
 from strix.tools.agents_graph.tools import (
     agent_finish,
     create_agent,
@@ -70,14 +60,12 @@ from strix.tools.todo.tools import (
     update_todo,
 )
 from strix.tools.web_search.tool import web_search
-from strix.utils.redaction import redact_secrets
 
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from agents import RunContextWrapper
-    from agents.model_settings import ModelSettings
     from agents.tool import FunctionToolResult
 
 
@@ -88,12 +76,6 @@ _CUSTOM_TOOL_INPUT_FIELD_BY_NAME = {
     "apply_patch": "patch",
 }
 _DEFAULT_CUSTOM_TOOL_INPUT_FIELD = "input"
-
-# Allowed callers for tools when programmatic tool calling is enabled.
-_PROGRAMMATIC_ALLOWED_CALLERS: list[ToolCaller] = cast(
-    "list[ToolCaller]",
-    ["direct", "programmatic"],
-)
 
 
 def _custom_tool_input_field(tool: CustomTool) -> str:
@@ -161,6 +143,85 @@ def _with_bounded_result(tool: FunctionTool) -> FunctionTool:
     return tool
 
 
+def _schema_types(spec: dict[str, Any]) -> set[str]:
+    types: set[str] = set()
+    raw = spec.get("type")
+    if isinstance(raw, str):
+        types.add(raw)
+    elif isinstance(raw, list):
+        types.update(t for t in raw if isinstance(t, str))
+    for variant in spec.get("anyOf") or ():
+        if isinstance(variant, dict):
+            types |= _schema_types(variant)
+    types.discard("null")
+    return types
+
+
+def _decode_structured(value: str, types: set[str]) -> Any:
+    stripped = value.strip()
+    if not stripped:
+        # An empty string is the model's "no value" for a list/dict param; give it
+        # the empty container so it validates instead of failing the type check.
+        return [] if "array" in types else {}
+    try:
+        decoded = json.loads(stripped)
+    except json.JSONDecodeError:
+        return value
+    wanted = list if "array" in types else dict
+    return decoded if isinstance(decoded, wanted) else value
+
+
+def _coerce_argument(value: Any, spec: dict[str, Any]) -> Any:
+    types = _schema_types(spec)
+    if not types or value is None:
+        return value
+    if isinstance(value, list | dict) and "string" in types and not types & {"array", "object"}:
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, str) and types & {"array", "object"} and "string" not in types:
+        return _decode_structured(value, types)
+    return value
+
+
+def _coerce_arguments(raw_input: str, schema: dict[str, Any]) -> str:
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return raw_input
+    try:
+        payload = json.loads(raw_input) if raw_input else None
+    except json.JSONDecodeError:
+        return raw_input
+    if not isinstance(payload, dict):
+        return raw_input
+
+    changed = False
+    for key, value in payload.items():
+        spec = properties.get(key)
+        if not isinstance(spec, dict):
+            continue
+        coerced = _coerce_argument(value, spec)
+        if coerced is not value:
+            payload[key] = coerced
+            changed = True
+
+    if not changed:
+        return raw_input
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _with_coerced_arguments(tool: FunctionTool) -> FunctionTool:
+    if getattr(tool, "_strix_coerced", False):
+        return tool
+    invoke_tool = tool.on_invoke_tool
+    schema = tool.params_json_schema
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        return await invoke_tool(ctx, _coerce_arguments(raw_input, schema))
+
+    tool.on_invoke_tool = invoke
+    tool._strix_coerced = True  # type: ignore[attr-defined]
+    return tool
+
+
 def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
 
@@ -224,31 +285,24 @@ def _bound_custom_tool(tool: CustomTool) -> CustomTool:
     return tool
 
 
-def _configure_filesystem_tools(
-    toolset: Any, *, chat_completions: bool = False, programmatic: bool = False
-) -> None:
-    for name, tool in cast("dict[str, Any]", vars(toolset)).items():
-        wrapped = tool
-        if chat_completions and isinstance(tool, CustomTool):
-            wrapped = _custom_tool_as_function_tool(tool)
-        elif chat_completions and isinstance(tool, FunctionTool):
-            wrapped = _function_tool_with_error_result(tool)
+def _configure_filesystem_tools(toolset: Any, *, chat_completions: bool) -> None:
+    for name, tool in vars(toolset).items():
+        if chat_completions:
+            if isinstance(tool, CustomTool):
+                setattr(toolset, name, _custom_tool_as_function_tool(tool))
+            elif isinstance(tool, FunctionTool):
+                setattr(
+                    toolset, name, _function_tool_with_error_result(_with_coerced_arguments(tool))
+                )
         elif isinstance(tool, CustomTool):
-            wrapped = _bound_custom_tool(tool)
+            setattr(toolset, name, _bound_custom_tool(tool))
         elif isinstance(tool, FunctionTool):
-            wrapped = _with_bounded_result(tool)
-        if isinstance(wrapped, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)):
-            wrapped.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS if programmatic else None
-        setattr(toolset, name, wrapped)
+            setattr(toolset, name, _with_bounded_result(_with_coerced_arguments(tool)))
 
 
-def _make_filesystem_configurator(*, chat_completions: bool, programmatic: bool) -> Any:
+def _make_filesystem_configurator(*, chat_completions: bool) -> Any:
     def configure(toolset: Any) -> None:
-        _configure_filesystem_tools(
-            toolset,
-            chat_completions=chat_completions,
-            programmatic=programmatic,
-        )
+        _configure_filesystem_tools(toolset, chat_completions=chat_completions)
 
     return configure
 
@@ -301,27 +355,6 @@ def _apply_shell_output_cap(parsed: dict[str, Any]) -> None:
     )
 
 
-def _redact_tool_output(result: Any, tool_name: str) -> Any:
-    """Redact secrets in tool output before it enters the model context.
-
-    Proactively redacts PEM keys, API keys, JWTs, and passwords to prevent
-    Azure content-filter blocks on sensitive material without hiding
-    vulnerability-relevant code patterns (function names, SQL, auth logic).
-    """
-    if not isinstance(result, str):
-        return result
-    redacted = redact_secrets(result)
-    if redacted != result:
-        logger.debug(
-            "%s output redacted %d -> %d chars",
-            tool_name,
-            len(result),
-            len(redacted),
-        )
-        return redacted
-    return result
-
-
 def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
 
@@ -336,7 +369,7 @@ def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
             _apply_shell_output_cap(parsed)
             raw_input = json.dumps(parsed)
         try:
-            result = await invoke_tool(ctx, raw_input)
+            return await invoke_tool(ctx, raw_input)
         except ValidationError as exc:
             return _format_validation_error(tool.name, exc)
         except InvalidManifestPathError as exc:
@@ -346,7 +379,6 @@ def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
                 "(or omitted to use the turn's cwd). "
                 f"Got: {rel!r}."
             )
-        return _redact_tool_output(result, tool.name)
 
     tool.on_invoke_tool = invoke
     return tool
@@ -366,37 +398,31 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
             _apply_shell_output_cap(parsed)
             raw_input = json.dumps(parsed)
         try:
-            result = await invoke_tool(ctx, raw_input)
+            return await invoke_tool(ctx, raw_input)
         except ValidationError as exc:
             return _format_validation_error(tool.name, exc)
-        return _redact_tool_output(result, tool.name)
 
     tool.on_invoke_tool = invoke
     return tool
 
 
-def _configure_shell_tools(toolset: Any, *, chat_completions: bool, programmatic: bool) -> None:
-    for name, tool in cast("dict[str, Any]", vars(toolset)).items():
+def _configure_shell_tools(toolset: Any, *, chat_completions: bool) -> None:
+    for name, tool in vars(toolset).items():
         if not isinstance(tool, FunctionTool):
             continue
-        wrapped = tool
+        wrapped = _with_coerced_arguments(tool)
         if tool.name == "exec_command":
             wrapped = _wrap_exec_command(wrapped)
         elif tool.name == "write_stdin":
             wrapped = _wrap_write_stdin(wrapped)
         if chat_completions:
             wrapped = _function_tool_with_error_result(wrapped)
-        wrapped.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS if programmatic else None
         setattr(toolset, name, wrapped)
 
 
-def _make_shell_configurator(*, chat_completions: bool, programmatic: bool) -> Any:
+def _make_shell_configurator(*, chat_completions: bool) -> Any:
     def configure(toolset: Any) -> None:
-        _configure_shell_tools(
-            toolset,
-            chat_completions=chat_completions,
-            programmatic=programmatic,
-        )
+        _configure_shell_tools(toolset, chat_completions=chat_completions)
 
     return configure
 
@@ -419,10 +445,7 @@ def _lifecycle_tool_completed(tool_name: str, output: Any) -> bool:
         parsed = json.loads(output)
     except (TypeError, ValueError):
         return False
-    if not isinstance(parsed, dict):
-        return False
-    parsed_dict = cast("dict[str, Any]", parsed)
-    return bool(parsed_dict.get("success") and parsed_dict.get(completion_key))
+    return bool(isinstance(parsed, dict) and parsed.get("success") and parsed.get(completion_key))
 
 
 def _wait_tool_parked(tool_name: str, output: Any) -> bool:
@@ -432,10 +455,11 @@ def _wait_tool_parked(tool_name: str, output: Any) -> bool:
         parsed = json.loads(output)
     except (TypeError, ValueError):
         return False
-    if not isinstance(parsed, dict):
-        return False
-    parsed_dict = cast("dict[str, Any]", parsed)
-    return bool(parsed_dict.get("success") and parsed_dict.get("wait_outcome") == "waiting")
+    return bool(
+        isinstance(parsed, dict)
+        and parsed.get("success")
+        and parsed.get("wait_outcome") == "waiting"
+    )
 
 
 def _finish_tool_use_behavior(
@@ -443,11 +467,9 @@ def _finish_tool_use_behavior(
     tool_results: list[FunctionToolResult],
 ) -> ToolsToFinalOutputResult:
     """Stop only after a lifecycle tool reports successful completion."""
-    if isinstance(ctx.context, dict):
-        context = cast("dict[str, Any]", ctx.context)
-        interactive = bool(context.get("interactive", False))
-    else:
-        interactive = False
+    interactive = (
+        bool(ctx.context.get("interactive", False)) if isinstance(ctx.context, dict) else False
+    )
     for tool_result in tool_results:
         if _lifecycle_tool_completed(tool_result.tool.name, tool_result.output):
             return ToolsToFinalOutputResult(
@@ -462,18 +484,8 @@ def _finish_tool_use_behavior(
     return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
 
 
-def _set_tools_programmatic_callers(tools: list[Tool], *, enabled: bool) -> None:
-    """Set callers on shared tools without leaking a prior agent's policy."""
-    for tool in tools:
-        if isinstance(tool, ProgrammaticToolCallingTool):
-            continue
-        if isinstance(tool, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)):
-            tool.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS if enabled else None
-
-
 _BASE_TOOLS: tuple[Tool, ...] = (
     think,
-    web_search,
     load_skill,
     create_todo,
     list_todos,
@@ -486,6 +498,7 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     get_note,
     update_note,
     delete_note,
+    web_search,
     create_vulnerability_report,
     create_dependency_report,
     list_reports,
@@ -496,13 +509,9 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     list_sitemap,
     view_sitemap_entry,
     scope_rules,
+    view_agent_graph,
     send_message_to_agent,
     wait_for_agents,
-)
-
-
-_ROOT_ORCHESTRATION_TOOLS: tuple[Tool, ...] = (
-    view_agent_graph,
     create_agent,
     stop_agent,
 )
@@ -538,16 +547,7 @@ def register_agent_tools(*tools: Tool) -> None:
         if tool not in _EXTRA_TOOLS and tool not in new_tools:
             new_tools.append(tool)
 
-    _ensure_unique_tool_names(
-        [
-            *_BASE_TOOLS,
-            *_ROOT_ORCHESTRATION_TOOLS,
-            *_EXTRA_TOOLS,
-            *new_tools,
-            finish_scan,
-            agent_finish,
-        ]
-    )
+    _ensure_unique_tool_names([*_BASE_TOOLS, *_EXTRA_TOOLS, *new_tools, finish_scan, agent_finish])
 
     for tool in new_tools:
         _EXTRA_TOOLS.append(tool)
@@ -561,7 +561,7 @@ def registered_agent_tools() -> tuple[Tool, ...]:
 
 def build_strix_agent(
     *,
-    name: str = "strix",
+    name: str = "agent",
     skills: list[str] | None = None,
     is_root: bool,
     scan_mode: str = "deep",
@@ -571,8 +571,6 @@ def build_strix_agent(
     system_prompt_context: dict[str, Any] | None = None,
     extra_tools: Sequence[Tool] | None = None,
     instructions_override: str | None = None,
-    model: str | None = None,
-    model_settings: ModelSettings | None = None,
 ) -> SandboxAgent[Any]:
     """Build a SandboxAgent for either root or child use.
 
@@ -601,63 +599,42 @@ def build_strix_agent(
         # Yielding to the user is only meaningful when one is attached.
         agent_tools.append(respond_to_user)
     if is_root:
-        tools: list[Tool] = [
-            *_BASE_TOOLS,
-            *_ROOT_ORCHESTRATION_TOOLS,
-            *agent_tools,
-            finish_scan,
-        ]
+        tools: list[Tool] = [*_BASE_TOOLS, *agent_tools, finish_scan]
     else:
         tools = [*_BASE_TOOLS, *agent_tools, agent_finish]
-
-    use_programmatic = (
-        not chat_completions_tools
-        and model is not None
-        and model_supports_programmatic_tool_calling(model)
-    )
-    _set_tools_programmatic_callers(tools, enabled=use_programmatic)
-    if use_programmatic:
-        tools.append(ProgrammaticToolCallingTool())
-
     _ensure_unique_tool_names(tools)
     tools = [
-        _with_bounded_result(tool) if isinstance(tool, FunctionTool) else tool for tool in tools
+        _with_bounded_result(_with_coerced_arguments(tool))
+        if isinstance(tool, FunctionTool)
+        else tool
+        for tool in tools
     ]
 
     logger.info(
-        "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s, programmatic=%s)",
+        "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s)",
         "root" if is_root else "child",
         name,
         len(skills or []),
         len(tools),
         scan_mode,
         is_whitebox,
-        use_programmatic,
     )
-
-    agent_model_options: dict[str, Any] = {}
-    if model is not None:
-        agent_model_options["model"] = model
-    if model_settings is not None:
-        agent_model_options["model_settings"] = model_settings
 
     return SandboxAgent(
         name=name,
         instructions=instructions,
         tools=tools,
         tool_use_behavior=_finish_tool_use_behavior,
-        **agent_model_options,
+        model=None,
         capabilities=[
             Filesystem(
                 configure_tools=_make_filesystem_configurator(
                     chat_completions=chat_completions_tools,
-                    programmatic=use_programmatic,
                 ),
             ),
             Shell(
                 configure_tools=_make_shell_configurator(
                     chat_completions=chat_completions_tools,
-                    programmatic=use_programmatic,
                 ),
             ),
         ],
@@ -671,8 +648,6 @@ def make_child_factory(
     interactive: bool = False,
     chat_completions_tools: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
-    model: str | None = None,
-    model_settings: ModelSettings | None = None,
 ) -> Any:
     """Return the runner-owned builder used by ``spawn_child_agent``.
 
@@ -691,8 +666,6 @@ def make_child_factory(
             interactive=interactive,
             chat_completions_tools=chat_completions_tools,
             system_prompt_context=system_prompt_context,
-            model=model,
-            model_settings=model_settings,
         )
 
     return _factory

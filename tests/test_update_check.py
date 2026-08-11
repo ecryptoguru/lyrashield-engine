@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from strix.interface import update_check
+from lyrashield.interface import update_check
 
 
 @pytest.fixture(autouse=True)

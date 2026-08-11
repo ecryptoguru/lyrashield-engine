@@ -64,4 +64,5 @@ Failure recovery:
 - If scans are slow or lossy, lower `-rate`, lower `-c`, and tighten `-p`/`-top-ports`.
 - If many hosts appear down, compare runs with and without `-Pn`.
 
-If uncertain, use `naabu -h` and retain the installed-version output.
+If uncertain, query web_search with:
+`site:docs.projectdiscovery.io naabu <flag> usage`

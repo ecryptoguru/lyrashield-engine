@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from strix.report.state import RUN_RECORD_SCHEMA_VERSION, ReportState
+from lyrashield.artifacts.state import RUN_RECORD_SCHEMA_VERSION, ReportState
 
 
 def test_schema_version_is_major_minor() -> None:

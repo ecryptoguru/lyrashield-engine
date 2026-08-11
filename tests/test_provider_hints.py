@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from strix.interface.main import _provider_import_hint
+from lyrashield.interface.main import _provider_import_hint
 
 
 VERTEX_MODEL = "vertex_ai/gemini-3-pro-preview"

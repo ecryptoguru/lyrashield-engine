@@ -1,4 +1,3 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Execution loop for addressable SDK-backed Strix agents."""
 
 from __future__ import annotations
@@ -7,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import Callable, Sized
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 import litellm
@@ -32,9 +31,7 @@ from strix.core.sessions import (
     enforce_image_budget,
     open_agent_session,
     replace_session_items,
-    sanitize_session_secrets,
     seed_initial_input,
-    session_write_lock,
     strip_all_images_from_session,
 )
 from strix.llm.compaction import is_context_overflow, maybe_compact
@@ -45,7 +42,7 @@ if TYPE_CHECKING:
 
     from agents.items import TResponseInputItem
     from agents.lifecycle import RunHooks
-    from agents.memory import Session
+    from agents.memory import Session, SQLiteSession
     from agents.result import RunResultBase
 
     from strix.core.agents import AgentCoordinator, Status
@@ -57,41 +54,6 @@ StreamEventSink = Callable[[str, Any], None]
 
 _INPUT_REJECTION_CODES = frozenset({400, 404, 422})
 _MAX_COMPACTIONS_PER_CYCLE = 2
-_MAX_CONTENT_FILTER_RETRIES = 2
-
-# Markers that unambiguously indicate a content-filter / guardrail block.
-_CONTENT_FILTER_MARKERS = (
-    "content_filter",
-    "response.incomplete",
-    "incomplete_details",
-)
-
-# ``response.failed`` can follow a content_filter block on retry — Azure's
-# filter may reject the retried response with a different event code. But it
-# also fires for non-filter failures, so we only treat it as content-filter
-# when the error text also contains a filter-specific marker.
-_RESPONSE_FAILED_MARKER = "response.failed"
-_CONTENT_FILTER_CONTEXT_MARKERS = ("content_filter", "content_policy")
-
-
-def _is_content_filter_error(exc: BaseException) -> bool:
-    """Return True if ``exc`` is a content-filter / guardrail block.
-
-    Covers Azure AI ``response.incomplete`` with ``reason='content_filter'``
-    and the ChatGPT cybersecurity guardrail. ``response.failed`` is only
-    treated as content-filter when the error text also contains a
-    filter-specific marker (``content_filter`` or ``content_policy``).
-    Distinct from transient errors (those retry unchanged; content-filter
-    retries need session sanitization).
-    """
-    if codex.is_content_guardrail_error(exc):
-        return True
-    text = str(exc).lower()
-    if any(marker in text for marker in _CONTENT_FILTER_MARKERS):
-        return True
-    return _RESPONSE_FAILED_MARKER in text and any(
-        ctx in text for ctx in _CONTENT_FILTER_CONTEXT_MARKERS
-    )
 
 
 class ProviderRefusalError(AgentsException):
@@ -136,16 +98,12 @@ async def _compact_session(
     model = _run_config_model(run_config)
     if session is None or model is None:
         return False
-    model_provider = getattr(run_config, "model_provider", None)
-    settings = getattr(model_provider, "_settings", None) if model_provider is not None else None
     return await maybe_compact(
         session,
         model=model,
         instructions=_agent_instructions(agent),
         tools_text=_agent_tools_text(agent),
         force=force,
-        model_provider=model_provider,
-        settings=settings,
     )
 
 
@@ -162,20 +120,8 @@ def _model_error_status_code(exc: BaseException) -> int | None:
 def _is_transient_model_error(exc: BaseException) -> bool:
     if codex.is_content_guardrail_error(exc):
         return False
-    if _is_content_filter_error(exc):
-        return False
     if isinstance(
         exc, APITimeoutError | APIConnectionError | TimeoutError | ConnectionError | OSError
-    ):
-        return True
-    # Azure's Responses API can return a `response.failed` terminal event for
-    # transient server-side issues (overload, capacity, internal errors) with no
-    # content-filter context. These should be retried with backoff rather than
-    # crashing the scan. If the error text contains content-filter markers, it
-    # is handled by the content-filter recovery path above.
-    text = str(exc).lower()
-    if _RESPONSE_FAILED_MARKER in text and not any(
-        ctx in text for ctx in _CONTENT_FILTER_CONTEXT_MARKERS
     ):
         return True
     code = _model_error_status_code(exc)
@@ -207,7 +153,7 @@ async def _salvage_stream_to_session(
     if len(desired) <= len(pre_run_items):
         return
     try:
-        await replace_session_items(session, desired, expected_len=len(pre_run_items))
+        await replace_session_items(session, desired)
     except Exception:
         logger.exception("salvaging crashed run history failed for %s", agent_id)
 
@@ -262,7 +208,6 @@ async def run_agent_loop(
         await coordinator.send(agent_id, _reserve_notice())
 
     if not (start_parked and interactive):
-        await coordinator.consume_pending(agent_id)
         with contextlib.suppress(BudgetPausedError):
             result = await _run_until_lifecycle(
                 agent,
@@ -286,10 +231,6 @@ async def run_agent_loop(
         try:
             woke = await coordinator.wait_for_message(agent_id, timeout=timeout)
         except asyncio.CancelledError:
-            return result
-
-        current_status = await coordinator.get_status(agent_id)
-        if current_status not in {"running", "waiting"}:
             return result
 
         if coordinator.budget_stopped:
@@ -350,7 +291,7 @@ async def spawn_child_agent(
     coordinator: AgentCoordinator,
     factory: Any,
     agents_db_path: Path,
-    sessions_to_close: list[Session],
+    sessions_to_close: list[SQLiteSession],
     run_config: RunConfig,
     max_turns: int,
     interactive: bool,
@@ -361,7 +302,6 @@ async def spawn_child_agent(
     parent_history: list[Any],
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
-    server_conversation: bool = False,
 ) -> dict[str, Any]:
     parent_id = parent_ctx.get("agent_id")
     if not isinstance(parent_id, str):
@@ -399,7 +339,6 @@ async def spawn_child_agent(
         ),
         event_sink=event_sink,
         hooks=hooks,
-        server_conversation=server_conversation,
     )
 
     return {
@@ -416,7 +355,7 @@ async def respawn_subagents(
     coordinator: AgentCoordinator,
     factory: Any,
     agents_db_path: Path,
-    sessions_to_close: list[Session],
+    sessions_to_close: list[SQLiteSession],
     run_config: RunConfig,
     max_turns: int,
     interactive: bool,
@@ -424,24 +363,27 @@ async def respawn_subagents(
     root_id: str,
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
-    server_conversation: bool = False,
 ) -> None:
-    agents_snapshot = await coordinator.agents_with_metadata()
-    candidates: list[tuple[str, str, str | None, dict[str, Any]]] = []
-    for aid, status, parent, name, md in agents_snapshot:
-        if not interactive and status not in {"running", "waiting"}:
-            continue
-        if parent is None or aid == root_id:
-            continue
-        md["_restored_status"] = status
-        candidates.append(
-            (
-                aid,
-                name,
-                parent,
-                md,
+    async with coordinator._lock:
+        agents_snapshot = [
+            (aid, status, dict(coordinator.metadata.get(aid, {})))
+            for aid, status in coordinator.statuses.items()
+        ]
+        candidates: list[tuple[str, str, str | None, dict[str, Any]]] = []
+        for aid, status, md in agents_snapshot:
+            if not interactive and status not in {"running", "waiting"}:
+                continue
+            if coordinator.parent_of.get(aid) is None or aid == root_id:
+                continue
+            md["_restored_status"] = status
+            candidates.append(
+                (
+                    aid,
+                    coordinator.names.get(aid, aid),
+                    coordinator.parent_of.get(aid),
+                    md,
+                )
             )
-        )
 
     for child_id, name, parent_id, md in candidates:
         try:
@@ -475,7 +417,6 @@ async def respawn_subagents(
                 start_parked=start_parked,
                 event_sink=event_sink,
                 hooks=hooks,
-                server_conversation=server_conversation,
             )
             logger.info(
                 "respawned %s (%s) parent=%s task_len=%d",
@@ -517,7 +458,6 @@ async def _run_until_lifecycle(
     result: RunResultBase | None = None
     input_data: Any = initial_input
     recovery_limit = _INTERACTIVE_TOOL_RECOVERY_LIMIT if interactive else max(1, max_turns)
-    is_root = context.get("parent_id") is None
 
     while True:
         if coordinator.budget_stopped:
@@ -573,10 +513,6 @@ async def _run_until_lifecycle(
         )
 
         if recoveries >= recovery_limit:
-            if not is_root:
-                await coordinator.set_status(agent_id, "crashed")
-                await _notify_parent_on_terminal(coordinator, agent_id, "crashed")
-                return None
             return await _exhausted_recovery(coordinator, agent_id, result, interactive=interactive)
 
         input_data = await _append_tool_required_message(
@@ -603,7 +539,7 @@ async def _exhausted_recovery(
     """
     if not interactive:
         await coordinator.set_status(agent_id, "crashed")
-        await _notify_parent_on_terminal(coordinator, agent_id, "crashed")
+        await notify_parent_on_terminal(coordinator, agent_id, "crashed")
         raise MaxTurnsExceeded(
             "Agent exhausted recovery attempts without calling finish_scan or agent_finish."
         )
@@ -686,11 +622,11 @@ async def _run_cycle_parked(
     except Exception as exc:
         logger.exception("error escaped the run cycle for %s; parking as failed", agent_id)
         await coordinator.set_status(agent_id, "failed", error=str(exc) or type(exc).__name__)
-        await _notify_parent_on_terminal(coordinator, agent_id, "failed")
+        await notify_parent_on_terminal(coordinator, agent_id, "failed")
         return None
 
 
-async def _run_cycle(  # noqa: PLR0915
+async def _run_cycle(  # noqa: PLR0912, PLR0915
     agent: Any,
     coordinator: AgentCoordinator,
     agent_id: str,
@@ -707,7 +643,6 @@ async def _run_cycle(  # noqa: PLR0915
     image_strips = 0
     compactions = 0
     model_retries = 0
-    content_filter_retries = 0
     while True:
         stream: Any = None
         pre_run_items: list[Any] = []
@@ -751,7 +686,7 @@ async def _run_cycle(  # noqa: PLR0915
                 except (BudgetExceededError, BudgetPausedError, SubagentBudgetReservedError):
                     raise
                 except RuntimeError as stream_exc:
-                    if "after shutdown" not in str(stream_exc).strip().lower():
+                    if "after shutdown" not in str(stream_exc):
                         raise
                     logger.warning(
                         "Ignoring LiteLLM end-of-stream shutdown race for %s",
@@ -767,7 +702,6 @@ async def _run_cycle(  # noqa: PLR0915
                     )
             finally:
                 await coordinator.detach_stream(agent_id, stream)
-                await coordinator.track_conversation_id(agent_id)
         except BudgetPausedError as exc:
             logger.info("agent %s paused at the scan budget limit: %s", agent_id, exc)
             await coordinator.pause_for_budget(agent_id)
@@ -804,7 +738,6 @@ async def _run_cycle(  # noqa: PLR0915
                     )
                     input_data = []
                     continue
-            is_root = context.get("parent_id") is None
             if (
                 compactions < _MAX_COMPACTIONS_PER_CYCLE
                 and session is not None
@@ -840,86 +773,36 @@ async def _run_cycle(  # noqa: PLR0915
                 if session is not None:
                     input_data = []
                 continue
-            if (
-                content_filter_retries < _MAX_CONTENT_FILTER_RETRIES
-                and session is not None
-                and _is_content_filter_error(exc)
-            ):
-                try:
-                    sanitized = await sanitize_session_secrets(session)
-                except Exception:
-                    logger.exception("content-filter session sanitization failed for %s", agent_id)
-                    sanitized = False
-                content_filter_retries += 1
-                if sanitized:
-                    logger.warning(
-                        "content_filter hit for %s; sanitized session secrets "
-                        "and replaying turn (%d/%d)",
-                        agent_id,
-                        content_filter_retries,
-                        _MAX_CONTENT_FILTER_RETRIES,
-                    )
-                else:
-                    logger.warning(
-                        "content_filter hit for %s; session had no redactable secrets, "
-                        "replaying with caution message (%d/%d)",
-                        agent_id,
-                        content_filter_retries,
-                        _MAX_CONTENT_FILTER_RETRIES,
-                    )
-                # Inject a caution message on retry to help the model avoid
-                # regenerating the same blocked response. Escalate the caution
-                # on the second retry.
-                caution = (
-                    "Your previous response was blocked by a content filter. "
-                    "Rephrase your analysis at a higher level — avoid including "
-                    "specific exploit code, sensitive code snippets, or detailed "
-                    "attack patterns. Report the finding with a summary and "
-                    "remediation only."
-                    if content_filter_retries == 1
-                    else "Your response was blocked again. Provide only a brief "
-                    "summary of the finding without any code, payloads, or "
-                    "sensitive technical details. Focus on the title, severity, "
-                    "and remediation steps."
-                )
-                input_data = [{"role": "user", "content": caution}]
-                continue
             if session is not None:
                 await _salvage_stream_to_session(session, pre_run_items, stream, agent_id)
             if isinstance(exc, ProviderRefusalError):
                 logger.warning("agent %s refused by the model provider: %s", agent_id, exc)
                 await coordinator.set_status(agent_id, "failed", error=str(exc))
-                await _notify_parent_on_terminal(coordinator, agent_id, "failed")
+                await notify_parent_on_terminal(coordinator, agent_id, "failed")
                 return None
-            if not interactive and is_root:
-                raise
             if isinstance(exc, MaxTurnsExceeded):
                 status: Status = "stopped"
             elif isinstance(exc, UserError | AgentsException | APIError):
                 status = "failed"
             else:
                 status = "crashed"
-            logger.exception("agent run failed for %s; parking as %s", agent_id, status)
+            logger.exception("agent run failed for %s; marking %s", agent_id, status)
+            # Settle the status and wake the parent before the exception unwinds a
+            # non-interactive agent's task: a child that dies still owes its parent a
+            # report, and the parent would otherwise wait out its timeout on a message
+            # the dead child can no longer send.
             await coordinator.set_status(agent_id, status, error=str(exc) or type(exc).__name__)
-            await _notify_parent_on_terminal(coordinator, agent_id, status)
+            await notify_parent_on_terminal(coordinator, agent_id, status)
+            if not interactive:
+                raise
             return None
         else:
             return cast("RunResultBase | None", stream)
 
 
 async def _agent_status(coordinator: AgentCoordinator, agent_id: str) -> Status | None:
-    return await coordinator.get_status(agent_id)
-
-
-def _final_output_metadata(result: object) -> str:
-    """Describe invalid model output without copying target-derived content to logs."""
-    final_output: object = getattr(result, "final_output", None)
-    if final_output is None:
-        return "type=NoneType"
-    output_type = type(final_output).__name__
-    if isinstance(final_output, str | bytes | list | tuple | dict):
-        return f"type={output_type} length={len(cast(Sized, final_output))}"  # noqa: TC006
-    return f"type={output_type}"
+    async with coordinator._lock:
+        return coordinator.statuses.get(agent_id)
 
 
 def _final_output_preview(result: RunResultBase | None) -> str:
@@ -947,7 +830,7 @@ async def _append_tool_required_message(
             "execution and never hands control to the user: it is shown to the user, and the "
             "run continues. Continue immediately and call exactly one tool. "
             "If you have something to tell the user and nothing to do until they reply, "
-            "call respond_to_user. "
+            "call respond_to_user — with no message if you have already said it. "
             "If you are blocked waiting for another agent, call wait_for_agents. "
             f"If the whole engagement is complete, call {finish_tool}. "
             "Otherwise use the appropriate execution or planning tool. "
@@ -955,7 +838,7 @@ async def _append_tool_required_message(
         )
     else:
         message = (
-            "Your previous response ended the autonomous Strix run without a lifecycle tool "
+            "Your previous response ended the autonomous run without a lifecycle tool "
             "call. That is invalid in non-interactive mode; plain text final answers are "
             "ignored. Continue immediately and call exactly one tool. "
             f"If your work is complete, call {finish_tool}. "
@@ -967,12 +850,16 @@ async def _append_tool_required_message(
     if session is None:
         return [item]
 
-    async with session_write_lock(session):
-        await session.add_items([cast("TResponseInputItem", item)])
+    await session.add_items([cast("TResponseInputItem", item)])
     return []
 
 
 _TERMINAL_NOTICE = {
+    "completed": (
+        "[Agent completed] {name} ({agent_id}) finished and is no longer running, but it "
+        "sent no completion report. Stop waiting on this child; ask it directly if you "
+        "need its results."
+    ),
     "crashed": (
         "[Agent crash] {name} ({agent_id}) terminated unexpectedly. "
         "Stop waiting on this child unless you want to message it again."
@@ -983,9 +870,9 @@ _TERMINAL_NOTICE = {
         "message it again."
     ),
     "stopped": (
-        "[Agent capped] {name} ({agent_id}) hit its turn limit and was stopped "
-        "before finishing. It will not send a completion report, so stop waiting "
-        "on this child; account for its capped subtask and continue."
+        "[Agent stopped] {name} ({agent_id}) was stopped before finishing (turn limit "
+        "or an explicit stop). It will not send a completion report, so stop waiting "
+        "on this child; account for its unfinished subtask and continue."
     ),
 }
 
@@ -1020,7 +907,7 @@ async def _notify_parent_on_stall(
     )
 
 
-async def _notify_parent_on_terminal(
+async def notify_parent_on_terminal(
     coordinator: AgentCoordinator,
     agent_id: str,
     status: str,
@@ -1028,10 +915,12 @@ async def _notify_parent_on_terminal(
     template = _TERMINAL_NOTICE.get(status)
     if template is None:
         return
-    if coordinator.budget_stopped:
-        return
-    parent, name = await coordinator.get_parent_and_name(agent_id)
+    async with coordinator._lock:
+        parent = coordinator.parent_of.get(agent_id)
+        name = coordinator.names.get(agent_id, agent_id)
     if parent is None:
+        return
+    if not await coordinator.claim_parent_notice(agent_id):
         return
     await coordinator.send(
         parent,
@@ -1067,12 +956,27 @@ async def _notify_root_on_budget_reserve(coordinator: AgentCoordinator) -> None:
     await coordinator.send(root, _reserve_notice())
 
 
+async def _notify_parent_on_exit(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+) -> None:
+    """Backstop for a child whose loop ended without telling its parent.
+
+    Every terminal state counts, including ``completed``: a child that skips its
+    completion report leaves the parent waiting on a message nobody will send.
+    """
+    status = await _agent_status(coordinator, agent_id)
+    if status is None:
+        return
+    await notify_parent_on_terminal(coordinator, agent_id, status)
+
+
 async def _start_child_runner(
     *,
     parent_ctx: dict[str, Any],
     coordinator: AgentCoordinator,
     agents_db_path: Path,
-    sessions_to_close: list[Session],
+    sessions_to_close: list[SQLiteSession],
     run_config: RunConfig,
     max_turns: int,
     interactive: bool,
@@ -1085,14 +989,8 @@ async def _start_child_runner(
     start_parked: bool = False,
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
-    server_conversation: bool = False,
 ) -> None:
-    session = open_agent_session(
-        child_id,
-        agents_db_path,
-        server_conversation=server_conversation,
-        conversation_id=coordinator.conversation_ids.get(child_id),
-    )
+    session = open_agent_session(child_id, agents_db_path)
     sessions_to_close.append(session)
     await coordinator.attach_runtime(child_id, session=session)
 
@@ -1126,10 +1024,9 @@ async def _start_child_runner(
             logger.info("child %s stopped after reaching the scan budget limit", child_id)
         except SubagentBudgetReservedError:
             logger.info("child %s stopped at the sub-agent budget reserve", child_id)
-        except asyncio.CancelledError:
-            logger.info("child %s cancelled during shutdown", child_id)
-            with contextlib.suppress(Exception):
-                await coordinator.request_stop(child_id)
+        finally:
+            if not coordinator.is_shutting_down:
+                await _notify_parent_on_exit(coordinator, child_id)
 
     task_handle = asyncio.create_task(_child_loop(), name=f"agent-{name}-{child_id}")
     await coordinator.attach_runtime(child_id, task=task_handle)

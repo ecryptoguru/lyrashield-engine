@@ -13,8 +13,8 @@ import asyncio
 
 from agents.retry import ModelRetryNormalizedError, RetryPolicyContext
 
-from strix.config import codex
-from strix.config.models import DEFAULT_MODEL_RETRY, _retry_statusless_provider_errors
+from lyrashield.policy import codex
+from lyrashield.policy.models import DEFAULT_MODEL_RETRY, _retry_statusless_provider_errors
 
 
 def _context(

@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 from agents.tool_context import ToolContext
 
-from strix.core.agents import AgentCoordinator
-from strix.tools.respond.tool import respond_to_user
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.tools.respond.tool import respond_to_user
 
 
 async def _call(context: dict[str, Any], message: str = "here is what I found") -> dict[str, Any]:

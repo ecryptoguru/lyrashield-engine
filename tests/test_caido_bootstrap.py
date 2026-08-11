@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from strix.runtime import caido_bootstrap
+from lyrashield.runtime import caido_bootstrap
 
 
 class _FakeProject:

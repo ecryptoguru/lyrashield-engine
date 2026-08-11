@@ -15,9 +15,9 @@ from openai import (
     RateLimitError,
 )
 
-from strix.config import codex
-from strix.core import execution
-from strix.core.agents import AgentCoordinator
+from lyrashield.lifecycle import execution
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.policy import codex
 
 
 def _request() -> httpx.Request:
@@ -67,6 +67,11 @@ def test_dns_and_connection_errors_are_transient() -> None:
     assert execution._is_transient_model_error(OSError("nodename nor servname provided")) is True
     assert execution._is_transient_model_error(ConnectionError("reset")) is True
     assert execution._is_transient_model_error(TimeoutError("timed out")) is True
+
+
+def test_httpx_transport_errors_are_transient() -> None:
+    error = httpx.RemoteProtocolError("peer disconnected", request=_request())
+    assert execution._is_transient_model_error(error) is True
 
 
 def test_content_guardrail_is_not_retried() -> None:

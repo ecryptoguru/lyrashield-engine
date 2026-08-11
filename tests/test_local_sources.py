@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-import strix.interface.utils as interface_utils
-from strix.interface.utils import (
+import lyrashield.interface.utils as interface_utils
+from lyrashield.interface.utils import (
     build_mount_targets_info,
     clone_repository,
     collect_local_sources,
@@ -167,6 +167,41 @@ def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path)
     argv = run.call_args.args[0]
     assert argv[0:3] == ["/usr/bin/git", "clone", "--"]
     assert argv[3] == repo_url
+
+
+def test_clone_repository_checks_out_the_requested_branch(tmp_path: Path) -> None:
+    with (
+        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(interface_utils.subprocess, "run") as run,
+    ):
+        clone_repository("https://github.com/org/repo", "branch-run", branch="release/2026.08")
+
+    argv = run.call_args.args[0]
+    assert argv[:5] == ["/usr/bin/git", "clone", "--branch", "release/2026.08", "--single-branch"]
+    assert argv[5] == "--"
+
+
+def test_clone_repository_checks_out_a_full_commit_sha_detached(tmp_path: Path) -> None:
+    commit_sha = "a" * 40
+    with (
+        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(interface_utils.subprocess, "run") as run,
+    ):
+        clone_repository("https://github.com/org/repo", "sha-run", branch=commit_sha)
+
+    clone_argv = run.call_args_list[0].args[0]
+    checkout_argv = run.call_args_list[1].args[0]
+    assert clone_argv[:4] == ["/usr/bin/git", "clone", "--no-checkout", "--"]
+    assert checkout_argv == [
+        "/usr/bin/git",
+        "-C",
+        clone_argv[-1],
+        "checkout",
+        "--detach",
+        commit_sha,
+    ]
 
 
 def test_build_mount_targets_info_for_valid_dir(tmp_path: Path) -> None:

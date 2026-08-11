@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from strix.report.state import ReportState
-from strix.utils.redaction import redact_internal_paths, redact_secrets, redact_text
+from lyrashield.artifacts.state import ReportState
+from lyrashield.utils.redaction import redact_internal_paths, redact_secrets, redact_text
 
 
 def test_redact_secrets_strips_api_keys() -> None:

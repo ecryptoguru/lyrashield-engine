@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from strix import provider_contract
-from strix.config.settings import LlmSettings, Settings
-from strix.interface import provider_contract_cli
+from lyrashield.interface import provider_contract_cli
+from lyrashield.policy import provider_contract
+from lyrashield.policy.settings import LlmSettings, Settings
 
 
 class _FakeModel:

@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from strix.config import codex
-from strix.config.settings import PRODUCT_BOUNDARY_ENV_VAR
-from strix.interface import auth_cli
+from lyrashield.interface import auth_cli
+from lyrashield.policy import codex
+from lyrashield.policy.settings import PRODUCT_BOUNDARY_ENV_VAR
 
 
 if TYPE_CHECKING:
@@ -35,6 +35,11 @@ def test_unknown_subcommand_returns_usage_error() -> None:
 
 def test_help_returns_zero() -> None:
     assert auth_cli.run_auth(["--help"]) == 0
+
+
+def test_auth_logo_is_packaged_product_asset() -> None:
+    assert auth_cli._LOGO_PATH.parts[-4:] == ("interface", "viewer", "static", "logo.png")
+    assert auth_cli._LOGO_PATH.is_file()
 
 
 def test_status_not_signed_in() -> None:

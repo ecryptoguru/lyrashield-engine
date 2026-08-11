@@ -6,7 +6,7 @@ import pytest
 from agents.model_settings import ModelSettings
 from agents.models.openai_responses import OpenAIResponsesModel
 
-from strix.config.models import (
+from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     _azure_responses_base_url,
@@ -16,7 +16,7 @@ from strix.config.models import (
     request_timeout_extra_args,
     uses_chat_completions_tool_schema,
 )
-from strix.config.settings import LlmSettings, Settings
+from lyrashield.policy.settings import LlmSettings, Settings
 
 
 @pytest.mark.parametrize("model_name", RECOMMENDED_MODEL_NAMES)

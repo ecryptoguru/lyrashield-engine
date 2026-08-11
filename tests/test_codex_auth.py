@@ -12,7 +12,7 @@ from unittest import mock
 import pytest
 import requests
 
-from strix.config import codex
+from lyrashield.policy import codex
 
 
 if TYPE_CHECKING:

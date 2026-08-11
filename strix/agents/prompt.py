@@ -1,10 +1,9 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Jinja-based system-prompt renderer."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any, cast
+from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -30,24 +29,24 @@ def _resolve_skills(
     Order:
 
     1. Whatever the caller asked for, in order.
-    2. For the root only, ``scan_modes/<mode>`` and orchestration guidance.
-       The root owns scan-wide coverage and delegates bounded specialist tasks.
+    2. ``scan_modes/<mode>`` (always).
     3. ``tooling/agent_browser`` (always — every agent has shell + the
        agent-browser CLI).
     4. ``tooling/python`` (always — Python runs through ``exec_command``;
        sandbox scripts can import ``caido_api`` for Caido automation).
-    5. For a whitebox root only, compact source-aware coordination guidance.
-       The detailed SAST playbook is loaded only by an explicitly assigned
-       specialist; carrying it in the root's repeated prompt wastes context.
+    5. ``coordination/root_agent`` for the root agent only — orchestration
+       guidance for delegating to specialist subagents.
+    6. Whitebox-specific skills if applicable.
     """
     ordered: list[str] = list(requested or [])
-    if is_root:
-        ordered.append(f"scan_modes/{scan_mode}")
-        ordered.append("coordination/root_agent")
-        if is_whitebox:
-            ordered.append("coordination/source_aware_whitebox")
+    ordered.append(f"scan_modes/{scan_mode}")
     ordered.append("tooling/agent_browser")
     ordered.append("tooling/python")
+    if is_root:
+        ordered.append("coordination/root_agent")
+    if is_whitebox:
+        ordered.append("coordination/source_aware_whitebox")
+        ordered.append("custom/source_aware_sast")
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -67,7 +66,7 @@ def render_system_prompt(
     interactive: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> str:
-    """Render the system prompt or fail before a tool-capable agent is created."""
+    """Render the system prompt. Returns empty string on template failure."""
     try:
         prompt_dir = get_strix_resource_path("agents", _PROMPT_DIRNAME)
         loader_dirs = [prompt_dir, *skill_search_dirs()]
@@ -85,29 +84,21 @@ def render_system_prompt(
             is_whitebox=is_whitebox,
             is_root=is_root,
         )
-        skill_content: dict[str, str] = load_skills(skills_to_load)
-
-        def _get_skill(name: str) -> str:
-            return skill_content.get(name, "")
-
-        cast("dict[str, Any]", env.globals)["get_skill"] = _get_skill
+        skill_content = load_skills(skills_to_load)
+        env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
         rendered = env.get_template("system_prompt.jinja").render(
             loaded_skill_names=list(skill_content.keys()),
             available_skills=get_available_skills(),
             interactive=interactive,
             is_root=is_root,
-            scan_mode=scan_mode,
-            is_whitebox=is_whitebox,
             system_prompt_context=system_prompt_context or {},
             **skill_content,
         )
-    except Exception as exc:
-        logger.exception("render_system_prompt failed")
-        raise RuntimeError("Unable to build the required scan system prompt") from exc
+    except Exception:
+        logger.exception("render_system_prompt failed; returning empty prompt")
+        return ""
     else:
-        if not rendered.strip():
-            raise RuntimeError("Required scan system prompt rendered empty")
         logger.debug(
             "render_system_prompt: scan_mode=%s root=%s whitebox=%s skills=%d prompt_len=%d",
             scan_mode,

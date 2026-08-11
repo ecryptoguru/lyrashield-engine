@@ -63,4 +63,5 @@ Failure recovery:
 - If blocked by filtering/WAF, reduce `--threads` and test targeted `--tamper` chains.
 - If initial detection misses likely injection, increment `--level`/`--risk` gradually.
 
-If uncertain, use `sqlmap -h` and retain the installed-version output.
+If uncertain, query web_search with:
+`site:github.com/sqlmapproject/sqlmap/wiki/usage sqlmap <flag>`

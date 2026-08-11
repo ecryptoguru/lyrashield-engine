@@ -10,14 +10,14 @@ import urllib.request
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from strix.core.paths import latest_run_dir, runs_base_dir
-from strix.interface.viewer.server import serve
-from strix.interface.viewer.transcript import (
+from lyrashield.interface.viewer.server import serve
+from lyrashield.interface.viewer.transcript import (
     build_run_state,
     read_report_markdown,
     read_run_summary,
     read_vulnerabilities,
 )
+from strix.core.paths import latest_run_dir, runs_base_dir
 
 
 if TYPE_CHECKING:
@@ -171,7 +171,7 @@ def test_server_serves_api_and_static(tmp_path: Path, monkeypatch: pytest.Monkey
     (assets / "assets").mkdir(parents=True)
     (assets / "index.html").write_text("<!doctype html><div id=root></div>", encoding="utf-8")
     (assets / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
-    monkeypatch.setattr("strix.interface.viewer.server.bundle_dir", lambda: assets)
+    monkeypatch.setattr("lyrashield.interface.viewer.server.bundle_dir", lambda: assets)
 
     httpd, url, _ = serve(run_dir, open_browser=False)
     try:
@@ -203,11 +203,11 @@ def test_server_event_endpoint_forwards_cta(
     assets = tmp_path / "bundle"
     assets.mkdir()
     (assets / "index.html").write_text("x", encoding="utf-8")
-    monkeypatch.setattr("strix.interface.viewer.server.bundle_dir", lambda: assets)
+    monkeypatch.setattr("lyrashield.interface.viewer.server.bundle_dir", lambda: assets)
 
     seen: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
-        "strix.telemetry.posthog.viewer_cta_clicked",
+        "lyrashield.telemetry.posthog.viewer_cta_clicked",
         lambda cta, surface=None: seen.append((cta, surface)),
     )
 
@@ -234,11 +234,11 @@ def test_server_event_endpoint_forwards_email_funnel(
     assets = tmp_path / "bundle"
     assets.mkdir()
     (assets / "index.html").write_text("x", encoding="utf-8")
-    monkeypatch.setattr("strix.interface.viewer.server.bundle_dir", lambda: assets)
+    monkeypatch.setattr("lyrashield.interface.viewer.server.bundle_dir", lambda: assets)
 
     seen: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
-        "strix.telemetry.posthog.viewer_email_event",
+        "lyrashield.telemetry.posthog.viewer_email_event",
         lambda step, purpose=None: seen.append((step, purpose)),
     )
 
@@ -269,7 +269,9 @@ def test_server_event_endpoint_forwards_agent_steered(
     _bundle(tmp_path, monkeypatch)
 
     seen: list[bool] = []
-    monkeypatch.setattr("strix.telemetry.posthog.viewer_agent_steered", lambda: seen.append(True))
+    monkeypatch.setattr(
+        "lyrashield.telemetry.posthog.viewer_agent_steered", lambda: seen.append(True)
+    )
 
     httpd, url, _ = serve(run_dir, open_browser=False)
     try:
@@ -293,9 +295,9 @@ def test_feedback_records_telemetry_on_success(
     _bundle(tmp_path, monkeypatch)
 
     sent: list[bool] = []
-    monkeypatch.setattr("strix.interface.viewer.auth.feedback_submit", lambda *_a: None)
+    monkeypatch.setattr("lyrashield.interface.viewer.auth.feedback_submit", lambda *_a: None)
     monkeypatch.setattr(
-        "strix.telemetry.posthog.viewer_feedback_submitted", lambda: sent.append(True)
+        "lyrashield.telemetry.posthog.viewer_feedback_submitted", lambda: sent.append(True)
     )
 
     httpd, url, token = serve(run_dir, open_browser=False)
@@ -361,7 +363,7 @@ def _bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assets = tmp_path / "bundle"
     assets.mkdir()
     (assets / "index.html").write_text("<!doctype html><div id=root></div>", encoding="utf-8")
-    monkeypatch.setattr("strix.interface.viewer.server.bundle_dir", lambda: assets)
+    monkeypatch.setattr("lyrashield.interface.viewer.server.bundle_dir", lambda: assets)
 
 
 def test_capability_issued_only_for_tokened_bootstrap(
@@ -372,7 +374,7 @@ def test_capability_issued_only_for_tokened_bootstrap(
     (assets / "assets").mkdir(parents=True)
     (assets / "index.html").write_text("<!doctype html>index", encoding="utf-8")
     (assets / "assets" / "app.js").write_text("1", encoding="utf-8")
-    monkeypatch.setattr("strix.interface.viewer.server.bundle_dir", lambda: assets)
+    monkeypatch.setattr("lyrashield.interface.viewer.server.bundle_dir", lambda: assets)
 
     httpd, url, token = serve(run_dir, open_browser=False)
     try:
@@ -433,10 +435,10 @@ def test_auth_status_reflects_expiry(tmp_path: Path, monkeypatch: pytest.MonkeyP
     run_dir = _make_run(tmp_path, "status", status="running", end_time=None)
     _bundle(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "strix.interface.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"}
+        "lyrashield.interface.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"}
     )
     verified = {"value": True}
-    monkeypatch.setattr("strix.interface.viewer.auth.is_verified", lambda: verified["value"])
+    monkeypatch.setattr("lyrashield.interface.viewer.auth.is_verified", lambda: verified["value"])
 
     httpd, url, token = serve(run_dir, open_browser=False)
     try:
@@ -462,7 +464,9 @@ def test_auth_mutations_require_session(tmp_path: Path, monkeypatch: pytest.Monk
     run_dir = _make_run(tmp_path, "authmut", status="running", end_time=None)
     _bundle(tmp_path, monkeypatch)
     forgotten = {"value": False}
-    monkeypatch.setattr("strix.interface.viewer.auth.forget", lambda: forgotten.update(value=True))
+    monkeypatch.setattr(
+        "lyrashield.interface.viewer.auth.forget", lambda: forgotten.update(value=True)
+    )
 
     httpd, url, _ = serve(run_dir, open_browser=False)
     try:
@@ -511,7 +515,7 @@ def test_report_send_requires_session_cookie(
 
     # A verified machine token exists, but that alone must not authorize a caller.
     monkeypatch.setattr(
-        "strix.interface.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"}
+        "lyrashield.interface.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"}
     )
 
     httpd, url, token = serve(run_dir, open_browser=False)
@@ -537,7 +541,7 @@ def test_report_send_rejects_live_run(tmp_path: Path, monkeypatch: pytest.Monkey
     run_dir = _make_run(tmp_path, "live", status="running", end_time=None)
     _bundle(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "strix.interface.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"}
+        "lyrashield.interface.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"}
     )
 
     httpd, url, token = serve(run_dir, open_browser=False)
@@ -557,7 +561,7 @@ def test_historical_run_data_requires_verification(
     _bundle(tmp_path, monkeypatch)
 
     verified = {"value": False}
-    monkeypatch.setattr("strix.interface.viewer.auth.is_verified", lambda: verified["value"])
+    monkeypatch.setattr("lyrashield.interface.viewer.auth.is_verified", lambda: verified["value"])
 
     httpd, url, token = serve(launched, open_browser=False)
     try:
@@ -591,7 +595,7 @@ def test_runs_list_requires_session_and_verification(
     _make_run(tmp_path, "other", status="completed", end_time="2026-01-01T00:00:00Z")
     _bundle(tmp_path, monkeypatch)
 
-    monkeypatch.setattr("strix.interface.viewer.auth.is_verified", lambda: True)
+    monkeypatch.setattr("lyrashield.interface.viewer.auth.is_verified", lambda: True)
 
     def _runs(cookie: str | None) -> dict[str, object]:
         headers = {"Cookie": cookie} if cookie else {}
@@ -627,9 +631,9 @@ def test_concurrent_servers_use_distinct_cookies(
     run_b = _make_run(tmp_path / "b", "run-b", status="running", end_time=None)
     _bundle(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        "strix.interface.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"}
+        "lyrashield.interface.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"}
     )
-    monkeypatch.setattr("strix.interface.viewer.auth.is_verified", lambda: True)
+    monkeypatch.setattr("lyrashield.interface.viewer.auth.is_verified", lambda: True)
 
     httpd_a, url_a, token_a = serve(run_a, open_browser=False)
     httpd_b, url_b, token_b = serve(run_b, open_browser=False)
@@ -672,7 +676,7 @@ def test_server_rejects_path_traversal(tmp_path: Path, monkeypatch: pytest.Monke
     assets = tmp_path / "bundle"
     assets.mkdir()
     (assets / "index.html").write_text("<!doctype html>index", encoding="utf-8")
-    monkeypatch.setattr("strix.interface.viewer.server.bundle_dir", lambda: assets)
+    monkeypatch.setattr("lyrashield.interface.viewer.server.bundle_dir", lambda: assets)
 
     httpd, url, _ = serve(run_dir, open_browser=False)
     try:

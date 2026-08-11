@@ -1,9 +1,6 @@
-# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
-# Controlled subprocess boundary: provenance lookup resolves Git and uses shell=False.
 import json
 import logging
-import shutil
-import subprocess  # nosec B404
+import subprocess
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -18,7 +15,7 @@ from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for
 from strix.report.sarif import write_sarif
-from strix.report.usage import LLMUsageLedger, _int_or_zero, _round_cost
+from strix.report.usage import LLMUsageLedger
 from strix.report.writer import (
     read_run_record,
     write_executive_report,
@@ -26,27 +23,11 @@ from strix.report.writer import (
     write_vulnerabilities,
 )
 from strix.telemetry import posthog, scarf
-from strix.utils.redaction import redact_text
 
 
 logger = logging.getLogger(__name__)
 
 _global_report_state: Optional["ReportState"] = None
-
-_ALLOWED_PHASES = frozenset({"setup", "running", "finalizing", "completed", "stopped"})
-
-# Schema version for run.json.
-#
-# run.json is a cross-repo contract: the LyraShield worker parses it to decide a
-# scan's terminal status, cost, and coverage. Until now it carried no version, so
-# a consumer had no way to detect an incompatible producer other than by probing
-# for individual fields.
-#
-# Bump the MAJOR component for a breaking change (a field removed, renamed, or
-# given new semantics) and the MINOR component for additive, backward-compatible
-# fields. The worker's zod schema uses `.strip()`, so unknown keys are ignored —
-# additive changes are safe to ship ahead of a worker update.
-RUN_RECORD_SCHEMA_VERSION = "1.0"
 
 
 def _strix_version() -> str | None:
@@ -86,15 +67,10 @@ def _git_head(repo_path: str) -> tuple[str | None, str | None]:
     if not path.is_dir():
         return None, None
 
-    git_executable = shutil.which("git")
-    if git_executable is None:
-        return None, None
-
     def _run(args: list[str]) -> str | None:
         try:
-            # Controlled subprocess boundary: Git path is resolved and shell is disabled.
-            result = subprocess.run(  # noqa: S603  # nosec B603
-                [git_executable, "-C", str(path), *args],
+            result = subprocess.run(  # noqa: S603
+                ["git", "-C", str(path), *args],  # noqa: S607
                 capture_output=True,
                 text=True,
                 check=False,
@@ -117,7 +93,7 @@ def get_global_report_state() -> Optional["ReportState"]:
     return _global_report_state
 
 
-def set_global_report_state(report_state: Optional["ReportState"]) -> None:
+def set_global_report_state(report_state: "ReportState") -> None:
     global _global_report_state  # noqa: PLW0603
     _global_report_state = report_state
     # New run: drop any streamed-cost entries a prior run left unconsumed.
@@ -149,23 +125,17 @@ class ReportState:
         auth_mode = codex.auth_mode(load_settings().llm.model)
         self._llm_usage.zero_cost = auth_mode == "subscription"
         self.run_record: dict[str, Any] = {
-            "schema_version": RUN_RECORD_SCHEMA_VERSION,
             "run_id": self.run_id,
             "run_name": self.run_name,
             "start_time": self.start_time,
             "end_time": None,
             "status": "running",
-            "phase": "setup",
             "auth_mode": auth_mode,
             "targets_info": [],
             "llm_usage": self._build_llm_usage_record(),
-            "seq": 0,
-            "turn_count": 0,
         }
         self._run_dir: Path | None = None
         self._saved_vuln_ids: set[str] = set()
-        self._save_seq = 0
-        self._turn_count = 0
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
@@ -214,33 +184,26 @@ class ReportState:
                 self.end_time = data["end_time"]
             scan_results = data.get("scan_results")
             if isinstance(scan_results, dict):
-                scan_results = cast("dict[str, Any]", scan_results)
                 self.scan_results = scan_results
                 self.final_scan_result = self._format_final_scan_result(scan_results)
             self._hydrate_llm_usage(data.get("llm_usage"))
-            self._save_seq = max(self._save_seq, _int_or_zero(data.get("seq")))
-            self._turn_count = max(self._turn_count, _int_or_zero(data.get("turn_count")))
-            self.run_record["seq"] = self._save_seq
-            self.run_record["turn_count"] = self._turn_count
             logger.info("report state hydrated run.json from %s", run_dir)
 
         json_path = run_dir / "vulnerabilities.json"
         if json_path.exists():
             try:
-                vuln_data = json.loads(json_path.read_text(encoding="utf-8"))
+                data = json.loads(json_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise RuntimeError(
                     f"vulnerabilities.json at {json_path} is corrupt ({exc}); "
                     f"refusing to start fresh — that would overwrite prior "
                     f"vulnerability MDs on disk. Inspect or delete the run dir.",
                 ) from exc
-            if not isinstance(vuln_data, list):
+            if not isinstance(data, list):
                 raise RuntimeError(
                     f"vulnerabilities.json at {json_path} is not a list",
                 )
-            self.vulnerability_reports = [
-                cast("dict[str, Any]", r) for r in vuln_data if isinstance(r, dict)
-            ]
+            self.vulnerability_reports = [r for r in data if isinstance(r, dict)]
             for r in self.vulnerability_reports:
                 rid = r.get("id")
                 if isinstance(rid, str):
@@ -274,7 +237,6 @@ class ReportState:
         fix_pr_body: str | None = None,
         finding_class: str | None = None,
         dependency_metadata: dict[str, str] | None = None,
-        control_ids: list[int] | None = None,
         agent_id: str | None = None,
         agent_name: str | None = None,
     ) -> str:
@@ -287,37 +249,24 @@ class ReportState:
             "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
         }
 
-        _redact_paths = not self._is_whitebox
         if description:
-            report["description"] = redact_text(
-                description.strip(), include_internal_paths=_redact_paths
-            )
+            report["description"] = description.strip()
         if impact:
-            report["impact"] = redact_text(impact.strip(), include_internal_paths=_redact_paths)
+            report["impact"] = impact.strip()
         if target:
             report["target"] = target.strip()
         if technical_analysis:
-            report["technical_analysis"] = redact_text(
-                technical_analysis.strip(), include_internal_paths=_redact_paths
-            )
+            report["technical_analysis"] = technical_analysis.strip()
         if poc_description:
-            report["poc_description"] = redact_text(
-                poc_description.strip(), include_internal_paths=_redact_paths
-            )
+            report["poc_description"] = poc_description.strip()
         if poc_script_code:
-            report["poc_script_code"] = redact_text(
-                poc_script_code.strip(), include_internal_paths=False
-            )
+            report["poc_script_code"] = poc_script_code.strip()
         if remediation_steps:
-            report["remediation_steps"] = redact_text(
-                remediation_steps.strip(), include_internal_paths=_redact_paths
-            )
+            report["remediation_steps"] = remediation_steps.strip()
         if evidence:
-            report["evidence"] = redact_text(evidence.strip(), include_internal_paths=_redact_paths)
+            report["evidence"] = evidence.strip()
         if assumptions:
-            report["assumptions"] = redact_text(
-                assumptions.strip(), include_internal_paths=_redact_paths
-            )
+            report["assumptions"] = assumptions.strip()
         if fix_effort:
             report["fix_effort"] = fix_effort.strip().lower()
         if cvss is not None:
@@ -335,14 +284,10 @@ class ReportState:
         if code_locations:
             report["code_locations"] = code_locations
         if fix_pr_body:
-            report["fix_pr_body"] = redact_text(
-                fix_pr_body.strip(), include_internal_paths=_redact_paths
-            )
+            report["fix_pr_body"] = fix_pr_body.strip()
         report["finding_class"] = (finding_class or "dynamic").strip().lower()
         if dependency_metadata:
             report["dependency_metadata"] = dependency_metadata
-        if control_ids:
-            report["control_ids"] = sorted(set(control_ids))
         if agent_id:
             report["agent_id"] = agent_id
         if agent_name:
@@ -356,7 +301,6 @@ class ReportState:
         if self.vulnerability_found_callback:
             self.vulnerability_found_callback(report)
 
-        self._set_phase("running")
         self.save_run_data()
         return report_id
 
@@ -372,15 +316,13 @@ class ReportState:
         model: str | None = None,
     ) -> None:
         """Record SDK-native token usage for one completed model run/cycle."""
-        self._llm_usage.record(
+        if self._llm_usage.record(
             agent_id=agent_id,
             agent_name=agent_name,
             model=model,
             usage=usage,
-        )
-        self._turn_count += 1
-        self._set_phase("running")
-        self.save_run_data()
+        ):
+            self.save_run_data()
 
     def record_observed_llm_cost(self, cost: float) -> None:
         self._llm_usage.record_observed_cost(cost)
@@ -392,35 +334,6 @@ class ReportState:
         """Live accumulated LLM cost, independent of the persisted run-record snapshot."""
         return self._llm_usage.total_cost
 
-    def record_web_search_cost(
-        self,
-        cost: float,
-        *,
-        query: str,
-        mode: str,
-        provider: str = "parallel",
-    ) -> None:
-        """Record a web search call's cost and append it to the run record."""
-        if cost > 0:
-            self._llm_usage.record_observed_cost(cost)
-        entry: dict[str, Any] = {
-            "provider": provider,
-            "mode": mode,
-            "query": query,
-            "cost": _round_cost(cost),
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-        self.run_record.setdefault("web_search_usage", []).append(entry)
-        self.save_run_data()
-
-    def get_web_search_stats(self) -> tuple[int, float]:
-        """Return (call_count, total_cost) for web search in this run."""
-        entries = self.run_record.get("web_search_usage", [])
-        if not isinstance(entries, list):
-            return 0, 0.0
-        total_cost = sum(float(e.get("cost", 0.0)) for e in entries)
-        return len(entries), total_cost
-
     def update_scan_final_fields(
         self,
         executive_summary: str,
@@ -428,47 +341,28 @@ class ReportState:
         technical_analysis: str,
         recommendations: str,
     ) -> None:
-        _redact_paths = not self._is_whitebox
         self.scan_results = {
             "scan_completed": True,
-            "executive_summary": redact_text(
-                executive_summary.strip(), include_internal_paths=_redact_paths
-            ),
-            "methodology": redact_text(methodology.strip(), include_internal_paths=_redact_paths),
-            "technical_analysis": redact_text(
-                technical_analysis.strip(), include_internal_paths=_redact_paths
-            ),
-            "recommendations": redact_text(
-                recommendations.strip(), include_internal_paths=_redact_paths
-            ),
+            "executive_summary": executive_summary.strip(),
+            "methodology": methodology.strip(),
+            "technical_analysis": technical_analysis.strip(),
+            "recommendations": recommendations.strip(),
             "success": True,
         }
 
         self.final_scan_result = self._format_final_scan_result(self.scan_results)
         self.run_record["scan_results"] = self.scan_results
-        self.run_record.pop("terminal_reason", None)
 
         logger.info("Updated scan final fields")
-        self._set_phase("finalizing")
-        self.save_run_data()
         self.save_run_data(mark_complete=True)
         posthog.end(self, exit_reason="finished_by_tool")
         scarf.end(self, exit_reason="finished_by_tool")
-
-    @property
-    def _is_whitebox(self) -> bool:
-        """True if any target is a local source tree (whitebox / source-aware)."""
-        if not self.scan_config:
-            return False
-        targets = self.scan_config.get("targets") or []
-        return any(isinstance(t, dict) and t.get("type") == "local_code" for t in targets)
 
     def set_scan_config(self, config: dict[str, Any]) -> None:
         self.scan_config = config
         self.run_record["status"] = "running"
         self.run_record["end_time"] = None
         self.run_record.pop("scan_results", None)
-        self.run_record.pop("terminal_reason", None)
         self.end_time = None
         self.scan_results = None
         self.final_scan_result = None
@@ -484,14 +378,12 @@ class ReportState:
                 "diff_base": config.get("diff_base"),
             }
         )
-        self._set_phase("running")
 
     def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> None:
         if mark_complete:
             self.end_time = datetime.now(UTC).isoformat()
             self.run_record["end_time"] = self.end_time
             self.run_record["status"] = "completed"
-            self._set_phase("completed")
         elif status and self.run_record.get("status") != "completed":
             current_status = self.run_record.get("status")
             if status == "stopped" and current_status in {"failed", "interrupted"}:
@@ -500,16 +392,9 @@ class ReportState:
                 self.end_time = datetime.now(UTC).isoformat()
             self.run_record["end_time"] = self.end_time
             self.run_record["status"] = status
-            self._set_phase(status)
 
-        self._sync_progress()
         self._sync_llm_usage_record()
         self._save_artifacts()
-
-    def set_terminal_reason(self, reason: str) -> None:
-        """Record a machine-readable non-completion reason for worker callers."""
-        if self.run_record.get("status") != "completed":
-            self.run_record["terminal_reason"] = reason
 
     def cleanup(self, status: str = "stopped") -> None:
         self.save_run_data(status=status)
@@ -535,29 +420,36 @@ class ReportState:
     def _save_artifacts(self) -> None:
         """Write scan artifacts under ``run_dir``."""
         run_dir = self.get_run_dir()
-        run_dir.mkdir(parents=True, exist_ok=True)
-
-        if self.final_scan_result:
-            write_executive_report(run_dir, self.final_scan_result)
-
-        # The worker must distinguish a clean scan from missing output. Always
-        # write this artifact, including for a valid zero-finding result.
-        write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
-
-        # SARIF is an integration artifact; it must not hide a successful core
-        # receipt when an optional formatter has a problem.
         try:
-            write_sarif(
-                run_dir,
-                self.vulnerability_reports,
-                tool_version=_strix_version(),
-                repository_context=self._sarif_repository_context(),
-            )
-        except Exception:
-            logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
+            run_dir.mkdir(parents=True, exist_ok=True)
 
-        write_run_record(run_dir, self.run_record)
-        logger.info("Essential scan data saved to: %s", run_dir)
+            if self.final_scan_result:
+                write_executive_report(run_dir, self.final_scan_result)
+
+            if self.vulnerability_reports:
+                write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
+
+            # SARIF 2.1.0 emitter for CI / ASPM integration. Always emit (even
+            # empty) so a clean run overwrites a prior findings.sarif rather than
+            # leaving a stale one — codeql-action's "absent from new submission →
+            # fixed" needs the fresh empty doc to auto-resolve alerts. Isolated
+            # in its own try: a SARIF-build error must NEVER break the CSV/MD/
+            # run-record path (the emitter's own contract).
+            try:
+                write_sarif(
+                    run_dir,
+                    self.vulnerability_reports,
+                    tool_version=_strix_version(),
+                    repository_context=self._sarif_repository_context(),
+                )
+            except Exception:
+                logger.exception("SARIF emit failed (non-fatal; CSV/MD unaffected)")
+
+            write_run_record(run_dir, self.run_record)
+
+            logger.info("Essential scan data saved to: %s", run_dir)
+        except (OSError, RuntimeError):
+            logger.exception("Failed to save scan data")
 
     def _sarif_repository_context(self) -> dict[str, Any] | None:
         """Repo/commit/branch context for SARIF provenance (repo scans only).
@@ -572,26 +464,23 @@ class ReportState:
         return self._sarif_repo_ctx
 
     def _derive_repository_context(self) -> dict[str, Any] | None:
-        targets = self.run_record.get("targets_info")
+        targets = self.run_record.get("targets_info") or []
         if not isinstance(targets, list):
             return None
-
-        repo_targets: list[dict[str, Any]] = []
-        for target in targets:
-            if not isinstance(target, dict):
-                continue
-            target = cast("dict[str, Any]", target)
-            if target.get("type") == "repository":
-                repo_targets.append(target)
-
+        repo_targets = [
+            target
+            for target in targets
+            if isinstance(target, dict) and target.get("type") == "repository"
+        ]
+        # Provenance binds the whole run to one repo; with multiple repo targets
+        # that's ambiguous, so omit it rather than mis-attributing later repos'
+        # findings to the first repo's URI/commit.
         if len(repo_targets) != 1:
             return None
         target = repo_targets[0]
-        details = target.get("details")
+        details = target.get("details") or {}
         if not isinstance(details, dict):
             return None
-        details = cast("dict[str, Any]", details)
-
         uri = details.get("target_repo")
         if not isinstance(uri, str) or not uri.strip():
             return None
@@ -613,31 +502,12 @@ class ReportState:
     def _sync_llm_usage_record(self) -> None:
         self.run_record["llm_usage"] = self._build_llm_usage_record()
 
-    def _set_phase(self, phase: str) -> None:
-        """Set a coarse, stable phase label on the run record."""
-        if phase not in _ALLOWED_PHASES:
-            phase = "stopped"
-        self.run_record["phase"] = phase
-
-    def _sync_progress(self) -> None:
-        """Advance the monotonic save sequence and copy live progress counters."""
-        self._save_seq += 1
-        self.run_record["seq"] = self._save_seq
-        self.run_record["turn_count"] = self._turn_count
-
     def _build_llm_usage_record(self) -> dict[str, Any]:
         return self._llm_usage.to_record()
 
     def _hydrate_llm_usage(self, raw_usage: Any) -> None:
         self._llm_usage.hydrate(raw_usage)
         self._sync_llm_usage_record()
-
-
-def _as_dict(obj: Any) -> dict[str, Any] | None:
-    """Return *obj* as a str-keyed dict, or None if it isn't a mapping."""
-    if isinstance(obj, dict):
-        return cast("dict[str, Any]", obj)
-    return None
 
 
 def openrouter_stream_cost(usage: Any) -> float | None:
@@ -714,28 +584,28 @@ def litellm_cost_callback(
 ) -> None:
     """LiteLLM ``success_callback`` adapter; forwards observed cost to the active scan."""
     cost: float | None = None
-    kwargs_dict = _as_dict(kwargs)
-    if kwargs_dict is not None:
-        raw = kwargs_dict.get("response_cost")
-        if isinstance(raw, int | float) and raw > 0:
-            cost = float(raw)
+    raw = kwargs.get("response_cost") if isinstance(kwargs, dict) else None
+    if isinstance(raw, int | float) and raw > 0:
+        cost = float(raw)
 
     if cost is None:
-        hidden = _as_dict(getattr(completion_response, "_hidden_params", None))
-        if hidden is not None:
-            candidate = hidden.get("response_cost")
-            if isinstance(candidate, int | float) and candidate > 0:
-                cost = float(candidate)
-            else:
-                headers = _as_dict(hidden.get("additional_headers"))
-                if headers is not None:
-                    raw = headers.get("llm_provider-x-litellm-response-cost")
-                    try:
-                        value = float(raw) if raw is not None else None
-                    except (TypeError, ValueError):
-                        value = None
-                    if value is not None and value > 0:
-                        cost = value
+        hidden = getattr(completion_response, "_hidden_params", None) or {}
+        candidate = hidden.get("response_cost") if isinstance(hidden, dict) else None
+        if isinstance(candidate, int | float) and candidate > 0:
+            cost = float(candidate)
+        else:
+            headers = hidden.get("additional_headers") or {} if isinstance(hidden, dict) else {}
+            raw = (
+                headers.get("llm_provider-x-litellm-response-cost")
+                if isinstance(headers, dict)
+                else None
+            )
+            try:
+                value = float(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                value = None
+            if value is not None and value > 0:
+                cost = value
 
     if cost is None:
         cost = _usage_reported_cost(completion_response)
@@ -800,22 +670,19 @@ def _estimate_response_cost(kwargs: Any, completion_response: Any) -> float | No
     """
     from litellm import completion_cost
 
-    kwargs_dict = _as_dict(kwargs)
-    model = kwargs_dict.get("model") if kwargs_dict is not None else None
+    model = kwargs.get("model") if isinstance(kwargs, dict) else None
     if not isinstance(model, str) or not model:
-        completion_response_dict = _as_dict(completion_response)
-        if completion_response_dict is not None:
-            model = completion_response_dict.get("model")
+        if isinstance(completion_response, dict):
+            model = cast("dict[str, Any]", completion_response).get("model")
         else:
             model = getattr(completion_response, "model", None)
     if not isinstance(model, str) or not model:
         return None
 
     provider = None
-    if kwargs_dict is not None:
-        litellm_params = _as_dict(kwargs_dict.get("litellm_params"))
-        if litellm_params is not None:
-            provider = litellm_params.get("custom_llm_provider")
+    litellm_params = kwargs.get("litellm_params") if isinstance(kwargs, dict) else None
+    if isinstance(litellm_params, dict):
+        provider = litellm_params.get("custom_llm_provider")
 
     usage_payload = _usage_payload(completion_response)
     if usage_payload is None:
@@ -834,11 +701,10 @@ def _estimate_response_cost(kwargs: Any, completion_response: Any) -> float | No
                 completion_response={"model": candidate, "usage": usage_payload},
                 model=candidate,
             )
-            numeric_value = float(value)
         except Exception:  # nosec B112  # noqa: BLE001, S112
             continue
-        if numeric_value > 0:
-            return numeric_value
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
     return None
 
 

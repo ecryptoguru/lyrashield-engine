@@ -6,12 +6,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from lyrashield_adapter import cli
-from strix.config import apply_config_override, loader
-from strix.config.settings import (
+from lyrashield.policy import loader
+from lyrashield.policy.loader import apply_config_override
+from lyrashield.policy.settings import (
     PRODUCT_BOUNDARY_ENV_VAR,
     is_chatgpt_subscription_allowed,
 )
+from lyrashield_adapter import cli
 
 
 if TYPE_CHECKING:
@@ -173,7 +174,7 @@ def test_prepare_environment_accepts_api_key_deployments() -> None:
 
 
 def test_cli_update_flag_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    strix_main = importlib.import_module("strix.interface.main")
+    strix_main = importlib.import_module("lyrashield.interface.main")
 
     monkeypatch.setattr(strix_main.sys, "argv", ["strix", "--update"])
     with pytest.raises(SystemExit) as excinfo:
@@ -188,7 +189,7 @@ def test_config_file_can_use_subscription_model(
     monkeypatch.setattr(loader, "_override", None, raising=False)
     monkeypatch.setattr(loader, "_cached", None, raising=False)
 
-    strix_main = importlib.import_module("strix.interface.main")
+    strix_main = importlib.import_module("lyrashield.interface.main")
 
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-5.6-luna"}}))
@@ -215,7 +216,7 @@ def test_config_file_can_use_supported_gpt56_provider(
     monkeypatch.setattr(loader, "_override", None, raising=False)
     monkeypatch.setattr(loader, "_cached", None, raising=False)
 
-    strix_main = importlib.import_module("strix.interface.main")
+    strix_main = importlib.import_module("lyrashield.interface.main")
 
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"env": {"STRIX_LLM": model}}))
@@ -242,7 +243,7 @@ def test_config_file_rejects_unsupported_gpt56_provider(
     monkeypatch.setattr(loader, "_override", None, raising=False)
     monkeypatch.setattr(loader, "_cached", None, raising=False)
 
-    strix_main = importlib.import_module("strix.interface.main")
+    strix_main = importlib.import_module("lyrashield.interface.main")
 
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"env": {"STRIX_LLM": model}}))
@@ -262,7 +263,7 @@ def test_config_file_rejects_subscription_model_when_disabled(
     monkeypatch.setattr(loader, "_override", None, raising=False)
     monkeypatch.setattr(loader, "_cached", None, raising=False)
 
-    strix_main = importlib.import_module("strix.interface.main")
+    strix_main = importlib.import_module("lyrashield.interface.main")
 
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-5.6-luna"}}))
@@ -285,7 +286,7 @@ def test_config_subscription_model_rejected_when_disabled(
     monkeypatch.setattr(loader, "_override", None, raising=False)
     monkeypatch.setattr(loader, "_cached", None, raising=False)
 
-    strix_main = importlib.import_module("strix.interface.main")
+    strix_main = importlib.import_module("lyrashield.interface.main")
 
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-5.6-luna"}}))
