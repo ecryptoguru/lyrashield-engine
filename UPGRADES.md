@@ -3,8 +3,8 @@
 LyraShield Engine is a controlled derivative over a pinned Strix substrate. It
 is not a thin wrapper: the adapter is the public entry point, while significant
 model, lifecycle, budget, result, and worker-contract behavior is intentionally
-owned within modified upstream modules. Preserve this reviewed boundary while
-syncing releases.
+owned in `lyrashield/**` and `lyrashield_adapter/**`, outside the retained
+upstream tree. Preserve this reviewed boundary while syncing releases.
 
 > **Upgrade to v1.5.3 product-outside-strix (2026-08-11).** The `strix/**`
 > substrate is pinned to upstream release v1.5.3
@@ -51,25 +51,52 @@ owns that behavior in `lyrashield/**` and `lyrashield_adapter/**`, while
 
 ## LyraShield-owned contract
 
+All product-critical behavior lives in `lyrashield/**` and
+`lyrashield_adapter/**`. The retained `strix/**` substrate is exact upstream
+v1.5.3 except for the two generic seams documented above.
+
 - GPT-5.6 Terra and Luna acceptance (Sol retired in PR #22); only
   LiteLLM/Strix-supported providers whose cost map lists `gpt-5.6-*` are allowed
   (currently OpenAI, Azure/Azure AI, and Bedrock Mantle); OpenAI/Azure remain
   the primary reference paths; ChatGPT-subscription model path is allowed by
   default and can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`;
   no OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, or
-  local/self-hosted endpoint as the main model at the product boundary.
+  local/self-hosted endpoint as the main model at the product boundary. Model
+  policy lives in `lyrashield/policy/models.py`; settings in
+  `lyrashield/policy/settings.py`.
 - Parallel Search is available as an optional, redacted `web_search` agent tool
   when `LYRASHIELD_WEB_SEARCH_ENABLED=1` and a Parallel API key is configured.
-  It is not an LLM endpoint and does not replace GPT-5.6 Terra/Luna.
+  It is not an LLM endpoint and does not replace GPT-5.6 Terra/Luna. The tool
+  lives in `lyrashield/tools/web_search/tool.py`.
 - Context compaction, bounded output and agent count, and concurrent
-  pre-request spend reservations.
+  pre-request spend reservations. Lifecycle and hooks live in
+  `lyrashield/lifecycle/`.
 - Non-interactive lifecycle, cancellation, cleanup, target-safe errors, and
-  forced telemetry-off production behavior.
+  forced telemetry-off production behavior. Interface and CLI live in
+  `lyrashield/interface/`; telemetry in `lyrashield/telemetry/`.
 - Deterministic finding identities, structured control/evidence metadata, and
-  the bounded `run.json` / `vulnerabilities.json` worker protocol.
+  the bounded `run.json` / `vulnerabilities.json` worker protocol. Report
+  state, dedupe, and writers live in `lyrashield/artifacts/`.
+- Product agent factory, prompt renderer, tool overrides, and skill overlays
+  live in `lyrashield/agents/`, `lyrashield/tools/`, and `lyrashield/skills/`
+  respectively, all registered through generic seams in the retained
+  `strix/**` substrate.
 
 ## Compatibility patches retained across imports
 
+After the v1.5.3 product-outside-strix migration (PR #58), product behavior
+lives in `lyrashield/**` and `lyrashield_adapter/**`. Only two generic patches
+remain inside `strix/**`; everything else below is owned in the product tree and
+has no upstream equivalent to reconcile with.
+
+- `strix/config/loader.py` (one of two `strix/**` seams): registers a pluggable
+  product settings loader via `register_settings_loader` and falls back to the
+  upstream `Settings` class when none is registered. `lyrashield/policy/loader.py`
+  is the registered product loader.
+- `strix/skills/__init__.py` (one of two `strix/**` seams): skips
+  telemetry-thread creation when the resolved settings disable telemetry, and
+  accepts additional skill directories via `register_skill_dir` (an upstream
+  v1.5.3 feature used to load `lyrashield/skills/`).
 - `lyrashield_adapter`: compatibility adapter for LyraShield invocation. It
   forces telemetry off, disables the upstream update check, and supports
   `chatgpt/` subscription-backed models by default (which bypass the Terra/Luna
@@ -83,27 +110,30 @@ owns that behavior in `lyrashield/**` and `lyrashield_adapter/**`, while
 - Out-of-band budget reservations: metered calls made outside the agent run
   loop (report deduplication) reserve against `max_budget_usd` through
   `ReportUsageHooks.reserve_out_of_band_request`, registered per scan via
-  `set_active_hooks`. Upstream has no budget enforcement, so this has no
-  upstream equivalent to reconcile with.
-- Bounded dedupe payload: `strix/report/dedupe.py` caps the serialized
+  `set_active_hooks`. Lives in `lyrashield/lifecycle/hooks.py`. Upstream has no
+  budget enforcement, so this has no upstream equivalent to reconcile with.
+- Bounded dedupe payload: `lyrashield/artifacts/dedupe.py` caps the serialized
   existing-report list. Upstream compares against every prior report.
-- Telemetry defaults: LyraShield-safe telemetry behavior by default.
+- Telemetry defaults: LyraShield-safe telemetry behavior by default. Product
+  telemetry lives in `lyrashield/telemetry/`.
 - Self-update disabled: `--update` and the startup update notice are disabled
-  in `strix/interface/main.py` — upstream self-update fetches usestrix/strix
-  artifacts, which would replace the controlled derivative.
+  in `lyrashield/interface/main.py` — upstream self-update fetches
+  usestrix/strix artifacts, which would replace the controlled derivative.
 - Pydantic compatibility: fixes required by the supported runtime.
 - Pre-Docker validation: validate inputs before container setup.
 - Per-instance binds: avoid shared mutable configuration between scans.
 - Worker output compatibility: preserve the worker's expected result format and
   coordinate schema evolution with the application repository.
 - Apache attribution banners: retain the one-line LyraShield modification notice
-  in every fork-modified `strix/` source file.
+  on the two reviewed `strix/` seam files and on all `lyrashield/` product
+  source files that derive from upstream.
 - Upstream formatter compatibility: retain Ruff's mechanical formatting in
-  `strix/tools/reporting/tool.py` and `tests/test_runner_root_prompt.py` until
-  upstream contains the same formatting.
+  `lyrashield/tools/reporting/tool.py` and `tests/test_runner_root_prompt.py`
+  until upstream contains the same formatting.
 - Upstream strict-typing compatibility: retain the local-variable narrowing in
-  `strix/skills/__init__.py` and dependency ecosystem normalization in
-  `strix/tools/reporting/tool.py` until upstream contains equivalent fixes.
+  `strix/skills/__init__.py` (one of the two seams) and dependency ecosystem
+  normalization in `lyrashield/tools/reporting/tool.py` until upstream contains
+  equivalent fixes.
 
 ## Current upstream base
 
@@ -298,25 +328,40 @@ GPT-5.6 Terra/Luna product boundary. No runtime behavior changed.
 Added an optional, redacted `web_search` agent tool backed by Parallel Search.
 It is not an LLM endpoint and does not alter the GPT-5.6 product boundary.
 
+> **Migration note (PR #58, 2026-08-12).** All `strix/**` paths listed below
+> were moved to `lyrashield/**` during the product-outside-strix migration.
+> The current locations are noted in parentheses; the original `strix/**`
+> paths were reset to upstream v1.5.3.
+
 - `strix/tools/web_search/tool.py`: new tool with redaction, call/budget caps,
   and `reserve_web_search_call` / `release_web_search_call` hook integration.
+  (Now `lyrashield/tools/web_search/tool.py`, registered as a tool override.)
 - `strix/config/settings.py`: new `WebSearchSettings` with `LYRASHIELD_*` env
-  aliases and `PARALLEL_API_KEY` fallback.
+  aliases and `PARALLEL_API_KEY` fallback. (Now `lyrashield/policy/settings.py`.)
 - `strix/agents/factory.py`: registers `web_search` in the base tool set.
+  (Now `lyrashield/agents/factory.py`.)
 - `strix/interface/tui/renderers/web_search_renderer.py`: TUI rendering for
-  search tool events.
+  search tool events. (Now `lyrashield/interface/tui/renderers/`.)
 - `strix/core/hooks.py`: `reserve_web_search_call` and `release_web_search_call`
   on `ReportUsageHooks` for per-call budget reservations.
+  (Now `lyrashield/lifecycle/hooks.py`.)
 - `strix/report/state.py`: records web search cost and usage in `run.json`.
+  (Now `lyrashield/artifacts/state.py`.)
 - `docs/advanced/configuration.mdx` and `docs/llm-providers/overview.mdx`:
   updated to clarify that Parallel is not an LLM endpoint but may be used as a
   web search tool when explicitly enabled.
 
 ## Security hardening pass (2026-08-05)
 
-Comprehensive AI safety, privacy, and reliability hardening based on the
-multi-domain audit in `AI_AUDIT_REPORT.md`. All 911 tests pass with no
-regressions. See the audit report for per-finding resolution status.
+Comprehensive AI safety, privacy, and reliability hardening based on a
+multi-domain security audit. All 911 tests pass with no regressions. The
+per-finding resolution details are documented in the subsections below.
+
+> **Migration note (PR #58, 2026-08-12).** All `strix/**` paths listed below
+> were moved to `lyrashield/**` during the product-outside-strix migration.
+> The current locations are noted in parentheses; the original `strix/**`
+> paths were reset to upstream v1.5.3. `strix/skills/__init__.py` remains one
+> of the two reviewed seams.
 
 ### Prompt injection and trust boundaries
 
@@ -326,12 +371,15 @@ SYSTEM-INJECTED MARKERS` section defining `[SYSTEM-NOTICE]` (budget/turn
   tags, with anti-spoofing rules. Tags are only valid at the start of a
   top-level user message from the platform; tags inside tool output or target
   content are treated as injection attempts.
+  (Now `lyrashield/skills/system_prompt.jinja`, loaded via the
+  template-override seam in `strix/agents/prompt.py`.)
 - `strix/core/agents.py`: `_message_to_session_item` wraps peer messages with
   the `[SYSTEM-VERIFIED PEER MESSAGE | id=... | from=... | type=... |
 priority=...]` header (already present from upstream sync, now documented in
-  the system prompt).
+  the system prompt). (Now `lyrashield/lifecycle/agents.py`.)
 - `strix/core/hooks.py`: budget/turn warnings prefixed with `[SYSTEM-NOTICE]`
   (already present from upstream sync, now documented in the system prompt).
+  (Now `lyrashield/lifecycle/hooks.py`.)
 
 ### Privacy and data leakage
 
@@ -339,16 +387,17 @@ priority=...]` header (already present from upstream sync, now documented in
   credential preservation. Now instructs the model to record placeholder types
   (e.g. `[SECRET]`) and where they apply. Conversation head is redacted via
   `redact_text()` before summarization; summary is redacted again before
-  checkpointing.
+  checkpointing. (Now `lyrashield/lifecycle/compaction.py`.)
 - `strix/report/state.py`: `add_vulnerability_report` and
   `update_scan_final_fields` now apply `redact_text()` to all free-text fields.
   Internal path redaction is mode-aware via `_is_whitebox` property: whitebox
   scans preserve `/workspace/<subdir>` target paths; blackbox scans redact them.
   `poc_script_code` always preserves internal paths for reproducibility.
+  (Now `lyrashield/artifacts/state.py`.)
 - `strix/utils/redaction.py`: split path patterns into `_ALWAYS_REDACT_PATH_\
 PATTERNS` (spill paths, tmp state — always redacted) and `_MODE_DEPENDENT_\
 PATH_PATTERNS` (general `/workspace/` paths — mode-dependent). Added
-  `redact_spill_paths()` for whitebox mode.
+  `redact_spill_paths()` for whitebox mode. (Now `lyrashield/utils/redaction.py`.)
 
 ### Structured output reliability
 
@@ -356,24 +405,27 @@ PATH_PATTERNS` (general `/workspace/` paths — mode-dependent). Added
   `AgentOutputSchema(strict_json_schema=True)` enforces structured output.
   Fallback to lenient `_parse_dedupe_response` on validation failure (already
   present from upstream sync, now covered by new tests).
+  (Now `lyrashield/artifacts/dedupe.py`.)
 
 ### Telemetry hygiene
 
 - `strix/telemetry/posthog.py`: replaced module-level `_POSTHOG_PUBLIC_API_KEY`
   and `_POSTHOG_HOST` with lazy `_posthog_api_key()` / `_posthog_host()`
   functions that read `STRIX_POSTHOG_API_KEY` / `STRIX_POSTHOG_HOST` at call
-  time.
+  time. (Now `lyrashield/telemetry/posthog.py`.)
 - `strix/telemetry/scarf.py`: replaced module-level `_SCARF_ENDPOINT` with
   lazy `_scarf_endpoint()` that reads `STRIX_SCARF_ENDPOINT` at call time.
+  (Now `lyrashield/telemetry/scarf.py`.)
 - `strix/skills/__init__.py`: `_track_skill_loaded` now checks
   `load_settings().telemetry.enabled` before spawning the telemetry thread.
+  (Remains one of the two reviewed `strix/**` seams.)
 
 ### Prompt sanitization
 
 - `strix/core/inputs.py`: `_JINJA_TAG_RE` regex updated to also strip Jinja
   comment tags (`{# #}`) in addition to `{{ }}` and `{% %}`. Applied to
   `root_instructions_override`, `extra_system_prompt_context`, and target
-  values in `build_scope_context`.
+  values in `build_scope_context`. (Now `lyrashield/lifecycle/inputs.py`.)
 
 ### Tests added
 
@@ -384,3 +436,170 @@ PATH_PATTERNS` (general `/workspace/` paths — mode-dependent). Added
 - `tests/test_telemetry_keys.py` (new): lazy env var reads, skip-when-
   unconfigured, skills telemetry gate.
 - `tests/test_runner_root_prompt.py`: Jinja comment tag stripping test case.
+
+## LyraShield PR #58 — Complete adapter migration and release hardening (2026-08-12)
+
+The largest single change in the ledger. All product-specific behavior was
+moved out of `strix/**` into `lyrashield/**` and `lyrashield_adapter/**`, and
+the retained `strix/**` substrate was reset to exact upstream v1.5.3
+(`7cc9fa9faa0179fc7e35111102fe3d20a9028393`). Only two generic, reviewed seams
+remain modified inside `strix/**`; everything else is owned in the product tree.
+
+### Generic seams in `strix/**` (the only two modified files)
+
+- `strix/config/loader.py`: `register_settings_loader` composition seam.
+  `lyrashield/policy/loader.py` is the registered product loader.
+- `strix/skills/__init__.py`: telemetry-thread gate + `register_skill_dir`
+  extension (an upstream v1.5.3 feature used to load `lyrashield/skills/`).
+
+Additional generic seams in `strix/**` that remain exact upstream (no local
+patch, but provide the registration hooks the product uses):
+
+- `strix/agents/factory.py`: `register_tool_override` and
+  `register_model_policy` seams so product tools and model policy can replace
+  upstream base behavior without modifying the base toolset.
+- `strix/agents/prompt.py`: Jinja `FileSystemLoader` searches registered skill
+  directories before the built-in `strix/agents/prompts/` path, allowing
+  product templates to override built-in ones.
+
+### Product modules created in `lyrashield/**`
+
+- `lyrashield/policy/`: `settings.py`, `models.py`, `codex.py`, `loader.py`,
+  `provider_contract.py` — GPT-5.6 model acceptance, reasoning policy,
+  `LYRASHIELD_*` env aliases, subscription gating, and provider-contract
+  probing.
+- `lyrashield/lifecycle/`: `agents.py`, `execution.py`, `hooks.py`,
+  `inputs.py`, `runner.py`, `sessions.py`, `compaction.py` — non-interactive
+  lifecycle, budget hooks, context compaction, prompt sanitization, and
+  cancellation.
+- `lyrashield/runtime/`: `caido_bootstrap.py`, `docker_client.py`,
+  `session_manager.py`, `local_dir_staging.py`, `backends.py` — sandbox
+  session and staging mechanics.
+- `lyrashield/agents/`: `factory.py`, `prompt.py` — product agent builder,
+  programmatic tool calling, output-store binding, redaction, and the product
+  system-prompt renderer.
+- `lyrashield/interface/`: `main.py`, `cli.py`, `auth_cli.py`,
+  `provider_contract_cli.py`, `update_check.py`, `utils.py`, `tui/`,
+  `viewer/`, `assets/` — product CLI, TUI, viewer SPA, and auth flows.
+- `lyrashield/artifacts/`: `dedupe.py`, `state.py`, `writer.py`, `sarif.py`,
+  `usage.py` — report state, dedupe, SARIF, and writer with redaction.
+- `lyrashield/telemetry/`: `posthog.py`, `scarf.py`, `_common.py`,
+  `logging.py` — lazy-key telemetry with forced-off defaults.
+- `lyrashield/utils/`: `redaction.py` — mode-aware path and secret redaction.
+- `lyrashield/tools/`: `web_search/`, `proxy/`, `reporting/`, `respond/`,
+  `todo/`, `agents_graph/`, `finish/`, `notes/`, `thinking/`, `load_skill/`,
+  `output_store.py` — all product tool overrides registered via
+  `register_tool_override`.
+- `lyrashield/skills/`: `system_prompt.jinja`, `coordination/`, `custom/`,
+  `scan_modes/`, `technologies/`, `tooling/`, `vulnerabilities/` — product
+  skill overlays and the product system-prompt template, registered via
+  `register_skill_dir`.
+
+### Tool overrides registered from `lyrashield_adapter/cli.py`
+
+The adapter registers the following tool overrides before delegating to the
+upstream `main()`:
+
+- `agent_finish`, `create_agent`, `send_message_to_agent`, `stop_agent`,
+  `view_agent_graph`, `wait_for_agents` (agents_graph)
+- `web_search` (Parallel Search)
+- `respond_to_user`
+- `list_requests`, `view_request`, `repeat_request`, `list_sitemap`,
+  `view_sitemap_entry`, `scope_rules` (Caido proxy)
+- `create_vulnerability_report`, `create_dependency_report`, `list_reports`,
+  `get_report` (reporting)
+- `create_todo`, `list_todos`, `update_todo`, `mark_todo_done`,
+  `mark_todo_pending`, `delete_todo` (todo)
+
+It also registers the product model policy via `register_model_policy` and the
+product skill directory via `register_skill_dir`.
+
+### Verification
+
+- `bash scripts/verify-controlled-derivative.sh`: 968 passed, 1 skipped;
+  lint/format/mypy/Bandit pass; `strix/**` footprint is exactly two files,
+  +24/-0 lines.
+- `bash scripts/verify-worker-contract.sh`: 68 passed.
+- `uv build` succeeds; wheel contains `lyrashield/**` product modules and
+  `strix/**` v1.5.3 substrate.
+
+### Files reset to upstream v1.5.3
+
+All `strix/**` paths that previously carried product behavior were restored to
+upstream content, including but not limited to: `strix/core/agents.py`,
+`strix/core/execution.py`, `strix/core/hooks.py`, `strix/core/inputs.py`,
+`strix/core/runner.py`, `strix/core/sessions.py`, `strix/config/settings.py`,
+`strix/config/models.py`, `strix/config/codex.py`, `strix/agents/factory.py`,
+`strix/agents/prompts/system_prompt.jinja`, `strix/interface/main.py`,
+`strix/interface/cli.py`, `strix/llm/compaction.py`, `strix/report/dedupe.py`,
+`strix/report/state.py`, `strix/report/writer.py`, `strix/telemetry/posthog.py`,
+`strix/telemetry/scarf.py`, `strix/tools/web_search/`,
+`strix/tools/proxy/tools.py`, `strix/tools/proxy/caido_api.py`,
+`strix/tools/reporting/tool.py`, `strix/tools/todo/tools.py`,
+`strix/tools/respond/tool.py`, `strix/tools/agents_graph/tools.py`,
+`strix/utils/redaction.py`. Prior product-ownership claims about these paths
+in this ledger are superseded by this migration.
+
+## LyraShield PR #59 — fix(release): harden sandbox supply chain and docs (2026-08-12)
+
+Restructured the sandbox publication workflow to smoke-test the exact candidate
+digest before promoting it, and reconciled operator docs with the
+product-outside-strix boundary.
+
+### Sandbox supply-chain hardening
+
+- `.github/workflows/publish-sandbox.yml`: replaced the two-stage
+  build-smoke-then-publish flow with a single publish job that (1) builds and
+  pushes an unqualified `candidate-<sha>` image with provenance and SBOM, (2)
+  smokes the exact candidate digest on both `linux/amd64` and `linux/arm64`
+  (non-root, no Docker socket, `cap_net_raw` on nmap, Caido GraphQL startup),
+  and (3) promotes only the smoke-qualified digest to the release and SHA tags
+  via `docker buildx imagetools create`. The release unit is the digest, never
+  a mutable tag.
+- `containers/npm-tools/package.json` and `package-lock.json`: removed the
+  stale npm lockfile that was not used by the sandbox build.
+- `.dockerignore`: tightened to exclude additional dev artifacts.
+- `tests/test_sandbox_dockerfile.py` and
+  `tests/test_sandbox_release_workflow.py`: added coverage for the new
+  candidate-digest-then-promote flow.
+
+### Documentation updates
+
+- `CONTRIBUTING.md`: updated from v1.4.1 references to v1.5.3; replaced the
+  warning-only footprint budget description with the hard two-file, +30/-0
+  gate; added a Dependency updates section; noted that skills now live in
+  `lyrashield/skills/` with `strix/skills/` as inherited substrate; added
+  worker-promotion boundary note.
+- `README.md`: updated upstream base reference to v1.5.3.
+- `UPGRADES.md`: replaced the Deep Review v12 footprint-budget blockquote with
+  a historical note clarifying the v1.5.3 hard gate supersedes it; fixed
+  markdown table separator and indentation formatting flagged by markdownlint.
+- `docs/advanced/configuration.mdx`: expanded to match the full `Settings`
+  schema, added ChatGPT subscription route documentation, clarified cache key
+  scoping and usage artifacts, and added sandbox digest verification and
+  worker-promotion-boundary notes.
+- `docs/tools/sandbox.mdx`: added worker-promotion-boundary note.
+- `docs/usage/scan-modes.mdx`: updated for current scan-mode behavior.
+- `lyrashield/skills/custom/source_aware_sast.md` and
+  `lyrashield/skills/system_prompt.jinja`: minor product wording adjustments.
+
+## LyraShield PR #60 — docs: clarify ChatGPT subscription support (2026-08-12)
+
+Docs-only change. Reconciled the public docs with the adapter's actual
+subscription support, which was enabled in PR #58 but still described as
+"rejected" in several pages.
+
+- `docs/index.mdx`: replaced "ChatGPT subscription-backed models are rejected"
+  with "supported through the authenticated `chatgpt/<model>` route."
+- `docs/llm-providers/overview.mdx`: added a ChatGPT subscription row to the
+  route table and updated the unsupported-providers sentence to scope the
+  rejection to subscription routes outside `chatgpt/*`.
+- `docs/llm-providers/openai.mdx`: clarified that subscription models use the
+  separately authenticated `chatgpt/<model>` route, not the API-credential
+  route.
+- `docs/usage/cli.mdx`: updated the `auth` subcommand description from
+  "retained only for upstream compatibility" to the actual ChatGPT
+  subscription sign-in flow.
+- `docs/usage/instructions.mdx`: updated the instruction constraint from
+  "enable ChatGPT subscription models" to "change the configured ChatGPT
+  subscription policy."

@@ -313,7 +313,7 @@ The engine omits `NET_ADMIN` and `NET_RAW` by default. Add them only for authori
 | `STRIX_IMAGE_DIGEST`                         | unset   | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123…`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |
 | `STRIX_SANDBOX_ALLOW_HOST_GATEWAY`           | unset   | Opt-in `host.docker.internal` access. Do not enable unless an explicitly authorized local workflow requires it.                                                                                                              |
 
-The `publish-sandbox` workflow pushes one multi-architecture candidate, runs the non-root capability smoke tests against that exact digest on both supported architectures, and only then promotes the same digest to release tags. It emits an SPDX SBOM plus signed provenance/SBOM attestations for that digest. Promote the digest, never a tag, as one release unit with its worker configuration.
+The `publish-sandbox` workflow pushes one multi-architecture candidate, runs the non-root capability smoke tests against that exact digest on both supported architectures, and only then promotes the same digest to release tags. It emits an SPDX SBOM plus signed provenance/SBOM attestations for that digest. Promote the digest, never a tag, as one release unit with its worker configuration. The application repository separately verifies and publishes the worker image digest; an operator promotes that worker digest explicitly on the dedicated VM, then reconciles its running reference, OCI labels, health, and scan readiness. Neither image follows a mutable tag in production.
 
 ## Telemetry
 

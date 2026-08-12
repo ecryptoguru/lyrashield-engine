@@ -7,4 +7,4 @@ description: "Not a LyraShield deployment path"
 Strix Cloud is an upstream service and is not a LyraShield Engine deployment, integration, or availability claim. This page is intentionally absent from LyraShield navigation.
 </Warning>
 
-LyraShield production uses its own authenticated application, BullMQ worker, evidence storage, reviewed engine source, and pinned sandbox image. Consult the application repository's deployment runbooks.
+LyraShield production uses its own authenticated application, BullMQ worker, evidence storage, reviewed engine source, and pinned sandbox image. The application repository verifies the worker image built from the reviewed engine commit; an operator then explicitly promotes that immutable worker digest to the dedicated VM and reconciles its digest, OCI labels, health, and scan readiness. Consult the application repository's deployment runbooks.

@@ -10,7 +10,7 @@ LyraShield Engine is a controlled derivative of upstream Strix. The inherited te
 - `STRIX_NO_UPDATE_CHECK=1` — disables the upstream self-update network check.
 - `LYRASHIELD_PRODUCT_BOUNDARY=1` — marks the process as running behind the product boundary so configuration is re-validated after `--config` is applied.
 
-It also rejects `chatgpt/` subscription-backed models, which would bypass the GPT-5.6 Terra/Luna deployment gate and record runs with zero metered cost.
+It also supports `chatgpt/` subscription-backed models by default (which bypass the GPT-5.6 Terra/Luna deployment gate and record runs with zero metered cost). Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable the subscription path and require a metered GPT-5.6 Terra or Luna deployment.
 
 ### Inherited clients (disabled in production)
 

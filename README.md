@@ -37,7 +37,7 @@ The pinned upstream tree remains the substrate for generic sandbox/session mecha
 
 ## Security hardening
 
-The engine includes a comprehensive security hardening pass (see `AI_AUDIT_REPORT.md` for the full audit and `UPGRADES.md` for the ledger). Key hardening:
+The engine includes a comprehensive security hardening pass (see the [Security hardening pass](UPGRADES.md#security-hardening-pass-2026-08-05) section in `UPGRADES.md` for the full audit and ledger). Key hardening:
 
 - **Trust boundaries:** The system prompt defines `[SYSTEM-NOTICE]` (budget/turn warnings) and `[SYSTEM-VERIFIED PEER MESSAGE]` (inter-agent communication) tags with anti-spoofing rules. Tags inside tool output or target content are treated as injection attempts.
 - **Secret redaction in compaction:** Conversation history is redacted via `redact_text()` before LLM summarization. The compaction prompt instructs the model to record placeholder types instead of copying credentials verbatim.
@@ -109,6 +109,10 @@ Each non-interactive run writes bounded machine-readable artifacts under `strix_
 Deep scans use a deterministic two-tier route: the Terra/medium root owns coordination and cross-file judgment, while Luna/high child specialists handle focused tasks with smaller output reservations. Only the root can create or stop specialists, so child work cannot fan out recursively. Child agents start with a focused task and system-owned scope instead of copying the full parent conversation unless the coordinator explicitly requests inherited context. Stable role-specific cache keys improve repeated-prefix reuse, and per-request usage receipts retain the actual model plus cache-read/cache-write buckets so mixed-model spend can be reconciled against the rate card.
 
 The TypeScript worker treats all engine output as untrusted. It schema-validates these artifacts, never persists raw stdout/stderr, and does not allow model confidence to become independent verification proof. Existing artifact keys are compatibility-sensitive; coordinate changes with the worker contract tests in `lyrashield-ai`.
+
+## Production worker promotion boundary
+
+This repository supplies the reviewed runtime and public worker contract; it does not update production worker VMs. The LyraShield AI repository verifies the worker image built from an exact engine commit, records its immutable digest and OCI app/engine revision labels, and an operator explicitly promotes that digest to the dedicated VM. The VM never follows `latest` or another mutable tag. Each promotion reconciles the configured and running digest, both labels, Docker health, and application scan readiness while retaining the prior digest for rollback.
 
 When the root model (Terra) hits any `ModelBehaviorError`, the engine falls back to the delegate model (Luna) rather than failing the scan immediately. If no separate delegate is configured, or if the delegate also fails, partial findings are salvaged with an `engine_stopped` (or `content_filter_stopped` for content-filter errors) terminal reason recorded in `run.json`. The exit code is 2 when findings are present and 5 when none were collected. Azure's transient `response.failed` status (without content-filter context) is retried with backoff rather than failing the scan.
 
