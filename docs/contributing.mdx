@@ -9,10 +9,10 @@ The root [CONTRIBUTING.md](https://github.com/ecryptoguru/lyrashield-engine/blob
 
 1. Branch from current `main`; never push directly to `main`.
 2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.
-3. Put LyraShield model, budget, lifecycle, identity, evidence, and artifact behavior behind explicit reviewed boundaries.
-4. Preserve the LyraShield modification banner on changed upstream Python files.
+3. Put LyraShield model, budget, lifecycle, identity, evidence, and artifact behavior behind explicit reviewed boundaries in `lyrashield/**`.
+4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The current hard allowlist contains only `strix/config/loader.py` and `strix/skills/__init__.py`. Preserve the LyraShield modification banner on those files.
 5. Add tests and update `NOTICE`, `UPGRADES.md`, and operator docs when the contract changes.
-6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate diffs `strix/**` against the pinned upstream base and fails on any changed file that lacks both the LyraShield attribution banner and an `UPGRADES.md` ledger entry. It also runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit on `strix` and `lyrashield_adapter`, package and binary smoke, sandbox smoke, and the public worker contract.
+6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate diffs `strix/**` against the pinned v1.5.3 base and fails on any path outside the two-file allowlist, more than 30 insertions, or any deletion. It also runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit, package and binary smoke, sandbox smoke, and the public worker contract.
 7. Require human approval and green Engine CI.
 
 <Warning>
@@ -23,7 +23,7 @@ Artifact schema changes require coordinated worker compatibility testing against
 
 ## Security hardening
 
-The engine includes a comprehensive security hardening pass (see `AI_AUDIT_REPORT.md` for the full audit and `UPGRADES.md` for the ledger). When contributing changes that touch security-sensitive areas:
+The engine includes a comprehensive security hardening pass (see the [Security hardening pass](https://github.com/ecryptoguru/lyrashield-engine/blob/main/UPGRADES.md#security-hardening-pass-2026-08-05) section in `UPGRADES.md` for the full audit and ledger). When contributing changes that touch security-sensitive areas:
 
 - **Trust boundaries:** Do not remove or weaken `[SYSTEM-NOTICE]` or `[SYSTEM-VERIFIED PEER MESSAGE]` tags from the system prompt or message wrapping code.
 - **Secret redaction:** Do not bypass `redact_text()` calls in `ReportState` or `maybe_compact`. PoC script code must always preserve internal paths for reproducibility.

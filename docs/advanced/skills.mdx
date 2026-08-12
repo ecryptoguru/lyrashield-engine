@@ -140,9 +140,10 @@ How to confirm findings and avoid false positives.
 
 ## Adding or changing skills
 
-The skill catalog lives under `strix/skills/` and is part of the controlled derivative. Any change must follow the same review boundary as other upstream files:
+Inherited skills live under `strix/skills/` (upstream v1.5.3 substrate). LyraShield additions and overrides live under `lyrashield/skills/` and are registered through the `register_skill_dir` seam in `strix/skills/__init__.py`. Any change must follow the same review boundary as other files:
 
-- Keep the LyraShield modification banner on changed upstream skill files.
+- Do not modify `strix/skills/**` directly; add or override skills in `lyrashield/skills/` instead.
+- Keep the LyraShield modification banner on any product skill file that derives from upstream.
 - Add regression coverage if a skill affects agent behavior or tool selection.
 - Update `UPGRADES.md` and operator docs when the catalog or skill contract changes.
 - Do not add skills that re-enable telemetry, broaden provider support, or declare confidence equivalent to verification.

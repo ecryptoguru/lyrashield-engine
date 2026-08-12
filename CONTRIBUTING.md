@@ -67,7 +67,7 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
    # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
    ```
 
-5. Add tests and update `NOTICE`, `UPGRADES.md`, and operator docs when the contract changes.
+5. Add tests and update `NOTICE`, `UPGRADES.md`, and operator docs when the contract changes. The application repository owns worker-image publication and VM promotion: merge and green Engine CI are necessary but do not update production by themselves. A reviewed application release must verify the immutable worker digest, and an operator must explicitly promote and reconcile it on the dedicated VM.
 6. Run the verify gate and check for whitespace errors:
 
    ```bash
@@ -104,7 +104,7 @@ When changing skills:
 
 ## Local viewer SPA
 
-`lyrashield view` (inherited from upstream `strix view`) serves a prebuilt web UI whose source lives in `strix/interface/viewer/frontend/` and whose built output lives in `strix/interface/viewer/static/`. Treat both as upstream substrate: viewer changes may enter only through an approved upstream-base update documented in `UPGRADES.md`. Product-specific UI belongs outside `strix/**`; do not edit or commit inherited viewer source or generated output directly.
+`lyrashield view` (inherited from upstream `strix view`) serves a prebuilt web UI whose source lives in `lyrashield/interface/viewer/frontend/` and whose built output is committed under `lyrashield/interface/viewer/static/`. Treat both as upstream substrate: viewer changes may enter only through an approved upstream-base update documented in `UPGRADES.md`. Do not edit or commit inherited viewer source or generated output directly.
 
 When an approved upstream-base update changes the viewer, retain the upstream source and generated output exactly as imported and let the controlled-derivative gate verify the resulting tree.
 
@@ -131,7 +131,7 @@ Artifact schema changes (`run.json`, `vulnerabilities.json`) require coordinated
 
 ## Security hardening
 
-The engine includes a comprehensive security hardening pass (see `AI_AUDIT_REPORT.md` for the full audit and `UPGRADES.md` for the ledger). When contributing changes that touch security-sensitive areas:
+The engine includes a comprehensive security hardening pass (see the [Security hardening pass](UPGRADES.md#security-hardening-pass-2026-08-05) section in `UPGRADES.md` for the full audit and ledger). When contributing changes that touch security-sensitive areas:
 
 - **Trust boundaries:** Do not remove or weaken `[SYSTEM-NOTICE]` or `[SYSTEM-VERIFIED PEER MESSAGE]` tags from the system prompt or message wrapping code. Tags must only be valid at the start of a top-level user message from the platform.
 - **Secret redaction:** Do not bypass `redact_text()` calls in `ReportState.add_vulnerability_report`, `ReportState.update_scan_final_fields`, or `maybe_compact`. PoC script code must always preserve internal paths for reproducibility.

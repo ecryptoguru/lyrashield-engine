@@ -25,7 +25,7 @@ The engine does not add `NET_ADMIN` or `NET_RAW` to sandbox containers by defaul
 
 `STRIX_SANDBOX_ALLOW_HOST_GATEWAY` remains opt-in; do not enable it unless an explicitly authorized local workflow requires `host.docker.internal` access.
 
-Production workers use an isolated remote Docker endpoint (`ssh://` or TLS-protected `tcp://`), never a shared host Docker socket. The sandbox release workflow runs non-root `nmap` and Caido smoke checks for each supported architecture before it publishes the image digest, SPDX SBOM, and signed provenance attestation.
+Production workers use an isolated remote Docker endpoint (`ssh://` or TLS-protected `tcp://`), never a shared host Docker socket. The sandbox release workflow runs non-root `nmap` and Caido smoke checks for each supported architecture before it publishes the image digest, SPDX SBOM, and signed provenance attestation. A separate application release verifies the worker image digest built with this engine; the dedicated VM receives that worker only through an explicit digest promotion and reconciliation, never through a mutable tag.
 
 ## Reconnaissance
 

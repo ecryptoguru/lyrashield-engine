@@ -13,7 +13,7 @@ LyraShield Engine accepts only deployment names recognized as GPT-5.6 Terra or L
 
 Anthropic, Bedrock, Vertex, OpenRouter, Novita, local models, and subscription-backed models outside `chatgpt/*` are unsupported as LLM endpoints and rejected. Perplexity and Parallel are not supported as LLM endpoints. Parallel Search may be used as an optional `web_search` tool when explicitly enabled; see Configuration.
 
-The application worker resolves the preset before spawning the engine: Safe/Quick/Standard use Luna with medium reasoning throughout. Deep/Custom use Terra with medium reasoning for the root coordinator and Luna with medium reasoning for focused child specialists. The route is deterministic: only the root can create or stop specialists, child agents cannot promote themselves or recursively fan out, and Terra retains final cross-file judgment. `LYRASHIELD_LLM` remains the explicit primary fallback; `LYRASHIELD_DELEGATE_LLM` configures the bounded specialist tier.
+The application worker resolves the preset before spawning the engine: Safe/Quick/Standard use Luna with medium reasoning throughout. Deep/Custom use Terra with medium reasoning for the root coordinator and Luna with high reasoning for focused child specialists. The route is deterministic: only the root can create or stop specialists, child agents cannot promote themselves or recursively fan out, and Terra retains final cross-file judgment. `LYRASHIELD_LLM` remains the explicit primary fallback; `LYRASHIELD_DELEGATE_LLM` configures the bounded specialist tier.
 
 <CardGroup cols={2}>
   <Card title="OpenAI-compatible" href="/llm-providers/openai">
