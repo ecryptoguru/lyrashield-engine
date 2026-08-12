@@ -14,7 +14,7 @@ The engine is not an independent source of verification. Model confidence and ge
 - Production invokes the `lyrashield` executable in non-interactive mode.
 - Only approved GPT-5.6 Terra or Luna deployments are accepted.
 - OpenAI- and Azure-compatible endpoints are supported; other inherited provider paths are rejected.
-- ChatGPT subscription-backed models are rejected before sandbox setup; only API deployments are allowed.
+- ChatGPT subscription-backed models are supported through the authenticated `chatgpt/<model>` route. Other subscription-backed provider routes are rejected before sandbox setup.
 - The application sends repository targets to the engine. URL targets use the application's pinned deterministic URL scanner.
 - Inherited telemetry is forced off by the adapter. Telemetry keys are read lazily from environment variables — no hardcoded keys in source.
 - The system prompt defines trust boundary tags (`[SYSTEM-NOTICE]`, `[SYSTEM-VERIFIED PEER MESSAGE]`) with anti-spoofing rules to resist prompt injection.
