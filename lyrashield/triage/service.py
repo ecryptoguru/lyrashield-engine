@@ -127,12 +127,7 @@ def checksum(value: object) -> str:
 def triage_cache_key(input_artifact: TriageInput, *, model_route: str) -> str:
     return checksum(
         {
-            "commitSha": input_artifact.commit_sha,
-            "detectorVersion": input_artifact.detector_version,
-            "ruleVersion": input_artifact.rule_version,
-            "evidenceChecksums": [
-                candidate.evidence_checksum for candidate in input_artifact.candidates
-            ],
+            "inputChecksum": checksum(input_artifact.model_dump(mode="json", by_alias=True)),
             "policyVersion": TRIAGE_POLICY_VERSION,
             "modelRoute": model_route,
         }
@@ -175,7 +170,12 @@ def _triage_prompt(candidate: TriageCandidate, excerpt: str) -> str:
 
 
 async def _request_judgement(
-    *, model: _Model, model_route: str, model_settings: ModelSettings, prompt: str
+    *,
+    model: _Model,
+    model_route: str,
+    model_settings: ModelSettings,
+    prompt: str,
+    limits: TriageLimits,
 ) -> tuple[TriageJudgement, Any]:
     reservation_key = f"ai-triage:{uuid4().hex}"
     hooks = get_active_hooks()
@@ -184,7 +184,7 @@ async def _request_judgement(
             key=reservation_key,
             model=model_route,
             input_tokens=max(1, len(prompt) // 3),
-            max_output_tokens=MAX_OUTPUT_TOKENS,
+            max_output_tokens=limits.max_output_tokens,
         )
     response: Any = None
     try:
@@ -239,7 +239,7 @@ def _terminal_artifact(
     }
 
 
-async def run_triage(  # noqa: PLR0912 - terminal states are the persisted public contract.
+async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persisted public contract.
     input_artifact: TriageInput,
     *,
     model_route: str,
@@ -292,6 +292,19 @@ async def run_triage(  # noqa: PLR0912 - terminal states are the persisted publi
             receipt=receipt,
             llm_usage=ledger.to_record(),
         )
+    prompt_tokens = sum(
+        max(1, len(_triage_prompt(candidate, excerpt)) // 3) for candidate, excerpt in sanitized
+    )
+    if prompt_tokens > limits.max_input_tokens:
+        return _terminal_artifact(
+            status="FAILED",
+            reason="TRIAGE_INPUT_LIMIT_EXCEEDED",
+            model_route=model_route,
+            input_checksum=input_checksum,
+            cache_key=cache_key,
+            receipt=receipt,
+            llm_usage=ledger.to_record(),
+        )
     try:
         if model is None:
             settings = load_settings()
@@ -328,6 +341,7 @@ async def run_triage(  # noqa: PLR0912 - terminal states are the persisted publi
                     model_route=model_route,
                     model_settings=model_settings,
                     prompt=_triage_prompt(candidate, excerpt),
+                    limits=limits,
                 )
             report_state = get_global_report_state()
             if report_state is not None:
@@ -352,10 +366,20 @@ async def run_triage(  # noqa: PLR0912 - terminal states are the persisted publi
             }
 
         try:
-            results = await asyncio.wait_for(
-                asyncio.gather(*(evaluate(candidate, excerpt) for candidate, excerpt in sanitized)),
-                timeout=limits.max_wall_seconds,
-            )
+            tasks = [
+                asyncio.create_task(evaluate(candidate, excerpt))
+                for candidate, excerpt in sanitized
+            ]
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks), timeout=limits.max_wall_seconds
+                )
+            except BaseException:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
         finally:
             if active_hooks is None:
                 set_active_hooks(None)

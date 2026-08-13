@@ -146,3 +146,101 @@ def test_cli_writes_disabled_artifact_without_a_model(tmp_path: Path) -> None:
     artifact = json.loads(output_path.read_text(encoding="utf-8"))
     assert artifact["status"] == "DISABLED"
     assert artifact["results"] == []
+
+
+def test_cli_does_not_reuse_completed_cache_when_triage_is_disabled(tmp_path: Path) -> None:
+    input_path = tmp_path / "candidates.json"
+    output_path = tmp_path / "ai-security-triage.json"
+    cache_dir = tmp_path / "cache"
+    triage_input = _input()
+    input_path.write_text(
+        json.dumps(triage_input.model_dump(mode="json", by_alias=True)), encoding="utf-8"
+    )
+    cache_key = service.triage_cache_key(triage_input, model_route="unconfigured")
+    cache_dir.mkdir()
+    (cache_dir / f"{cache_key}.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": service.TRIAGE_OUTPUT_SCHEMA_VERSION,
+                "status": "COMPLETED",
+                "cacheKey": cache_key,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        run_triage_cli(
+            [
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "DISABLED"
+
+
+def test_cache_key_includes_all_prompt_context() -> None:
+    first = _input()
+    second = first.model_copy(deep=True)
+    second.candidates[0].control_id = "AI-02"
+
+    assert service.triage_cache_key(
+        first, model_route="azure_ai/gpt-5.6-luna"
+    ) != service.triage_cache_key(second, model_route="azure_ai/gpt-5.6-luna")
+
+
+@pytest.mark.asyncio
+async def test_input_limit_prevents_provider_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested = False
+
+    async def fake_request(**_kwargs: object) -> tuple[service.TriageJudgement, object]:
+        nonlocal requested
+        requested = True
+        raise AssertionError("provider request should not be attempted")
+
+    monkeypatch.setattr(service, "_request_judgement", fake_request)
+    artifact = await service.run_triage(
+        _input(),
+        model_route="azure_ai/gpt-5.6-luna",
+        enabled=True,
+        limits=service.TriageLimits(max_input_tokens=1),
+        model=SimpleNamespace(),
+    )
+
+    assert artifact["terminalReason"] == "TRIAGE_INPUT_LIMIT_EXCEEDED"
+    assert requested is False
+
+
+@pytest.mark.asyncio
+async def test_failure_cancels_and_awaits_sibling_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = 0
+    sibling_cancelled = False
+
+    async def fake_request(**_kwargs: object) -> tuple[service.TriageJudgement, object]:
+        nonlocal started, sibling_cancelled
+        started += 1
+        if started == 1:
+            raise ValueError("provider failed")
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            sibling_cancelled = True
+            raise
+        raise AssertionError("sibling request should have been cancelled")
+
+    monkeypatch.setattr(service, "_request_judgement", fake_request)
+    artifact = await service.run_triage(
+        _input(candidates=2),
+        model_route="azure_ai/gpt-5.6-luna",
+        enabled=True,
+        model=SimpleNamespace(),
+    )
+
+    assert artifact["terminalReason"] == "TRIAGE_PROVIDER_UNAVAILABLE"
+    assert sibling_cancelled is True

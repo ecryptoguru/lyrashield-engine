@@ -97,7 +97,7 @@ def run_triage_cli(argv: Sequence[str]) -> int:
 
     cache_key = triage_cache_key(triage_input, model_route=model_route)
     cache_path = args.cache_dir / f"{cache_key}.json" if args.cache_dir else None
-    if cache_path is not None:
+    if args.enabled and cache_path is not None:
         cached = _read_cached(cache_path, cache_key=cache_key)
         if cached is not None:
             write_artifact(args.output, dict(cached))
