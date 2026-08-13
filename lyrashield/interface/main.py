@@ -1238,6 +1238,13 @@ def main() -> None:
 
         sys.exit(run_provider_contract(sys.argv[2:]))
 
+    # Triage is an additive artifact command, not a target scan. It deliberately
+    # bypasses Docker and never touches the deterministic vulnerabilities output.
+    if len(sys.argv) > 1 and sys.argv[1] == "ai-security-triage":
+        from lyrashield.triage.cli import run_triage_cli
+
+        sys.exit(run_triage_cli(sys.argv[2:]))
+
     args = parse_arguments()
 
     if args.config:
