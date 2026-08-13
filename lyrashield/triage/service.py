@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path  # noqa: TC003
@@ -17,7 +18,13 @@ from openai.types.responses import ResponseOutputMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lyrashield.artifacts.state import get_global_report_state
-from lyrashield.lifecycle.hooks import BudgetExceededError, get_active_hooks
+from lyrashield.artifacts.usage import LLMUsageLedger
+from lyrashield.lifecycle.hooks import (
+    BudgetExceededError,
+    ReportUsageHooks,
+    get_active_hooks,
+    set_active_hooks,
+)
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy.loader import load_settings
 from lyrashield.policy.models import StrixProvider, configure_sdk_model_defaults
@@ -59,7 +66,10 @@ class _StrictModel(BaseModel):
 
 
 class TriageCandidate(_StrictModel):
-    finding_identity: str = Field(alias="findingIdentity", min_length=1, max_length=256)
+    # The redacted evidence checksum is deliberately the sole cross-process
+    # identity. Repository paths and application finding IDs never enter the
+    # triage command or its cache.
+    finding_identity: str = Field(alias="findingIdentity", pattern=r"^[a-f0-9]{64}$")
     control_id: str = Field(alias="controlId", min_length=1, max_length=64)
     rule_id: str = Field(alias="ruleId", min_length=1, max_length=128)
     severity: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
@@ -213,6 +223,7 @@ def _terminal_artifact(
     input_checksum: str,
     cache_key: str,
     receipt: dict[str, Any],
+    llm_usage: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "schemaVersion": TRIAGE_OUTPUT_SCHEMA_VERSION,
@@ -223,15 +234,17 @@ def _terminal_artifact(
         "inputChecksum": input_checksum,
         "cacheKey": cache_key,
         "redactionReceipt": receipt,
+        "llmUsage": llm_usage,
         "results": [],
     }
 
 
-async def run_triage(
+async def run_triage(  # noqa: PLR0912 - terminal states are the persisted public contract.
     input_artifact: TriageInput,
     *,
     model_route: str,
     enabled: bool,
+    max_budget_usd: float | None = None,
     limits: TriageLimits | None = None,
     model: _Model | None = None,
 ) -> dict[str, Any]:
@@ -252,6 +265,13 @@ async def run_triage(
         "redactedFieldCounts": redacted_fields,
         "boundedExcerptBytes": limits.max_excerpt_bytes,
     }
+    ledger = LLMUsageLedger()
+    if max_budget_usd is not None and (
+        not isinstance(max_budget_usd, (int, float))
+        or not math.isfinite(max_budget_usd)
+        or max_budget_usd <= 0
+    ):
+        raise ValueError("max_budget_usd must be a finite number greater than 0")
     if not enabled:
         return _terminal_artifact(
             status="DISABLED",
@@ -260,6 +280,7 @@ async def run_triage(
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
+            llm_usage=ledger.to_record(),
         )
     if not model_route.lower().endswith("gpt-5.6-luna"):
         return _terminal_artifact(
@@ -269,6 +290,7 @@ async def run_triage(
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
+            llm_usage=ledger.to_record(),
         )
     try:
         if model is None:
@@ -290,6 +312,14 @@ async def run_triage(
                 prompt_cache=False,
             )
         semaphore = asyncio.Semaphore(min(MAX_CONCURRENCY, limits.max_concurrency))
+        active_hooks = get_active_hooks()
+        triage_hooks = active_hooks or ReportUsageHooks(
+            model=model_route,
+            max_budget_usd=max_budget_usd,
+            max_output_tokens=limits.max_output_tokens,
+        )
+        if active_hooks is None:
+            set_active_hooks(triage_hooks)
 
         async def evaluate(candidate: TriageCandidate, excerpt: str) -> dict[str, Any]:
             async with semaphore:
@@ -307,18 +337,28 @@ async def run_triage(
                     model=model_route,
                     usage=getattr(response, "usage", None),
                 )
+            ledger.record(
+                agent_id="ai-security-triage",
+                agent_name="ai-security-triage",
+                model=model_route,
+                usage=getattr(response, "usage", None),
+            )
             return {
-                "findingIdentity": candidate.finding_identity,
+                "findingIdentity": candidate.evidence_checksum,
                 "disposition": judgement.disposition,
                 "confidence": judgement.confidence,
                 "explanation": redact_text(judgement.explanation)[:MAX_EXPLANATION_CHARS],
                 "evidenceChecksum": candidate.evidence_checksum,
             }
 
-        results = await asyncio.wait_for(
-            asyncio.gather(*(evaluate(candidate, excerpt) for candidate, excerpt in sanitized)),
-            timeout=limits.max_wall_seconds,
-        )
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*(evaluate(candidate, excerpt) for candidate, excerpt in sanitized)),
+                timeout=limits.max_wall_seconds,
+            )
+        finally:
+            if active_hooks is None:
+                set_active_hooks(None)
     except BudgetExceededError:
         return _terminal_artifact(
             status="BUDGET_STOPPED",
@@ -327,6 +367,7 @@ async def run_triage(
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
+            llm_usage=ledger.to_record(),
         )
     except TimeoutError:
         return _terminal_artifact(
@@ -336,6 +377,7 @@ async def run_triage(
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
+            llm_usage=ledger.to_record(),
         )
     except ValidationError:
         return _terminal_artifact(
@@ -345,6 +387,7 @@ async def run_triage(
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
+            llm_usage=ledger.to_record(),
         )
     except (OSError, RuntimeError, ValueError):
         # Provider and content-filter errors remain a bounded overlay state.
@@ -355,6 +398,7 @@ async def run_triage(
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
+            llm_usage=ledger.to_record(),
         )
     return {
         "schemaVersion": TRIAGE_OUTPUT_SCHEMA_VERSION,
@@ -365,6 +409,7 @@ async def run_triage(
         "inputChecksum": input_checksum,
         "cacheKey": cache_key,
         "redactionReceipt": receipt,
+        "llmUsage": ledger.to_record(),
         "results": results,
     }
 
@@ -393,4 +438,5 @@ def invalid_input_artifact(raw_input: str, *, model_route: str) -> dict[str, Any
             "redactedFieldCounts": {},
             "boundedExcerptBytes": MAX_EXCERPT_BYTES,
         },
+        llm_usage=LLMUsageLedger().to_record(),
     )

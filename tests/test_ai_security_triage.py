@@ -25,7 +25,7 @@ def _input(*, candidates: int = 1) -> service.TriageInput:
             "ruleVersion": "rules/1",
             "candidates": [
                 {
-                    "findingIdentity": f"finding-{index}",
+                    "findingIdentity": "b" * 64,
                     "controlId": "AI-01",
                     "ruleId": "unsafe-log",
                     "severity": "MEDIUM",
@@ -74,7 +74,7 @@ async def test_triage_accepts_only_structured_additive_overlay(
     assert artifact["status"] == "COMPLETED"
     assert artifact["results"] == [
         {
-            "findingIdentity": "finding-0",
+            "findingIdentity": "b" * 64,
             "disposition": "NEEDS_REVIEW",
             "confidence": 0.7,
             "explanation": "Bounded review needed",

@@ -38,7 +38,22 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--cache-dir", type=Path, help="Private cache directory for redacted artifacts"
     )
     parser.add_argument("--enabled", action="store_true", help="Allow paid-scan triage execution")
+    parser.add_argument(
+        "--max-budget-usd",
+        type=_positive_budget,
+        help="Remaining protected scan budget available to triage",
+    )
     return parser.parse_args(argv)
+
+
+def _positive_budget(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("budget must be a number") from error
+    if not (parsed > 0 and parsed < 1_000):
+        raise argparse.ArgumentTypeError("budget must be greater than 0 and less than 1000")
+    return parsed
 
 
 def _luna_model_route() -> str:
@@ -89,7 +104,12 @@ def run_triage_cli(argv: Sequence[str]) -> int:
             return 0
 
     artifact = asyncio.run(
-        run_triage(triage_input, model_route=model_route, enabled=bool(args.enabled))
+        run_triage(
+            triage_input,
+            model_route=model_route,
+            enabled=bool(args.enabled),
+            max_budget_usd=args.max_budget_usd,
+        )
     )
     write_artifact(args.output, artifact)
     if cache_path is not None and artifact["status"] == "COMPLETED":
