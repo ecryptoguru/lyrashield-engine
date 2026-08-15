@@ -566,6 +566,12 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             committed = max(observed, self._committed_cost_floor)
             reserved = sum(self._reservations.values())
             if committed + reserved + reservation > self._max_budget_usd:
+                # Interactive scans pause for a budget extension rather than
+                # hard-stopping; non-interactive scans stop immediately.
+                if self._interactive:
+                    raise BudgetPausedError(
+                        f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
+                    )
                 raise BudgetExceededError(
                     f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
                 )
@@ -764,6 +770,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 committed = max(observed, self._committed_cost_floor)
                 reserved = sum(self._reservations.values())
                 if committed + reserved + reservation > self._max_budget_usd:
+                    if self._interactive:
+                        raise BudgetPausedError(
+                            f"Next bounded request would exceed ${self._max_budget_usd:.2f} "
+                            f"(spent ${committed:.4f}); pausing until the user continues"
+                        )
                     raise BudgetExceededError(
                         f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
                     )

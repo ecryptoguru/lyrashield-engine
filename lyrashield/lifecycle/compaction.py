@@ -10,13 +10,16 @@ pairing so the trimmed history is still valid provider input.
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from litellm.exceptions import BadRequestError, ContextWindowExceededError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
+from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.lifecycle.sessions import replace_session_items, session_write_lock
 from lyrashield.policy.models import StrixProvider
@@ -340,6 +343,28 @@ async def _summarize(
         prompt_cache=False,
         extra_headers=llm.extra_headers,
     ).resolve(ModelSettings(max_tokens=max_tokens))
+    # Reserve against the scan budget before this out-of-band model call.
+    # Compaction queries the model directly (not through an agent run), so the
+    # reservation hooks never see it. Without this the tokens vanish entirely for
+    # GPT-5.6 (the LiteLLM cost callback early-returns) and a scan near its cap
+    # can overshoot by up to a full context-window input per compaction per agent.
+    # Mirrors the dedupe pattern in artifacts/dedupe.py.
+    from lyrashield.lifecycle.hooks import (
+        BudgetExceededError,
+        BudgetPausedError,
+        get_active_hooks,
+    )
+
+    hooks = get_active_hooks()
+    reservation_key = f"compaction:{uuid4().hex}"
+    if hooks is not None:
+        await hooks.reserve_out_of_band_request(
+            key=reservation_key,
+            model=model,
+            input_tokens=max(1, math.ceil(len(prompt) / 3.5)),
+            max_output_tokens=max_tokens,
+        )
+    response: ModelResponse | None = None
     try:
         response = await model_provider.get_model(model).get_response(
             system_instructions=None,
@@ -353,9 +378,34 @@ async def _summarize(
             conversation_id=None,
             prompt=None,
         )
+    except (BudgetExceededError, BudgetPausedError):
+        # A budget rejection from the reservation is not a generic compaction
+        # failure — it must propagate so the interactive pause handler (or the
+        # non-interactive budget stop) sees it. Re-raise unchanged.
+        raise
     except Exception:
         logger.exception("compaction summary call failed for model %s", model)
         return None
+    finally:
+        # Always release: a failed request must not strand its reservation and
+        # shrink the remaining budget for the rest of the scan.
+        if hooks is not None:
+            await hooks.release_out_of_band_request(
+                key=reservation_key,
+                model=model,
+                usage=response.usage if response is not None else None,
+            )
+    report_state = get_global_report_state()
+    if report_state is not None and response is not None:
+        try:
+            report_state.record_sdk_usage(
+                agent_id="compaction",
+                agent_name="compaction",
+                model=model,
+                usage=response.usage,
+            )
+        except Exception:
+            logger.exception("failed to record SDK usage for compaction")
     content = _extract_text(response).strip()
     if not content:
         logger.warning("compaction summary returned no content")

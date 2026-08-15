@@ -629,6 +629,9 @@ async def check_duplicate(
             "reason": "No exact deterministic report identity matched",
         }
 
+    # Lazy import avoids the lifecycle-hooks/artifact-state import cycle.
+    from lyrashield.lifecycle.hooks import BudgetExceededError
+
     try:
         settings = load_settings()
         dedupe = settings.dedupe
@@ -690,6 +693,11 @@ async def check_duplicate(
             result["reason"][:100],
         )
 
+    except BudgetExceededError:
+        # Propagate the budget-stop signal instead of swallowing it as a
+        # dedupe failure. Fail-open dedupe is defensible, but consuming the
+        # budget-stop here lets a scan silently overshoot max_budget_usd.
+        raise
     except Exception as e:
         logger.exception("Error during vulnerability deduplication check")
         return {
