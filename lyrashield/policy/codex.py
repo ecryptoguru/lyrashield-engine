@@ -342,13 +342,13 @@ def get_valid_token() -> tuple[str, str]:
     guard if near expiry."""
     record = read_record()
     if record is None:
-        raise CodexAuthError("not_authenticated", "not signed in; run: strix auth login")
+        raise CodexAuthError("not_authenticated", "not signed in; run: lyrashield auth login")
     if not _near_expiry(record):
         return record["access"], record["account_id"]
     with _refresh_guard():
         record = read_record()
         if record is None:
-            raise CodexAuthError("not_authenticated", "not signed in; run: strix auth login")
+            raise CodexAuthError("not_authenticated", "not signed in; run: lyrashield auth login")
         if not _near_expiry(record):
             return record["access"], record["account_id"]
         try:

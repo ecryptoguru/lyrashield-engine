@@ -819,7 +819,7 @@ async def run_strix_scan(
     except RateLimitError as exc:
         logger.warning(
             "Scan %s stopped: persistent rate limit from the LLM provider (%s). "
-            "Resume with 'strix --resume %s' once the limit clears.",
+            "Resume with 'lyrashield --resume %s' once the limit clears.",
             scan_id,
             exc,
             scan_id,
