@@ -24,6 +24,7 @@ from agents.tool import (
 )
 from pydantic import ValidationError
 
+from lyrashield.agents import overrides as _product_overrides
 from lyrashield.agents.prompt import render_system_prompt
 from lyrashield.tools.finish.tool import finish_scan
 from lyrashield.tools.output_store import bound_and_store, bound_text
@@ -585,8 +586,27 @@ def register_tool_override(name: str, tool: Tool) -> None:
     logger.info("Registered tool override: %s", key)
 
 
+def resolve_product_overrides() -> None:
+    """Materialize registrations the product entry point deferred.
+
+    The entry point queues loader callables (see ``lyrashield.agents.overrides``)
+    instead of importing the product tool modules at CLI startup; resolving
+    runs those loaders, performing the deferred imports. Safe to call
+    repeatedly: draining empties the queues and already-resolved names are
+    skipped, so this is also the recovery path when a registration lands
+    after this module was first imported.
+    """
+    for name, load in _product_overrides.drain_tool_override_loaders().items():
+        if name not in _TOOL_OVERRIDES:
+            register_tool_override(name, load())
+    for policy_name, policy_load in _product_overrides.drain_model_policy_loaders().items():
+        if policy_name not in _MODEL_POLICY:
+            register_model_policy(policy_name, policy_load())
+
+
 def _apply_tool_overrides(tools: list[Tool]) -> list[Tool]:
     """Replace any tool whose name is registered as an override."""
+    resolve_product_overrides()
     if not _TOOL_OVERRIDES:
         return tools
     updated: list[Tool] = []
@@ -617,6 +637,8 @@ def register_model_policy(name: str, fn: Callable[..., Any]) -> None:
 
 
 def _model_policy(name: str, *args: Any, default: Any = False, **kwargs: Any) -> Any:
+    if name not in _MODEL_POLICY:
+        resolve_product_overrides()
     if name in _MODEL_POLICY:
         return _MODEL_POLICY[name](*args, **kwargs)
     return default
@@ -771,3 +793,11 @@ def make_child_factory(
         )
 
     return _factory
+
+
+# Materialize anything the product entry point registered before this module
+# was first imported. The loaders' target modules are already imported by this
+# module's own top-level imports, so resolving here adds no import cost; the
+# call is idempotent, and later registrations are picked up by
+# ``resolve_product_overrides`` at build time.
+resolve_product_overrides()
