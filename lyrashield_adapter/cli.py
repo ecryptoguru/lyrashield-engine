@@ -257,6 +257,31 @@ def _run_upstream() -> None:
     product_main()
 
 
+# Subcommands dispatched inside ``lyrashield.interface.main.main`` that never
+# build a scan agent. They must not pay the tool-override import cost.
+_NON_SCAN_SUBCOMMANDS = frozenset(
+    {
+        "view",
+        "auth",
+        "provider-contract",
+        "ai-security-triage",
+    }
+)
+
+
+def _is_scan_invocation(argv: list[str]) -> bool:
+    """Return True when this invocation will build scan agents.
+
+    Tool overrides, skills, and the model policy are only consumed by
+    ``build_strix_agent`` on the scan path. The viewer, auth, provider-contract,
+    and triage subcommands exit before any agent exists, so registering the
+    ~25 tool overrides for them is pure startup cost. ``--version``/``-v`` are
+    already short-circuited in ``main`` before this runs.
+    """
+    first = argv[0] if argv else ""
+    return first not in _NON_SCAN_SUBCOMMANDS
+
+
 def main() -> None:
     if sys.argv[1:] in (["--version"], ["-v"]):
         print(f"lyrashield {get_version()}")  # noqa: T201
@@ -265,9 +290,10 @@ def main() -> None:
         # Caller-supplied env vars must win over a local .env file.
         load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
     prepare_environment()
-    _register_lyrashield_skills()
-    _register_lyrashield_tool_overrides()
-    _register_lyrashield_model_policy()
+    if _is_scan_invocation(sys.argv[1:]):
+        _register_lyrashield_skills()
+        _register_lyrashield_tool_overrides()
+        _register_lyrashield_model_policy()
     _run_upstream()
 
 
