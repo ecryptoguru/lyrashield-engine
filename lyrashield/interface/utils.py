@@ -973,7 +973,7 @@ def _resolve_repo_diff_scope(
 
     if _is_repo_shallow(repo_path):
         raise ValueError(
-            "Strix requires full git history for diff-scope. Please set fetch-depth: 0 "
+            "LyraShield requires full git history for diff-scope. Please set fetch-depth: 0 "
             "in your CI config."
         )
 
@@ -1116,7 +1116,7 @@ def resolve_diff_scope_context(
 def _is_http_git_repo(url: str) -> bool:
     check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
     try:
-        resp = requests.get(check_url, headers={"User-Agent": "git/strix"}, timeout=10)
+        resp = requests.get(check_url, headers={"User-Agent": "git/lyrashield"}, timeout=10)
     except (requests.RequestException, ValueError):
         return False
     if resp.status_code >= 400:
@@ -1479,7 +1479,7 @@ def _print_clone_error(console: Console, message: str) -> None:
     error_text.append(f"{message}\n", style="white")
     panel = Panel(
         error_text,
-        title="[bold white]STRIX",
+        title="[bold white]LYRASHIELD",
         title_align="left",
         border_style="red",
         padding=(1, 2),
@@ -1564,7 +1564,7 @@ def clone_repository(
 
         panel = Panel(
             error_text,
-            title="[bold white]STRIX",
+            title="[bold white]LYRASHIELD",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -1582,7 +1582,7 @@ def clone_repository(
 
         panel = Panel(
             error_text,
-            title="[bold white]STRIX",
+            title="[bold white]LYRASHIELD",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -1603,13 +1603,13 @@ def check_docker_connection() -> Any:
         error_text.append("\n\n", style="white")
         error_text.append("Cannot connect to Docker daemon.\n", style="white")
         error_text.append(
-            "Please ensure Docker Desktop is installed and running, and try running strix again.\n",
+            "Please ensure Docker Desktop is installed and running, and try running lyrashield again.\n",
             style="white",
         )
 
         panel = Panel(
             error_text,
-            title="[bold white]STRIX",
+            title="[bold white]LYRASHIELD",
             title_align="left",
             border_style="red",
             padding=(1, 2),

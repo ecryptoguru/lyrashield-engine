@@ -1,5 +1,5 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
-"""`strix auth` — ChatGPT subscription sign-in (login / status / logout).
+"""`lyrashield auth` — ChatGPT subscription sign-in (login / status / logout).
 
 Signing in only stores OAuth tokens (``~/.strix/subscription-auth.json``); model
 selection stays with ``STRIX_LLM``. A ``chatgpt/<model>`` STRIX_LLM runs on the
@@ -44,18 +44,18 @@ _CALLBACK_TIMEOUT_S = 300
 LOGIN_PROVIDER = "chatgpt"
 _ACCEPTED_PROVIDERS = frozenset({LOGIN_PROVIDER, codex.PROVIDER})
 
-_USAGE = "Usage:\n  strix auth login chatgpt [--manual]\n  strix auth status\n  strix auth logout"
+_USAGE = "Usage:\n  lyrashield auth login chatgpt [--manual]\n  lyrashield auth status\n  lyrashield auth logout"
 
 
 def run_auth(argv: list[str]) -> int:
-    """Entry point for ``strix auth …``. Returns a process exit code."""
+    """Entry point for ``lyrashield auth …``. Returns a process exit code."""
     console = Console()
     if is_lyrashield_product() and not is_chatgpt_subscription_allowed():
         console.print(
             "[bold red]LyraShield does not support ChatGPT subscription authentication.[/]"
         )
         return 1
-    # Bare `strix auth` (no subcommand) defaults to login.
+    # Bare `lyrashield auth` (no subcommand) defaults to login.
     subcommand = argv[0] if argv else "login"
     rest = argv[1:]
 
@@ -78,7 +78,7 @@ def run_auth(argv: list[str]) -> int:
 
 
 def _login(console: Console, argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="strix auth login", add_help=True)
+    parser = argparse.ArgumentParser(prog="lyrashield auth login", add_help=True)
     parser.add_argument(
         "provider",
         nargs="?",
@@ -256,7 +256,7 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
 def _status(console: Console) -> int:
     record = codex.read_record()
     if record is None:
-        console.print("[yellow]Not signed in.[/] Run [cyan]strix auth login chatgpt[/] to sign in.")
+        console.print("[yellow]Not signed in.[/] Run [cyan]lyrashield auth login chatgpt[/] to sign in.")
         return 1
     settings = load_settings()
     console.print("[green]Signed in[/] with a ChatGPT subscription.")
@@ -286,7 +286,7 @@ def _fail(console: Console, exc: codex.CodexAuthError) -> int:
     console.print(
         Panel(
             error_text,
-            title="[bold white]STRIX",
+            title="[bold white]LYRASHIELD",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -308,12 +308,12 @@ def _print_success(console: Console) -> None:
     text.append(") — runs are billed to your ChatGPT plan.", style="white")
     text.append("\n\n", style="white")
     text.append("Run a scan as usual, e.g. ", style="white")
-    text.append("strix --target https://example.com", style="bold cyan")
+    text.append("lyrashield --target https://example.com", style="bold cyan")
     console.print()
     console.print(
         Panel(
             text,
-            title="[bold white]STRIX",
+            title="[bold white]LYRASHIELD",
             title_align="left",
             border_style="#22c55e",
             padding=(1, 2),
@@ -326,11 +326,11 @@ _LOGO_PATH = Path(__file__).resolve().parent / "viewer" / "static" / "logo.png"
 
 
 def _logo_img_tag() -> str:
-    """Return an ``<img>`` for the Strix logo as an inline data URI, or "".
+    """Return an ``<img>`` for the LyraShield logo as an inline data URI, or "".
 
     The callback page is served offline by the local OAuth server, so the logo
     is embedded rather than linked. Missing/unreadable file degrades to just the
-    "Strix" wordmark.
+    "LyraShield" wordmark.
     """
     try:
         data = _LOGO_PATH.read_bytes()
@@ -347,7 +347,7 @@ def _render_callback_html() -> str:
 _CALLBACK_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Strix — signed in</title>
+<title>LyraShield — signed in</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -401,26 +401,26 @@ _CALLBACK_HTML = """<!doctype html>
   .close { margin: 24px 0 0; color: #5a5a5a; font-size: .78rem; text-align: center; }
 </style></head>
 <body>
-  <a class="topbar" href="https://strix.ai" target="_blank" rel="noopener"
-     aria-label="Strix — strix.ai">
+  <a class="topbar" href="https://lyrashieldai.com" target="_blank" rel="noopener"
+     aria-label="LyraShield — lyrashieldai.com">
     <!--LOGO-->
-    <span>Strix</span>
+    <span>LyraShield</span>
   </a>
-  <div class="brand">Strix</div>
+  <div class="brand">LyraShield</div>
   <h1>You're signed in</h1>
   <main class="card">
     <div class="badge">✓</div>
-    <p class="msg">Strix is connected to your ChatGPT subscription. Head back to your
+    <p class="msg">LyraShield is connected to your ChatGPT subscription. Head back to your
       terminal — your security test runs there.</p>
     <div class="rule"></div>
     <p class="tagline">Autonomous AI hackers that <b>find and fix</b> your app's
       vulnerabilities.</p>
     <nav class="links">
-      <a href="https://strix.ai" target="_blank" rel="noopener">strix.ai</a>
+      <a href="https://lyrashieldai.com" target="_blank" rel="noopener">lyrashieldai.com</a>
       <span class="dot">·</span>
-      <a href="https://docs.strix.ai" target="_blank" rel="noopener">docs</a>
+      <a href="https://lyrashieldai.com/docs" target="_blank" rel="noopener">docs</a>
       <span class="dot">·</span>
-      <a href="https://discord.gg/strix-ai" target="_blank" rel="noopener">community</a>
+      <a href="https://lyrashieldai.com/support" target="_blank" rel="noopener">support</a>
     </nav>
   </main>
   <p class="close">You can close this tab.</p>
