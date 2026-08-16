@@ -336,8 +336,18 @@ async def run_strix_scan(
         scan_id,
         image=image,
         local_sources=local_sources or [],
+        targets=list(scan_config.get("targets") or []),
     )
     logger.info("Sandbox ready for scan %s", scan_id)
+
+    if bundle.get("default_scope_id"):
+        report_state = get_global_report_state()
+        if report_state is not None:
+            report_state.run_record["proxy_default_scope"] = {
+                "id": bundle["default_scope_id"],
+                "name": "authorized-targets",
+                "allowlist": bundle.get("default_scope_allowlist") or [],
+            }
 
     sandbox_session = bundle["session"]
 
