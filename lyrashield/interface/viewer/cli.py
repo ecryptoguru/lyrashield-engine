@@ -1,4 +1,4 @@
-"""`strix view [<run>]` command: serve a run's viewer UI locally."""
+"""`lyrashield view [<run>]` command: serve a run's viewer UI locally."""
 
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 
 def run_view(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(
-        prog="strix view",
-        description="Open a local web view of a Strix run (live or finished).",
+        prog="lyrashield view",
+        description="Open a local web view of a LyraShield run (live or finished).",
     )
     parser.add_argument(
         "run",

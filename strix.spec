@@ -169,6 +169,22 @@ hiddenimports = [
     'lyrashield.interface.tui.renderers',
     'lyrashield.interface.viewer.server',
     'lyrashield.skills',
+    # The agent factory imports these product tool/utility modules at top level
+    # (and the deferred-registration override queue in agents/overrides.py is
+    # drained by the factory at import time). PyInstaller's static analysis
+    # cannot see them through the factory, so they must be bundled explicitly
+    # or the packaged binary crashes on startup with ModuleNotFoundError
+    # (empty `--help`, exit 1).
+    'lyrashield.agents.overrides',
+    'lyrashield.utils.redaction',
+    'lyrashield.tools.finish.tool',
+    'lyrashield.tools.output_store',
+    'lyrashield.tools.proxy.tools',
+    'lyrashield.tools.reporting.tool',
+    'lyrashield.tools.respond.tool',
+    'lyrashield.tools.todo.tools',
+    'lyrashield.tools.web_search.tool',
+    'lyrashield.tools.agents_graph.tools',
 ]
 
 hiddenimports += collect_submodules('textual')
