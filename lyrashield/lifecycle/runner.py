@@ -303,15 +303,26 @@ async def run_strix_scan(
         await coordinator.restore(snap)
         report_state = get_global_report_state()
         if report_state is not None:
+            hydrated_cost = report_state.get_total_llm_cost()
             budget_stopped, reserve_stopped = recomputed_budget_flags(
-                report_state.get_total_llm_cost(),
+                hydrated_cost,
                 max_budget_usd,
                 interactive=interactive,
+            )
+            # A fresh process resets ``coordinator.budget_paused`` to False even
+            # when the prior run ended budget-paused (the pause is raised via
+            # BudgetPausedError and may never reach the snapshot). Recompute the
+            # pause from the hydrated cost so an interactive resume that is
+            # already at/over budget starts paused and lets the user extend it,
+            # instead of immediately re-spending.
+            budget_paused = interactive and (
+                coordinator.budget_paused
+                or (max_budget_usd is not None and hydrated_cost >= max_budget_usd)
             )
             await coordinator.reset_budget_stops(
                 budget_stopped=budget_stopped,
                 reserve_stopped=reserve_stopped,
-                budget_paused=interactive and coordinator.budget_paused,
+                budget_paused=budget_paused,
             )
         for aid, parent in coordinator.parent_of.items():
             if parent is None:
