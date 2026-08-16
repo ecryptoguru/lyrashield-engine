@@ -204,9 +204,11 @@ async def _create_default_scope(
     """Create the default authorized-targets Caido scope before the agent starts.
 
     Returns ``(scope_id, allowlist)``; ``(None, None)`` when there are no
-    network targets. A creation failure is logged but non-fatal: the scope
-    focuses the agent's proxy view, while the replay egress guard is the
-    enforced control and stays active regardless.
+    network targets OR when scope creation fails. A creation failure is logged
+    but non-fatal: the scope focuses the agent's proxy view, while the replay
+    egress guard is the enforced control and stays active regardless. On
+    failure both values are None so a caller never sees an allowlist without
+    its scope id.
     """
     if not authorized_hosts:
         return None, None
@@ -222,7 +224,7 @@ async def _create_default_scope(
             "Failed to create default Caido scope for scan %s; replay egress guard remains active",
             scan_id,
         )
-        return None, allowlist
+        return None, None
     scope_id = str(getattr(scope, "id", "") or "") or None
     logger.info(
         "Default Caido scope for scan %s created (id=%s, allowlist=%s)",
