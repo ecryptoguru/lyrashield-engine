@@ -195,11 +195,11 @@ class SplashScreen(Static):  # type: ignore[misc]
         return text
 
     def _build_url_text(self) -> Text:
-        return Text("strix.ai", style=Style(color=self.PRIMARY_GREEN, bold=True))
+        return Text("lyrashieldai.com", style=Style(color=self.PRIMARY_GREEN, bold=True))
 
     def _build_welcome_text(self) -> Text:
         text = Text("Welcome to ", style=Style(color="white", bold=True))
-        text.append("Strix", style=Style(color=self.PRIMARY_GREEN, bold=True))
+        text.append("LyraShield", style=Style(color=self.PRIMARY_GREEN, bold=True))
         text.append("!", style=Style(color="white", bold=True))
         return text
 
@@ -210,7 +210,7 @@ class SplashScreen(Static):  # type: ignore[misc]
         return Text("Open-source AI hackers for your apps", style=Style(color="white", dim=True))
 
     def _build_start_line_text(self, phase: int) -> Text:
-        full_text = "Starting Strix Agent"
+        full_text = "Starting LyraShield Agent"
         text_len = len(full_text)
 
         shine_pos = phase % (text_len + 8)
@@ -236,7 +236,7 @@ class SplashScreen(Static):  # type: ignore[misc]
 class HelpScreen(ModalScreen):  # type: ignore[misc]
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label("Strix Help", id="help_title"),
+            Label("LyraShield Help", id="help_title"),
             Label(
                 "F1        Help\nCtrl+Q/C  Quit\nESC       Stop Agent\n"
                 "Enter     Send message to agent\nTab       Switch panels\n↑/↓       Navigate tree",
@@ -728,7 +728,7 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
 class QuitScreen(ModalScreen):  # type: ignore[misc]
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label("Quit Strix?", id="quit_title"),
+            Label("Quit LyraShield?", id="quit_title"),
             Grid(
                 Button("Yes", variant="error", id="quit"),
                 Button("No", variant="default", id="cancel"),
@@ -980,7 +980,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             self.call_after_refresh(self._focus_agents_tree)
 
     def on_mount(self) -> None:
-        self.title = "strix"
+        self.title = "lyrashield"
 
         self.set_timer(4.5, self._hide_splash_screen)
 
