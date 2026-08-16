@@ -603,3 +603,11 @@ subscription support, which was enabled in PR #58 but still described as
 - `docs/usage/instructions.mdx`: updated the instruction constraint from
   "enable ChatGPT subscription models" to "change the configured ChatGPT
   subscription policy."
+
+## LyraShield PR — fix(sandbox): default-on resource caps + authorized-target egress scope (2026-08-16)
+
+Sandbox isolation posture change (founder-pinned values).
+
+- **Resource caps are now default-on**, mirroring the log-limit pattern: `mem_limit=2g`, `shm_size=512m` (Chromium/headless tools OOM on docker's 64m `/dev/shm` default), `cpus=2`, `pids_limit=512`. Previously these were opt-in and unset meant docker's unbounded default — a fork bomb or memory hog inside an autonomous agent's container could exhaust the host and take down co-located scans. Each `STRIX_SANDBOX_*` knob still overrides the default; the explicit opt-out tokens `0`/`off`/`none`/`unlimited` restore docker's unbounded default for that knob; an unparseable value falls back to the pinned default, never to unbounded. The effective resolved cap set is logged at container create (`sandbox caps: …`) so "was this scan bounded?" is answerable from logs.
+- **Authorized-target egress scope**: at sandbox bring-up the engine now derives the scan's authorized network hosts from `targets_info` (URL + IP targets), creates a default `authorized-targets` Caido scope from them before the agent starts (recorded on the run record as `proxy_default_scope`), and registers the hosts with the replay egress guard. The replay path blocks RFC1918/loopback space by default — reachable only toward an authorized target or when `STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS=1` is explicitly set. Cloud-metadata and link-local blocks remain unconditional. Repositories and local source trees are not network destinations and produce no egress hosts.
+- Docs: `docs/tools/sandbox.mdx` and `docs/advanced/configuration.mdx` document the new cap table, default-on posture, and escape hatches.

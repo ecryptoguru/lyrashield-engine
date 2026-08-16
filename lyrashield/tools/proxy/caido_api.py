@@ -54,6 +54,60 @@ _LINK_LOCAL_NETWORKS: tuple[ipaddress.IPv4Network, ipaddress.IPv6Network] = (
     ipaddress.IPv4Network("169.254.0.0/16"),
     ipaddress.IPv6Network("fe80::/10"),
 )
+# Private-range guard for REPLAY traffic only (the Caido GraphQL endpoint
+# itself legitimately lives on loopback). Without this, an agent could pivot
+# from an authorized public target into RFC1918/loopback internal space.
+_PRIVATE_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+    ipaddress.IPv4Network("127.0.0.0/8"),
+    ipaddress.IPv6Network("::1/128"),
+    ipaddress.IPv6Network("fc00::/7"),
+)
+_PRIVATE_EGRESS_OPT_IN_ENV = "STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS"
+_AUTHORIZED_TARGET_HOSTS: set[str] = set()
+
+
+def set_authorized_target_hosts(hosts: set[str]) -> None:
+    """Register the current scan's authorized target hosts.
+
+    Replay to a private-range host is allowed only when that host is an
+    authorized target (e.g. an internal staging scan) or the operator has
+    explicitly opted in via ``STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS``.
+    """
+    _AUTHORIZED_TARGET_HOSTS.clear()
+    _AUTHORIZED_TARGET_HOSTS.update(h.lower().rstrip(".") for h in hosts if h)
+
+
+def _private_egress_opt_in() -> bool:
+    return os.environ.get(_PRIVATE_EGRESS_OPT_IN_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _private_range_block_reason(hostname: str) -> str | None:
+    """Return a block reason when replay targets private space it may not reach."""
+    if _private_egress_opt_in():
+        return None
+    hostname = hostname.lower().rstrip(".")
+    if hostname in _AUTHORIZED_TARGET_HOSTS:
+        return None
+    for raw in _resolve_hostname_ips(hostname):
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if any(ip in net for net in _PRIVATE_NETWORKS):
+            return (
+                f"private-range address {ip} (not an authorized target; set "
+                f"{_PRIVATE_EGRESS_OPT_IN_ENV}=1 to allow)"
+            )
+    return None
+
+
 _BLOCKED_METADATA_HOSTS = frozenset(
     {"metadata.google.internal", "metadata.google.internal.", "metadata.google", "metadata.google."}
 )
@@ -100,13 +154,16 @@ def _check_replay_url_host(url: str) -> str | None:
     try:
         ip = ipaddress.ip_address(hostname)
     except ValueError:
-        return None
-    if ip in _BLOCKED_METADATA_IPS:
-        return f"cloud metadata IP {ip}"
-    for net in _LINK_LOCAL_NETWORKS:
-        if ip in net:
-            return f"link-local address {ip}"
-    return None
+        ip = None
+    if ip is not None:
+        if ip in _BLOCKED_METADATA_IPS:
+            return f"cloud metadata IP {ip}"
+        for net in _LINK_LOCAL_NETWORKS:
+            if ip in net:
+                return f"link-local address {ip}"
+    # Private-range guard also resolves DNS names, so a hostname that points
+    # into RFC1918/loopback space is caught the same way as a literal IP.
+    return _private_range_block_reason(hostname)
 
 
 def caido_url() -> str:
