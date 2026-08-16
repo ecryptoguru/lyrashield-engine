@@ -1163,9 +1163,9 @@ requires-dist = [
     { name = "cvss", specifier = ">=3.2" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
-    { name = "litellm", specifier = "==1.90.1" },
+    { name = "litellm", specifier = "~=1.90" },
     { name = "openai", specifier = ">=2.48.0,<2.49" },
-    { name = "openai-agents", extras = ["litellm"], git = "https://github.com/openai/openai-agents-python.git?rev=f663a06aea23c859be8e8555c005ac912bd58337" },
+    { name = "openai-agents", extras = ["litellm"], specifier = ">=0.19.0,<0.20" },
     { name = "pydantic", specifier = ">=2.11.3" },
     { name = "pydantic-settings", specifier = ">=2.13.0" },
     { name = "pypdf", marker = "extra == 'viewer'", specifier = ">=5.0" },
@@ -1511,8 +1511,8 @@ wheels = [
 
 [[package]]
 name = "openai-agents"
-version = "0.18.3"
-source = { git = "https://github.com/openai/openai-agents-python.git?rev=f663a06aea23c859be8e8555c005ac912bd58337#f663a06aea23c859be8e8555c005ac912bd58337" }
+version = "0.19.4"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "griffelib" },
     { name = "mcp" },
@@ -1521,6 +1521,10 @@ dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },
     { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ff/ea/a8cae2dadf798f369be5f9cb544a169f5f6aecc096a80f1a209dddc4c00f/openai_agents-0.19.4.tar.gz", hash = "sha256:fe21778ee1e8216c9cdb775fa86d11b08be68c0184e14023993088d3f812c0be", size = 5784063, upload-time = "2026-08-05T02:59:12.939Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/d8/98925e1e4888e58d7694ba71af2ba93b94540f481c45ee8b7f7be7e30fcd/openai_agents-0.19.4-py3-none-any.whl", hash = "sha256:12e0372fae9698fe6f78e05aaeb4ccdb229602f7ef99b8195a7d68dc82869f51", size = 968498, upload-time = "2026-08-05T02:59:11.191Z" },
 ]
 
 [package.optional-dependencies]

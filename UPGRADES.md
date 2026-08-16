@@ -603,3 +603,30 @@ subscription support, which was enabled in PR #58 but still described as
 - `docs/usage/instructions.mdx`: updated the instruction constraint from
   "enable ChatGPT subscription models" to "change the configured ChatGPT
   subscription policy."
+
+## LyraShield PR — chore(deps): move openai-agents to a released range and litellm to a compatible release pin (2026-08-16)
+
+Dependency-policy change (ENG finding: the structural pins blocked Dependabot
+and `uv` from picking up security fixes).
+
+- `openai-agents` was pinned to git SHA `f663a06`. That SHA was a PRE-RELEASE
+  commit of the 0.19 line — its package metadata still reported 0.18.3, but the
+  PyPI 0.18.3 wheel lacks `ProgrammaticToolCallingTool`, which the engine
+  imports. It is now `>=0.19.0,<0.20` resolved from PyPI (currently 0.19.4,
+  hash-pinned in uv.lock), so patch releases in the 0.19 line flow through a
+  lock refresh without re-deriving a SHA pin. The 0.x SDK reserves minor
+  versions for breaking changes, hence the `<0.20` ceiling.
+- `litellm==1.90.1` (exact pin) is now `~=1.90` (>=1.90, <2.0). Resolution is
+  unchanged today (still 1.90.1) but 1.x security releases can flow through
+  `uv lock` refreshes.
+- Historical reason for the original SHA pin: the engine depends on
+  SDK-internal seams (Docker sandbox create-container signature, usage
+  serialization shapes) that moved between releases; the pin froze them while
+  the controlled-derivative work stabilized. `assert_sdk_docker_compatibility`
+  still fails fast at scan time if the private hook changes.
+- Re-review cadence: re-run the full engine gate (`scripts/verify-controlled-derivative.sh`)
+  and a live Standard/Luna scan against an approved target whenever a
+  `uv lock` refresh moves either dependency, and before any ceiling lift
+  (`openai-agents>=0.20` or `litellm>=2`, or the openai `<2.49` cap — the
+  last is tracked by Dependabot PR #73 and needs a manual LLM-path regression
+  first).
