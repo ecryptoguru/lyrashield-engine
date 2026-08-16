@@ -181,8 +181,12 @@ class AgentCoordinator:
         async with self._lock:
             self._budget_stopped = budget_stopped
             self._reserve_stopped = reserve_stopped
+            # ``budget_paused`` is authoritative: it both preserves a pause
+            # restored from a snapshot and asserts one re-derived from the
+            # hydrated ledger (a fresh process can resume a run that ended at
+            # its budget without the persisted flag surviving).
+            self._budget_paused = budget_paused
             if not budget_paused:
-                self._budget_paused = False
                 for aid, status in self.statuses.items():
                     if status == "budget_paused":
                         self.statuses[aid] = "waiting"

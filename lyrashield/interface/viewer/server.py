@@ -129,7 +129,7 @@ class _ViewerState:
         self.base_dir = run_dir.parent
         # Set only when the viewer runs inside a live scan process (the TUI
         # launcher), which can deliver a message to a running agent. Absent for
-        # standalone ``strix view`` / finished runs, so steering is unavailable.
+        # standalone ``lyrashield view`` / finished runs, so steering is unavailable.
         self.steer_handler = steer_handler
         # Unguessable per-process capability. It is minted here, printed/opened
         # for the operator who started the server (see ``authorized_url``), and
@@ -146,7 +146,7 @@ class _ViewerState:
 
 def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
     class ViewerHandler(BaseHTTPRequestHandler):
-        server_version = "StrixViewer/1.0"
+        server_version = "LyraShieldViewer/1.0"
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             logger.debug("viewer %s - %s", self.address_string(), format % args)
@@ -588,12 +588,12 @@ def serve(
     build the operator link that authorizes the browser.
 
     Binds an ephemeral port by default. If a fixed ``port`` is requested but in
-    use, falls back to an ephemeral port. Reused by both the ``strix view``
+    use, falls back to an ephemeral port. Reused by both the ``lyrashield view``
     command and the in-TUI launcher; callers own the server's lifetime.
 
     ``steer_handler`` is supplied only by the in-TUI launcher, which runs inside
     the live scan process and can forward a message to a running agent. Left
-    ``None`` (standalone ``strix view``), steering is reported unavailable.
+    ``None`` (standalone ``lyrashield view``), steering is reported unavailable.
     """
     assets_dir = bundle_dir()
     state = _ViewerState(run_dir=run_dir, assets_dir=assets_dir, steer_handler=steer_handler)
