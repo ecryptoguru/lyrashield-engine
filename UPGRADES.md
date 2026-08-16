@@ -637,3 +637,22 @@ and `uv` from picking up security fixes).
   (`openai-agents>=0.20` or `litellm>=2`, or the openai `<2.49` cap — the
   last is tracked by Dependabot PR #73 and needs a manual LLM-path regression
   first).
+## LyraShield PR — test: pin the agent SDK seams in a contract test (2026-08-16)
+
+`tests/test_sdk_seam_contract.py` turns the dependency-range policy above into
+a CI-enforced contract:
+
+- Every `agents.*` symbol the product imports is inventoried **dynamically from
+  the source tree** (AST walk over `lyrashield/**` + `lyrashield_adapter/**`)
+  and asserted to exist on the pinned SDK — new imports are covered
+  automatically, and a lock refresh that drops a symbol fails here with the
+  exact missing names instead of at scan time.
+- The private Docker adapter seam (`DockerSandboxClient._create_container`
+  signature) is pinned alongside the runtime `assert_sdk_docker_compatibility`
+  check the worker depends on.
+- The usage-serialization round-trip the billing ledger relies on
+  (`serialize_usage`/`deserialize_usage`) is pinned explicitly.
+
+This complements — not replaces — the re-review cadence above: the full gate
+plus a live Standard/Luna scan remain required before promoting a worker image
+on a moved SDK.
