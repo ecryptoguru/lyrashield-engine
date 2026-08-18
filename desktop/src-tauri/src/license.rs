@@ -68,30 +68,37 @@ impl From<ed25519_dalek::ed25519::Error> for LicenseError {
     }
 }
 
-/// The signed license payload.
+/// The signed license payload — mirrors the TypeScript `LicensePayload` in
+/// packages/licenses/src/types.ts. Field names use camelCase + serde rename
+/// so the canonical JSON matches the server's `signLicense()` output exactly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LicensePayload {
-    /// Unique license id (used for revocation checks).
-    pub license_id: String,
-    /// Customer / seat name.
-    pub name: String,
-    /// Unix timestamp (seconds) the license was issued.
-    pub issued_at: u64,
-    /// Unix timestamp (seconds) after which newer updates are refused.
+    /// SKU identifier (e.g. "individual_launch", "team_perpetual").
+    #[serde(rename = "sku")]
+    pub sku: String,
+    /// Number of seats purchased.
+    #[serde(rename = "seatCount")]
+    pub seat_count: u32,
+    /// Machine IDs that have activated this license.
+    #[serde(rename = "machineIds")]
+    pub machine_ids: Vec<String>,
+    /// ISO 8601 timestamp after which newer updates are refused.
     /// The app keeps running (perpetual fallback) but won't apply updates.
-    pub update_eligible_until: u64,
-    /// Last build number this license is eligible for.
-    pub last_eligible_build: u64,
+    #[serde(rename = "updateEligibleUntil")]
+    pub update_eligible_until: String,
+    /// Last build this license is eligible for (null = no build pin).
+    #[serde(rename = "perpetualFallbackBuild")]
+    pub perpetual_fallback_build: Option<String>,
 }
 
 /// The license info returned to the webview.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicenseInfo {
-    pub license_id: String,
-    pub name: String,
-    pub issued_at: u64,
-    pub update_eligible_until: u64,
-    pub last_eligible_build: u64,
+    pub sku: String,
+    pub seat_count: u32,
+    pub machine_ids: Vec<String>,
+    pub update_eligible_until: String,
+    pub perpetual_fallback_build: Option<String>,
     pub revoked: bool,
 }
 
@@ -157,20 +164,23 @@ pub fn is_revoked(license_id: &str, revocation_list: &[RevocationEntry]) -> bool
 
 /// Activate a license from a base64 blob. Verifies the signature, checks the
 /// revocation list, and caches the blob in the OS keychain.
-pub fn activate(blob_b64: &str) -> Result<LicenseInfo, LicenseError> {
+/// `license_id` is provided by the server (not in the signed payload) and
+/// used for revocation checks.
+pub fn activate(blob_b64: &str, license_id: &str) -> Result<LicenseInfo, LicenseError> {
     let payload = verify_blob(blob_b64, BUNDLED_PUBKEY_HEX)?;
     let revocations = bundled_revocation_list();
-    if is_revoked(&payload.license_id, &revocations) {
+    if is_revoked(license_id, &revocations) {
         return Err(LicenseError::Revoked);
     }
-    // Cache the signed blob in the keychain (offline grace).
+    // Cache the signed blob + license ID in the keychain (offline grace).
     keychain::set_license_cache(blob_b64).map_err(LicenseError::from)?;
+    keychain::set("lyrashield-local", "license-id", license_id).map_err(LicenseError::from)?;
     Ok(LicenseInfo {
-        license_id: payload.license_id,
-        name: payload.name,
-        issued_at: payload.issued_at,
+        sku: payload.sku,
+        seat_count: payload.seat_count,
+        machine_ids: payload.machine_ids,
         update_eligible_until: payload.update_eligible_until,
-        last_eligible_build: payload.last_eligible_build,
+        perpetual_fallback_build: payload.perpetual_fallback_build,
         revoked: false,
     })
 }
@@ -186,8 +196,10 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
         }),
         Some(blob) => {
             let payload = verify_blob(&blob, BUNDLED_PUBKEY_HEX)?;
+            // License ID is cached separately (not in the signed payload).
+            let license_id = keychain::get("lyrashield-local", "license-id").unwrap_or_default().unwrap_or_default();
             let revocations = bundled_revocation_list();
-            if is_revoked(&payload.license_id, &revocations) {
+            if !license_id.is_empty() && is_revoked(&license_id, &revocations) {
                 return Ok(LicenseStatus {
                     active: false,
                     info: None,
@@ -197,11 +209,11 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
             Ok(LicenseStatus {
                 active: true,
                 info: Some(LicenseInfo {
-                    license_id: payload.license_id,
-                    name: payload.name,
-                    issued_at: payload.issued_at,
+                    sku: payload.sku,
+                    seat_count: payload.seat_count,
+                    machine_ids: payload.machine_ids,
                     update_eligible_until: payload.update_eligible_until,
-                    last_eligible_build: payload.last_eligible_build,
+                    perpetual_fallback_build: payload.perpetual_fallback_build,
                     revoked: false,
                 }),
                 message: "License active (offline grace).".into(),
@@ -210,15 +222,65 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
     }
 }
 
-/// Perpetual fallback: given a cached license and a candidate build number,
+/// Perpetual fallback: given a cached license and a candidate build version,
 /// return whether the update should be applied. Refuses newer builds after
-/// `update_eligible_until` but never deactivates the running app.
-pub fn should_accept_update(info: &LicenseInfo, now: u64, build: u64) -> bool {
+/// `update_eligible_until` expires but never deactivates the running app.
+/// `now` is a Unix timestamp (seconds). `build_version` is the target version string.
+pub fn should_accept_update(info: &LicenseInfo, now: u64, build_version: &str) -> bool {
+    // Parse updateEligibleUntil (ISO 8601) to a Unix timestamp.
+    let eligible = parse_iso_to_unix(&info.update_eligible_until).unwrap_or(0);
     // After the eligibility window, refuse newer builds.
-    if now > info.update_eligible_until {
-        return build <= info.last_eligible_build;
+    if now > eligible {
+        // Allow if the build matches or is older than the perpetual fallback build.
+        if let Some(fallback) = &info.perpetual_fallback_build {
+            return build_version <= fallback.as_str();
+        }
+        return false;
     }
     true
+}
+
+/// Parse an ISO 8601 timestamp to a Unix timestamp (seconds).
+fn parse_iso_to_unix(iso: &str) -> Option<u64> {
+    // Simple parser: handle "YYYY-MM-DDTHH:MM:SS.sssZ" format.
+    // For production, use a proper datetime crate; this is sufficient for
+    // the license check which only needs second-level precision.
+    let ts = iso.strip_suffix('Z').unwrap_or(iso);
+    // Try parsing with chrono-like manual extraction.
+    // Format: 2026-08-18T12:00:00.000
+    let parts: Vec<&str> = ts.split('T').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let date_parts: Vec<&str> = parts[0].split('-').collect();
+    let time_parts: Vec<&str> = parts[1].split(':').collect();
+    if date_parts.len() != 3 || time_parts.len() < 2 {
+        return None;
+    }
+    let year: u64 = date_parts[0].parse().ok()?;
+    let month: u64 = date_parts[1].parse().ok()?;
+    let day: u64 = date_parts[2].parse().ok()?;
+    let hour: u64 = time_parts[0].parse().ok()?;
+    let min: u64 = time_parts[1].parse().ok()?;
+    let sec: u64 = if time_parts.len() > 2 {
+        time_parts[2].split('.').next()?.parse().ok()?
+    } else {
+        0
+    };
+    // Approximate Unix timestamp (not accounting for leap seconds).
+    // Days from epoch (1970-01-01) to the given date.
+    let days_since_epoch = days_from_civil(year as i32, month as i32, day as i32);
+    Some((days_since_epoch as u64) * 86400 + hour * 3600 + min * 60 + sec)
+}
+
+/// Convert civil date to days since 1970-01-01 (Howard Hinnant's algorithm).
+fn days_from_civil(y: i32, m: i32, d: i32) -> i32 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as i32;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
 }
 
 #[cfg(test)]
@@ -228,21 +290,20 @@ mod tests {
     use ed25519_dalek::{SigningKey, Signer};
     use rand::rngs::OsRng;
 
-    fn mint_license(pubkey_hex: &str) -> (String, SigningKey) {
+    fn mint_license(_pubkey_hex: &str) -> (String, SigningKey) {
         let mut rng = OsRng;
         let signing_key = SigningKey::generate(&mut rng);
         let payload = LicensePayload {
-            license_id: "test-license-1".into(),
-            name: "Test User".into(),
-            issued_at: 1_000_000,
-            update_eligible_until: 2_000_000,
-            last_eligible_build: 100,
+            sku: "individual_launch".into(),
+            seat_count: 1,
+            machine_ids: vec!["machine-1".into()],
+            update_eligible_until: "2036-01-01T00:00:00.000Z".into(),
+            perpetual_fallback_build: Some("1.0.0".into()),
         };
         let payload_bytes = serde_json::to_vec(&payload).unwrap();
         let signature = signing_key.sign(&payload_bytes);
         let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&payload_bytes);
         let sig_b64 = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
-        let _ = pubkey_hex; // pubkey_hex is used by the caller for verification
         (format!("{payload_b64}.{sig_b64}"), signing_key)
     }
 
@@ -255,7 +316,8 @@ mod tests {
         let (blob, signing_key) = mint_license("");
         let pubkey_hex = pubkey_hex_for(&signing_key);
         let payload = verify_blob(&blob, &pubkey_hex).expect("valid signature should verify");
-        assert_eq!(payload.license_id, "test-license-1");
+        assert_eq!(payload.sku, "individual_launch");
+        assert_eq!(payload.seat_count, 1);
     }
 
     #[test]
@@ -283,37 +345,31 @@ mod tests {
 
     #[test]
     fn test_revoked_license() {
-        let payload = LicensePayload {
-            license_id: "revoked-1".into(),
-            name: "x".into(),
-            issued_at: 1,
-            update_eligible_until: 999_999_999,
-            last_eligible_build: 1,
-        };
         let revocations = vec![RevocationEntry {
             license_id: "revoked-1".into(),
             reason: "fraud".into(),
         }];
-        assert!(is_revoked(&payload.license_id, &revocations));
+        assert!(is_revoked("revoked-1", &revocations));
+        assert!(!is_revoked("not-revoked", &revocations));
     }
 
     #[test]
     fn test_perpetual_fallback_refuses_newer_after_window() {
         let info = LicenseInfo {
-            license_id: "x".into(),
-            name: "x".into(),
-            issued_at: 1,
-            update_eligible_until: 1000,
-            last_eligible_build: 50,
+            sku: "individual_launch".into(),
+            seat_count: 1,
+            machine_ids: vec![],
+            update_eligible_until: "2000-01-01T00:00:00.000Z".into(), // expired
+            perpetual_fallback_build: Some("1.0.0".into()),
             revoked: false,
         };
-        // Before the window: accept any build.
-        assert!(should_accept_update(&info, 500, 999));
-        // After the window: refuse newer builds.
-        assert!(!should_accept_update(&info, 2000, 60));
-        // After the window: accept builds <= last eligible (perpetual fallback).
-        assert!(should_accept_update(&info, 2000, 50));
-        assert!(should_accept_update(&info, 2000, 40));
+        // Before the window (1999): accept any build.
+        assert!(should_accept_update(&info, 915148800, "2.0.0")); // 1999-01-01
+        // After the window (2020): refuse newer builds.
+        assert!(!should_accept_update(&info, 1577836800, "2.0.0")); // 2020-01-01
+        // After the window: accept builds <= perpetual fallback (1.0.0).
+        assert!(should_accept_update(&info, 1577836800, "1.0.0"));
+        assert!(should_accept_update(&info, 1577836800, "0.9.0"));
     }
 
     #[test]
@@ -324,18 +380,17 @@ mod tests {
 
     #[test]
     fn test_expired_update_window_still_runs() {
-        // The perpetual fallback never deactivates — status() should still
-        // return active for a cached license even after the update window.
-        // (This is a logic check; the keychain is not exercised here.)
+        // The perpetual fallback never deactivates — should_accept_update
+        // should still accept old builds even after the update window.
         let info = LicenseInfo {
-            license_id: "x".into(),
-            name: "x".into(),
-            issued_at: 1,
-            update_eligible_until: 1,
-            last_eligible_build: 1,
+            sku: "individual_launch".into(),
+            seat_count: 1,
+            machine_ids: vec![],
+            update_eligible_until: "2000-01-01T00:00:00.000Z".into(), // expired
+            perpetual_fallback_build: Some("1.0.0".into()),
             revoked: false,
         };
         // After window with an old build: still accepted.
-        assert!(should_accept_update(&info, 9_999_999, 1));
+        assert!(should_accept_update(&info, 9_999_999_999, "1.0.0"));
     }
 }

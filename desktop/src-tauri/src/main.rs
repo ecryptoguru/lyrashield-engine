@@ -17,7 +17,7 @@ mod updater;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Global scan state shared across Tauri commands.
 pub struct AppState {
@@ -56,7 +56,7 @@ async fn scan_stop() -> Result<(), String> {
 
 #[tauri::command]
 async fn doctor_run() -> Result<docker_detect::DoctorReport, String> {
-    docker_detect::run_doctor().await
+    Ok(docker_detect::run_doctor().await)
 }
 
 #[tauri::command]
@@ -70,8 +70,8 @@ async fn keychain_get(service: String, key: String) -> Result<Option<String>, St
 }
 
 #[tauri::command]
-async fn license_activate(blob_b64: String) -> Result<license::LicenseInfo, String> {
-    license::activate(&blob_b64).map_err(|e| e.to_string())
+async fn license_activate(blob_b64: String, license_id: String) -> Result<license::LicenseInfo, String> {
+    license::activate(&blob_b64, &license_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
