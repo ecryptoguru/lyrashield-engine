@@ -233,11 +233,53 @@ pub fn should_accept_update(info: &LicenseInfo, now: u64, build_version: &str) -
     if now > eligible {
         // Allow if the build matches or is older than the perpetual fallback build.
         if let Some(fallback) = &info.perpetual_fallback_build {
-            return build_version <= fallback.as_str();
+            // Numeric-segment semver comparison (mirrors packages/licenses/src/verify.ts
+            // compareVersions). A plain string compare is WRONG: "1.10.0" <= "1.2.0"
+            // is false lexicographically but true semantically, and "1.2.0-hotfix" > "1.2.0".
+            return compare_versions(build_version, fallback) <= 0;
         }
         return false;
     }
     true
+}
+
+/// Numeric-segment semver comparison: returns Ordering (Less/Equal/Greater).
+///
+/// Mirrors packages/licenses/src/verify.ts `compareVersions`. Pre-release tags
+/// like "1.2.0-beta" are stripped before comparison. Non-numeric segments fall
+/// back to lexicographic comparison for that segment (matching the TS side).
+fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    // Strip pre-release suffixes ("1.2.0-beta" -> "1.2.0").
+    let clean_a = a.split('-').next().unwrap_or(a);
+    let clean_b = b.split('-').next().unwrap_or(b);
+    let pa: Vec<&str> = clean_a.split('.').collect();
+    let pb: Vec<&str> = clean_b.split('.').collect();
+    let len = pa.len().max(pb.len());
+    for i in 0..len {
+        let na = pa.get(i).copied().unwrap_or("0");
+        let nb = pb.get(i).copied().unwrap_or("0");
+        match (na.parse::<u64>(), nb.parse::<u64>()) {
+            (Ok(va), Ok(vb)) => {
+                if va < vb {
+                    return Ordering::Less;
+                }
+                if va > vb {
+                    return Ordering::Greater;
+                }
+            }
+            _ => {
+                // Non-numeric segment: fall back to lexicographic comparison.
+                if na < nb {
+                    return Ordering::Less;
+                }
+                if na > nb {
+                    return Ordering::Greater;
+                }
+            }
+        }
+    }
+    Ordering::Equal
 }
 
 /// Parse an ISO 8601 timestamp to a Unix timestamp (seconds).
@@ -392,5 +434,31 @@ mod tests {
         };
         // After window with an old build: still accepted.
         assert!(should_accept_update(&info, 9_999_999_999, "1.0.0"));
+    }
+
+    #[test]
+    fn test_perpetual_fallback_numeric_version_compare() {
+        // Regression for the lexicographic-string-comparison bug: "1.10.0" is
+        // semantically newer than "1.2.0" (10 > 2), but "1.10.0" < "1.2.0"
+        // lexicographically. A user entitled to fallback build "1.10.0" must be
+        // allowed to run it even after the update window — a string compare
+        // would wrongly refuse it.
+        let info = LicenseInfo {
+            sku: "individual_launch".into(),
+            seat_count: 1,
+            machine_ids: vec![],
+            update_eligible_until: "2000-01-01T00:00:00.000Z".into(), // expired
+            perpetual_fallback_build: Some("1.10.0".into()),
+            revoked: false,
+        };
+        let after_window = 1_577_836_800u64; // 2020-01-01
+        assert!(should_accept_update(&info, after_window, "1.10.0")); // exactly the fallback
+        assert!(should_accept_update(&info, after_window, "1.9.0")); // older
+        assert!(should_accept_update(&info, after_window, "1.2.0")); // older (2 < 10)
+        assert!(!should_accept_update(&info, after_window, "1.11.0")); // newer
+        assert!(!should_accept_update(&info, after_window, "2.0.0")); // newer
+        // Pre-release tags are stripped: "1.10.0-hotfix" (numerically 1.10.0) is
+        // the fallback build, accepted.
+        assert!(should_accept_update(&info, after_window, "1.10.0-hotfix"));
     }
 }
