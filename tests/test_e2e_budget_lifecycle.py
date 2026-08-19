@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import types
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lyrashield.lifecycle import execution
+import lyrashield.tools.todo.tools as todo_tools
+import strix.tools.notes.tools as notes_tools
+from lyrashield.lifecycle import execution, runner
 from lyrashield.lifecycle.agents import AgentCoordinator, WaitKind
 from lyrashield.lifecycle.execution import _start_child_runner, run_agent_loop
 from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
 from lyrashield.lifecycle.sessions import open_agent_session
+from lyrashield.runtime import session_manager
 
 
 if TYPE_CHECKING:
@@ -370,3 +375,177 @@ async def test_interactive_budget_pause_then_user_message_extends_and_resumes(
         await root_task
 
     root_session.close()
+
+
+class _ResumeLedger(_FakeLedger):
+    """Report-state stand-in covering the runner's resume bookkeeping."""
+
+    def __init__(self, cost: float) -> None:
+        super().__init__()
+        self.cost = cost
+        self.run_record: dict[str, Any] = {}
+
+    def save_run_data(self) -> None:
+        return
+
+    def set_terminal_reason(self, _reason: str) -> None:
+        return
+
+
+def _patch_resume_scaffold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ledger: _ResumeLedger
+) -> None:
+    """Stub the runner around its resume bookkeeping and stop at run_agent_loop."""
+    monkeypatch.setattr(runner, "run_dir_for", lambda _scan_id: tmp_path)
+    monkeypatch.setattr(runner, "runtime_state_dir", lambda _run_dir: tmp_path)
+    monkeypatch.setattr(runner, "setup_scan_logging", lambda _run_dir: lambda: None)
+    monkeypatch.setattr(runner, "set_scan_id", lambda _scan_id: None)
+
+    settings = types.SimpleNamespace(
+        llm=types.SimpleNamespace(
+            model="openai/gpt-4o",
+            reasoning_effort="high",
+            force_required_tool_choice=False,
+            timeout=300,
+            prompt_cache=True,
+            extra_headers=None,
+        ),
+        runtime=types.SimpleNamespace(max_context_images=3),
+    )
+    monkeypatch.setattr(runner, "load_settings", lambda: settings)
+    monkeypatch.setattr(runner, "configure_sdk_model_defaults", lambda _settings: None)
+    monkeypatch.setattr(runner, "uses_chat_completions_tool_schema", lambda _m, _s: False)
+    monkeypatch.setattr(
+        runner, "prompt_cache_options_for_model", lambda _m: {"mode": "explicit", "ttl": "30m"}
+    )
+
+    monkeypatch.setattr(todo_tools, "hydrate_todos_from_disk", lambda _state_dir: None)
+    monkeypatch.setattr(notes_tools, "hydrate_notes_from_disk", lambda _state_dir: None)
+
+    async def _create_or_reuse(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"client": object(), "session": object(), "caido_client": None}
+
+    async def _cleanup(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(session_manager, "create_or_reuse", _create_or_reuse)
+    monkeypatch.setattr(session_manager, "cleanup", _cleanup)
+
+    monkeypatch.setattr(runner, "get_global_report_state", lambda: ledger)
+    monkeypatch.setattr(runner, "build_root_task", lambda _scan_config: "task")
+    monkeypatch.setattr(runner, "build_scope_context", lambda _scan_config: {})
+    monkeypatch.setattr(runner, "make_model_settings", lambda *_a, **_k: {})
+    monkeypatch.setattr(runner, "build_strix_agent", lambda **_k: object())
+    monkeypatch.setattr(runner, "make_child_factory", lambda **_k: lambda **_k2: object())
+    monkeypatch.setattr(runner, "open_agent_session", lambda _rid, _db, **_k: object())
+
+    async def _run_agent_loop(**_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(runner, "run_agent_loop", _run_agent_loop)
+
+
+def _resume_snapshot(*, budget_paused: bool) -> dict[str, Any]:
+    return {
+        # A persisted pause parks the agent; a stale-flag resume left it
+        # waiting when the prior process exited.
+        "statuses": {"root": "budget_paused" if budget_paused else "waiting"},
+        "parent_of": {"root": None},
+        "names": {"root": "root"},
+        "metadata": {"root": {"task": "", "skills": []}},
+        "pending_counts": {"root": 0},
+        "budget_stopped": False,
+        "reserve_stopped": False,
+        "budget_paused": budget_paused,
+    }
+
+
+def _write_resume_state(tmp_path: Path, snapshot: dict[str, Any]) -> None:
+    (tmp_path / "agents.json").write_text(json.dumps(snapshot), encoding="utf-8")
+    (tmp_path / "agents.db").write_bytes(b"")
+
+
+@pytest.mark.asyncio
+async def test_interactive_resume_at_budget_starts_paused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh-process interactive resume at 100% budget must start paused.
+
+    The persisted pause flag can be stale (the prior process may have exited
+    before asserting it), so the pause is re-derived from the hydrated ledger.
+    """
+    _write_resume_state(tmp_path, _resume_snapshot(budget_paused=False))
+    ledger = _ResumeLedger(cost=MAX_BUDGET)
+    _patch_resume_scaffold(monkeypatch, tmp_path, ledger)
+    coordinator = AgentCoordinator()
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-at-budget",
+        image="img",
+        coordinator=coordinator,
+        interactive=True,
+        max_budget_usd=MAX_BUDGET,
+        resume=True,
+        cleanup_on_exit=False,
+    )
+
+    assert coordinator.budget_paused is True
+    # The stubbed loop "completed" the root; the pause flag — which makes the
+    # user's first message extend the budget — is what the fix asserts.
+    assert coordinator.statuses["root"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_interactive_resume_of_persisted_pause_stays_paused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snapshot that persisted the pause must not auto-extend on resume.
+
+    Resuming must not silently extend the budget; a user message is what lifts
+    the pause (and extends the budget), matching the in-session contract.
+    """
+    _write_resume_state(tmp_path, _resume_snapshot(budget_paused=True))
+    ledger = _ResumeLedger(cost=MAX_BUDGET)
+    _patch_resume_scaffold(monkeypatch, tmp_path, ledger)
+    coordinator = AgentCoordinator()
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-paused",
+        image="img",
+        coordinator=coordinator,
+        interactive=True,
+        max_budget_usd=MAX_BUDGET,
+        resume=True,
+        cleanup_on_exit=False,
+    )
+
+    assert coordinator.budget_paused is True
+    assert coordinator.statuses["root"] == "budget_paused"
+    # No budget_extended nudge was injected by the resume itself.
+    assert coordinator.runtimes["root"].mailbox == []
+
+
+@pytest.mark.asyncio
+async def test_interactive_resume_below_budget_does_not_pause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resume with budget headroom starts unpaused, as before."""
+    _write_resume_state(tmp_path, _resume_snapshot(budget_paused=False))
+    ledger = _ResumeLedger(cost=1.0)
+    _patch_resume_scaffold(monkeypatch, tmp_path, ledger)
+    coordinator = AgentCoordinator()
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-headroom",
+        image="img",
+        coordinator=coordinator,
+        interactive=True,
+        max_budget_usd=MAX_BUDGET,
+        resume=True,
+        cleanup_on_exit=False,
+    )
+
+    assert coordinator.budget_paused is False

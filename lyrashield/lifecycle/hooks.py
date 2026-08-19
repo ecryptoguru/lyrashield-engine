@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import json
 import logging
 import math
@@ -306,6 +307,19 @@ def _history_groups(items: list[Any]) -> list[list[Any]]:
     return groups
 
 
+# Content-keyed memo for full-payload token estimates. BPE tokenization is not
+# additive across items (tokenizing the concatenated payload differs from the
+# sum of per-item tokenizations), so the only way to keep estimates numerically
+# identical while avoiding redundant work is to cache each computed estimate
+# under a digest of its exact inputs. This removes the repeated re-estimation
+# of unchanged content: the post-compaction estimate that matches the last
+# binary-search candidate, repeated ``on_llm_start`` calls over an unchanged
+# history (retries, duplicate hook invocations), and re-entry from compaction.
+# Bounded so a long scan cannot grow it without limit.
+_ESTIMATE_CACHE_MAX_ENTRIES = 512
+_estimate_cache: dict[tuple[str, str], int] = {}
+
+
 def _estimate_input_tokens(
     model: str,
     system_prompt: str | None,
@@ -327,13 +341,24 @@ def _estimate_input_tokens(
         separators=(",", ":"),
     )
     bare_model = model.strip().lower().split("/")[-1]
+    cache_key = (
+        bare_model,
+        hashlib.blake2b(payload.encode("utf-8", "surrogatepass")).hexdigest(),
+    )
+    cached = _estimate_cache.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         counter = cast(Callable[..., int], litellm.token_counter)  # noqa: TC006
         token_count = int(counter(model=bare_model, text=payload))
     except Exception:  # noqa: BLE001
         # UTF-8 bytes are a conservative ceiling for BPE token count.
         token_count = len(payload.encode("utf-8"))
-    return token_count + 4_096
+    token_count += 4_096
+    if len(_estimate_cache) >= _ESTIMATE_CACHE_MAX_ENTRIES:
+        _estimate_cache.clear()
+    _estimate_cache[cache_key] = token_count
+    return token_count
 
 
 def _compact_input_items(

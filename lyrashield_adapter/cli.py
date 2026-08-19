@@ -6,11 +6,13 @@ import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import TYPE_CHECKING, get_args, get_origin
+from typing import TYPE_CHECKING, cast, get_args, get_origin
 
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
+    from collections.abc import Callable, MutableMapping
+
+    from agents.tool import Tool
 
 from pydantic import AliasChoices, BaseModel
 
@@ -172,83 +174,74 @@ def _register_lyrashield_skills() -> None:
     register_skill_dir(Path(__file__).resolve().parents[1] / "lyrashield" / "skills")
 
 
+# Product tool overrides, mapped as override name -> (module, attribute). The
+# modules are imported only when an override is actually resolved (the scan
+# path), so non-scan subcommands (auth, view, provider-contract) never pay
+# for the product toolset imports at CLI startup.
+_TOOL_OVERRIDE_SPECS: dict[str, tuple[str, str]] = {
+    "agent_finish": ("lyrashield.tools.agents_graph.tools", "agent_finish"),
+    "create_agent": ("lyrashield.tools.agents_graph.tools", "create_agent"),
+    "send_message_to_agent": ("lyrashield.tools.agents_graph.tools", "send_message_to_agent"),
+    "stop_agent": ("lyrashield.tools.agents_graph.tools", "stop_agent"),
+    "view_agent_graph": ("lyrashield.tools.agents_graph.tools", "view_agent_graph"),
+    "wait_for_agents": ("lyrashield.tools.agents_graph.tools", "wait_for_agents"),
+    "web_search": ("lyrashield.tools.web_search.tool", "web_search"),
+    "respond_to_user": ("lyrashield.tools.respond.tool", "respond_to_user"),
+    "list_requests": ("lyrashield.tools.proxy.tools", "list_requests"),
+    "view_request": ("lyrashield.tools.proxy.tools", "view_request"),
+    "repeat_request": ("lyrashield.tools.proxy.tools", "repeat_request"),
+    "list_sitemap": ("lyrashield.tools.proxy.tools", "list_sitemap"),
+    "view_sitemap_entry": ("lyrashield.tools.proxy.tools", "view_sitemap_entry"),
+    "scope_rules": ("lyrashield.tools.proxy.tools", "scope_rules"),
+    "create_vulnerability_report": (
+        "lyrashield.tools.reporting.tool",
+        "create_vulnerability_report",
+    ),
+    "create_dependency_report": (
+        "lyrashield.tools.reporting.tool",
+        "create_dependency_report",
+    ),
+    "list_reports": ("lyrashield.tools.reporting.tool", "list_reports"),
+    "get_report": ("lyrashield.tools.reporting.tool", "get_report"),
+    "create_todo": ("lyrashield.tools.todo.tools", "create_todo"),
+    "list_todos": ("lyrashield.tools.todo.tools", "list_todos"),
+    "update_todo": ("lyrashield.tools.todo.tools", "update_todo"),
+    "mark_todo_done": ("lyrashield.tools.todo.tools", "mark_todo_done"),
+    "mark_todo_pending": ("lyrashield.tools.todo.tools", "mark_todo_pending"),
+    "delete_todo": ("lyrashield.tools.todo.tools", "delete_todo"),
+}
+
+
 def _register_lyrashield_tool_overrides() -> None:
-    from lyrashield.agents.factory import register_tool_override  # noqa: PLC0415
-    from lyrashield.tools.agents_graph.tools import (  # noqa: PLC0415
-        agent_finish,
-        create_agent,
-        send_message_to_agent,
-        stop_agent,
-        view_agent_graph,
-        wait_for_agents,
-    )
-    from lyrashield.tools.proxy.tools import (  # noqa: PLC0415
-        list_requests,
-        list_sitemap,
-        repeat_request,
-        scope_rules,
-        view_request,
-        view_sitemap_entry,
-    )
-    from lyrashield.tools.reporting.tool import (  # noqa: PLC0415
-        create_dependency_report,
-        create_vulnerability_report,
-        get_report,
-        list_reports,
-    )
-    from lyrashield.tools.respond.tool import (  # noqa: PLC0415
-        respond_to_user as lyra_respond_to_user,
-    )
-    from lyrashield.tools.todo.tools import (  # noqa: PLC0415
-        create_todo,
-        delete_todo,
-        list_todos,
-        mark_todo_done,
-        mark_todo_pending,
-        update_todo,
-    )
-    from lyrashield.tools.web_search.tool import (  # noqa: PLC0415
-        web_search as lyra_web_search,
+    from importlib import import_module  # noqa: PLC0415
+
+    from lyrashield.agents.overrides import (  # noqa: PLC0415
+        register_tool_override_loader,
     )
 
-    register_tool_override("agent_finish", agent_finish)
-    register_tool_override("create_agent", create_agent)
-    register_tool_override("send_message_to_agent", send_message_to_agent)
-    register_tool_override("stop_agent", stop_agent)
-    register_tool_override("view_agent_graph", view_agent_graph)
-    register_tool_override("wait_for_agents", wait_for_agents)
+    def _loader(module_name: str, attr: str) -> Callable[[], Tool]:
+        def _load() -> Tool:
+            return cast("Tool", getattr(import_module(module_name), attr))
 
-    register_tool_override("web_search", lyra_web_search)
-    register_tool_override("respond_to_user", lyra_respond_to_user)
+        return _load
 
-    register_tool_override("list_requests", list_requests)
-    register_tool_override("view_request", view_request)
-    register_tool_override("repeat_request", repeat_request)
-    register_tool_override("list_sitemap", list_sitemap)
-    register_tool_override("view_sitemap_entry", view_sitemap_entry)
-    register_tool_override("scope_rules", scope_rules)
-    register_tool_override("create_vulnerability_report", create_vulnerability_report)
-    register_tool_override("create_dependency_report", create_dependency_report)
-    register_tool_override("list_reports", list_reports)
-    register_tool_override("get_report", get_report)
-    register_tool_override("create_todo", create_todo)
-    register_tool_override("list_todos", list_todos)
-    register_tool_override("update_todo", update_todo)
-    register_tool_override("mark_todo_done", mark_todo_done)
-    register_tool_override("mark_todo_pending", mark_todo_pending)
-    register_tool_override("delete_todo", delete_todo)
+    for name, (module_name, attr) in _TOOL_OVERRIDE_SPECS.items():
+        register_tool_override_loader(name, _loader(module_name, attr))
 
 
 def _register_lyrashield_model_policy() -> None:
-    from lyrashield.agents.factory import register_model_policy  # noqa: PLC0415
-    from lyrashield.policy.models import (  # noqa: PLC0415
-        model_supports_programmatic_tool_calling,
+    from lyrashield.agents.overrides import (  # noqa: PLC0415
+        register_model_policy_loader,
     )
 
-    register_model_policy(
-        "model_supports_programmatic_tool_calling",
-        model_supports_programmatic_tool_calling,
-    )
+    def _load() -> Callable[..., object]:
+        from lyrashield.policy.models import (  # noqa: PLC0415
+            model_supports_programmatic_tool_calling,
+        )
+
+        return model_supports_programmatic_tool_calling
+
+    register_model_policy_loader("model_supports_programmatic_tool_calling", _load)
 
 
 def _run_upstream() -> None:

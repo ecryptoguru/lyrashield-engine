@@ -167,7 +167,7 @@ def validate_environment() -> None:
         console.print(
             Panel(
                 error_text,
-                title="[bold white]STRIX",
+                title="[bold white]LYRASHIELD",
                 title_align="left",
                 border_style="red",
                 padding=(1, 2),
@@ -263,7 +263,7 @@ def validate_environment() -> None:
 
         panel = Panel(
             error_text,
-            title="[bold white]STRIX",
+            title="[bold white]LYRASHIELD",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -294,7 +294,7 @@ def check_docker_installed() -> None:
 
         panel = Panel(
             error_text,
-            title="[bold white]STRIX",
+            title="[bold white]LYRASHIELD",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -362,7 +362,7 @@ def _subscription_error_hint(exc: BaseException) -> str | None:
     ):
         return (
             "Your ChatGPT sign-in has expired or was revoked. Sign in again:\n"
-            "  strix auth login chatgpt"
+            "  lyrashield auth login chatgpt"
         )
     return None
 
@@ -411,7 +411,7 @@ async def warm_up_llm(
             console.print(
                 Panel(
                     warn_text,
-                    title="[bold white]STRIX",
+                    title="[bold white]LYRASHIELD",
                     title_align="left",
                     border_style="yellow",
                     padding=(1, 2),
@@ -425,7 +425,8 @@ async def warm_up_llm(
             warn_text.append("\n\n", style="white")
             warn_text.append(f"'{raw_model}'", style="bold cyan")
             warn_text.append(
-                " is not a recommended frontier model for Strix.\nSecurity scans work best with:\n",
+                " is not a recommended frontier model for LyraShield.\n"
+                "Security scans work best with:\n",
                 style="white",
             )
             for recommended_model in RECOMMENDED_MODEL_NAMES:
@@ -438,7 +439,7 @@ async def warm_up_llm(
             console.print(
                 Panel(
                     warn_text,
-                    title="[bold white]STRIX",
+                    title="[bold white]LYRASHIELD",
                     title_align="left",
                     border_style="yellow",
                     padding=(1, 2),
@@ -539,7 +540,7 @@ async def warm_up_llm(
 
         panel = Panel(
             error_text,
-            title="[bold white]STRIX",
+            title="[bold white]LYRASHIELD",
             title_align="left",
             border_style=border_style,
             padding=(1, 2),
@@ -602,42 +603,42 @@ def _repository_branch(value: str) -> str:
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Strix Multi-Agent Cybersecurity Penetration Testing Tool",
+        description="LyraShield Multi-Agent Cybersecurity Penetration Testing Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Web application penetration test
-  strix --target https://example.com
+  lyrashield --target https://example.com
 
   # GitHub repository analysis
-  strix --target https://github.com/user/repo
-  strix --target git@github.com:user/repo.git
+  lyrashield --target https://github.com/user/repo
+  lyrashield --target git@github.com:user/repo.git
 
   # Local code analysis
-  strix --target ./my-project
+  lyrashield --target ./my-project
 
   # Large local repository (bind-mounted read-only instead of copied)
-  strix --mount ./huge-monorepo
+  lyrashield --mount ./huge-monorepo
 
   # Domain penetration test
-  strix --target example.com
+  lyrashield --target example.com
 
   # IP address penetration test
-  strix --target 192.168.1.42
+  lyrashield --target 192.168.1.42
 
   # Multiple targets (e.g., white-box testing with source and deployed app)
-  strix --target https://github.com/user/repo --target https://example.com
-  strix --target ./my-project --target https://staging.example.com --target https://prod.example.com
+  lyrashield --target https://github.com/user/repo --target https://example.com
+  lyrashield --target ./my-project --target https://staging.example.com --target https://prod.example.com
 
   # Targets from a file, one target per non-empty, non-comment line
-  strix --target-list ./targets.txt
+  lyrashield --target-list ./targets.txt
 
   # Custom instructions (inline)
-  strix --target example.com --instruction "Focus on authentication vulnerabilities"
+  lyrashield --target example.com --instruction "Focus on authentication vulnerabilities"
 
   # Custom instructions (from file)
-  strix --target example.com --instruction-file ./instructions.txt
-  strix --target https://app.com --instruction-file /path/to/detailed_instructions.md
+  lyrashield --target example.com --instruction-file ./instructions.txt
+  lyrashield --target https://app.com --instruction-file /path/to/detailed_instructions.md
         """,
     )
 
@@ -645,7 +646,7 @@ Examples:
         "-v",
         "--version",
         action="version",
-        version=f"strix {get_version()}",
+        version=f"lyrashield {get_version()}",
     )
 
     parser.add_argument(
@@ -1051,7 +1052,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     view_text.append("\n")
     view_text.append("View", style="dim")
     view_text.append("    ")
-    view_text.append(f"strix view {args.run_name}", style="#22c55e")
+    view_text.append(f"lyrashield view {args.run_name}", style="#22c55e")
     panel_parts.extend(["\n", view_text])
 
     if not scan_completed:
@@ -1059,7 +1060,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
         resume_text.append("\n")
         resume_text.append("Resume", style="dim")
         resume_text.append("  ")
-        resume_text.append(f"strix --resume {args.run_name}", style="#22c55e")
+        resume_text.append(f"lyrashield --resume {args.run_name}", style="#22c55e")
         panel_parts.extend(["\n", resume_text])
 
     panel_content = Text.assemble(*panel_parts)
@@ -1068,7 +1069,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
 
     panel = Panel(
         panel_content,
-        title="[bold white]STRIX",
+        title="[bold white]LYRASHIELD",
         title_align="left",
         border_style=border_style,
         padding=(1, 2),
@@ -1077,11 +1078,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     console.print("\n")
     console.print(panel)
     console.print()
-    console.print(
-        "[#60a5fa]strix.ai[/]  [dim]·[/]  "
-        "[#60a5fa]docs.strix.ai[/]  [dim]·[/]  "
-        "[#60a5fa]discord.gg/strix-ai[/]"
-    )
+    console.print("[#60a5fa]https://lyrashieldai.com[/]")
     console.print()
     # Upstream shows an update notice here; LyraShield Engine ships as reviewed
     # releases, so the upstream version check would suggest the wrong package.
@@ -1182,7 +1179,7 @@ def pull_docker_image() -> None:
 
             panel = Panel(
                 error_text,
-                title="[bold white]STRIX",
+                title="[bold white]LYRASHIELD",
                 title_align="left",
                 border_style="red",
                 padding=(1, 2),
@@ -1211,7 +1208,7 @@ def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    # `strix view [<run>]` is a viewer-only subcommand, dispatched before the
+    # `lyrashield view [<run>]` is a viewer-only subcommand, dispatched before the
     # scan argument parser (which requires a target) and before any scan setup.
     if len(sys.argv) > 1 and sys.argv[1] == "view":
         from lyrashield.interface.viewer.cli import run_view
@@ -1219,7 +1216,7 @@ def main() -> None:
         run_view(sys.argv[2:])
         return
 
-    # `strix auth …` manages model-subscription sign-in and exits; it needs no
+    # `lyrashield auth …` manages model-subscription sign-in and exits; it needs no
     # target, Docker, or scan setup. LyraShield disables this by default, but
     # enables it when `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION` is set.
     if len(sys.argv) > 1 and sys.argv[1] == "auth":
@@ -1293,7 +1290,7 @@ def main() -> None:
 
             panel = Panel(
                 error_text,
-                title="[bold white]STRIX",
+                title="[bold white]LYRASHIELD",
                 title_align="left",
                 border_style="red",
                 padding=(1, 2),

@@ -29,6 +29,16 @@ class LLMUsageLedger:
         self._request_usage_entries: list[dict[str, Any]] = []
         self._total_cost = 0.0
         self._has_cost = False
+        # Per-agent cost accumulated at record() time from the model rate card.
+        # Token-share pro-rata is only a fallback for cost that cannot be
+        # attributed to one agent (e.g. provider-reported callback cost).
+        self._agent_costs: dict[str, float] = {}
+        # Models for which the LiteLLM success callback already reported an
+        # observed cost; record() must not ALSO estimate those tokens.
+        self._observed_cost_models: set[str] = set()
+        # Response ids already counted via record_observed_cost (callback
+        # double-fire protection).
+        self._observed_response_ids: set[str] = set()
         # When True, tokens are still tracked but cost stays $0 — the run is on a
         # model subscription, so there is no metered per-token charge to report.
         self.zero_cost = False
@@ -55,19 +65,32 @@ class LLMUsageLedger:
         if model:
             metadata["model"] = model
 
-        if not self.zero_cost:
+        if not self.zero_cost and _normalized_model_key(model) not in self._observed_cost_models:
             estimated = _estimate_gpt56_cost(usage, model)
             if estimated is None and not _is_litellm_routed(model):
                 estimated = _estimate_litellm_cost(usage, model)
             if estimated:
                 self._total_cost += estimated
+                self._agent_costs[normalized_agent_id] = (
+                    self._agent_costs.get(normalized_agent_id, 0.0) + estimated
+                )
                 self._has_cost = True
 
         return True
 
-    def record_observed_cost(self, cost: Any, *, model: str | None = None) -> None:
+    def record_observed_cost(
+        self,
+        cost: Any,
+        *,
+        model: str | None = None,
+        response_id: str | None = None,
+    ) -> None:
         if self.zero_cost or _gpt56_rate(model) is not None:
             return
+        if response_id is not None:
+            if response_id in self._observed_response_ids:
+                return
+            self._observed_response_ids.add(response_id)
         try:
             numeric_cost = float(cost)
         except (TypeError, ValueError):
@@ -75,6 +98,9 @@ class LLMUsageLedger:
         if numeric_cost > 0:
             self._total_cost += numeric_cost
             self._has_cost = True
+            model_key = _normalized_model_key(model)
+            if model_key:
+                self._observed_cost_models.add(model_key)
 
     @property
     def total_cost(self) -> float:
@@ -101,13 +127,42 @@ class LLMUsageLedger:
         agents: list[dict[str, Any]] = []
 
         agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}
-        total_tokens = sum(agent_tokens.values())
+        # Cost attributed to no single agent (provider callback cost, web search)
+        # is shared pro-rata so per-agent costs still sum to the run total.
+        priced_total = sum(
+            self._agent_costs[aid] for aid in self._agent_usage if aid in self._agent_costs
+        )
+        residual = max(0.0, self._total_cost - priced_total)
+        share_recipients: list[str] = []
+        if residual > 0 and self._agent_usage:
+            fallback = [aid for aid in self._agent_usage if aid not in self._agent_costs]
+            share_recipients = fallback or list(self._agent_usage)
+            share_tokens = sum(agent_tokens[aid] for aid in share_recipients)
+            if share_tokens > 0:
+                residual_shares = {
+                    aid: residual * agent_tokens[aid] / share_tokens for aid in share_recipients
+                }
+            else:
+                residual_shares = {
+                    aid: residual / len(share_recipients) for aid in share_recipients
+                }
+        else:
+            residual_shares = {}
+
+        all_priced = True
         for agent_id in sorted(self._agent_usage):
             usage = self._agent_usage[agent_id]
             metadata = self._agent_metadata.get(agent_id, {})
-            agent_cost = (
-                self._total_cost * (agent_tokens[agent_id] / total_tokens) if total_tokens else 0.0
-            )
+            priced = self._agent_costs.get(agent_id)
+            shared = residual_shares.get(agent_id, 0.0)
+            if priced is not None:
+                agent_cost: float | None = priced + shared
+                cost_basis = "per_agent_priced" if shared == 0.0 else "pro_rata"
+            else:
+                agent_cost = shared if self._has_cost else None
+                cost_basis = "pro_rata"
+            if cost_basis != "per_agent_priced":
+                all_priced = False
 
             agent_record = serialize_usage(usage)
             agent_record.update(
@@ -117,11 +172,14 @@ class LLMUsageLedger:
                     "model": metadata.get("model"),
                 }
             )
-            if self._has_cost:
+            if agent_cost is not None:
                 agent_record["cost"] = _round_cost(agent_cost)
+                agent_record["cost_basis"] = cost_basis
             agents.append(agent_record)
 
         record["agents"] = agents
+        if (self._has_cost or self.zero_cost) and agents:
+            record["cost_basis"] = "per_agent_priced" if all_priced else "pro_rata"
         return record
 
     def hydrate(self, raw_usage: Any) -> None:
@@ -131,6 +189,9 @@ class LLMUsageLedger:
         self._request_usage_entries.clear()
         self._total_cost = 0.0
         self._has_cost = False
+        self._agent_costs.clear()
+        self._observed_cost_models.clear()
+        self._observed_response_ids.clear()
 
         if not isinstance(raw_usage, dict):
             return
@@ -172,6 +233,19 @@ class LLMUsageLedger:
                 if isinstance(model, str) and model:
                     metadata["model"] = model
                 self._agent_metadata[agent_id] = metadata
+
+                # Restore per-agent priced costs so a resumed run keeps exact
+                # attribution instead of falling back to token-share pro-rata.
+                if raw_agent.get("cost_basis") == "per_agent_priced":
+                    cost = raw_agent.get("cost")
+                    if isinstance(cost, int | float) and cost > 0:
+                        self._agent_costs[agent_id] = float(cost)
+
+
+def _normalized_model_key(model: str | None) -> str | None:
+    if not model:
+        return None
+    return model.strip().lower().split("/")[-1] or None
 
 
 def _resolve_total_tokens(usage: Usage) -> int:

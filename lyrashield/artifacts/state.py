@@ -166,6 +166,7 @@ class ReportState:
         self._saved_vuln_ids: set[str] = set()
         self._save_seq = 0
         self._turn_count = 0
+        self.receipt_persisted: bool = True
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
@@ -382,8 +383,14 @@ class ReportState:
         self._set_phase("running")
         self.save_run_data()
 
-    def record_observed_llm_cost(self, cost: float) -> None:
-        self._llm_usage.record_observed_cost(cost)
+    def record_observed_llm_cost(
+        self,
+        cost: float,
+        *,
+        model: str | None = None,
+        response_id: str | None = None,
+    ) -> None:
+        self._llm_usage.record_observed_cost(cost, model=model, response_id=response_id)
 
     def get_total_llm_usage(self) -> dict[str, Any]:
         return dict(self.run_record.get("llm_usage") or self._build_llm_usage_record())
@@ -542,12 +549,20 @@ class ReportState:
         run_dir = self.get_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        # Each artifact is isolated so a failure in one cannot skip the others;
+        # run.json is the billing/cost receipt and is written last.
         if self.final_scan_result:
-            write_executive_report(run_dir, self.final_scan_result)
+            try:
+                write_executive_report(run_dir, self.final_scan_result)
+            except (OSError, RuntimeError):
+                logger.exception("Executive report write failed (non-fatal)")
 
         # The worker must distinguish a clean scan from missing output. Always
         # write this artifact, including for a valid zero-finding result.
-        write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
+        try:
+            write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
+        except (OSError, RuntimeError):
+            logger.exception("Vulnerabilities artifact write failed (non-fatal)")
 
         # SARIF is an integration artifact; it must not hide a successful core
         # receipt when an optional formatter has a problem.
@@ -561,7 +576,18 @@ class ReportState:
         except Exception:
             logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
 
-        write_run_record(run_dir, self.run_record)
+        try:
+            write_run_record(run_dir, self.run_record)
+        except (OSError, RuntimeError):
+            # The run record carries the cost receipt the worker reconciles
+            # against the provider total; a silent skip here mis-bills the
+            # scan as if it cost nothing. Flag it, never swallow it.
+            self.receipt_persisted = False
+            self.run_record["receipt_persisted"] = False
+            logger.exception("run.json receipt persist FAILED — cost receipt not written")
+        else:
+            self.receipt_persisted = True
+            self.run_record["receipt_persisted"] = True
         logger.info("Essential scan data saved to: %s", run_dir)
 
     def _sarif_repository_context(self) -> dict[str, Any] | None:
@@ -767,7 +793,11 @@ def litellm_cost_callback(
     if report_state is None:
         return
     try:
-        report_state.record_observed_llm_cost(cost)
+        report_state.record_observed_llm_cost(
+            cost,
+            model=model if isinstance(model, str) else None,
+            response_id=_response_id(completion_response),
+        )
     except Exception:
         logger.exception("Failed to record observed LiteLLM cost")
 

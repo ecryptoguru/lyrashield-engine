@@ -41,6 +41,7 @@ def test_streaming_logging_stays_enabled_for_cost_callback() -> None:
 def test_cost_callback_reads_openrouter_stream_usage_cost() -> None:
     report_state = MagicMock()
     response = SimpleNamespace(
+        id="resp-or-1",
         usage=SimpleNamespace(cost=1.2345),
         _hidden_params={},
     )
@@ -48,22 +49,27 @@ def test_cost_callback_reads_openrouter_stream_usage_cost() -> None:
     with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({"response_cost": None}, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(1.2345)
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        1.2345, model=None, response_id="resp-or-1"
+    )
 
 
 def test_cost_callback_reads_usage_cost_from_mapping_response() -> None:
     report_state = MagicMock()
-    response = {"usage": {"cost": 0.125}}
+    response = {"id": "resp-map", "usage": {"cost": 0.125}}
 
     with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({}, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(0.125)
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        0.125, model=None, response_id="resp-map"
+    )
 
 
 def test_cost_callback_reads_byok_upstream_inference_cost() -> None:
     report_state = MagicMock()
     response = SimpleNamespace(
+        id="resp-byok",
         usage=SimpleNamespace(
             cost=0,
             is_byok=True,
@@ -75,39 +81,47 @@ def test_cost_callback_reads_byok_upstream_inference_cost() -> None:
     with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({"response_cost": None}, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(6.75e-06)
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        6.75e-06, model=None, response_id="resp-byok"
+    )
 
 
 def test_cost_callback_sums_usage_cost_and_upstream_inference_cost() -> None:
     report_state = MagicMock()
     response = {
+        "id": "resp-sum",
         "usage": {
             "cost": 0.01,
             "is_byok": True,
             "cost_details": {"upstream_inference_cost": 0.2},
-        }
+        },
     }
 
     with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({}, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(pytest.approx(0.21))
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        pytest.approx(0.21), model=None, response_id="resp-sum"
+    )
 
 
 def test_cost_callback_ignores_upstream_cost_for_non_byok_responses() -> None:
     report_state = MagicMock()
     response = {
+        "id": "resp-nonbyok",
         "usage": {
             "cost": 0.05,
             "is_byok": False,
             "cost_details": {"upstream_inference_cost": 0.04},
-        }
+        },
     }
 
     with patch("lyrashield.artifacts.state.get_global_report_state", return_value=report_state):
         litellm_cost_callback({}, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(0.05)
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        0.05, model=None, response_id="resp-nonbyok"
+    )
 
 
 def test_cost_callback_defers_gpt56_cost_to_the_token_rate_card() -> None:
@@ -140,7 +154,9 @@ def test_cost_callback_estimates_cost_with_provider_prefixed_model() -> None:
     ):
         litellm_cost_callback(kwargs, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(0.5)
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        0.5, model="anthropic/claude-sonnet-4.5", response_id=None
+    )
 
 
 def test_cost_callback_estimates_cost_with_bare_model_fallback() -> None:
@@ -163,7 +179,9 @@ def test_cost_callback_estimates_cost_with_bare_model_fallback() -> None:
     ):
         litellm_cost_callback(kwargs, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(0.025)
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        0.025, model="openai/gpt-4o-mini", response_id=None
+    )
 
 
 def test_cost_callback_records_nothing_when_no_cost_available() -> None:
@@ -204,7 +222,9 @@ def test_cost_callback_recovers_streamed_openrouter_cost_by_response_id() -> Non
     ):
         litellm_cost_callback({"response_cost": None, "model": "moonshotai/kimi-k3"}, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(0.42)
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        0.42, model="moonshotai/kimi-k3", response_id="gen-abc"
+    )
     # The entry is consumed so a later response cannot double-count it.
     assert streamed_openrouter_costs.take(response) is None
 
@@ -224,7 +244,9 @@ def test_streamed_openrouter_cost_prefers_provider_report_over_estimate() -> Non
     ):
         litellm_cost_callback({"response_cost": None, "model": "moonshotai/kimi-k3"}, response)
 
-    report_state.record_observed_llm_cost.assert_called_once_with(0.9)
+    report_state.record_observed_llm_cost.assert_called_once_with(
+        0.9, model="moonshotai/kimi-k3", response_id="gen-xyz"
+    )
     estimate.assert_not_called()
 
 

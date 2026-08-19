@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import logging
 import shutil
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 from agents.sandbox.entries import BaseEntry, LocalDir
 from agents.sandbox.manifest import EnvEntry, Environment, EnvValue, Manifest
@@ -18,6 +20,7 @@ from lyrashield.runtime.backends import get_backend
 from lyrashield.runtime.caido_bootstrap import bootstrap_caido
 from lyrashield.runtime.docker_client import host_gateway_enabled
 from lyrashield.runtime.local_dir_staging import stage_symlink_safe_dir
+from lyrashield.tools.proxy import caido_api
 from strix.config import load_settings
 
 
@@ -138,17 +141,118 @@ def build_session_entries(
     return entries, bind_mounts, staged_dirs, extra_path_grants
 
 
+def _hosts_from_target_value(value: str) -> set[str]:
+    """Parse a comma-separated URL/host/IP target value into bare hosts."""
+    hosts: set[str] = set()
+    for raw_piece in value.split(","):
+        piece = raw_piece.strip()
+        if not piece:
+            continue
+        if "://" in piece:
+            host = urlparse(piece).hostname or ""
+        else:
+            # Bare host/IP, possibly with :port or /CIDR suffix.
+            host = piece.split("/")[0]
+            if ":" in host and not host.startswith("["):
+                host = host.rsplit(":", 1)[0].strip("[]")
+        if host:
+            hosts.add(host.lower().rstrip("."))
+    return hosts
+
+
+def derive_authorized_target_hosts(targets: list[dict[str, Any]] | None) -> set[str]:
+    """Extract network-reachable authorized target hosts from ``targets_info``.
+
+    Only URL and IP targets produce egress hosts; repositories and local
+    source trees are not network destinations for the replay path.
+    """
+    hosts: set[str] = set()
+    for target in targets or []:
+        ttype = str(target.get("type") or "")
+        details = target.get("details")
+        if not isinstance(details, dict):
+            continue
+        if ttype == "web_application":
+            value_keys = ("target_url",)
+        elif ttype == "ip_address":
+            value_keys = ("target_ip",)
+        else:
+            continue
+        for key in value_keys:
+            hosts |= _hosts_from_target_value(str(details.get(key) or ""))
+    return hosts
+
+
+def derive_default_scope_allowlist(hosts: set[str]) -> list[str]:
+    """Caido allowlist patterns covering each authorized host and subdomains."""
+    patterns: list[str] = []
+    for host in sorted(hosts):
+        patterns.append(host)
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            patterns.append(f"*.{host}")
+    return patterns
+
+
+async def _create_default_scope(
+    caido_client: Any,
+    *,
+    scan_id: str,
+    authorized_hosts: set[str],
+) -> tuple[str | None, list[str] | None]:
+    """Create the default authorized-targets Caido scope before the agent starts.
+
+    Returns ``(scope_id, allowlist)``; ``(None, None)`` when there are no
+    network targets OR when scope creation fails. A creation failure is logged
+    but non-fatal: the scope focuses the agent's proxy view, while the replay
+    egress guard is the enforced control and stays active regardless. On
+    failure both values are None so a caller never sees an allowlist without
+    its scope id.
+    """
+    if not authorized_hosts:
+        return None, None
+    allowlist = derive_default_scope_allowlist(authorized_hosts)
+    try:
+        scope = await caido_api.scope_create(
+            caido_client,
+            name="authorized-targets",
+            allowlist=allowlist,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to create default Caido scope for scan %s; replay egress guard remains active",
+            scan_id,
+        )
+        return None, None
+    scope_id = str(getattr(scope, "id", "") or "") or None
+    logger.info(
+        "Default Caido scope for scan %s created (id=%s, allowlist=%s)",
+        scan_id,
+        scope_id,
+        allowlist,
+    )
+    return scope_id, allowlist
+
+
 async def create_or_reuse(
     scan_id: str,
     *,
     image: str,
     local_sources: list[dict[str, Any]],
+    targets: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return the existing session bundle for ``scan_id`` or create a new one.
 
     Each ``local_sources`` entry exposes its host ``source_path`` at
     ``/workspace/<workspace_subdir>`` inside the container — copied in, or
     bind-mounted read-only when the entry is flagged ``mount``.
+
+    When ``targets`` carries the scan's authorized network targets, a default
+    Caido scope derived from them is created before the agent starts, and the
+    authorized hosts are registered with the replay egress guard so
+    private-range traffic is only permitted toward explicitly authorized
+    internal targets.
     """
     async with _CACHE_LOCK:
         cached = _SESSION_CACHE.get(scan_id)
@@ -206,6 +310,14 @@ async def create_or_reuse(
             host_url=host_caido_url,
             container_url=container_caido_url,
         )
+
+        authorized_hosts = derive_authorized_target_hosts(targets)
+        caido_api.set_authorized_target_hosts(authorized_hosts)
+        default_scope_id, default_scope_allowlist = await _create_default_scope(
+            caido_client,
+            scan_id=scan_id,
+            authorized_hosts=authorized_hosts,
+        )
     except Exception:
         if caido_client is not None:
             with contextlib.suppress(Exception):
@@ -227,6 +339,9 @@ async def create_or_reuse(
         "client": client,
         "session": session,
         "caido_client": caido_client,
+        "default_scope_id": default_scope_id,
+        "default_scope_allowlist": default_scope_allowlist,
+        "authorized_hosts": sorted(authorized_hosts),
     }
     async with _CACHE_LOCK:
         _SESSION_CACHE[scan_id] = bundle
