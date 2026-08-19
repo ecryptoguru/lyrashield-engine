@@ -1,0 +1,291 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
+# FF3 — Signed + notarized Tauri desktop release pipeline.
+#
+# On tag push (v*), builds and signs the Tauri desktop shell for macOS, Windows,
+# and Linux. macOS builds are codesigned + notarized + stapled. Windows builds
+# are Authenticode-signed (EV cert for SmartScreen reputation). Linux builds
+# produce .AppImage + .deb with a GPG-signed .AppImage.
+#
+# Notarization/stapling failures fail the build. Signing keys come from
+# repository secrets — never embedded in the repo.
+
+name: release-tauri
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # macOS — codesign + notarize + staple
+  # ---------------------------------------------------------------------------
+  release-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inject release public keys (fail-closed)
+        env:
+          LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+          UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LICENSE_PUBKEY_HEX}" ] || [ "${LICENSE_PUBKEY_HEX}" = "0000000000000000000000000000000000000000000000000000000000000000" ]; then
+            echo "LYRASHIELD_LICENSE_PUBKEY_HEX is missing or still the zero placeholder." >&2
+            exit 1
+          fi
+          if [ -z "${UPDATER_PUBKEY}" ] || [ "${UPDATER_PUBKEY}" = "LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER" ]; then
+            echo "LYRASHIELD_UPDATER_PUBKEY is missing or still the placeholder." >&2
+            exit 1
+          fi
+          echo "LYRASHIELD_LICENSE_PUBKEY_HEX=$LICENSE_PUBKEY_HEX" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os, pathlib
+          p = pathlib.Path("desktop/src-tauri/tauri.conf.json")
+          text = p.read_text()
+          old = "LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER"
+          new = os.environ["UPDATER_PUBKEY"]
+          if old not in text:
+              raise SystemExit("updater pubkey placeholder not found in tauri.conf.json")
+          p.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install UI dependencies
+        working-directory: desktop/ui
+        run: npm ci || npm install
+
+      - name: Import Apple Developer certificate
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_FILE=$(mktemp /tmp/certificate.XXXXXX.p12)
+          KEYCHAIN_FILE=$(mktemp /tmp/keychain.XXXXXX.keychain-db)
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$CERT_FILE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_FILE"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
+          security import "$CERT_FILE" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_FILE"
+          security set-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
+          security list-keychain -d user -s "$KEYCHAIN_FILE"
+          echo "KEYCHAIN_FILE=$KEYCHAIN_FILE" >> "$GITHUB_ENV"
+
+      - name: Build + codesign + notarize (Tauri)
+        working-directory: desktop/src-tauri
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Tauri's updater signing key (ed25519). The public key is baked into
+          # tauri.conf.json; the private key signs update artifacts.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+        run: |
+          # Build the universal macOS binary via Tauri's bundler.
+          cargo tauri build --target universal-apple-darwin
+
+      - name: Deep codesign bundle
+        run: |
+          BUNDLE=$(find desktop/src-tauri/target -name "LyraShield Local.app" | head -1)
+          if [ -z "$BUNDLE" ]; then
+            echo "error: LyraShield Local.app not found" >&2
+            exit 1
+          fi
+          codesign --deep --force --options runtime --timestamp "$BUNDLE"
+
+      - name: Notarize + staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          BUNDLE=$(find desktop/src-tauri/target -name "LyraShield Local.app" | head -1)
+          ZIP=$(mktemp /tmp/lyrashield.XXXXXX.zip)
+          ditto -c -k --keepParent "$BUNDLE" "$ZIP"
+          xcrun notarytool submit "$ZIP" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$BUNDLE"
+          # Verify stapling — fail the build if not stapled.
+          xcrun stapler validate "$BUNDLE"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyrashield-local-macos
+          path: |
+            desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.dmg
+            desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.app
+
+  # ---------------------------------------------------------------------------
+  # Windows — Authenticode sign (EV cert for SmartScreen reputation)
+  # ---------------------------------------------------------------------------
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inject release public keys (fail-closed)
+        shell: bash
+        env:
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+          LYRASHIELD_UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
+        run: bash scripts/inject-release-pubkeys.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install UI dependencies
+        working-directory: desktop/ui
+        run: npm ci || npm install
+
+      - name: Import Windows Authenticode certificate
+        env:
+          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $certPath = [System.IO.Path]::GetTempFileName() + ".pfx"
+          [System.Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX) | Set-Content $certPath -AsByteStream
+          $env:CERT_PATH = $certPath
+          echo "CERT_PATH=$certPath" >> $env:GITHUB_ENV
+
+      - name: Build (Tauri)
+        working-directory: desktop/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+        run: cargo tauri build
+
+      - name: Sign Windows installers (signtool)
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $msi = Get-ChildItem -Path desktop/src-tauri/target -Recurse -Filter "*.msi" | Select-Object -First 1
+          $nsis = Get-ChildItem -Path desktop/src-tauri/target -Recurse -Filter "*.exe" | Where-Object { $_.Name -notmatch "LyraShield Local\.exe$" } | Select-Object -First 1
+          foreach ($f in @($msi, $nsis)) {
+            if ($f) {
+              signtool sign /f $env:CERT_PATH /p $env:WINDOWS_CERTIFICATE_PASSWORD /fd SHA256 /td http://timestamp.digicert.com $f.FullName
+              signtool verify /pa /v $f.FullName
+            }
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyrashield-local-windows
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.msi
+            desktop/src-tauri/target/release/bundle/**/*.exe
+
+  # ---------------------------------------------------------------------------
+  # Linux — .AppImage + .deb, GPG-signed .AppImage
+  # ---------------------------------------------------------------------------
+  release-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inject release public keys (fail-closed)
+        env:
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+          LYRASHIELD_UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
+        run: bash scripts/inject-release-pubkeys.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Install UI dependencies
+        working-directory: desktop/ui
+        run: npm ci || npm install
+
+      - name: Build (Tauri)
+        working-directory: desktop/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+        run: cargo tauri build
+
+      - name: GPG-sign AppImage
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          APPIMAGE=$(find desktop/src-tauri/target -name "*.AppImage" | head -1)
+          if [ -n "$APPIMAGE" ]; then
+            echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+              --detach-sign --armor "$APPIMAGE"
+          fi
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyrashield-local-linux
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.AppImage
+            desktop/src-tauri/target/release/bundle/**/*.AppImage.sig
+            desktop/src-tauri/target/release/bundle/**/*.deb
+
+  # ---------------------------------------------------------------------------
+  # Publish — create the GitHub Release with all signed artifacts + the
+  # updater manifest (latest.json) that the Tauri updater consumes.
+  # ---------------------------------------------------------------------------
+  publish-release:
+    needs: [release-macos, release-windows, release-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.msi
+            artifacts/**/*.exe
+            artifacts/**/*.AppImage
+            artifacts/**/*.AppImage.sig
+            artifacts/**/*.deb

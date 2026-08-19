@@ -111,28 +111,82 @@ def _apply_sandbox_network(create_kwargs: dict[str, Any]) -> None:
         create_kwargs.pop("ports", None)
 
 
+_DEFAULT_SANDBOX_MEM_LIMIT = "2g"
+_DEFAULT_SANDBOX_SHM_SIZE = "512m"
+_DEFAULT_SANDBOX_CPUS_NANO = 2_000_000_000
+_DEFAULT_SANDBOX_PIDS_LIMIT = 512
+_SANDBOX_CAP_OPT_OUT = frozenset({"0", "off", "none", "unlimited"})
+
+
+def _sandbox_cap_value(env_name: str, default: str) -> str | None:
+    """Resolve a sandbox cap knob: explicit override > pinned default.
+
+    Blank/unset applies the pinned default; an explicit opt-out token
+    (``0``/``off``/``none``/``unlimited``) restores docker's unbounded
+    default for that knob.
+    """
+    value = os.environ.get(env_name, "").strip()
+    if not value:
+        return default
+    if value.lower() in _SANDBOX_CAP_OPT_OUT:
+        return None
+    return value
+
+
 def _apply_resource_limits(create_kwargs: dict[str, Any]) -> None:
-    """Apply optional cgroup resource caps from the environment. Unset/blank
-    values leave docker's default (unbounded), so this is opt-in per host."""
-    mem_limit = os.environ.get("STRIX_SANDBOX_MEM_LIMIT", "").strip()
+    """Apply cgroup resource caps. Defaults **on** (founder-pinned).
+
+    An autonomous agent executes model-generated, attacker-influenced
+    commands inside this container; a fork bomb or memory hog must not be
+    able to exhaust the host and take down co-located scans. Defaults:
+    ``mem_limit=2g``, ``shm_size=512m`` (Chromium/headless tools OOM on
+    docker's 64m default), ``cpus=2``, ``pids_limit=512``.
+
+    Set any ``STRIX_SANDBOX_*`` knob to ``0``/``off``/``none``/``unlimited``
+    to opt that knob back out to docker's unbounded default; any other
+    value overrides the default. An unparseable value falls back to the
+    pinned default — never to unbounded.
+    """
+    mem_limit = _sandbox_cap_value("STRIX_SANDBOX_MEM_LIMIT", _DEFAULT_SANDBOX_MEM_LIMIT)
     if mem_limit:
         create_kwargs["mem_limit"] = mem_limit
 
-    shm_size = os.environ.get("STRIX_SANDBOX_SHM_SIZE", "").strip()
+    shm_size = _sandbox_cap_value("STRIX_SANDBOX_SHM_SIZE", _DEFAULT_SANDBOX_SHM_SIZE)
     if shm_size:
         create_kwargs["shm_size"] = shm_size
 
-    cpus = os.environ.get("STRIX_SANDBOX_CPUS", "").strip()
+    cpus = _sandbox_cap_value(
+        "STRIX_SANDBOX_CPUS", str(_DEFAULT_SANDBOX_CPUS_NANO // 1_000_000_000)
+    )
+    nano_cpus: int | None = None
     if cpus:
         with contextlib.suppress(ValueError, OverflowError):
-            nano_cpus = int(float(cpus) * 1_000_000_000)
-            if 0 < nano_cpus <= 2**63 - 1:
-                create_kwargs["nano_cpus"] = nano_cpus
+            candidate = int(float(cpus) * 1_000_000_000)
+            if 0 < candidate <= 2**63 - 1:
+                nano_cpus = candidate
+    if nano_cpus is None and cpus:
+        # Unparseable or out-of-range override: fall back to the pinned default.
+        nano_cpus = _DEFAULT_SANDBOX_CPUS_NANO
+    if nano_cpus is not None:
+        create_kwargs["nano_cpus"] = nano_cpus
 
-    pids_limit = os.environ.get("STRIX_SANDBOX_PIDS_LIMIT", "").strip()
+    pids_limit = _sandbox_cap_value("STRIX_SANDBOX_PIDS_LIMIT", str(_DEFAULT_SANDBOX_PIDS_LIMIT))
     if pids_limit:
-        with contextlib.suppress(ValueError):
-            create_kwargs["pids_limit"] = int(pids_limit)
+        try:
+            parsed_pids = int(pids_limit)
+        except ValueError:
+            parsed_pids = _DEFAULT_SANDBOX_PIDS_LIMIT
+        if parsed_pids <= 0:
+            parsed_pids = _DEFAULT_SANDBOX_PIDS_LIMIT
+        create_kwargs["pids_limit"] = parsed_pids
+
+    logger.info(
+        "sandbox caps: mem=%s shm=%s cpus=%s pids=%s",
+        create_kwargs.get("mem_limit", "unbounded"),
+        create_kwargs.get("shm_size", "default"),
+        create_kwargs.get("nano_cpus", "unbounded"),
+        create_kwargs.get("pids_limit", "unbounded"),
+    )
 
 
 def _apply_log_limits(create_kwargs: dict[str, Any]) -> None:
