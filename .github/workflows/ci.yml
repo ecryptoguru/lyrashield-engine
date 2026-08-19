@@ -56,6 +56,18 @@ jobs:
       - name: Run test suite
         run: uv run pytest -q
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Desktop logic tests (cargo test)
+        # Runs the standalone crate in desktop/tests — no Tauri context needed
+        # (tauri::generate_context! requires the built frontend dist). This is
+        # where the cross-language license golden vector (Node-signed canonical
+        # JSON, Rust-verified exact bytes) is enforced; without this step the
+        # desktop license round-trip had no CI coverage.
+        working-directory: desktop/tests
+        run: cargo test --locked
+
       - name: Verify native release binary
         run: bash scripts/build.sh
 
