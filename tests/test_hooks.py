@@ -2,20 +2,51 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import litellm
 import pytest
 
+import lyrashield.lifecycle.hooks as hooks_mod
 from lyrashield.lifecycle.hooks import (
     BudgetExceededError,
     BudgetPausedError,
     ReportUsageHooks,
     SubagentBudgetReservedError,
+    _compact_input_items,
     _compact_item,
+    _estimate_input_tokens,
     _history_groups,
     recomputed_budget_flags,
 )
+
+
+class _CountingCounter:
+    """Deterministic token counter that records every invocation."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __call__(self, *, model: str, text: str) -> int:  # noqa: ARG002
+        self.calls.append(text)
+        return len(text) // 10
+
+
+@pytest.fixture
+def _clear_estimate_cache() -> object:  # pyright: ignore[reportUnusedFunction]
+    hooks_mod._estimate_cache.clear()
+    yield
+    hooks_mod._estimate_cache.clear()
+
+
+def _items(n: int) -> list[dict[str, Any]]:
+    return [{"role": "user", "content": f"message {i} " + "x" * (50 + i)} for i in range(n)]
+
+
+def _agent() -> Any:
+    return SimpleNamespace(tools=[], output_type="")
 
 
 def _make_hooks(max_budget: float | None) -> ReportUsageHooks:
@@ -560,3 +591,86 @@ async def test_turn_warning_has_system_notice_tag() -> None:
     await hooks.on_llm_start(_make_warn_context(requests=69), MagicMock(), None, items)
     assert items
     assert "[SYSTEM-NOTICE]" in items[0]["content"]
+
+
+@pytest.mark.usefixtures("_clear_estimate_cache")
+def test_estimate_input_tokens_memoizes_identical_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-estimating unchanged content must not re-run the token counter."""
+    counter = _CountingCounter()
+    monkeypatch.setattr(litellm, "token_counter", counter)
+    items = _items(4)
+    agent = _agent()
+
+    first = _estimate_input_tokens("m", "sys", items, agent)
+    second = _estimate_input_tokens("m", "sys", items, agent)
+
+    assert first == second
+    assert len(counter.calls) == 1
+
+    _estimate_input_tokens("m", "sys", [*items, {"role": "user", "content": "tail"}], agent)
+    assert len(counter.calls) == 2
+
+
+@pytest.mark.usefixtures("_clear_estimate_cache")
+def test_estimate_input_tokens_cache_returns_identical_numbers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache hit must return exactly what a cold computation would return."""
+    counter = _CountingCounter()
+    monkeypatch.setattr(litellm, "token_counter", counter)
+    items = _items(6)
+
+    cold = _estimate_input_tokens("m", None, items, _agent())
+    warm = _estimate_input_tokens("m", None, items, _agent())
+
+    assert warm == cold
+    hooks_mod._estimate_cache.clear()
+    recomputed = _estimate_input_tokens("m", None, items, _agent())
+    assert recomputed == cold
+
+
+@pytest.mark.usefixtures("_clear_estimate_cache")
+def test_compact_input_items_identical_results_with_warm_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compaction over content already estimated makes zero new counter calls."""
+    counter = _CountingCounter()
+    monkeypatch.setattr(litellm, "token_counter", counter)
+    thresholds = (200, 120)
+
+    cold_items = _items(12)
+    cold = _compact_input_items("m", "sys", cold_items, _agent(), thresholds)
+    cold_calls = len(counter.calls)
+    assert cold_calls > 0  # the cold run did real estimation work
+    assert cold[0] >= thresholds[0]  # compaction actually triggered
+
+    warm_items = _items(12)
+    warm = _compact_input_items("m", "sys", warm_items, _agent(), thresholds)
+
+    assert warm == cold
+    assert warm_items == cold_items
+    # Identical inputs were all estimated during the cold run, so the warm run
+    # (including its binary search) must not invoke the counter again.
+    assert len(counter.calls) == cold_calls
+
+
+@pytest.mark.usefixtures("_clear_estimate_cache")
+def test_compact_input_items_re_estimates_only_changed_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Growing history re-estimates only payloads not seen before."""
+    counter = _CountingCounter()
+    monkeypatch.setattr(litellm, "token_counter", counter)
+
+    base = _items(3)
+    _estimate_input_tokens("m", "sys", base, _agent())
+    calls_after_base = len(counter.calls)
+
+    grown = [*base, {"role": "user", "content": "new tail " + "y" * 80}]
+    _estimate_input_tokens("m", "sys", grown, _agent())
+
+    # The grown history is a new payload (one new call), and the unchanged
+    # base payload is not recomputed.
+    assert len(counter.calls) == calls_after_base + 1

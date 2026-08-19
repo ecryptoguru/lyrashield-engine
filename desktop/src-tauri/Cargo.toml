@@ -1,0 +1,46 @@
+[package]
+name = "lyrashield-local"
+version = "1.2.0"
+description = "LyraShield Local — desktop shell for the LyraShield engine"
+authors = ["LyraShield"]
+license = "Apache-2.0"
+edition = "2021"
+rust-version = "1.77"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "lyrashield_local_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-store = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }
+rand = "0.8"
+rand_core = "0.6"
+keyring = "3"
+base64 = "0.22"
+sha2 = "0.10"
+thiserror = "1"
+log = "0.4"
+env_logger = "0.11"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+url = "2"
+dirs = "5"
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+mockito = "1"
+tempfile = "3"

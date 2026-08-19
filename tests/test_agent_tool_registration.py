@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from agents.tool import FunctionTool
 
 from lyrashield.agents import factory
+from lyrashield.agents import overrides as deferred_overrides
 from lyrashield_adapter.cli import _register_lyrashield_tool_overrides
 
 
@@ -47,6 +49,15 @@ def _reset_tool_overrides() -> object:  # pyright: ignore[reportUnusedFunction]
         yield
     finally:
         factory._TOOL_OVERRIDES.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _reset_deferred_overrides() -> object:  # pyright: ignore[reportUnusedFunction]
+    deferred_overrides._tool_override_loaders.clear()
+    deferred_overrides._model_policy_loaders.clear()
+    yield
+    deferred_overrides._tool_override_loaders.clear()
+    deferred_overrides._model_policy_loaders.clear()
 
 
 def test_register_agent_tools_is_deduped() -> None:
@@ -148,9 +159,25 @@ def test_register_tool_override_replaces_base_tool() -> None:
     assert web_search_tools == [override]
 
 
+def test_adapter_registration_defers_tool_module_imports() -> None:
+    """Registering overrides must not import the product tool modules.
+
+    Non-scan subcommands (auth, view, provider-contract) run the same
+    registration at startup; importing the toolset there is pure overhead.
+    """
+    before = {name for name in sys.modules if name.startswith("lyrashield.")}
+
+    _register_lyrashield_tool_overrides()
+
+    after = {name for name in sys.modules if name.startswith("lyrashield.")}
+    assert before == after
+    assert deferred_overrides._tool_override_loaders
+
+
 def test_adapter_registers_lyrashield_web_search() -> None:
     """The product entry point registers the LyraShield web_search override."""
     _register_lyrashield_tool_overrides()
+    factory.resolve_product_overrides()
 
     assert "web_search" in factory._TOOL_OVERRIDES
     assert factory._TOOL_OVERRIDES["web_search"].name == "web_search"
@@ -159,6 +186,7 @@ def test_adapter_registers_lyrashield_web_search() -> None:
 def test_adapter_registers_lyrashield_respond_to_user() -> None:
     """The product entry point registers the LyraShield respond_to_user override."""
     _register_lyrashield_tool_overrides()
+    factory.resolve_product_overrides()
 
     assert "respond_to_user" in factory._TOOL_OVERRIDES
     assert factory._TOOL_OVERRIDES["respond_to_user"].name == "respond_to_user"
@@ -167,6 +195,7 @@ def test_adapter_registers_lyrashield_respond_to_user() -> None:
 def test_adapter_registers_lyrashield_reporting_tools() -> None:
     """The product entry point registers the LyraShield reporting tool overrides."""
     _register_lyrashield_tool_overrides()
+    factory.resolve_product_overrides()
 
     for name in (
         "create_vulnerability_report",
@@ -181,6 +210,7 @@ def test_adapter_registers_lyrashield_reporting_tools() -> None:
 def test_adapter_registers_lyrashield_proxy_tools() -> None:
     """The product entry point registers the LyraShield Caido proxy tool overrides."""
     _register_lyrashield_tool_overrides()
+    factory.resolve_product_overrides()
 
     for name in (
         "list_requests",
@@ -197,6 +227,7 @@ def test_adapter_registers_lyrashield_proxy_tools() -> None:
 def test_adapter_registers_lyrashield_todo_tools() -> None:
     """The product entry point registers the LyraShield todo tool overrides."""
     _register_lyrashield_tool_overrides()
+    factory.resolve_product_overrides()
 
     for name in (
         "create_todo",
@@ -208,3 +239,15 @@ def test_adapter_registers_lyrashield_todo_tools() -> None:
     ):
         assert name in factory._TOOL_OVERRIDES
         assert factory._TOOL_OVERRIDES[name].name == name
+
+
+def test_agent_build_resolves_deferred_overrides() -> None:
+    """A scan-path agent build materializes overrides registered after import."""
+    _register_lyrashield_tool_overrides()
+    assert factory._TOOL_OVERRIDES == {}
+
+    agent = factory.build_strix_agent(is_root=True)
+
+    assert "web_search" in factory._TOOL_OVERRIDES
+    web_search_tools = [t for t in agent.tools if t.name == "web_search"]
+    assert web_search_tools == [factory._TOOL_OVERRIDES["web_search"]]

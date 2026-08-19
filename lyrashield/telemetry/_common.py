@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReportState(Protocol):
-    """Minimal shape of strix.report.state.ReportState used by telemetry."""
+    """Minimal shape of lyrashield.artifacts.state.ReportState used by telemetry."""
 
     posthog_scan_ended_sent: bool
     scarf_scan_ended_sent: bool
