@@ -203,7 +203,7 @@ pub fn machine_id() -> Result<String, LicenseError> {
 /// Activate a license from an already-signed detached blob (offline / tests).
 /// Production activation goes through [`activate_online`].
 pub fn activate(blob_b64: &str, license_id: &str) -> Result<LicenseInfo, LicenseError> {
-    let payload = verify_blob(blob_b64, BUNDLED_PUBKEY_HEX)?;
+    let payload = verify_blob(blob_b64, bundled_pubkey_hex())?;
     let revocations = bundled_revocation_list();
     if is_revoked(license_id, &revocations) {
         return Err(LicenseError::Revoked);
@@ -219,7 +219,22 @@ pub fn activate(blob_b64: &str, license_id: &str) -> Result<LicenseInfo, License
     })
 }
 
-/// Read the cached license status. Never phones home.
+fn clear_cached_license() {
+    let _ = keychain::delete("lyrashield-local", "license-cache");
+    let _ = keychain::delete("lyrashield-local", "license-id");
+    let _ = keychain::delete("lyrashield-local", LAST_VALIDATED_KEY);
+}
+
+fn revoked_status() -> LicenseStatus {
+    LicenseStatus {
+        active: false,
+        info: None,
+        message: "License revoked — contact support.".into(),
+    }
+}
+
+/// Read the cached license status. Never phones home for the crypto check.
+/// After OFFLINE_GRACE_SECS the caller should run [`revalidate_online`].
 pub fn status() -> Result<LicenseStatus, LicenseError> {
     let cached = keychain::get_license_cache().map_err(LicenseError::from)?;
     match cached {
@@ -229,17 +244,22 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
             message: "No license activated.".into(),
         }),
         Some(blob) => {
-            let payload = verify_blob(&blob, BUNDLED_PUBKEY_HEX)?;
-            // License ID is cached separately (not in the signed payload).
-            let license_id = keychain::get("lyrashield-local", "license-id").unwrap_or_default().unwrap_or_default();
+            let payload = verify_blob(&blob, bundled_pubkey_hex())?;
+            let license_id = keychain::get("lyrashield-local", "license-id")
+                .unwrap_or_default()
+                .unwrap_or_default();
             let revocations = bundled_revocation_list();
             if !license_id.is_empty() && is_revoked(&license_id, &revocations) {
-                return Ok(LicenseStatus {
-                    active: false,
-                    info: None,
-                    message: "License revoked — contact support.".into(),
-                });
+                clear_cached_license();
+                return Ok(revoked_status());
             }
+            let last = keychain::get("lyrashield-local", LAST_VALIDATED_KEY)
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let age = unix_now().saturating_sub(last);
+            let needs_revalidation = last == 0 || age > OFFLINE_GRACE_SECS;
             Ok(LicenseStatus {
                 active: true,
                 info: Some(LicenseInfo {
@@ -250,10 +270,60 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
                     perpetual_fallback_build: payload.perpetual_fallback_build,
                     revoked: false,
                 }),
-                message: "License active (offline grace).".into(),
+                message: if needs_revalidation {
+                    "License active — revalidation due.".into()
+                } else {
+                    "License active (offline grace).".into()
+                },
             })
         }
     }
+}
+
+/// Online revalidation. Revoke is not expiry: a revoked license is a hard
+/// stop (cache cleared). Network failure during grace keeps the cached
+/// license so a laptop on a plane still scans.
+pub async fn revalidate_online() -> Result<LicenseStatus, LicenseError> {
+    let license_id = keychain::get("lyrashield-local", "license-id")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if license_id.is_empty() {
+        return status();
+    }
+    let api_base = std::env::var("LYRASHIELD_API_URL").unwrap_or_else(|_| DEFAULT_API_BASE.to_string());
+    let url = format!("{}/api/licenses/verify", api_base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .user_agent("LyraShield-Local")
+        .build()
+        .map_err(|e| LicenseError::Request(e.to_string()))?;
+    let resp = match client
+        .post(url)
+        .json(&serde_json::json!({ "licenseId": license_id }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return status(),
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(_) => return status(),
+    };
+    let revoked = body.pointer("/data/revoked").and_then(|v| v.as_bool()) == Some(true)
+        || body.pointer("/data/reason").and_then(|v| v.as_str()) == Some("LICENSE_REVOKED");
+    if revoked {
+        clear_cached_license();
+        return Ok(revoked_status());
+    }
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        let _ = keychain::set(
+            "lyrashield-local",
+            LAST_VALIDATED_KEY,
+            &now.as_secs().to_string(),
+        );
+    }
+    status()
 }
 
 /// One-time online activation: POST licenseKey + machine fingerprint to
@@ -315,6 +385,11 @@ pub async fn activate_online(license_key: &str) -> Result<LicenseInfo, LicenseEr
 /// `update_eligible_until` expires but never deactivates the running app.
 /// `now` is a Unix timestamp (seconds). `build_version` is the target version string.
 pub fn should_accept_update(info: &LicenseInfo, now: u64, build_version: &str) -> bool {
+    // RISK-B1: revoke is not expiry. A revoked license never gets updates
+    // and never rides perpetual-fallback.
+    if info.revoked {
+        return false;
+    }
     // Parse updateEligibleUntil (ISO 8601) to a Unix timestamp.
     let eligible = parse_iso_to_unix(&info.update_eligible_until).unwrap_or(0);
     // After the eligibility window, refuse newer builds.
@@ -484,6 +559,21 @@ mod tests {
     }
 
     #[test]
+    fn test_revoked_license_never_gets_updates() {
+        let info = LicenseInfo {
+            sku: "individual_launch".into(),
+            seat_count: 1,
+            machine_ids: vec![],
+            update_eligible_until: "2036-01-01T00:00:00.000Z".into(),
+            perpetual_fallback_build: Some("1.0.0".into()),
+            revoked: true,
+        };
+        // Still inside the update window, fallback would otherwise allow 1.0.0.
+        assert!(!should_accept_update(&info, 1_577_836_800, "1.0.0"));
+        assert!(!should_accept_update(&info, 1_577_836_800, "0.9.0"));
+    }
+
+    #[test]
     fn test_perpetual_fallback_refuses_newer_after_window() {
         let info = LicenseInfo {
             sku: "individual_launch".into(),
@@ -556,6 +646,26 @@ mod tests {
         // Rust verifies the decoded payload bytes as received — no re-serialize.
         let blob = "eyJtYWNoaW5lSWRzIjpbIm1hY2hpbmUtZ29sZGVuLTEiXSwicGVycGV0dWFsRmFsbGJhY2tCdWlsZCI6IjEuMi4wIiwic2VhdENvdW50IjoxLCJza3UiOiJpbmRpdmlkdWFsX2xhdW5jaCIsInVwZGF0ZUVsaWdpYmxlVW50aWwiOiIyMDM2LTAxLTAxVDAwOjAwOjAwLjAwMFoifQ==.f5rJ6rAhcL5+sCgngjFKKvpTz+IBeYuAgnwPyQArw/w9+AHRwIywUv5VYGdrx50ToUO0VVSJhFOOwU71F0UXCg==";
         let pubkey_hex = "1548593e16dcf2654eadd19429e88a91a21ca1d78da676249352b7eecf30592c";
+        let payload = verify_blob(blob, pubkey_hex).expect("Node-signed golden blob must verify");
+        assert_eq!(payload.sku, "individual_launch");
+        assert_eq!(payload.seat_count, 1);
+        assert_eq!(payload.machine_ids, vec!["machine-golden-1".to_string()]);
+        assert_eq!(payload.perpetual_fallback_build.as_deref(), Some("1.2.0"));
+
+        // Re-serializing in serde struct order would produce different bytes
+        // than the signed canonicalJSON. The verifier must not do that.
+        let (payload_b64, _) = blob.split_once('.').unwrap();
+        let received = base64::engine::general_purpose::STANDARD
+            .decode(payload_b64)
+            .unwrap();
+        let re_serialized = serde_json::to_vec(&payload).unwrap();
+        assert_ne!(
+            received, re_serialized,
+            "golden payload is canonicalJSON, not serde_json struct order"
+        );
+    }
+}
+1ca1d78da676249352b7eecf30592c";
         let payload = verify_blob(blob, pubkey_hex).expect("Node-signed golden blob must verify");
         assert_eq!(payload.sku, "individual_launch");
         assert_eq!(payload.seat_count, 1);

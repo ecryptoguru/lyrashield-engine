@@ -28,6 +28,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Inject release public keys (fail-closed)
+        env:
+          LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+          UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LICENSE_PUBKEY_HEX}" ] || [ "${LICENSE_PUBKEY_HEX}" = "0000000000000000000000000000000000000000000000000000000000000000" ]; then
+            echo "LYRASHIELD_LICENSE_PUBKEY_HEX is missing or still the zero placeholder." >&2
+            exit 1
+          fi
+          if [ -z "${UPDATER_PUBKEY}" ] || [ "${UPDATER_PUBKEY}" = "LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER" ]; then
+            echo "LYRASHIELD_UPDATER_PUBKEY is missing or still the placeholder." >&2
+            exit 1
+          fi
+          echo "LYRASHIELD_LICENSE_PUBKEY_HEX=$LICENSE_PUBKEY_HEX" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os, pathlib
+          p = pathlib.Path("desktop/src-tauri/tauri.conf.json")
+          text = p.read_text()
+          old = "LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER"
+          new = os.environ["UPDATER_PUBKEY"]
+          if old not in text:
+              raise SystemExit("updater pubkey placeholder not found in tauri.conf.json")
+          p.write_text(text.replace(old, new, 1))
+          PY
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -69,6 +95,7 @@ jobs:
           # tauri.conf.json; the private key signs update artifacts.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
         run: |
           # Build the universal macOS binary via Tauri's bundler.
           cargo tauri build --target universal-apple-darwin
@@ -116,6 +143,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Inject release public keys (fail-closed)
+        shell: bash
+        env:
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+          LYRASHIELD_UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
+        run: bash scripts/inject-release-pubkeys.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -145,6 +179,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
         run: cargo tauri build
 
       - name: Sign Windows installers (signtool)
@@ -176,6 +211,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Inject release public keys (fail-closed)
+        env:
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+          LYRASHIELD_UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
+        run: bash scripts/inject-release-pubkeys.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -198,6 +239,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
         run: cargo tauri build
 
       - name: GPG-sign AppImage
@@ -247,3 +289,4 @@ jobs:
             artifacts/**/*.AppImage
             artifacts/**/*.AppImage.sig
             artifacts/**/*.deb
+ artifacts/**/*.deb

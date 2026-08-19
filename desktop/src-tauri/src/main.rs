@@ -70,13 +70,27 @@ async fn keychain_get(service: String, key: String) -> Result<Option<String>, St
 }
 
 #[tauri::command]
-async fn license_activate(blob_b64: String, license_id: String) -> Result<license::LicenseInfo, String> {
+async fn license_activate(license_key: String) -> Result<license::LicenseInfo, String> {
+    license::activate_online(&license_key)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn license_activate_blob(
+    blob_b64: String,
+    license_id: String,
+) -> Result<license::LicenseInfo, String> {
     license::activate(&blob_b64, &license_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn license_status() -> Result<license::LicenseStatus, String> {
-    license::status().map_err(|e| e.to_string())
+    let local = license::status().map_err(|e| e.to_string())?;
+    if local.message.contains("revalidation due") {
+        return license::revalidate_online().await.map_err(|e| e.to_string());
+    }
+    Ok(local)
 }
 
 #[tauri::command]
