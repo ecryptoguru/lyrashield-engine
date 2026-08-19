@@ -165,9 +165,9 @@ beautifulsoup4==4.15.0 \
     # via
     #   -r /tmp/lyrashield-sandbox-lock/requirements.in
     #   dirsearch
-boltons==21.0.0 \
-    --hash=sha256:65e70a79a731a7fe6e98592ecfb5ccf2115873d01dbc576079874629e5c90f13 \
-    --hash=sha256:b9bb7b58b2b420bbe11a6025fdef6d3e5edc9f76a42fb467afe7ca212ef9948b
+boltons==26.1.0 \
+    --hash=sha256:1d966b165805b83600b31af9f0db672e3b3313d9de438e22708a94ac5f4c93de \
+    --hash=sha256:5764468aba493b15995ed17f46a16789023f123ca2a62d491a9ce825c1cbe26c
     # via
     #   face
     #   glom
