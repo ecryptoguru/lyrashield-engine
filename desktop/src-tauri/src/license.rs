@@ -20,6 +20,15 @@ use thiserror::Error;
 use crate::keychain;
 
 pub const LICENSE_CACHE_KEY: &str = "license-cache";
+pub const LAST_VALIDATED_KEY: &str = "license-last-validated";
+pub const MACHINE_ID_KEY: &str = "machine-id";
+
+/// Offline grace after a successful online activation, in seconds (30 days).
+/// Scanning never phones home; only license revalidation does, after this window.
+pub const OFFLINE_GRACE_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// Production activate endpoint. Overridable via `LYRASHIELD_API_URL`.
+pub const DEFAULT_API_BASE: &str = "https://app.lyrashieldai.com";
 
 /// Bundled ed25519 public key for license verification. In production this is
 /// replaced at build time with LyraShield's real public key. The placeholder
@@ -162,19 +171,44 @@ pub fn is_revoked(license_id: &str, revocation_list: &[RevocationEntry]) -> bool
     revocation_list.iter().any(|e| e.license_id == license_id)
 }
 
-/// Activate a license from a base64 blob. Verifies the signature, checks the
-/// revocation list, and caches the blob in the OS keychain.
-/// `license_id` is provided by the server (not in the signed payload) and
-/// used for revocation checks.
+/// Cache a verified blob + stamp last-validated-at (unix seconds).
+fn cache_verified(blob: &str, license_id: &str) -> Result<(), LicenseError> {
+    let now = unix_now();
+    keychain::set_license_cache(blob).map_err(LicenseError::from)?;
+    keychain::set("lyrashield-local", "license-id", license_id).map_err(LicenseError::from)?;
+    keychain::set("lyrashield-local", LAST_VALIDATED_KEY, &now.to_string())
+        .map_err(LicenseError::from)?;
+    Ok(())
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Stable per-install machine fingerprint, persisted in the keychain.
+pub fn machine_id() -> Result<String, LicenseError> {
+    if let Some(existing) = keychain::get("lyrashield-local", MACHINE_ID_KEY).map_err(LicenseError::from)? {
+        if !existing.is_empty() {
+            return Ok(existing);
+        }
+    }
+    let id = format!("ls-{}", hex::encode(rand::random::<[u8; 16]>()));
+    keychain::set("lyrashield-local", MACHINE_ID_KEY, &id).map_err(LicenseError::from)?;
+    Ok(id)
+}
+
+/// Activate a license from an already-signed detached blob (offline / tests).
+/// Production activation goes through [`activate_online`].
 pub fn activate(blob_b64: &str, license_id: &str) -> Result<LicenseInfo, LicenseError> {
     let payload = verify_blob(blob_b64, BUNDLED_PUBKEY_HEX)?;
     let revocations = bundled_revocation_list();
     if is_revoked(license_id, &revocations) {
         return Err(LicenseError::Revoked);
     }
-    // Cache the signed blob + license ID in the keychain (offline grace).
-    keychain::set_license_cache(blob_b64).map_err(LicenseError::from)?;
-    keychain::set("lyrashield-local", "license-id", license_id).map_err(LicenseError::from)?;
+    cache_verified(blob_b64, license_id)?;
     Ok(LicenseInfo {
         sku: payload.sku,
         seat_count: payload.seat_count,
@@ -220,6 +254,60 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
             })
         }
     }
+}
+
+/// One-time online activation: POST licenseKey + machine fingerprint to
+/// `/api/licenses/activate`, receive a detached signed blob, verify the
+/// **exact received bytes**, then cache. After this the app runs offline
+/// until `OFFLINE_GRACE_SECS` elapses.
+pub async fn activate_online(license_key: &str) -> Result<LicenseInfo, LicenseError> {
+    if license_key.is_empty() {
+        return Err(LicenseError::ActivationRefused("license key is required".into()));
+    }
+    let machine = machine_id()?;
+    let api_base = std::env::var("LYRASHIELD_API_URL").unwrap_or_else(|_| DEFAULT_API_BASE.to_string());
+    let url = format!("{}/api/licenses/activate", api_base.trim_end_matches('/'));
+
+    let client = reqwest::Client::builder()
+        .user_agent("LyraShield-Local")
+        .build()
+        .map_err(|e| LicenseError::Request(e.to_string()))?;
+
+    let resp = client
+        .post(url)
+        .json(&serde_json::json!({
+            "licenseKey": license_key,
+            "machineId": machine,
+        }))
+        .send()
+        .await
+        .map_err(|e| LicenseError::Request(e.to_string()))?;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| LicenseError::Request(e.to_string()))?;
+
+    if !status.is_success() || body.get("success") != Some(&serde_json::Value::Bool(true)) {
+        let code = body
+            .pointer("/error/code")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ACTIVATION_FAILED");
+        return Err(LicenseError::ActivationRefused(code.to_string()));
+    }
+
+    let data = body.get("data").cloned().unwrap_or(serde_json::Value::Null);
+    let blob = data
+        .get("blob")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| LicenseError::ActivationRefused("missing blob".into()))?;
+    let license_id = data
+        .get("licenseId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    activate(blob, license_id)
 }
 
 /// Perpetual fallback: given a cached license and a candidate build version,
@@ -460,5 +548,30 @@ mod tests {
         // Pre-release tags are stripped: "1.10.0-hotfix" (numerically 1.10.0) is
         // the fallback build, accepted.
         assert!(should_accept_update(&info, after_window, "1.10.0-hotfix"));
+    }
+
+    #[test]
+    fn test_golden_vector_verifies_exact_received_bytes() {
+        // Cross-language golden: signed by Node canonicalJSON (packages/licenses).
+        // Rust verifies the decoded payload bytes as received — no re-serialize.
+        let blob = "eyJtYWNoaW5lSWRzIjpbIm1hY2hpbmUtZ29sZGVuLTEiXSwicGVycGV0dWFsRmFsbGJhY2tCdWlsZCI6IjEuMi4wIiwic2VhdENvdW50IjoxLCJza3UiOiJpbmRpdmlkdWFsX2xhdW5jaCIsInVwZGF0ZUVsaWdpYmxlVW50aWwiOiIyMDM2LTAxLTAxVDAwOjAwOjAwLjAwMFoifQ==.f5rJ6rAhcL5+sCgngjFKKvpTz+IBeYuAgnwPyQArw/w9+AHRwIywUv5VYGdrx50ToUO0VVSJhFOOwU71F0UXCg==";
+        let pubkey_hex = "1548593e16dcf2654eadd19429e88a91a21ca1d78da676249352b7eecf30592c";
+        let payload = verify_blob(blob, pubkey_hex).expect("Node-signed golden blob must verify");
+        assert_eq!(payload.sku, "individual_launch");
+        assert_eq!(payload.seat_count, 1);
+        assert_eq!(payload.machine_ids, vec!["machine-golden-1".to_string()]);
+        assert_eq!(payload.perpetual_fallback_build.as_deref(), Some("1.2.0"));
+
+        // Re-serializing in serde struct order would produce different bytes
+        // than the signed canonicalJSON. The verifier must not do that.
+        let (payload_b64, _) = blob.split_once('.').unwrap();
+        let received = base64::engine::general_purpose::STANDARD
+            .decode(payload_b64)
+            .unwrap();
+        let re_serialized = serde_json::to_vec(&payload).unwrap();
+        assert_ne!(
+            received, re_serialized,
+            "golden payload is canonicalJSON, not serde_json struct order"
+        );
     }
 }

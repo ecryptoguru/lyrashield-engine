@@ -109,6 +109,7 @@ pub fn run() {
             keychain_set,
             keychain_get,
             license_activate,
+            license_activate_blob,
             license_status,
             sync_connect,
             sync_status,
@@ -117,6 +118,21 @@ pub fn run() {
         .setup(|app| {
             // On startup, detect a Docker-API-compliant runtime. If missing,
             // the webview shows a guided install offering free alternatives.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let report = docker_detect::run_doctor().await;
+                let _ = handle.emit("doctor-report", &report);
+            });
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running LyraShield Local");
+}
+
+fn main() {
+    run();
+}
+e webview shows a guided install offering free alternatives.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let report = docker_detect::run_doctor().await;
