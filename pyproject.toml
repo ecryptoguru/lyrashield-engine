@@ -41,7 +41,7 @@ dependencies = [
 # 0.18.3, but ProgrammaticToolCallingTool only ships in >=0.19.0). The <0.20
 # ceiling holds minor-version compatibility for the 0.x SDK.
 "openai-agents[litellm]>=0.19.0,<0.20",
-  "openai>=2.48.0,<2.49",
+  "openai>=2.48.0,<3.2",
   "litellm~=1.90",
   "pydantic>=2.11.3",
   "pydantic-settings>=2.13.0",
