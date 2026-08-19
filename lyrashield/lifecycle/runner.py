@@ -303,15 +303,24 @@ async def run_strix_scan(
         await coordinator.restore(snap)
         report_state = get_global_report_state()
         if report_state is not None:
+            hydrated_cost = report_state.get_total_llm_cost()
             budget_stopped, reserve_stopped = recomputed_budget_flags(
-                report_state.get_total_llm_cost(),
+                hydrated_cost,
                 max_budget_usd,
                 interactive=interactive,
             )
+            # A fresh process may resume a run that ended at (or over) its
+            # budget without the persisted pause flag surviving — for example
+            # when the previous process exited between the last snapshot and
+            # the pause being asserted. Re-derive the pause from the hydrated
+            # ledger so an interactive resume at 100% budget starts paused and
+            # the user's first message extends the budget, instead of the root
+            # agent launching into a doomed reservation attempt.
+            at_budget = max_budget_usd is not None and hydrated_cost >= max_budget_usd
             await coordinator.reset_budget_stops(
                 budget_stopped=budget_stopped,
                 reserve_stopped=reserve_stopped,
-                budget_paused=interactive and coordinator.budget_paused,
+                budget_paused=interactive and (coordinator.budget_paused or at_budget),
             )
         for aid, parent in coordinator.parent_of.items():
             if parent is None:
@@ -336,8 +345,18 @@ async def run_strix_scan(
         scan_id,
         image=image,
         local_sources=local_sources or [],
+        targets=list(scan_config.get("targets") or []),
     )
     logger.info("Sandbox ready for scan %s", scan_id)
+
+    if bundle.get("default_scope_id"):
+        report_state = get_global_report_state()
+        if report_state is not None:
+            report_state.run_record["proxy_default_scope"] = {
+                "id": bundle["default_scope_id"],
+                "name": "authorized-targets",
+                "allowlist": bundle.get("default_scope_allowlist") or [],
+            }
 
     sandbox_session = bundle["session"]
 
@@ -458,9 +477,12 @@ async def run_strix_scan(
         # later scan can never reserve against a stale budget.
         set_active_hooks(hooks)
         if interactive:
+            # The extender is what lets a user message lift a budget pause
+            # (see ``AgentCoordinator.send``). A resumed scan at or over its
+            # budget must stay paused until that message arrives; resuming
+            # here would silently extend the budget without user consent and
+            # start the root agent before the pause is re-asserted.
             coordinator.set_budget_extender(hooks.extend_budget)
-            if is_resume and coordinator.budget_paused:
-                await coordinator.resume_from_budget_pause()
 
         report_state = get_global_report_state()
         if report_state is not None:
@@ -807,7 +829,7 @@ async def run_strix_scan(
     except RateLimitError as exc:
         logger.warning(
             "Scan %s stopped: persistent rate limit from the LLM provider (%s). "
-            "Resume with 'strix --resume %s' once the limit clears.",
+            "Resume with 'lyrashield --resume %s' once the limit clears.",
             scan_id,
             exc,
             scan_id,

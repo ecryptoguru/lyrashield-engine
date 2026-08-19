@@ -94,3 +94,9 @@ schema.graphql
 
 .opencode/
 .devin/
+
+# Tauri desktop build artifacts
+desktop/src-tauri/target/
+desktop/ui/node_modules/
+desktop/ui/dist/
+desktop/tests/target/
