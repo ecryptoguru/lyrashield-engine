@@ -72,6 +72,10 @@ pub enum LicenseError {
     Base64(String),
     #[error("ed25519 error: {0}")]
     Ed25519(String),
+    #[error("license request error: {0}")]
+    Request(String),
+    #[error("activation refused: {0}")]
+    ActivationRefused(String),
 }
 
 impl From<keyring::Error> for LicenseError {
@@ -178,7 +182,7 @@ pub fn verify_blob(blob: &str, pubkey_hex: &str) -> Result<LicensePayload, Licen
     let signature = Signature::from_bytes(&sig_arr);
 
     verifying_key
-        .verify(&payload_bytes, &signature)
+        .verify_strict(&payload_bytes, &signature)
         .map_err(|_| LicenseError::InvalidSignature)?;
 
     let payload: LicensePayload = serde_json::from_slice(&payload_bytes)
@@ -196,8 +200,8 @@ pub fn is_revoked(license_id: &str, revocation_list: &[RevocationEntry]) -> bool
 fn cache_verified(blob: &str, license_id: &str) -> Result<(), LicenseError> {
     let now = unix_now();
     keychain::set_license_cache(blob).map_err(LicenseError::from)?;
-    keychain::set("lyrashield-local", "license-id", license_id).map_err(LicenseError::from)?;
-    keychain::set("lyrashield-local", LAST_VALIDATED_KEY, &now.to_string())
+    keychain::set(keychain::SERVICE, "license-id", license_id).map_err(LicenseError::from)?;
+    keychain::set(keychain::SERVICE, LAST_VALIDATED_KEY, &now.to_string())
         .map_err(LicenseError::from)?;
     Ok(())
 }
@@ -229,6 +233,12 @@ pub fn activate(blob_b64: &str, license_id: &str) -> Result<LicenseInfo, License
     if is_revoked(license_id, &revocations) {
         return Err(LicenseError::Revoked);
     }
+    let this_machine = machine_id()?;
+    if !payload.machine_ids.is_empty() && !payload.machine_ids.iter().any(|m| m == &this_machine) {
+        return Err(LicenseError::InvalidPayload(
+            "license is not issued for this machine".into(),
+        ));
+    }
     cache_verified(blob_b64, license_id)?;
     Ok(LicenseInfo {
         sku: payload.sku,
@@ -241,9 +251,9 @@ pub fn activate(blob_b64: &str, license_id: &str) -> Result<LicenseInfo, License
 }
 
 fn clear_cached_license() {
-    let _ = keychain::delete("lyrashield-local", "license-cache");
-    let _ = keychain::delete("lyrashield-local", "license-id");
-    let _ = keychain::delete("lyrashield-local", LAST_VALIDATED_KEY);
+    let _ = keychain::delete(keychain::SERVICE, "license-cache");
+    let _ = keychain::delete(keychain::SERVICE, "license-id");
+    let _ = keychain::delete(keychain::SERVICE, LAST_VALIDATED_KEY);
 }
 
 fn revoked_status() -> LicenseStatus {
@@ -266,11 +276,20 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
         }),
         Some(blob) => {
             let payload = verify_blob(&blob, bundled_pubkey_hex())?;
-            let license_id = keychain::get("lyrashield-local", "license-id")
-                .unwrap_or_default()
-                .unwrap_or_default();
+            let license_id = match keychain::get(keychain::SERVICE, "license-id") {
+                Ok(Some(id)) if !id.is_empty() => id,
+                Ok(_) => {
+                    clear_cached_license();
+                    return Ok(LicenseStatus {
+                        active: false,
+                        info: None,
+                        message: "License cache is incomplete — activate again.".into(),
+                    });
+                }
+                Err(e) => return Err(LicenseError::from(e)),
+            };
             let revocations = bundled_revocation_list();
-            if !license_id.is_empty() && is_revoked(&license_id, &revocations) {
+            if is_revoked(&license_id, &revocations) {
                 clear_cached_license();
                 return Ok(revoked_status());
             }
@@ -305,17 +324,23 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
 /// stop (cache cleared). Network failure during grace keeps the cached
 /// license so a laptop on a plane still scans.
 pub async fn revalidate_online() -> Result<LicenseStatus, LicenseError> {
-    let license_id = keychain::get("lyrashield-local", "license-id")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    if license_id.is_empty() {
-        return status();
-    }
+    let license_id = match keychain::get(keychain::SERVICE, "license-id") {
+        Ok(Some(id)) if !id.is_empty() => id,
+        _ => {
+            clear_cached_license();
+            return Ok(LicenseStatus {
+                active: false,
+                info: None,
+                message: "License cache is incomplete — activate again.".into(),
+            });
+        }
+    };
     let api_base = std::env::var("LYRASHIELD_API_URL").unwrap_or_else(|_| DEFAULT_API_BASE.to_string());
     let url = format!("{}/api/licenses/verify", api_base.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .user_agent("LyraShield-Local")
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| LicenseError::Request(e.to_string()))?;
     let resp = match client
@@ -327,6 +352,18 @@ pub async fn revalidate_online() -> Result<LicenseStatus, LicenseError> {
         Ok(r) => r,
         Err(_) => return status(),
     };
+    if !resp.status().is_success() {
+        // Do not refresh LAST_VALIDATED_KEY on 4xx/5xx.
+        let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        let revoked = body.pointer("/data/revoked").and_then(|v| v.as_bool()) == Some(true)
+            || body.pointer("/data/reason").and_then(|v| v.as_str()) == Some("LICENSE_REVOKED")
+            || body.pointer("/error/code").and_then(|v| v.as_str()) == Some("LICENSE_REVOKED");
+        if revoked {
+            clear_cached_license();
+            return Ok(revoked_status());
+        }
+        return status();
+    }
     let body: serde_json::Value = match resp.json().await {
         Ok(b) => b,
         Err(_) => return status(),
@@ -337,9 +374,13 @@ pub async fn revalidate_online() -> Result<LicenseStatus, LicenseError> {
         clear_cached_license();
         return Ok(revoked_status());
     }
+    let valid = body.pointer("/data/valid").and_then(|v| v.as_bool()) == Some(true);
+    if !valid {
+        return status();
+    }
     if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         let _ = keychain::set(
-            "lyrashield-local",
+            keychain::SERVICE,
             LAST_VALIDATED_KEY,
             &now.as_secs().to_string(),
         );
@@ -667,26 +708,6 @@ mod tests {
         // Rust verifies the decoded payload bytes as received — no re-serialize.
         let blob = "eyJtYWNoaW5lSWRzIjpbIm1hY2hpbmUtZ29sZGVuLTEiXSwicGVycGV0dWFsRmFsbGJhY2tCdWlsZCI6IjEuMi4wIiwic2VhdENvdW50IjoxLCJza3UiOiJpbmRpdmlkdWFsX2xhdW5jaCIsInVwZGF0ZUVsaWdpYmxlVW50aWwiOiIyMDM2LTAxLTAxVDAwOjAwOjAwLjAwMFoifQ==.f5rJ6rAhcL5+sCgngjFKKvpTz+IBeYuAgnwPyQArw/w9+AHRwIywUv5VYGdrx50ToUO0VVSJhFOOwU71F0UXCg==";
         let pubkey_hex = "1548593e16dcf2654eadd19429e88a91a21ca1d78da676249352b7eecf30592c";
-        let payload = verify_blob(blob, pubkey_hex).expect("Node-signed golden blob must verify");
-        assert_eq!(payload.sku, "individual_launch");
-        assert_eq!(payload.seat_count, 1);
-        assert_eq!(payload.machine_ids, vec!["machine-golden-1".to_string()]);
-        assert_eq!(payload.perpetual_fallback_build.as_deref(), Some("1.2.0"));
-
-        // Re-serializing in serde struct order would produce different bytes
-        // than the signed canonicalJSON. The verifier must not do that.
-        let (payload_b64, _) = blob.split_once('.').unwrap();
-        let received = base64::engine::general_purpose::STANDARD
-            .decode(payload_b64)
-            .unwrap();
-        let re_serialized = serde_json::to_vec(&payload).unwrap();
-        assert_ne!(
-            received, re_serialized,
-            "golden payload is canonicalJSON, not serde_json struct order"
-        );
-    }
-}
-1ca1d78da676249352b7eecf30592c";
         let payload = verify_blob(blob, pubkey_hex).expect("Node-signed golden blob must verify");
         assert_eq!(payload.sku, "individual_launch");
         assert_eq!(payload.seat_count, 1);

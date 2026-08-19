@@ -100,28 +100,34 @@ pub async fn start_scan(
         let stderr = child.stderr.take().expect("stderr piped");
 
         let app_out = app_handle.clone();
-        let mut stdout_reader = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = stdout_reader.next_line().await {
-            let _ = app_out.emit(
-                "scan-progress",
-                ScanProgressEvent {
-                    stream: "stdout".into(),
-                    line,
-                },
-            );
-        }
+        let out_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = app_out.emit(
+                    "scan-progress",
+                    ScanProgressEvent {
+                        stream: "stdout".into(),
+                        line,
+                    },
+                );
+            }
+        });
 
         let app_err = app_handle.clone();
-        let mut stderr_reader = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = stderr_reader.next_line().await {
-            let _ = app_err.emit(
-                "scan-progress",
-                ScanProgressEvent {
-                    stream: "stderr".into(),
-                    line,
-                },
-            );
-        }
+        let err_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = app_err.emit(
+                    "scan-progress",
+                    ScanProgressEvent {
+                        stream: "stderr".into(),
+                        line,
+                    },
+                );
+            }
+        });
+
+        let _ = tokio::join!(out_task, err_task);
 
         let status = child.wait().await;
         let (success, code) = match status {

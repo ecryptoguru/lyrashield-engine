@@ -10,8 +10,12 @@ UPDATER_PUBKEY="${LYRASHIELD_UPDATER_PUBKEY:-}"
 ZERO="0000000000000000000000000000000000000000000000000000000000000000"
 PLACEHOLDER="LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER"
 
-if [ -z "${LICENSE_PUBKEY_HEX}" ] || [ "${LICENSE_PUBKEY_HEX}" = "${ZERO}" ]; then
-  echo "LYRASHIELD_LICENSE_PUBKEY_HEX is missing or still the zero placeholder." >&2
+if ! printf '%s' "${LICENSE_PUBKEY_HEX}" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+  echo "LYRASHIELD_LICENSE_PUBKEY_HEX must be exactly 64 hex characters." >&2
+  exit 1
+fi
+if [ "${LICENSE_PUBKEY_HEX}" = "${ZERO}" ]; then
+  echo "LYRASHIELD_LICENSE_PUBKEY_HEX is still the zero placeholder." >&2
   exit 1
 fi
 if [ -z "${UPDATER_PUBKEY}" ] || [ "${UPDATER_PUBKEY}" = "${PLACEHOLDER}" ]; then

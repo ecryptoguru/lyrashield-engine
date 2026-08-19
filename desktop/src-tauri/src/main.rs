@@ -59,14 +59,33 @@ async fn doctor_run() -> Result<docker_detect::DoctorReport, String> {
     Ok(docker_detect::run_doctor().await)
 }
 
-#[tauri::command]
-async fn keychain_set(service: String, key: String, value: String) -> Result<(), String> {
-    keychain::set(&service, &key, &value).map_err(|e| e.to_string())
+const ALLOWED_KEYCHAIN_KEYS: &[&str] = &[
+    "chatgpt-oauth-token",
+    "azure-openai-api-key",
+    "license-cache",
+    "license-id",
+    "license-last-validated",
+    "machine-id",
+];
+
+fn check_keychain_key(key: &str) -> Result<(), String> {
+    if ALLOWED_KEYCHAIN_KEYS.contains(&key) {
+        Ok(())
+    } else {
+        Err(format!("key not allowed: {key}"))
+    }
 }
 
 #[tauri::command]
-async fn keychain_get(service: String, key: String) -> Result<Option<String>, String> {
-    keychain::get(&service, &key).map_err(|e| e.to_string())
+async fn keychain_set(key: String, value: String) -> Result<(), String> {
+    check_keychain_key(&key)?;
+    keychain::set(keychain::SERVICE, &key, &value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn keychain_get(key: String) -> Result<Option<String>, String> {
+    check_keychain_key(&key)?;
+    keychain::get(keychain::SERVICE, &key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -132,21 +151,6 @@ pub fn run() {
         .setup(|app| {
             // On startup, detect a Docker-API-compliant runtime. If missing,
             // the webview shows a guided install offering free alternatives.
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let report = docker_detect::run_doctor().await;
-                let _ = handle.emit("doctor-report", &report);
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running LyraShield Local");
-}
-
-fn main() {
-    run();
-}
-e webview shows a guided install offering free alternatives.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let report = docker_detect::run_doctor().await;
