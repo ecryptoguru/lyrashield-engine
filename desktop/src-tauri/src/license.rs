@@ -30,10 +30,31 @@ pub const OFFLINE_GRACE_SECS: u64 = 30 * 24 * 60 * 60;
 /// Production activate endpoint. Overridable via `LYRASHIELD_API_URL`.
 pub const DEFAULT_API_BASE: &str = "https://app.lyrashieldai.com";
 
-/// Bundled ed25519 public key for license verification. In production this is
-/// replaced at build time with LyraShield's real public key. The placeholder
-/// is a 32-byte zero key so tests can mint their own keypair.
-pub const BUNDLED_PUBKEY_HEX: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+/// Bundled ed25519 public key for license verification.
+///
+/// Dev/test default is 32 zero bytes so unit tests can mint their own pair.
+/// Release builds (`--release`, or `LYRASHIELD_RELEASE=1`) MUST inject the
+/// real public half via `LYRASHIELD_LICENSE_PUBKEY_HEX` at compile time.
+/// The private half never lives in this repo.
+pub const BUNDLED_PUBKEY_HEX: &str = match option_env!("LYRASHIELD_LICENSE_PUBKEY_HEX") {
+    Some(hex) => hex,
+    None => "0000000000000000000000000000000000000000000000000000000000000000",
+};
+
+const ZERO_PUBKEY_HEX: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Hex of the pubkey this binary will actually verify against.
+/// Release builds refuse the all-zero placeholder.
+pub fn bundled_pubkey_hex() -> &'static str {
+    let release = cfg!(not(debug_assertions))
+        || std::env::var("LYRASHIELD_RELEASE").ok().as_deref() == Some("1");
+    if release && BUNDLED_PUBKEY_HEX == ZERO_PUBKEY_HEX {
+        panic!(
+            "LYRASHIELD_LICENSE_PUBKEY_HEX is unset in a release build.              Inject the real public key at compile time; do not ship the zero placeholder."
+        );
+    }
+    BUNDLED_PUBKEY_HEX
+}
 
 #[derive(Debug, Error)]
 pub enum LicenseError {
