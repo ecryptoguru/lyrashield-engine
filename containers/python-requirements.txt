@@ -1517,9 +1517,9 @@ requests-ntlm==1.3.0 \
     --hash=sha256:4c7534a7d0e482bb0928531d621be4b2c74ace437e88c5a357ceb7452d25a510 \
     --hash=sha256:b29cc2462623dffdf9b88c43e180ccb735b4007228a542220e882c58ae56c668
     # via dirsearch
-rich==13.5.3 \
-    --hash=sha256:87b43e0543149efa1253f485cd845bb7ee54df16c9617b8a893650ab84b4acb6 \
-    --hash=sha256:9257b468badc3d347e146a4faa268ff229039d4c2d176ab0cffb4c4fbc73d5d9
+rich==15.0.0 \
+    --hash=sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb \
+    --hash=sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36
     # via
     #   bandit
     #   semgrep
