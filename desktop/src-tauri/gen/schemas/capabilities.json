@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capabilities for LyraShield Local","local":true,"windows":["main"],"permissions":["core:default","shell:allow-open","store:default","updater:default","dialog:default","process:default"]}}

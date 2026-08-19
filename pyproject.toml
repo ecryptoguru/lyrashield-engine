@@ -54,6 +54,9 @@ dependencies = [
   # Cap <49: 49.x drops the universal2 macOS wheel (arm64-only), which breaks
   # the Intel macOS (macos-x86_64) release build's `uv sync --frozen`.
   "cryptography>=48.0.1,<49",
+  # OS keychain storage for BYOK credentials (ChatGPT OAuth token, Azure keys)
+  # and the local results-store envelope key. Never written to plaintext files.
+  "keyring>=25.0.0",
 ]
 
 [project.optional-dependencies]
@@ -66,6 +69,9 @@ bedrock = ["boto3>=1.28.0"]
 
 [project.scripts]
 lyrashield = "lyrashield_adapter.cli:main"
+# LyraShield Local TUI — a desktop-friendly terminal UI that shells into the
+# engine CLI. Lives outside the lyrashield_adapter/ and strix/** boundary.
+lyrashield-local = "lyrashield.tui:run_tui"
 
 [dependency-groups]
 dev = [
@@ -104,6 +110,7 @@ exclude = [
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/tests/**",
+    "/desktop/**",
     "/strix/interface/viewer/frontend/**",
     "/lyrashield/interface/viewer/frontend/**",
 ]
@@ -122,7 +129,15 @@ strict = true
 # TUI is not yet clean under strict mypy; keep it out of the gate until it is.
 # Tests are also excluded because the strict gate in the verify script only
 # covers source packages; test-only type issues are tracked by pytest + ruff.
-exclude = ["strix/interface/tui", "lyrashield/interface/tui", "lyrashield/interface/viewer", "tests"]
+# The LyraShield Local TUI (lyrashield/tui) shells into the engine CLI and is
+# excluded from the strict type gate for the same reason as the upstream TUI.
+exclude = [
+    "strix/interface/tui",
+    "lyrashield/interface/tui",
+    "lyrashield/interface/viewer",
+    "lyrashield/tui",
+    "tests",
+]
 strict_optional = true
 warn_redundant_casts = false
 warn_unused_ignores = true
@@ -347,6 +362,12 @@ ignore = [
 "lyrashield/interface/viewer/*.py" = ["PLC0415", "BLE001"]
 "lyrashield/tools/agents_graph/tools.py" = ["PLR0911", "PLC0415"]
 "lyrashield/tools/output_store.py" = ["PLC0415"]
+# LyraShield Local TUI shells into the engine CLI and uses lazy imports +
+# broad exception swallows for terminal-rendering resilience, mirroring the
+# upstream TUI allowances. The results store uses envelope-encryption helpers
+# with fixed test keys in tests.
+"lyrashield/tui/*.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "S105", "S106", "T201", "RUF100", "S603", "S607", "S113", "PERF401", "SIM105", "FBT003", "UP042", "PIE810", "RUF012", "E501", "F541", "TC001", "TC002", "TC003", "TC005", "F401", "ARG001"]
+"tests/tui/*.py" = ["S101", "S105", "S106", "SLF001", "PLC0415", "T201", "ARG001", "ARG005", "BLE001", "S603", "S607", "F401", "E501", "I001", "RUF100", "TC001", "TC002", "TC003", "FBT003", "SIM105"]
 
 [tool.ruff.lint.isort]
 force-single-line = false
