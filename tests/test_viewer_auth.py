@@ -151,7 +151,7 @@ def test_report_send_never_includes_password(monkeypatch: pytest.MonkeyPatch) ->
         return 200, {"ok": True}
 
     monkeypatch.setattr(auth, "_post_json", fake)
-    auth.report_send("tok", b"%PDF-fake", "strix-report-x.pdf", "x", "https://example.com")
+    auth.report_send("tok", b"%PDF-fake", "lyrashield-report-x.pdf", "x", "https://example.com")
 
     payload = captured["payload"]
     assert set(payload) == {"token", "pdf_base64", "filename", "run_name", "target"}
