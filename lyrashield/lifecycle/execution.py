@@ -11,7 +11,7 @@ from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any, cast
 
 import litellm
-from agents import RunConfig, Runner
+from agents import Model, RunConfig, Runner
 from agents.exceptions import AgentsException, MaxTurnsExceeded, UserError
 from agents.sandbox.errors import ExecTransportError
 from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
@@ -113,7 +113,24 @@ def _structured_provider_refusal(result: Any) -> str | None:
 
 
 def _run_config_model(run_config: RunConfig) -> str | None:
-    return run_config.model if isinstance(run_config.model, str) else None
+    model = getattr(run_config, "model", None)
+    return model if isinstance(model, str) else None
+
+
+def _validate_model_route(agent: Any, run_config: RunConfig) -> None:
+    agent_model = getattr(agent, "model", None)
+    run_model = getattr(run_config, "model", None)
+    if agent_model is None or run_model is None or agent_model is run_model:
+        return
+    if (
+        isinstance(agent_model, str)
+        and isinstance(run_model, str)
+        and agent_model.strip() == run_model.strip()
+    ):
+        return
+    if not isinstance(agent_model, (str, Model)) or not isinstance(run_model, (str, Model)):
+        return
+    raise RuntimeError(f"Agent model routing mismatch: agent={agent_model}, run_config={run_model}")
 
 
 def _agent_instructions(agent: Any) -> str:
@@ -245,6 +262,11 @@ async def run_agent_loop(
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
 ) -> RunResultBase | None:
+    try:
+        _validate_model_route(agent, run_config)
+    except RuntimeError:
+        await coordinator.set_status(agent_id, "stopped")
+        raise
     await coordinator.attach_runtime(
         agent_id,
         session=session,

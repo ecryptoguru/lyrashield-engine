@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import types
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ import pytest
 from agents.exceptions import MaxTurnsExceeded
 from agents.items import MessageOutputItem
 from agents.memory import SQLiteSession
+from agents.models.interface import Model
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
 
@@ -26,6 +28,59 @@ from lyrashield.tools.finish.tool import finish_scan
 
 
 _NO_STREAM_EVENTS: list[Any] = []
+
+
+@pytest.mark.asyncio
+async def test_run_agent_loop_rejects_model_override_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run-wide model override must never silently reroute an agent."""
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+
+    async def _complete(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(execution, "_run_until_lifecycle", _complete)
+
+    with pytest.raises(RuntimeError, match="model routing mismatch"):
+        await execution.run_agent_loop(
+            agent=types.SimpleNamespace(model="azure_ai/gpt-5.6-luna"),
+            initial_input=[],
+            run_config=types.SimpleNamespace(model="azure_ai/gpt-5.6-terra"),
+            context={"agent_id": "root", "parent_id": None},
+            max_turns=1,
+            coordinator=coordinator,
+            agent_id="root",
+            interactive=False,
+        )
+    assert coordinator.statuses["root"] == "stopped"
+
+
+@pytest.mark.parametrize(
+    ("agent_model", "run_model"),
+    [
+        (MagicMock(spec=Model), MagicMock(spec=Model)),
+        (MagicMock(spec=Model), "model-b"),
+        ("model-a", MagicMock(spec=Model)),
+    ],
+)
+def test_validate_model_route_rejects_object_mismatches(
+    agent_model: object, run_model: object
+) -> None:
+    with pytest.raises(RuntimeError, match="model routing mismatch"):
+        execution._validate_model_route(
+            types.SimpleNamespace(model=agent_model),
+            cast("Any", types.SimpleNamespace(model=run_model)),
+        )
+
+
+def test_validate_model_route_accepts_same_model_object() -> None:
+    model = MagicMock(spec=Model)
+    execution._validate_model_route(
+        types.SimpleNamespace(model=model),
+        cast("Any", types.SimpleNamespace(model=model)),
+    )
 
 
 class _StructuredRefusalStream:

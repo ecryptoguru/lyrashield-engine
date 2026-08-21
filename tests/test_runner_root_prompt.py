@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
+from agents import ModelSettings
 from openai import RateLimitError
 
 import lyrashield.tools.todo.tools as todo_tools
@@ -171,6 +172,70 @@ async def test_runner_uses_stable_prompt_cache_keys(
     assert all(len(key) <= 64 for key in cache_keys)
     assert all("scan-specific-id" not in key for key in cache_keys)
     assert cache_keys[0] != cache_keys[1]
+
+
+@pytest.mark.asyncio
+async def test_delegate_run_uses_delegate_model_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """A Terra coordinator must not override a Luna specialist at SDK runtime."""
+    _patch_engine_scaffold(monkeypatch, tmp_path, {"scope": "built-in"})
+    monkeypatch.setattr(
+        runner,
+        "load_settings",
+        lambda: types.SimpleNamespace(
+            llm=types.SimpleNamespace(
+                model="azure_ai/gpt-5.6-terra",
+                delegate_model="azure_ai/gpt-5.6-luna",
+                reasoning_effort="medium",
+                delegate_reasoning_effort="high",
+                force_required_tool_choice=False,
+                timeout=300,
+                prompt_cache=False,
+                extra_headers=None,
+                api_base="https://example.openai.azure.com",
+                api_key="test-key",
+            ),
+            runtime=types.SimpleNamespace(max_context_images=3),
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "make_model_settings",
+        lambda _effort, **kwargs: ModelSettings(
+            max_tokens=4_096 if kwargs["model_name"].endswith("luna") else 8_192
+        ),
+    )
+
+    child_calls: list[dict[str, Any]] = []
+
+    async def _start_child_agent(**kwargs: Any) -> dict[str, Any]:
+        child_calls.append(kwargs)
+        return {"success": True}
+
+    async def _run_root_agent(**kwargs: Any) -> None:
+        await kwargs["context"]["spawn_child_agent"](
+            name="specialist",
+            task="inspect routing",
+            skills=[],
+            parent_history=[],
+        )
+
+    monkeypatch.setattr(runner, "start_child_agent", _start_child_agent)
+    monkeypatch.setattr(runner, "run_agent_loop", _run_root_agent)
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-model-route",
+        image="img",
+        coordinator=AgentCoordinator(),
+    )
+
+    assert len(child_calls) == 1
+    child_run_config = child_calls[0]["run_config"]
+    assert child_run_config.model == "azure_ai/gpt-5.6-luna"
+    assert child_run_config.model_settings.max_tokens == 4_096
 
 
 @pytest.mark.asyncio
