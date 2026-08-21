@@ -138,7 +138,7 @@ def test_strix_version_reports_installed_lyrashield_distribution(
         main_module.main()
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out == "lyrashield 1.2.0\n"
+    assert capsys.readouterr().out == "lyrashield 1.2.1\n"
 
 
 def test_network_capabilities_disabled_by_default(

@@ -1,6 +1,6 @@
 [project]
 name = "lyrashield-engine"
-version = "1.2.0"
+version = "1.2.1"
 description = "LyraShield AI scan engine, based on Strix"
 readme = "README.md"
 license = "Apache-2.0"
@@ -109,6 +109,7 @@ exclude = [
 
 [tool.hatch.build.targets.sdist]
 exclude = [
+    "/.worktrees",
     "/tests/**",
     "/desktop/**",
     "/strix/interface/viewer/frontend/**",

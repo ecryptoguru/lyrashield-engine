@@ -464,6 +464,11 @@ async def run_strix_scan(
             sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
             trace_include_sensitive_data=False,
         )
+        delegate_run_config = replace(
+            run_config,
+            model=delegate_model,
+            model_settings=delegate_model_settings,
+        )
         hooks = ReportUsageHooks(
             model=resolved_model,
             max_budget_usd=max_budget_usd,
@@ -560,7 +565,7 @@ async def run_strix_scan(
                 factory=child_agent_builder,
                 agents_db_path=agents_db,
                 sessions_to_close=sessions_to_close,
-                run_config=run_config,
+                run_config=delegate_run_config,
                 max_turns=max_turns,
                 interactive=interactive,
                 event_sink=event_sink,
@@ -597,7 +602,7 @@ async def run_strix_scan(
                 factory=child_agent_builder,
                 agents_db_path=agents_db,
                 sessions_to_close=sessions_to_close,
-                run_config=run_config,
+                run_config=delegate_run_config,
                 max_turns=max_turns,
                 interactive=interactive,
                 parent_ctx=context,

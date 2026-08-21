@@ -57,6 +57,7 @@ def test_source_archive_excludes_tests() -> None:
     config = (ROOT / "pyproject.toml").read_text()
     assert "[tool.hatch.build.targets.sdist]" in config
     assert '"/tests/**"' in config
+    assert '"/.worktrees"' in config
 
 
 def test_built_source_archive_excludes_test_and_frontend_source(tmp_path: Path) -> None:
@@ -73,7 +74,7 @@ def test_built_source_archive_excludes_test_and_frontend_source(tmp_path: Path) 
     with tarfile.open(archive, "r:gz") as source_dist:
         names = source_dist.getnames()
 
-    forbidden = ("/tests/", "/interface/viewer/frontend/", "/.env")
+    forbidden = ("/tests/", "/interface/viewer/frontend/", "/.env", "/.worktrees/")
     assert not [name for name in names if any(marker in name for marker in forbidden)]
 
 
