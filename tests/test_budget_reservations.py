@@ -267,6 +267,48 @@ async def test_failed_call_releases_its_slot(
 
 
 @pytest.mark.asyncio
+async def test_timeout_releases_both_reservation_layers(
+    monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
+) -> None:
+    """E5: a timeout during the web_search call must release both the
+    ReportState slot and the hooks reservation."""
+
+    class _TimeoutClient(_FakeParallelClient):
+        async def post(self, *_: object, **__: object) -> Any:
+            raise httpx.TimeoutException("request timed out")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _TimeoutClient)
+    args = {"query": "slow query"}
+    parsed = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
+    assert parsed["success"] is False
+    # Both reservation layers released.
+    assert _web_search_enabled._web_search_inflight == 0
+    assert _web_search_enabled._web_search_reserved_cost == 0.0
+
+
+@pytest.mark.asyncio
+async def test_cancellation_releases_both_reservation_layers(
+    monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
+) -> None:
+    """E5: a task cancellation during the web_search call must release both
+    the ReportState slot and the hooks reservation."""
+
+    class _CancellableClient(_FakeParallelClient):
+        async def post(self, *_: object, **__: object) -> Any:
+            raise asyncio.CancelledError("task cancelled")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _CancellableClient)
+    args = {"query": "cancelled query"}
+    import contextlib  # noqa: PLC0415
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args))
+    # Both reservation layers released even after cancellation.
+    assert _web_search_enabled._web_search_inflight == 0
+    assert _web_search_enabled._web_search_reserved_cost == 0.0
+
+
+@pytest.mark.asyncio
 async def test_cost_limit_counts_reserved_charges(
     monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
 ) -> None:

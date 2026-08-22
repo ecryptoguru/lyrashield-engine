@@ -134,6 +134,38 @@ def test_first_run_json_write_is_complete_versioned_contract(
     assert captured[0] == on_disk
 
 
+def test_extra_cannot_override_required_run_record_fields() -> None:
+    """E3: extra must not overwrite required contract fields in
+    initial_run_record. A caller passing extra={"status": "completed"} must
+    not be able to forge a completed state."""
+    record = initial_run_record(
+        "test-run",
+        auth_mode="byok",
+        extra={
+            "status": "completed",
+            "schema_version": 999,
+            "run_id": "forged-id",
+            "phase": "finished",
+        },
+    )
+    # Required fields must retain their canonical values, not the extra overrides.
+    assert record["status"] == "running"
+    assert record["schema_version"] == RUN_RECORD_SCHEMA_VERSION
+    assert record["run_id"] == "test-run"
+    assert record["phase"] == "setup"
+
+
+def test_extra_non_required_fields_are_preserved() -> None:
+    """E3: extra fields that don't conflict with required fields are kept."""
+    record = initial_run_record(
+        "test-run",
+        auth_mode="byok",
+        extra={"custom_field": "value", "scan_mode": "deep"},
+    )
+    assert record["custom_field"] == "value"
+    assert record["scan_mode"] == "deep"
+
+
 def test_receipt_persisted_true_on_disk_and_reverted_on_write_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

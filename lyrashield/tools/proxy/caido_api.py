@@ -90,6 +90,8 @@ class EgressPolicy:
 
 _FAIL_CLOSED_POLICY = EgressPolicy()
 
+_SUPPORTED_POLICY_VERSIONS = frozenset({1})
+
 
 def _in_container() -> bool:
     return Path("/.dockerenv").exists()
@@ -156,6 +158,20 @@ def load_egress_policy() -> EgressPolicy | None:
     except (OSError, ValueError):
         return _FAIL_CLOSED_POLICY
     if not isinstance(raw, dict):
+        return _FAIL_CLOSED_POLICY
+    # Validate version: must be present and supported.
+    version = raw.get("version")
+    if not isinstance(version, int) or version not in _SUPPORTED_POLICY_VERSIONS:
+        return _FAIL_CLOSED_POLICY
+    # Validate scan_id: must be present and match the current run when
+    # STRIX_RUN_ID is set (inside the container). A wrong-run policy is
+    # treated as malformed — the agent must not replay toward another run's
+    # authorized hosts.
+    scan_id = raw.get("scan_id")
+    if not isinstance(scan_id, str) or not scan_id:
+        return _FAIL_CLOSED_POLICY
+    expected_run_id = os.environ.get("STRIX_RUN_ID", "").strip()
+    if expected_run_id and scan_id != expected_run_id:
         return _FAIL_CLOSED_POLICY
     hosts_raw = raw.get("authorized_hosts")
     if not isinstance(hosts_raw, list) or not all(isinstance(h, str) for h in hosts_raw):

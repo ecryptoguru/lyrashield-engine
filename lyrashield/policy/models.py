@@ -496,8 +496,14 @@ class StrixProvider(MultiProvider):
             )
         # Routing consumes the same strict parser admission uses, so a raw
         # route string can never be reinterpreted differently downstream.
-        parse_model_route(model_name)
-        model = super().get_model(model_name)
+        route = parse_model_route(model_name)
+        # If a wrapper prefix is present, strip it so the SDK routes through
+        # the actual provider (e.g. litellm/azure/... → azure/...), not the
+        # wrapper's litellm fallback. Admission already checked route.provider.
+        routed_name = model_name
+        if route is not None and route.wrapper is not None and route.provider is not None:
+            routed_name = f"{route.provider}/{route.model_path}"
+        model = super().get_model(routed_name)
         if llm.disable_streaming:
             return _NonStreamingModel(model)
         return model

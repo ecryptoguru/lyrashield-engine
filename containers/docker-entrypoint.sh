@@ -48,6 +48,8 @@ fi
 
 # ---------------- agent phase (pentester, no way back to root) ----------------
 
+export HOME=/home/pentester
+
 if [ ! -f /app/certs/ca.p12 ]; then
   echo "ERROR: CA certificate file /app/certs/ca.p12 not found."
   exit 1

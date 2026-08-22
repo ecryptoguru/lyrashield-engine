@@ -199,3 +199,91 @@ def test_whitebox_mode_preserves_workspace_paths_but_strips_host_paths(
     description: Any = vulns[0]["description"]
     assert "/workspace/repo/app.py" in description
     assert SENTINEL not in description
+
+
+def test_unknown_nested_metadata_fields_are_recursively_sanitized(
+    report_state: ReportState, tmp_path: Path
+) -> None:
+    """E4: unknown nested dict/list fields in a finding must be recursively
+    sanitized, not copied verbatim by the catch-all else branch."""
+    report_state.add_vulnerability_report(
+        title="Nested metadata test",
+        severity="high",
+        description="desc",
+        dependency_metadata={
+            "custom_metadata": json.dumps(
+                {
+                    "nested_secret": f"password={SENTINEL}",
+                    "deep_list": [f"token={SENTINEL}", "safe_value"],
+                    "deeper": {"inner": f"api_key={SENTINEL}"},
+                }
+            ),
+            "unknown_list": json.dumps([f"secret={SENTINEL}", "clean"]),
+        },
+    )
+    blob = _artifact_texts(tmp_path)
+    assert SENTINEL not in blob, "sentinel leaked through unknown nested metadata"
+
+
+def test_oversized_text_fields_are_truncated(report_state: ReportState, tmp_path: Path) -> None:
+    """E4: oversized text fields must be deterministically truncated, not
+    persisted unbounded."""
+    huge = "A" * 100_000  # 100k chars — well beyond any reasonable bound
+    report_state.add_vulnerability_report(
+        title="Truncation test",
+        severity="low",
+        description=huge,
+    )
+    vulns = json.loads((tmp_path / "vulnerabilities.json").read_text(encoding="utf-8"))
+    desc = vulns[0]["description"]
+    assert len(desc) < 100_000, "description was not truncated"
+    assert len(desc) > 0, "description was over-truncated to empty"
+
+
+def test_url_redaction_handles_case_insensitive_query_keys() -> None:
+    """E4: sensitive query keys must be redacted regardless of case."""
+    from lyrashield.utils.redaction import redact_url  # noqa: PLC0415
+
+    assert SENTINEL not in redact_url(f"https://app.example.com/x?TOKEN={SENTINEL}")
+    assert SENTINEL not in redact_url(f"https://app.example.com/x?ApiKey={SENTINEL}")
+    assert SENTINEL not in redact_url(f"https://app.example.com/x?SESSION={SENTINEL}")
+
+
+def test_url_redaction_handles_encoding_variants() -> None:
+    """E4: sensitive query keys must be redacted regardless of URL encoding."""
+    from lyrashield.utils.redaction import redact_url  # noqa: PLC0415
+
+    # Percent-encoded key should still be caught after decoding.
+    assert SENTINEL not in redact_url(f"https://app.example.com/x?%74oken={SENTINEL}")
+
+
+def test_callback_receives_sanitized_report(
+    report_state: ReportState,
+) -> None:
+    """E4: the vulnerability_found_callback must receive a sanitized snapshot,
+    not the raw report with secrets/host paths."""
+    captured: list[dict[str, Any]] = []
+    report_state.vulnerability_found_callback = lambda r: captured.append(dict(r))
+    report_state.add_vulnerability_report(
+        title=f"Callback leak test password={SENTINEL}",
+        severity="high",
+        description=f"secret={SENTINEL} at /Users/op/{SENTINEL}/app.py",
+    )
+    assert len(captured) == 1
+    callback_blob = json.dumps(captured[0])
+    assert SENTINEL not in callback_blob, "sentinel leaked to callback"
+
+
+def test_get_existing_vulnerabilities_returns_sanitized_reports(
+    report_state: ReportState,
+) -> None:
+    """E4: get_existing_vulnerabilities (used by dedupe) must return sanitized
+    reports, not raw ones with secrets."""
+    report_state.add_vulnerability_report(
+        title=f"Dedupe leak test token={SENTINEL}",
+        severity="high",
+        description=f"secret={SENTINEL} at /Users/op/{SENTINEL}/app.py",
+    )
+    reports = report_state.get_existing_vulnerabilities()
+    blob = json.dumps(reports)
+    assert SENTINEL not in blob, "sentinel leaked through get_existing_vulnerabilities"

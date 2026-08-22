@@ -8,6 +8,7 @@ cross the trust boundary.
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote, urlparse, urlunparse
 
 
 _SECRET_PLACEHOLDER = "[SECRET]"  # noqa: S105  # nosec B105
@@ -305,22 +306,46 @@ def redact_url(url: str) -> str:
     parameters are replaced with ``[REDACTED]``; scheme, host, port, path, and
     non-sensitive parameters survive so the URL remains a usable target
     identifier.
+
+    Uses ``urllib.parse`` for robust parsing that handles case-insensitive
+    query keys, URL-encoded key variants, and edge cases the regex approach
+    missed. Falls back to manual parsing when ``urlparse`` rejects the URL
+    (e.g. when a prior redaction pass left ``[PLACEHOLDER]`` in the netloc,
+    which urlparse interprets as an invalid IPv6 literal).
     """
     if not url:
         return url
+    # Strip userinfo first using a simple scan — robust against placeholders
+    # that urlparse would reject as invalid IPv6 literals.
     redacted = _URL_USERINFO_RE.sub(r"\1[REDACTED]@", url)
-    if "?" not in redacted:
-        return redacted
-    base, _, query = redacted.partition("?")
-    fragment = ""
-    if "#" in query:
-        query, _, fragment = query.partition("#")
-        fragment = f"#{fragment}"
+    # Now parse for query redaction. urlparse may still fail on edge cases;
+    # fall back to manual query splitting.
+    try:
+        parsed = urlparse(redacted)
+        query = parsed.query
+        fragment = parsed.fragment
+        base = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
+    except ValueError:
+        # urlparse failed (e.g. bracketed placeholder in netloc); split
+        # query/fragment manually.
+        if "?" not in redacted:
+            return redacted
+        base, _, rest = redacted.partition("?")
+        query, _, fragment = rest.partition("#")
+        fragment = f"#{fragment}" if fragment else ""
+    # Redact sensitive query parameter values (case-insensitive, decoded).
+    if not query:
+        return base + (f"#{fragment}" if fragment and not base.endswith("#") else "")
+    pairs = query.split("&")
     kept: list[str] = []
-    for piece in query.split("&"):
-        key, sep, value = piece.partition("=")
-        if key.strip().lower() in _SENSITIVE_QUERY_KEYS and value:
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        decoded_key = unquote(key).strip().lower()
+        if decoded_key in _SENSITIVE_QUERY_KEYS and value:
             kept.append(f"{key}{sep}[REDACTED]")
         else:
-            kept.append(piece)
-    return f"{base}?{'&'.join(kept)}{fragment}"
+            kept.append(pair)
+    result = f"{base}?{'&'.join(kept)}"
+    if fragment and not result.endswith(fragment):
+        result += fragment
+    return result

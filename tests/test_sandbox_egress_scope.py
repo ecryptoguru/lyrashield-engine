@@ -65,6 +65,7 @@ def _no_policy_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv(caido_api._EGRESS_POLICY_ENV, raising=False)
     monkeypatch.delenv(caido_api._EGRESS_POLICY_TRUST_RW_ENV, raising=False)
     monkeypatch.delenv("STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS", raising=False)
+    monkeypatch.delenv("STRIX_RUN_ID", raising=False)
     monkeypatch.setattr(caido_api, "_in_container", lambda: False)
     monkeypatch.setattr(caido_api, "_path_on_readonly_mount", lambda _p: False)
     # Default policy path must not leak the host's /run into tests.
@@ -76,13 +77,15 @@ def _write_policy(
     *,
     authorized_hosts: list[str],
     allow_private_egress: bool = False,
+    scan_id: str = "scan-test",
+    version: int = 1,
 ) -> Path:
     path = tmp_path / "policy.json"
     path.write_text(
         json.dumps(
             {
-                "version": 1,
-                "scan_id": "scan-test",
+                "version": version,
+                "scan_id": scan_id,
                 "authorized_hosts": authorized_hosts,
                 "allow_private_egress": allow_private_egress,
             }
@@ -97,10 +100,12 @@ def _trusted_policy(
     path: Path,
     *,
     in_container: bool = True,
+    run_id: str = "scan-test",
 ) -> None:
     monkeypatch.setenv(caido_api._EGRESS_POLICY_ENV, str(path))
     monkeypatch.setattr(caido_api, "_in_container", lambda: in_container)
     monkeypatch.setattr(caido_api, "_path_on_readonly_mount", lambda _p: True)
+    monkeypatch.setenv("STRIX_RUN_ID", run_id)
 
 
 def test_replay_blocks_private_ranges_by_default() -> None:
@@ -204,3 +209,59 @@ def test_legacy_opt_in_env_still_works_without_policy(monkeypatch: pytest.Monkey
     assert caido_api.load_egress_policy() is None
     monkeypatch.setenv("STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS", "1")
     assert caido_api._check_replay_url_host("http://10.0.0.5/") is None
+
+
+def test_policy_rejects_wrong_scan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A policy whose scan_id doesn't match the current run must fail closed."""
+    path = _write_policy(tmp_path, authorized_hosts=["10.2.3.4"], scan_id="other-run")
+    _trusted_policy(monkeypatch, path, run_id="current-run")
+    policy = caido_api.load_egress_policy()
+    assert policy == caido_api._FAIL_CLOSED_POLICY
+    assert caido_api._check_replay_url_host("http://10.2.3.4/") is not None
+
+
+def test_policy_rejects_unsupported_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A policy with an unsupported version must fail closed."""
+    path = _write_policy(tmp_path, authorized_hosts=["10.2.3.4"], version=99)
+    _trusted_policy(monkeypatch, path)
+    policy = caido_api.load_egress_policy()
+    assert policy == caido_api._FAIL_CLOSED_POLICY
+    assert caido_api._check_replay_url_host("http://10.2.3.4/") is not None
+
+
+def test_policy_rejects_missing_scan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A policy without a scan_id field must fail closed."""
+    path = tmp_path / "policy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "authorized_hosts": ["10.2.3.4"],
+                "allow_private_egress": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _trusted_policy(monkeypatch, path)
+    policy = caido_api.load_egress_policy()
+    assert policy == caido_api._FAIL_CLOSED_POLICY
+
+
+def test_policy_rejects_missing_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A policy without a version field must fail closed."""
+    path = tmp_path / "policy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "scan_id": "scan-test",
+                "authorized_hosts": ["10.2.3.4"],
+                "allow_private_egress": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _trusted_policy(monkeypatch, path)
+    policy = caido_api.load_egress_policy()
+    assert policy == caido_api._FAIL_CLOSED_POLICY

@@ -290,3 +290,14 @@ def test_opposite_policy_agents_own_distinct_tool_instances(
     # Module-level singletons stay unconfigured.
     base_by_name = {t.name: t for t in factory._BASE_TOOLS}
     assert base_by_name["web_search"].allowed_callers is None
+
+
+def test_materialize_tool_copies_programmatic_tool_calling_tool() -> None:
+    """E2: ProgrammaticToolCallingTool is a dataclass and must be copied by
+    _materialize_tool so a per-agent mutation cannot leak to a shared instance."""
+    from agents import ProgrammaticToolCallingTool  # noqa: PLC0415
+
+    original = ProgrammaticToolCallingTool()
+    copy = factory._materialize_tool(original)
+    assert copy is not original
+    assert type(copy) is type(original)

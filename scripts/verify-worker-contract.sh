@@ -33,7 +33,9 @@ if [[ "$checked_out_sha" != "$PINNED_CONSUMER_SHA" ]]; then
   echo "Update .lyrashield-worker-pin only through a reviewed compatibility change." >&2
   exit 2
 fi
-if [[ -n "$(git -C "$app_checkout" status --porcelain 2>/dev/null || true)" ]]; then
+# Reject tracked modifications (staged or unstaged) but allow untracked files
+# (e.g. a nested lyrashield-engine/ checkout used by app deployment).
+if [[ -n "$(git -C "$app_checkout" status --porcelain --untracked-files=no 2>/dev/null || true)" ]]; then
   echo "Worker-consumer checkout has local modifications; contract requires a clean checkout." >&2
   exit 2
 fi

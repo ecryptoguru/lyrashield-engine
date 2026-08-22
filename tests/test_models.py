@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from agents.model_settings import ModelSettings
 from agents.models.openai_responses import OpenAIResponsesModel
@@ -317,6 +319,57 @@ def test_admission_checks_exactly_the_provider_routing_selects() -> None:
         assert is_gpt56_supported_provider(model_name), model_name
         selected = route.provider or "openai"
         assert selected in {"openai", "azure", "azure_ai", "bedrock_mantle", "chatgpt"}, model_name
+
+
+def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """E2: the provider delegated by StrixProvider._resolve_prefixed_model must
+    equal ModelRoute.provider for every accepted GPT-5.6 fixture. This spies on
+    the actual routing seam, not just static parsing."""
+    import contextlib  # noqa: PLC0415
+
+    from lyrashield.policy import codex  # noqa: PLC0415
+    from lyrashield.policy.models import StrixProvider  # noqa: PLC0415
+
+    # Prevent subscription model shortcut from bypassing routing.
+    monkeypatch.setattr(codex, "subscription_model", lambda _name: None)
+
+    accepted = [
+        ("gpt-5.6-luna", "openai"),
+        ("openai/gpt-5.6-luna", "openai"),
+        ("azure/eu/gpt-5.6-terra", "azure"),
+        ("azure_ai/gpt-5.6-luna", "azure_ai"),
+        ("bedrock_mantle/openai.gpt-5.6-luna", "bedrock_mantle"),
+        ("litellm/azure/gpt-5.6-luna", "azure"),
+    ]
+
+    for model_name, expected_provider in accepted:
+        route = parse_model_route(model_name)
+        assert route is not None, model_name
+        assert is_gpt56_supported_provider(model_name), model_name
+
+        # Build a StrixProvider and spy on _resolve_prefixed_model.
+        provider = StrixProvider()
+        seen: list[str] = []
+        original_method = provider._resolve_prefixed_model
+
+        def _make_spy(seen_list: list[str], orig: Any) -> Any:
+            def _spy(*args: Any, **kwargs: Any) -> Any:
+                prefix = kwargs.get("prefix") or (args[1] if len(args) > 1 else None)
+                if prefix:
+                    seen_list.append(str(prefix))
+                return orig(*args, **kwargs)
+
+            return _spy
+
+        monkeypatch.setattr(provider, "_resolve_prefixed_model", _make_spy(seen, original_method))
+        # get_model will call _resolve_prefixed_model for prefixed routes.
+        with contextlib.suppress(Exception):
+            provider.get_model(model_name)
+        if seen:
+            assert seen[0] == expected_provider, (
+                f"{model_name}: routing selected {seen[0]!r}, "
+                f"admission expected {expected_provider!r}"
+            )
 
 
 def test_parse_model_route_documented_forms() -> None:

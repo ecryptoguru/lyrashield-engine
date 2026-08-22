@@ -480,7 +480,9 @@ def _materialize_tool(tool: Tool) -> Tool:
     reconfigure every already-running agent built from the same registry.
     Dataclass copy keeps the (stateless) invoke functions shared.
     """
-    if isinstance(tool, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)):
+    if isinstance(
+        tool, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool, ProgrammaticToolCallingTool)
+    ):
         return dataclasses.replace(tool)
     return tool
 

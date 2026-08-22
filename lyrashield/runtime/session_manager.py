@@ -286,7 +286,7 @@ def write_egress_policy(
     return mount, host_dir
 
 
-async def create_or_reuse(
+async def create_or_reuse(  # noqa: PLR0915
     scan_id: str,
     *,
     image: str,
@@ -330,6 +330,7 @@ async def create_or_reuse(
         container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
         environment = build_sandbox_environment(container_caido_url)
         environment["LYRASHIELD_EGRESS_POLICY"] = _EGRESS_POLICY_TARGET
+        environment["STRIX_RUN_ID"] = scan_id
         manifest = Manifest(
             entries=entries,
             environment=Environment(value=environment),
@@ -421,51 +422,52 @@ async def cleanup(scan_id: str) -> str:
     be replaced by success through a later cache miss, and a confirmed removal
     is terminal. Cleanup remains non-fatal for scan results, but the receipt
     makes a stranded container observable to the run record and worker.
+
+    Cleanup holds ``_CREATION_LOCK`` so a same-ID create cannot race: the
+    create/cleanup pair is serialized per scan ID through the same lock.
     """
-    async with _CACHE_LOCK:
-        bundle = _SESSION_CACHE.get(scan_id)
-    if bundle is None:
-        receipt = _CLEANUP_RECEIPTS.get(scan_id)
-        if receipt is not None:
-            return str(receipt["status"])
-        logger.debug("cleanup(%s): no cached session", scan_id)
-        return CLEANUP_NOT_FOUND
+    async with _CREATION_LOCK:
+        async with _CACHE_LOCK:
+            bundle = _SESSION_CACHE.get(scan_id)
+        if bundle is None:
+            receipt = _CLEANUP_RECEIPTS.get(scan_id)
+            if receipt is not None:
+                return str(receipt["status"])
+            logger.debug("cleanup(%s): no cached session", scan_id)
+            return CLEANUP_NOT_FOUND
 
-    caido_client = bundle.get("caido_client")
-    if caido_client is not None:
+        caido_client = bundle.get("caido_client")
+        if caido_client is not None:
+            try:
+                await caido_client.aclose()
+            except Exception:
+                logger.debug("cleanup(%s): caido_client.aclose() raised", scan_id, exc_info=True)
+
+        client = bundle["client"]
         try:
-            await caido_client.aclose()
-        except Exception:
-            logger.debug("cleanup(%s): caido_client.aclose() raised", scan_id, exc_info=True)
+            await client.delete(bundle["session"])
+            logger.info("Cleaned up sandbox session for scan %s", scan_id)
+        except Exception as exc:
+            logger.exception(
+                "cleanup(%s): client.delete raised; container may need manual reaping",
+                scan_id,
+            )
+            _record_cleanup_receipt(scan_id, CLEANUP_FAILED, last_error=str(exc))
+            return CLEANUP_FAILED
 
-    client = bundle["client"]
-    try:
-        await client.delete(bundle["session"])
-        logger.info("Cleaned up sandbox session for scan %s", scan_id)
-    except Exception as exc:
-        logger.exception(
-            "cleanup(%s): client.delete raised; container may need manual reaping",
-            scan_id,
-        )
-        _record_cleanup_receipt(scan_id, CLEANUP_FAILED, last_error=str(exc))
-        return CLEANUP_FAILED
-
-    async with _CACHE_LOCK:
-        # Another creation for the same ID cannot have raced us here: it would
-        # still be waiting on _CREATION_LOCK, which callers hold through
-        # teardown sequencing. Pop only after confirmed deletion.
-        _SESSION_CACHE.pop(scan_id, None)
-    docker_client = getattr(client, "docker_client", None)
-    if docker_client is not None:
-        try:
-            docker_client.close()
-        except Exception:
-            logger.debug("cleanup(%s): docker_client.close() raised", scan_id, exc_info=True)
-    policy_dir = bundle.get("egress_policy_dir")
-    if policy_dir:
-        shutil.rmtree(policy_dir, ignore_errors=True)
-    _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)
-    return CLEANUP_REMOVED
+        async with _CACHE_LOCK:
+            _SESSION_CACHE.pop(scan_id, None)
+        docker_client = getattr(client, "docker_client", None)
+        if docker_client is not None:
+            try:
+                docker_client.close()
+            except Exception:
+                logger.debug("cleanup(%s): docker_client.close() raised", scan_id, exc_info=True)
+        policy_dir = bundle.get("egress_policy_dir")
+        if policy_dir:
+            shutil.rmtree(policy_dir, ignore_errors=True)
+        _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)
+        return CLEANUP_REMOVED
 
 
 def _record_cleanup_receipt(scan_id: str, status: str, *, last_error: str | None = None) -> None:

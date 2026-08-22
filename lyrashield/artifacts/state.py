@@ -107,7 +107,10 @@ def initial_run_record(
         "turn_count": 0,
     }
     if extra:
-        record.update(extra)
+        # Required contract fields are immutable here: extra must not
+        # overwrite them. A caller cannot forge status, schema_version,
+        # run_id, or any other field the worker contract depends on.
+        record.update({k: v for k, v in extra.items() if k not in REQUIRED_RUN_RECORD_FIELDS})
     return record
 
 
@@ -197,6 +200,56 @@ _FINDING_TEXT_FIELDS = (
 )
 _FINDING_URL_FIELDS = ("target", "endpoint")
 
+# Deterministic bounds for artifact fields (E4): unbounded model-controlled
+# text could exhaust disk/memory or smuggle payloads through projections.
+_MAX_TEXT_LENGTH = 10_000
+_MAX_COLLECTION_SIZE = 1_000
+_MAX_METADATA_DEPTH = 10
+_MAX_FINDING_SERIALIZED_SIZE = 1_000_000
+
+
+def _truncate_text(value: str, max_length: int = _MAX_TEXT_LENGTH) -> str:
+    """Deterministically truncate a string to ``max_length`` chars."""
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - 3] + "..."
+
+
+def _bound_collection(items: list[Any], max_size: int = _MAX_COLLECTION_SIZE) -> list[Any]:
+    """Deterministically bound a collection to ``max_size`` items."""
+    if len(items) <= max_size:
+        return items
+    return items[:max_size]
+
+
+def _recursive_sanitize_unknown(value: Any, *, include_internal_paths: bool, depth: int = 0) -> Any:
+    """Recursively sanitize unknown dict/list/string values from model-controlled fields.
+
+    Every string leaf is redacted; nested dicts/lists are descended up to
+    ``_MAX_METADATA_DEPTH``; collections are bounded to ``_MAX_COLLECTION_SIZE``.
+    """
+    if depth > _MAX_METADATA_DEPTH:
+        return "[truncated:depth]"
+    if isinstance(value, str):
+        return _truncate_text(redact_text(value, include_internal_paths=include_internal_paths))
+    if isinstance(value, dict):
+        bounded = list(value.items())[:_MAX_COLLECTION_SIZE]
+        return {
+            str(k): _recursive_sanitize_unknown(
+                v, include_internal_paths=include_internal_paths, depth=depth + 1
+            )
+            for k, v in bounded
+        }
+    if isinstance(value, list):
+        bounded = value[:_MAX_COLLECTION_SIZE]
+        return [
+            _recursive_sanitize_unknown(
+                item, include_internal_paths=include_internal_paths, depth=depth + 1
+            )
+            for item in bounded
+        ]
+    return value
+
 
 def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) -> dict[str, Any]:
     """Return the immutable sanitized snapshot of one finding.
@@ -208,21 +261,27 @@ def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) ->
     snapshot: dict[str, Any] = {}
     for key, value in report.items():
         if key in _FINDING_TEXT_FIELDS and isinstance(value, str):
-            snapshot[key] = redact_text(value, include_internal_paths=include_internal_paths)
+            snapshot[key] = _truncate_text(
+                redact_text(value, include_internal_paths=include_internal_paths)
+            )
         elif key in _FINDING_URL_FIELDS and isinstance(value, str):
             snapshot[key] = redact_url(redact_text(value, include_internal_paths=False))
         elif key == "poc_script_code" and isinstance(value, str):
             # The weaponized payload stays a local artifact, but its copy in
             # the durable snapshot is stripped of secrets and host identity;
             # sandbox-internal workspace paths are preserved by policy.
-            snapshot[key] = redact_text(value, include_internal_paths=False)
+            snapshot[key] = _truncate_text(redact_text(value, include_internal_paths=False))
         elif key == "code_locations" and isinstance(value, list):
-            snapshot[key] = _sanitize_code_locations(value, include_internal_paths)
+            snapshot[key] = _bound_collection(
+                _sanitize_code_locations(value, include_internal_paths)
+            )
         elif key == "dependency_metadata" and isinstance(value, dict):
             snapshot[key] = {
-                str(k): redact_text(str(v), include_internal_paths=include_internal_paths)
+                str(k): _truncate_text(
+                    redact_text(str(v), include_internal_paths=include_internal_paths)
+                )
                 if isinstance(v, str)
-                else v
+                else _recursive_sanitize_unknown(v, include_internal_paths=include_internal_paths)
                 for k, v in value.items()
             }
         elif key == "cvss_breakdown" and isinstance(value, dict):
@@ -230,7 +289,11 @@ def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) ->
                 str(k): redact_text(str(v), include_internal_paths=False) for k, v in value.items()
             }
         else:
-            snapshot[key] = value
+            # Unknown fields: recursively sanitize so model-controlled nested
+            # metadata cannot leak secrets through the catch-all branch.
+            snapshot[key] = _recursive_sanitize_unknown(
+                value, include_internal_paths=include_internal_paths
+            )
     return snapshot
 
 
@@ -532,14 +595,22 @@ class ReportState:
         scarf.finding(severity, cwe=cwe, is_cve=bool(cve))
 
         if self.vulnerability_found_callback:
-            self.vulnerability_found_callback(report)
+            # E4: callback receives the sanitized snapshot, not the raw report,
+            # so live CLI/TUI displays never show secrets or host paths.
+            sanitized = sanitize_finding(report, include_internal_paths=not _redact_paths)
+            self.vulnerability_found_callback(sanitized)
 
         self._set_phase("running")
         self.save_run_data()
         return report_id
 
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
-        return list(self.vulnerability_reports)
+        # E4: return sanitized snapshots so dedupe and other consumers never
+        # see raw secrets or host paths from the in-memory reports.
+        return [
+            sanitize_finding(report, include_internal_paths=not self._is_whitebox)
+            for report in self.vulnerability_reports
+        ]
 
     def record_sdk_usage(
         self,

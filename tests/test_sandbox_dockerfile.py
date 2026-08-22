@@ -101,3 +101,11 @@ def test_sandbox_uses_supported_javascript_analyzer() -> None:
     assert package["dependencies"]["eslint"] == "10.8.1"
     assert "jshint" not in package["dependencies"]
     assert '"node_modules/jshint"' not in lock
+
+
+def test_entrypoint_sets_home_for_pentester() -> None:
+    """The entrypoint must set HOME=/home/pentester so tools relying on $HOME
+    (caido-cli, npm, pip user installs) resolve to the non-root user's home."""
+    entrypoint = Path(__file__).parents[1] / "containers" / "docker-entrypoint.sh"
+    content = entrypoint.read_text(encoding="utf-8")
+    assert "HOME=/home/pentester" in content or "export HOME=/home/pentester" in content

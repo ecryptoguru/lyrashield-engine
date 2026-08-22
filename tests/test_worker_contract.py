@@ -159,3 +159,19 @@ def test_canonical_scan_profile_test_cannot_be_omitted(tmp_path: Path) -> None:
 def test_real_pin_is_a_sha() -> None:
     pin = PIN_FILE.read_text(encoding="utf-8").strip()
     assert len(pin) == 40 and all(c in "0123456789abcdef" for c in pin)
+
+
+def test_untracked_nested_engine_checkout_does_not_fail_gate(tmp_path: Path) -> None:
+    """E6: an untracked nested lyrashield-engine/ checkout inside the app
+    checkout must NOT cause the gate to fail. The gate should only reject
+    tracked modifications, not untracked files used by app deployment."""
+    app, head = make_fake_app(tmp_path)
+    # Simulate an untracked nested engine checkout (used by app deployment).
+    nested = app / "lyrashield-engine"
+    nested.mkdir(exist_ok=True)
+    (nested / "README.md").write_text("untracked nested checkout\n", encoding="utf-8")
+    (nested / "lyrashield").mkdir(exist_ok=True)
+    (nested / "lyrashield" / "__init__.py").write_text("", encoding="utf-8")
+    _gate_root, gate_script = make_gate_root(tmp_path, head)
+    result = run_contract(gate_script, app, tmp_path, help_text=REQUIRED_FLAGS)
+    assert result.returncode == 0, f"gate failed with untracked nested checkout: {result.stderr}"

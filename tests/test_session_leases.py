@@ -153,6 +153,50 @@ async def test_concurrent_different_scan_ids_get_isolated_policies(_stubbed_boot
 
 
 @pytest.mark.asyncio
+async def test_create_racing_cleanup_ends_with_one_truthful_state(_stubbed_bootstraps) -> None:
+    """Same-ID create racing cleanup must end with one tracked state, no orphan.
+
+    Cleanup must hold _CREATION_LOCK so a concurrent create cannot interleave:
+    either cleanup completes first (cache cleared, receipt=removed) and the
+    later create makes a fresh session, or create completes first (cache
+    populated) and cleanup tears it down. There is never a window where both
+    see an empty cache and produce two sessions, or where cleanup removes a
+    just-created session's cache entry while create is still inserting.
+    """
+    behavior = _stubbed_bootstraps
+    scan_id = "scan-race"
+
+    # Start create and cleanup concurrently for the same ID.
+    create_task = asyncio.create_task(
+        session_manager.create_or_reuse(
+            scan_id,
+            image="img:1",
+            local_sources=[],
+            targets=[_url_target("https://race.example.com/")],
+        )
+    )
+    cleanup_task = asyncio.create_task(session_manager.cleanup(scan_id))
+
+    # Let both run; the lock must serialize them.
+    bundle, cleanup_outcome = await asyncio.gather(create_task, cleanup_task)
+
+    # After both finish, the cache must have exactly one truthful state:
+    # either the create won (bundle cached, cleanup saw it and removed it)
+    # or cleanup won first (NOT_FOUND, then create made a fresh bundle).
+    if cleanup_outcome == session_manager.CLEANUP_NOT_FOUND:
+        # Cleanup raced first: create then populated the cache.
+        assert scan_id in session_manager._SESSION_CACHE
+        assert session_manager._SESSION_CACHE[scan_id] is bundle
+        await session_manager.cleanup(scan_id)
+    else:
+        # Create raced first: cleanup then removed it.
+        assert cleanup_outcome == session_manager.CLEANUP_REMOVED
+        assert scan_id not in session_manager._SESSION_CACHE
+    # No orphan: exactly one creation happened.
+    assert behavior["creations"] == 1
+
+
+@pytest.mark.asyncio
 async def test_manifest_carries_policy_env(_stubbed_bootstraps) -> None:
     behavior = _stubbed_bootstraps
     await session_manager.create_or_reuse(
