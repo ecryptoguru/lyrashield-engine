@@ -340,6 +340,14 @@ class ReportState:
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
 
+        # Concurrency-safe web-search reservation boundary (I20): the scan's
+        # count/cost limits are checked and reserved atomically, so concurrent
+        # tool calls cannot overspend either limit. Process-local is the real
+        # boundary today — one engine process owns a scan's budget.
+        self._web_search_lock = threading.Lock()
+        self._web_search_inflight = 0
+        self._web_search_reserved_cost = 0.0
+
         self._sarif_repo_ctx: dict[str, Any] | None = None
         self._sarif_repo_ctx_ready: bool = False
 
@@ -568,6 +576,65 @@ class ReportState:
         """Live accumulated LLM cost, independent of the persisted run-record snapshot."""
         return self._llm_usage.total_cost
 
+    def reserve_web_search_slot(
+        self,
+        estimated_cost: float,
+        *,
+        max_calls: int,
+        budget_usd: float,
+    ) -> str | None:
+        """Atomically reserve one web-search call slot and its max charge.
+
+        Returns an error string when the call would exceed the scan's
+        call-count or web-search cost limit (counting in-flight calls and
+        reserved charges), or None when the slot is reserved. Pair with
+        :meth:`commit_web_search_call` on success or
+        :meth:`release_web_search_reservation` on failure/cancellation.
+        """
+        with self._web_search_lock:
+            committed_count, committed_cost = self.get_web_search_stats()
+            if max_calls > 0 and committed_count + self._web_search_inflight >= max_calls:
+                return (
+                    f"Web search call limit reached "
+                    f"({committed_count + self._web_search_inflight}/{max_calls})."
+                )
+            if (
+                budget_usd > 0
+                and committed_cost + self._web_search_reserved_cost + estimated_cost > budget_usd
+            ):
+                return (
+                    f"Web search budget exceeded "
+                    f"(${committed_cost + self._web_search_reserved_cost:.4f}/${budget_usd:.2f})."
+                )
+            self._web_search_inflight += 1
+            self._web_search_reserved_cost += max(0.0, estimated_cost)
+            return None
+
+    def release_web_search_reservation(self, estimated_cost: float) -> None:
+        """Roll back an uncommitted web-search reservation."""
+        with self._web_search_lock:
+            self._web_search_inflight = max(0, self._web_search_inflight - 1)
+            self._web_search_reserved_cost = max(
+                0.0, self._web_search_reserved_cost - max(0.0, estimated_cost)
+            )
+
+    def commit_web_search_call(
+        self,
+        cost: float,
+        *,
+        query: str,
+        mode: str,
+        provider: str = "parallel",
+        estimated_cost: float = 0.0,
+    ) -> None:
+        """Commit a reserved web-search call at its actual charge."""
+        with self._web_search_lock:
+            self._web_search_inflight = max(0, self._web_search_inflight - 1)
+            self._web_search_reserved_cost = max(
+                0.0, self._web_search_reserved_cost - max(0.0, estimated_cost)
+            )
+        self.record_web_search_cost(cost, query=query, mode=mode, provider=provider)
+
     def record_web_search_cost(
         self,
         cost: float,
@@ -578,7 +645,9 @@ class ReportState:
     ) -> None:
         """Record a web search call's cost and append it to the run record."""
         if cost > 0:
-            self._llm_usage.record_observed_cost(cost)
+            # Ancillary provider charge: stays metered even when the model
+            # tokens ride a subscription (I19).
+            self._llm_usage.record_ancillary_cost("web_search", cost)
         entry: dict[str, Any] = {
             "provider": provider,
             "mode": mode,

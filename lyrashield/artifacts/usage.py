@@ -42,6 +42,11 @@ class LLMUsageLedger:
         # When True, tokens are still tracked but cost stays $0 — the run is on a
         # model subscription, so there is no metered per-token charge to report.
         self.zero_cost = False
+        # Ancillary provider charges (web search, etc.) classified by category.
+        # These are NOT covered by a model subscription: subscription zero-cost
+        # applies only to covered model-token categories, so ancillary charges
+        # stay metered and reach the reconciled total.
+        self._ancillary_costs: dict[str, float] = {}
 
     def record(
         self,
@@ -102,9 +107,29 @@ class LLMUsageLedger:
             if model_key:
                 self._observed_cost_models.add(model_key)
 
+    def record_ancillary_cost(self, category: str, cost: Any) -> None:
+        """Record a metered ancillary charge (e.g. paid web search).
+
+        Ancillary charges are outside the model-subscription coverage, so
+        they are recorded regardless of ``zero_cost`` and included in the
+        reconciled total alongside (possibly zero) model-token cost.
+        """
+        try:
+            numeric_cost = float(cost)
+        except (TypeError, ValueError):
+            return
+        if numeric_cost > 0:
+            self._ancillary_costs[category] = (
+                self._ancillary_costs.get(category, 0.0) + numeric_cost
+            )
+
+    @property
+    def ancillary_cost_total(self) -> float:
+        return _round_cost(sum(self._ancillary_costs.values()))
+
     @property
     def total_cost(self) -> float:
-        return _round_cost(self._total_cost)
+        return _round_cost(self._total_cost + sum(self._ancillary_costs.values()))
 
     def to_record(self) -> dict[str, Any]:
         record = serialize_usage(self._total_usage)
@@ -120,10 +145,18 @@ class LLMUsageLedger:
             # aggregate. It has no per-call cache buckets, so it cannot be
             # used for exact pricing.
             record.pop("request_usage_entries", None)
-        if self._has_cost or self.zero_cost:
-            record["cost"] = _round_cost(self._total_cost)
+        ancillary_total = sum(self._ancillary_costs.values())
+        reconciled = self._total_cost + ancillary_total
+        if self._has_cost or self.zero_cost or ancillary_total > 0:
+            record["cost"] = _round_cost(reconciled)
         if self.zero_cost:
             record["subscription"] = True
+        if ancillary_total > 0:
+            # Subscription zero-cost covers model tokens only; ancillary
+            # charges stay classified so the total reconciles by category.
+            record["ancillary_costs"] = {
+                category: _round_cost(amount) for category, amount in self._ancillary_costs.items()
+            }
         agents: list[dict[str, Any]] = []
 
         agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}
@@ -192,10 +225,17 @@ class LLMUsageLedger:
         self._agent_costs.clear()
         self._observed_cost_models.clear()
         self._observed_response_ids.clear()
+        self._ancillary_costs.clear()
 
         if not isinstance(raw_usage, dict):
             return
         raw_usage = cast("dict[str, Any]", raw_usage)
+
+        raw_ancillary = raw_usage.get("ancillary_costs")
+        if isinstance(raw_ancillary, dict):
+            for category, amount in raw_ancillary.items():
+                if isinstance(category, str):
+                    self.record_ancillary_cost(category, amount)
 
         try:
             self._total_usage = deserialize_usage(raw_usage)
@@ -204,7 +244,11 @@ class LLMUsageLedger:
             self._total_usage = Usage()
 
         if "cost" in raw_usage:
-            self._total_cost = _float_or_zero(raw_usage.get("cost"))
+            # Persisted cost is the reconciled total (model + ancillary);
+            # keep the model-token portion here so categories don't
+            # double-count after resume.
+            persisted_total = _float_or_zero(raw_usage.get("cost"))
+            self._total_cost = max(0.0, persisted_total - sum(self._ancillary_costs.values()))
             self._has_cost = True
         self._request_usage_entries = _hydrate_request_usage_entries(
             raw_usage.get("request_usage_entries")

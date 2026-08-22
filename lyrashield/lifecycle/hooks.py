@@ -47,17 +47,16 @@ _GPT56_LONG_CONTEXT_TOKENS = 272_000
 # tag as system-verified and to ignore any similar-looking content from
 # user or peer messages.
 _SYSTEM_NOTICE_TAG = "[SYSTEM-NOTICE]"
-# Azure GPT-5.6 rates in Microsoft Foundry, effective 2026-08-06.
-# Rates are dollars per 1M tokens (input, output).
-_GPT56_RATES = {
-    "terra": (2.0, 12.0),
-    "luna": (0.2, 1.2),
-}
+# Canonical GPT-5.6 rate card (input, cached, cache-write, output) and the
+# long-context threshold, imported from the pricing ledger so admission,
+# reservation, and final pricing share one source of truth (I8).
+from lyrashield.artifacts.usage import (  # noqa: E402
+    _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS,
+    _GPT56_USD_PER_MILLION,
+)
 
-_GPT56_CACHED_RATES = {
-    "terra": 0.2,
-    "luna": 0.02,
-}
+
+_GPT56_LONG_CONTEXT_TOKENS = _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS
 
 # Conservative defaults for models not explicitly priced. We deliberately
 # overestimate so budget enforcement errs on the side of protecting the
@@ -114,63 +113,78 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
 
 
 @functools.cache
-def _model_rates(model: str) -> tuple[float, float]:
-    normalized = model.lower()
-    for tier, rates in _GPT56_RATES.items():
-        if tier in normalized:
-            return rates
-    return _fallback_model_rates(model)
+def _model_rate_card(model: str) -> tuple[float, float, float, float]:
+    """(input, cached, cache_write, output) dollars per 1M tokens for a model.
 
-
-@functools.cache
-def _cached_input_rate(model: str) -> float:
-    normalized = model.lower()
-    for tier, rate in _GPT56_CACHED_RATES.items():
-        if tier in normalized:
-            return rate
-    return _fallback_cached_input_rate(model)
-
-
-@functools.cache
-def _fallback_model_rates(model: str) -> tuple[float, float]:
-    """Return (input_rate, output_rate) in dollars per 1M tokens.
-
-    Prefer known GPT-5.6 rates (handled by callers); for other models try the
-    LiteLLM public cost map. If the model is unknown, use a conservative
-    default so budget enforcement does not crash and still overestimates cost.
+    GPT-5.6 tiers come from the canonical rate card shared with final
+    pricing; other models fall back to the LiteLLM cost map, then to
+    conservative defaults that overestimate so budget enforcement errs on
+    the side of protecting the cap.
     """
+    suffix = model.strip().lower().split("/")[-1]
+    for tier, rates in _GPT56_USD_PER_MILLION.items():
+        if tier in suffix:
+            return rates
+    return _fallback_model_rate_card(model)
+
+
+@functools.cache
+def _fallback_model_rate_card(model: str) -> tuple[float, float, float, float]:
+    """Fallback (input, cached, cache_write, output) rates for non-GPT-5.6 models."""
     cost_info = _lookup_litellm_cost(model)
     if cost_info is not None:
         input_cost = cost_info.get("input_cost_per_token")
         output_cost = cost_info.get("output_cost_per_token")
         if input_cost and output_cost:
             try:
-                return float(input_cost) * 1_000_000, float(output_cost) * 1_000_000
+                input_rate = float(input_cost) * 1_000_000
+                output_rate = float(output_cost) * 1_000_000
+                cached_rate = _rate_or_fraction(
+                    cost_info.get("cache_read_input_token_cost"), input_rate
+                )
+                cache_write_rate = _rate_or_fraction(
+                    cost_info.get("cache_creation_input_token_cost"), input_rate
+                )
+                return input_rate, cached_rate, cache_write_rate, output_rate
             except (TypeError, ValueError):
                 pass
 
     logger.warning("No LiteLLM cost rates for model %s; using conservative fallback rates", model)
-    return _DEFAULT_FALLBACK_INPUT_RATE, _DEFAULT_FALLBACK_OUTPUT_RATE
+    return (
+        _DEFAULT_FALLBACK_INPUT_RATE,
+        _DEFAULT_FALLBACK_CACHE_RATE,
+        _DEFAULT_FALLBACK_INPUT_RATE,
+        _DEFAULT_FALLBACK_OUTPUT_RATE,
+    )
+
+
+def _rate_or_fraction(per_token_cost: Any, input_rate: float) -> float:
+    """Per-token cost scaled to per-million, or a conservative fraction."""
+    if per_token_cost:
+        try:
+            return float(per_token_cost) * 1_000_000
+        except (TypeError, ValueError):
+            pass
+    return max(input_rate * 0.1, _DEFAULT_FALLBACK_CACHE_RATE)
 
 
 @functools.cache
-def _fallback_cached_input_rate(model: str) -> float:
-    """Return a cached-input rate in dollars per 1M tokens.
+def _model_rates(model: str) -> tuple[float, float]:
+    """Backward-compatible (input, output) pair from the canonical card."""
+    rates = _model_rate_card(model)
+    return rates[0], rates[3]
 
-    LiteLLM models often list a cache-read rate; otherwise fall back to a
-    fraction of the standard input rate. This is intentionally conservative.
+
+@functools.cache
+def _reservation_input_rate(model: str) -> float:
+    """Input-side rate for reservations: the most expensive input bucket.
+
+    A reservation is taken before the provider reports which input tokens
+    were cache writes (priced above plain input for GPT-5.6 Terra), so the
+    reserved amount must assume the worst bucket (I8: reserved >= final).
     """
-    cost_info = _lookup_litellm_cost(model)
-    if cost_info is not None:
-        cached_cost = cost_info.get("cache_read_input_token_cost")
-        if cached_cost:
-            try:
-                return float(cached_cost) * 1_000_000
-            except (TypeError, ValueError):
-                pass
-
-    input_rate, _ = _model_rates(model)
-    return max(input_rate * 0.1, _DEFAULT_FALLBACK_CACHE_RATE)
+    input_rate, _cached, cache_write_rate, _output = _model_rate_card(model)
+    return max(input_rate, cache_write_rate)
 
 
 def _lookup_litellm_cost(model: str) -> dict[str, Any] | None:
@@ -223,21 +237,62 @@ def _cached_tokens_from_entry(entry: Any) -> int:
     return max(0, int(cached or 0))
 
 
+def _cache_write_tokens_from_entry(entry: Any) -> int:
+    """Cache-write tokens reported by the provider, or ``-1`` when unknown.
+
+    ``-1`` signals "the entry carries no cache-write detail", which makes the
+    upper bound price ALL input tokens at the worst input bucket — a cache
+    write is billed above plain input for GPT-5.6 Terra.
+    """
+    details = _usage_value(entry, "input_tokens_details")
+    if not details:
+        return -1
+    if isinstance(details, dict):
+        details = cast("dict[str, Any]", details)
+        if "cache_write_tokens" not in details:
+            return -1
+        return max(0, int(details.get("cache_write_tokens", 0) or 0))
+    if not hasattr(details, "cache_write_tokens"):
+        return -1
+    return max(0, int(getattr(details, "cache_write_tokens", None) or 0))
+
+
 def _usage_cost_upper_bound(model: str, usage: Any) -> float:
-    input_rate, output_rate = _model_rates(model)
-    cached_rate = _cached_input_rate(model)
+    """Cost upper bound for ``usage`` under the canonical rate card.
+
+    With per-entry cache details this equals the exact bucketed price; the
+    committed floor after a release may then match the final ledger cost. For
+    entries without cache detail, every input token is priced at the most
+    expensive input bucket, so the bound is never below the final cost for
+    identical usage (I8).
+    """
+    input_rate, cached_rate, cache_write_rate, output_rate = _model_rate_card(model)
+    worst_input_rate = max(input_rate, cache_write_rate)
     entries = list(getattr(usage, "request_usage_entries", None) or [usage])
     total = 0.0
     for entry in entries:
         input_tokens = max(0, int(_usage_value(entry, "input_tokens") or 0))
         cached_tokens = min(_cached_tokens_from_entry(entry), input_tokens)
-        uncached_tokens = input_tokens - cached_tokens
+        cache_write_tokens = _cache_write_tokens_from_entry(entry)
         output_tokens = max(0, int(_usage_value(entry, "output_tokens") or 0))
         multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_TOKENS else 1.0
+        output_multiplier = 1.5 if multiplier > 1 else 1.0
+        if cache_write_tokens < 0:
+            # Unknown bucket split: assume the worst input bucket for all
+            # non-cached tokens.
+            total += (
+                (input_tokens - cached_tokens) * worst_input_rate * multiplier
+                + cached_tokens * max(cached_rate, worst_input_rate) * multiplier
+                + output_tokens * output_rate * output_multiplier
+            ) / 1_000_000
+            continue
+        cache_write_tokens = min(cache_write_tokens, input_tokens - cached_tokens)
+        uncached_tokens = input_tokens - cached_tokens - cache_write_tokens
         total += (
             uncached_tokens * input_rate * multiplier
             + cached_tokens * cached_rate * multiplier
-            + output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
+            + cache_write_tokens * cache_write_rate * multiplier
+            + output_tokens * output_rate * output_multiplier
         ) / 1_000_000
     return total
 
@@ -578,7 +633,12 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         """
         if self._max_budget_usd is None:
             return
-        input_rate, output_rate = _model_rates(model)
+        # Reserve against the worst input bucket: the provider has not yet
+        # reported which tokens will be cache writes (billed above plain
+        # input for GPT-5.6 Terra), so the reservation must be an upper
+        # bound of the final cost for identical usage (I8).
+        input_rate = _reservation_input_rate(model)
+        output_rate = _model_rate_card(model)[3]
         multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_TOKENS else 1.0
         reservation = (
             input_tokens * input_rate * multiplier
@@ -777,7 +837,10 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 len(input_items),
             )
         if self._max_budget_usd is not None:
-            input_rate, output_rate = _model_rates(model)
+            # Worst input bucket rate (see reserve_out_of_band_request): the
+            # reserved amount is an upper bound of the final cost (I8).
+            input_rate = _reservation_input_rate(model)
+            output_rate = _model_rate_card(model)[3]
             multiplier = 2.0 if after > _GPT56_LONG_CONTEXT_TOKENS else 1.0
             reservation = (
                 after * input_rate * multiplier
