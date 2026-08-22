@@ -1,0 +1,7 @@
+packages/types/src/scan-profile.test.ts
+apps/worker/src/engine/command-builder.test.ts
+apps/worker/src/docker-runtime.test.ts
+apps/worker/src/engine/output-parser.test.ts
+apps/worker/src/engine/result-integrity.test.ts
+apps/worker/src/engine/runner.test.ts
+apps/worker/src/jobs/run-scan.job.test.ts

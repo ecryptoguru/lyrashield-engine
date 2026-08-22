@@ -71,10 +71,14 @@ jobs:
       - name: Verify native release binary
         run: bash scripts/build.sh
 
+      - name: Read pinned worker-consumer revision
+        run: echo "WORKER_PIN=$(tr -d '[:space:]' < .lyrashield-worker-pin)" >> "$GITHUB_ENV"
+
       - name: Check out public LyraShield app contract
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ecryptoguru/lyrashield-ai
+          ref: ${{ env.WORKER_PIN }}
           path: .ci/lyrashield-ai
           fetch-depth: 1
           persist-credentials: false

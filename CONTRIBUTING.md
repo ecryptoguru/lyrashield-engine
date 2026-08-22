@@ -75,9 +75,11 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
    git diff --check
    ```
 
-   The gate runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It diffs `strix/**` against the pinned v1.5.3 base and fails on any path outside the two-file allowlist, more than 30 insertions, or any deletion. It also validates attribution and the `UPGRADES.md` ledger.
+   That script executes exactly: `uv sync --frozen --extra viewer` (so the PDF/viewer tests actually run), `ruff check .`, `ruff format --check .`, the full `pytest` suite with `-W error::pydantic.PydanticDeprecatedSince211`, `mypy strix lyrashield_adapter lyrashield`, and `bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q`. It also diffs `strix/**` against the pinned v1.5.3 base and fails on any path outside the two-file allowlist, more than 30 insertions, or any deletion.
 
-7. Require human approval and green Engine CI before merge. Engine CI (`.github/workflows/ci.yml`) enforces the same quality gates on every pull request and push to `main`. Test counts are intentionally omitted because the executable gate is authoritative.
+   The following are **separate gates** this script does not run — do not claim a local green gate covers them: Python package build and native-binary smoke, Docker sandbox-image build and probes, and the pinned worker-contract suite (`scripts/verify-worker-contract.sh`, Engine CI). Signed desktop-release evidence is a release workflow concern, not a local gate.
+
+7. Require human approval and green Engine CI before merge. Engine CI (`.github/workflows/ci.yml`) enforces the same quality gates on every pull request and push to `main`, checks out the pinned worker-consumer revision from `.lyrashield-worker-pin`, and runs the worker contract tests declared in `scripts/worker-contract-tests.txt` (including `packages/types/src/scan-profile.test.ts`). Test counts are intentionally omitted because the executable gate is authoritative.
 
 ## Dependency updates
 
