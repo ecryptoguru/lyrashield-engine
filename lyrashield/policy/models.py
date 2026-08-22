@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import inspect
 import os
 import re
@@ -87,6 +88,66 @@ _GPT56_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
     }
 )
 
+# Documented passthrough wrappers: exactly one may lead a route, and the
+# provider selected by routing is then the first component after it.
+_ROUTE_WRAPPER_PREFIXES: tuple[str, ...] = ("litellm", "any-llm")
+
+
+@dataclasses.dataclass(frozen=True)
+class ModelRoute:
+    """Strictly parsed model route: one canonical interpretation per string.
+
+    ``provider`` is the component the provider implementation actually selects
+    (the first component after an optional documented wrapper); ``None`` means
+    a bare model name that routing sends to the default OpenAI provider.
+    """
+
+    wrapper: str | None
+    provider: str | None
+    model_path: str
+    original: str
+
+
+def parse_model_route(model_name: str | None) -> ModelRoute | None:
+    """Parse the documented model-route forms and only those.
+
+    Accepted: a bare model, or one documented wrapper prefix (``litellm/`` or
+    ``any-llm/``) followed by a provider component and a non-empty model path
+    (the path may itself contain ``/`` or ``.``, e.g. Azure regions or Bedrock
+    dotted deployment names). Everything else — empty components, unknown or
+    nested/repeated wrappers, leading/trailing/doubled separators — raises
+    ``ValueError`` so admission and routing can never disagree by interpreting
+    the raw string differently.
+    """
+    name = (model_name or "").strip()
+    if not name:
+        return None
+    lowered = name.lower()
+    wrapper: str | None = None
+    remainder = lowered
+    for candidate in _ROUTE_WRAPPER_PREFIXES:
+        prefix = f"{candidate}/"
+        if lowered.startswith(prefix):
+            wrapper = candidate
+            remainder = lowered[len(prefix) :]
+            break
+    if remainder.startswith(tuple(f"{w}/" for w in _ROUTE_WRAPPER_PREFIXES)):
+        raise ValueError(f"model route nests a wrapper prefix: {model_name!r}")
+    if not remainder:
+        raise ValueError(f"model route ends at its wrapper prefix: {model_name!r}")
+    if remainder.startswith("/") or remainder.endswith("/") or "//" in remainder:
+        raise ValueError(f"model route has an empty component: {model_name!r}")
+    if "/" in remainder:
+        provider, _, model_path = remainder.partition("/")
+    else:
+        provider, model_path = None, remainder
+    return ModelRoute(
+        wrapper=wrapper,
+        provider=provider,
+        model_path=model_path,
+        original=name,
+    )
+
 
 def is_gpt56_supported_provider(model_name: str | None) -> bool:
     """Return whether a model name identifies a GPT-5.6 Terra/Luna deployment
@@ -94,27 +155,23 @@ def is_gpt56_supported_provider(model_name: str | None) -> bool:
 
     The allowed set is intentionally conservative. If a new provider starts
     carrying GPT-5.6, add its LiteLLM provider marker here (and in the cost-map
-    refresh script) before advertising it in docs.
+    refresh script) before advertising it in docs. Admission checks only the
+    leading provider the routing implementation selects; a permitted provider
+    appearing later in the string (e.g. ``evil/azure/gpt-5.6-luna``) is a
+    different, unapproved route and is rejected.
     """
     if not is_gpt56_model(model_name):
         return False
-    name = (model_name or "").strip().lower()
-    # The ChatGPT subscription route is gated separately by auth, not by this
-    # provider allow-list; let it through so the product auth check can run.
-    if name.startswith("chatgpt/"):
+    try:
+        route = parse_model_route(model_name)
+    except ValueError:
+        return False
+    if route is None:
+        return False
+    if route.provider is None:
+        # Bare OpenAI model names route to the default OpenAI provider.
         return True
-    # Bare OpenAI model names (e.g. "gpt-5.6-luna" or "prod-gpt-5.6-luna")
-    # are routed to OpenAI. They may contain dots, so only require no provider
-    # slash and no LiteLLM passthrough prefix.
-    if "/" not in name:
-        return True
-    # Strip LiteLLM passthrough prefixes before looking at the provider.
-    for prefix in ("litellm/", "any-llm/"):
-        if name.startswith(prefix):
-            name = name[len(prefix) :]
-            break
-    parts = name.replace(".", "/").split("/")
-    return any(part in _GPT56_SUPPORTED_PROVIDERS for part in parts)
+    return route.provider in _GPT56_SUPPORTED_PROVIDERS
 
 
 def model_supports_programmatic_tool_calling(model_name: str | None) -> bool:
@@ -437,6 +494,9 @@ class StrixProvider(MultiProvider):
                 codex.get_subscription_client(),
                 reasoning_effort=llm.reasoning_effort,
             )
+        # Routing consumes the same strict parser admission uses, so a raw
+        # route string can never be reinterpreted differently downstream.
+        parse_model_route(model_name)
         model = super().get_model(model_name)
         if llm.disable_streaming:
             return _NonStreamingModel(model)

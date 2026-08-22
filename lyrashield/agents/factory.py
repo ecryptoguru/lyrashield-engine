@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import json
 import logging
@@ -463,12 +464,25 @@ def _finish_tool_use_behavior(
 
 
 def _set_tools_programmatic_callers(tools: list[Tool], *, enabled: bool) -> None:
-    """Set callers on shared tools without leaking a prior agent's policy."""
+    """Set callers on per-agent tool copies without leaking a prior agent's policy."""
     for tool in tools:
         if isinstance(tool, ProgrammaticToolCallingTool):
             continue
         if isinstance(tool, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)):
             tool.allowed_callers = _PROGRAMMATIC_ALLOWED_CALLERS if enabled else None
+
+
+def _materialize_tool(tool: Tool) -> Tool:
+    """Return a per-agent copy of a registry/toolset tool singleton.
+
+    ``allowed_callers`` policy and result-bounding wrappers mutate the tool
+    object they touch; applying them to the shared singletons would silently
+    reconfigure every already-running agent built from the same registry.
+    Dataclass copy keeps the (stateless) invoke functions shared.
+    """
+    if isinstance(tool, (FunctionTool, CustomTool, ShellTool, ApplyPatchTool)):
+        return dataclasses.replace(tool)
+    return tool
 
 
 _BASE_TOOLS: tuple[Tool, ...] = (
@@ -706,6 +720,9 @@ def build_strix_agent(
         tools = [*_BASE_TOOLS, *agent_tools, agent_finish]
 
     tools = _apply_tool_overrides(tools)
+    # Materialize per-agent copies before any policy or wrapper mutates them,
+    # so building one agent can never reconfigure another agent's tools.
+    tools = [_materialize_tool(tool) for tool in tools]
 
     use_programmatic = (
         not chat_completions_tools
