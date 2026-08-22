@@ -1,8 +1,52 @@
 #!/bin/bash
 set -e
 
+# Two-phase startup. The container starts as root so this script can perform
+# the required certificate/proxy startup mutations; it then irreversibly
+# re-execs itself as the unprivileged `pentester` user (setpriv) and never
+# regains privileges — the runtime image ships no sudo grant, so the agent
+# cannot become root or modify protected system paths.
+
 CAIDO_PORT=48080
 CAIDO_LOG="/tmp/caido_startup.log"
+
+if [ "$(id -u)" = "0" ]; then
+  # ---------------- privileged phase (root, one-shot) ----------------
+  cat > /etc/profile.d/proxy.sh << EOF
+export http_proxy=http://127.0.0.1:${CAIDO_PORT}
+export https_proxy=http://127.0.0.1:${CAIDO_PORT}
+export HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
+export HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
+export ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
+export NO_PROXY=localhost,127.0.0.1
+export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+EOF
+  chmod 644 /etc/profile.d/proxy.sh
+
+  cat > /etc/environment << EOF
+http_proxy=http://127.0.0.1:${CAIDO_PORT}
+https_proxy=http://127.0.0.1:${CAIDO_PORT}
+HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
+HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
+ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
+NO_PROXY=localhost,127.0.0.1
+EOF
+  chmod 644 /etc/environment
+
+  cat > /etc/wgetrc << EOF
+use_proxy=yes
+http_proxy=http://127.0.0.1:${CAIDO_PORT}
+https_proxy=http://127.0.0.1:${CAIDO_PORT}
+EOF
+  chmod 644 /etc/wgetrc
+
+  # Irreversible privilege drop; the agent phase re-enters this script below.
+  exec setpriv --reuid=pentester --regid=pentester --init-groups \
+    /usr/local/bin/docker-entrypoint.sh "$@"
+fi
+
+# ---------------- agent phase (pentester, no way back to root) ----------------
 
 if [ ! -f /app/certs/ca.p12 ]; then
   echo "ERROR: CA certificate file /app/certs/ca.p12 not found."
@@ -63,34 +107,6 @@ sleep 2
 
 echo "Caido is up — host bootstraps the guest token + project via the Python SDK."
 
-echo "Configuring system-wide proxy settings..."
-
-cat << EOF | sudo tee /etc/profile.d/proxy.sh
-export http_proxy=http://127.0.0.1:${CAIDO_PORT}
-export https_proxy=http://127.0.0.1:${CAIDO_PORT}
-export HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
-export HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
-export ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
-export NO_PROXY=localhost,127.0.0.1
-export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-EOF
-
-cat << EOF | sudo tee /etc/environment
-http_proxy=http://127.0.0.1:${CAIDO_PORT}
-https_proxy=http://127.0.0.1:${CAIDO_PORT}
-HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
-HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
-ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
-NO_PROXY=localhost,127.0.0.1
-EOF
-
-cat << EOF | sudo tee /etc/wgetrc
-use_proxy=yes
-http_proxy=http://127.0.0.1:${CAIDO_PORT}
-https_proxy=http://127.0.0.1:${CAIDO_PORT}
-EOF
-
 # Use POSIX `.` (not the bashism `source`) so these lines are safe when the rc
 # files are read by a POSIX shell (e.g. `sh -lc`), which otherwise fails with
 # "source: not found". `.` is understood by bash, zsh, and dash alike.
@@ -102,9 +118,9 @@ echo ". /etc/profile.d/proxy.sh" >> ~/.zshrc
 echo "✅ System-wide proxy configuration complete"
 
 echo "Adding CA to browser trust store..."
-sudo -u pentester mkdir -p /home/pentester/.pki/nssdb
-sudo -u pentester certutil -N -d sql:/home/pentester/.pki/nssdb --empty-password
-sudo -u pentester certutil -A -n "Testing Root CA" -t "C,," -i /app/certs/ca.crt -d sql:/home/pentester/.pki/nssdb
+mkdir -p /home/pentester/.pki/nssdb
+certutil -N -d sql:/home/pentester/.pki/nssdb --empty-password
+certutil -A -n "Testing Root CA" -t "C,," -i /app/certs/ca.crt -d sql:/home/pentester/.pki/nssdb
 echo "✅ CA added to browser trust store"
 
 mkdir -p /workspace/.agent-browser-screenshots

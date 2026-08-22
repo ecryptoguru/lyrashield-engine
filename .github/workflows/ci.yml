@@ -122,6 +122,9 @@ jobs:
             test ! -S /var/run/docker.sock &&
             test "$VIRTUAL_ENV" = "/app/.venv" &&
             test "$HTTP_PROXY" = "http://127.0.0.1:48080" &&
+            ! sudo -n true 2>/dev/null &&
+            test ! -w /etc &&
+            test ! -w /usr/local/bin &&
             caido-cli --version &&
             command -v nmap >/dev/null &&
             getcap /usr/lib/nmap/nmap | grep -q "cap_net_raw" &&
@@ -130,6 +133,52 @@ jobs:
             /app/.venv/bin/python -c "import caido_api" &&
             status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
             case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
+          '
+
+      - name: Guarded replay egress probes (built image)
+        run: |
+          docker run --rm lyrashield-sandbox:ci /app/.venv/bin/python -c "
+          import socket
+          from caido_api import _check_replay_url_host as blocked
+
+          for url in (
+              'http://169.254.169.254/',
+              'http://100.100.100.200/',
+              'http://metadata.google.internal/',
+              'http://127.0.0.1:8080/',
+              'http://10.0.0.5/',
+              'http://192.168.1.1/',
+              'http://[::1]/',
+              'http://user:pass@10.0.0.5/',
+          ):
+              assert blocked(url) is not None, url
+          assert blocked('https://example.com/') is None
+
+          # DNS rebinding: a hostname resolving into private space is blocked.
+          orig_getaddrinfo = socket.getaddrinfo
+          def fake_getaddrinfo(host, *args, **kwargs):
+              if host == 'rebind.example.net':
+                  return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.9.9.9', 0))]
+              return orig_getaddrinfo(host, *args, **kwargs)
+          socket.getaddrinfo = fake_getaddrinfo
+          assert blocked('http://rebind.example.net/') is not None
+          print('replay guard probes passed')
+          "
+
+      - name: Deny-by-default network probes (built image)
+        run: |
+          docker network create --internal ci-sandbox-internal
+          trap 'docker network rm ci-sandbox-internal >/dev/null 2>&1 || true' EXIT
+          docker run --rm --network ci-sandbox-internal lyrashield-sandbox:ci sh -c '
+            # Direct IPv4, IPv6, DNS, metadata, and alternate-client egress
+            # (proxy variables unset) must all be denied by the network layer.
+              ! curl -sS -m 5 -o /dev/null http://203.0.113.10/ &&
+              ! curl -sS -m 5 -o /dev/null "http://[2001:db8::1]/" &&
+              ! getent hosts example.com &&
+              ! curl -sS -m 5 -o /dev/null http://169.254.169.254/ &&
+              ! env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+                   curl -sS -m 5 -o /dev/null http://203.0.113.10/ &&
+              echo "network deny probes passed"
           '
 
       - name: Upload image diagnostics

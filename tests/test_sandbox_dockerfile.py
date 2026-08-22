@@ -53,6 +53,31 @@ def test_nmap_file_capabilities_work_without_opt_in_net_admin() -> None:
     assert "setcap cap_net_raw,cap_net_admin" not in content
 
 
+def test_runtime_agent_has_no_sudo_and_image_starts_root() -> None:
+    """The agent runs unprivileged: no NOPASSWD grant, no sudo group, no sudo
+    package; the image's final USER is root so the entrypoint can run its
+    privileged phase and then drop to pentester irreversibly."""
+    content = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "NOPASSWD" not in content
+    assert "usermod -aG sudo" not in content
+    assert "apt-get install -y kali-archive-keyring sudo" not in content
+    # Final USER must be root, immediately before ENTRYPOINT, so the
+    # entrypoint's privilege-drop phase is reachable.
+    final_user_block = content[content.rfind("USER") :]
+    assert final_user_block.startswith("USER root")
+    assert "docker-entrypoint.sh" in final_user_block
+
+
+def test_image_ships_guarded_proxy_module_not_upstream_copy() -> None:
+    """The prompt-documented `import caido_api` must resolve to the guarded
+    LyraShield implementation (C1), packaged from exactly one source file."""
+    content = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py" in content
+    assert "strix/tools/proxy/caido_api.py" not in content
+
+
 def test_wapiti_install_refreshes_rolling_package_index() -> None:
     content = DOCKERFILE.read_text(encoding="utf-8")
 

@@ -6,8 +6,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ipaddress
+import json
 import logging
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -30,9 +32,16 @@ logger = logging.getLogger(__name__)
 # In-container Caido sidecar port (matches the image's caido-cli bind).
 _CONTAINER_CAIDO_PORT = 48080
 
+# Read-only mount target for the per-run replay egress policy consumed by the
+# guarded ``caido_api`` module inside the sandbox.
+_EGRESS_POLICY_TARGET = "/run/lyrashield-egress/policy.json"
+
 
 _SESSION_CACHE: dict[str, dict[str, Any]] = {}
 _CACHE_LOCK = asyncio.Lock()
+# ponytail: one global creation lock serializes all sandbox creations; per-ID
+# locks only if measured throughput ever needs them.
+_CREATION_LOCK = asyncio.Lock()
 
 # Manifest root inside the container; entry keys hang off this path.
 _WORKSPACE_ROOT = "/workspace"
@@ -235,6 +244,38 @@ async def _create_default_scope(
     return scope_id, allowlist
 
 
+def write_egress_policy(
+    scan_id: str,
+    authorized_hosts: set[str],
+    *,
+    allow_private_egress: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """Write the run-scoped replay egress policy for ``scan_id``.
+
+    Returns ``(bind_mount_spec, host_dir)`` where the spec mounts the policy
+    read-only at :data:`_EGRESS_POLICY_TARGET`. The trusted host creates the
+    policy before launch; the sandbox agent can read it but — via the
+    read-only mount plus the guard's mount check — cannot replace it with its
+    own authorization.
+    """
+    host_dir = tempfile.mkdtemp(prefix=f"lyrashield-egress-{scan_id}-")
+    policy_path = Path(host_dir) / "policy.json"
+    payload = {
+        "version": 1,
+        "scan_id": scan_id,
+        "authorized_hosts": sorted(authorized_hosts),
+        "allow_private_egress": allow_private_egress,
+    }
+    policy_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    policy_path.chmod(0o444)
+    mount = {
+        "source": str(policy_path),
+        "target": _EGRESS_POLICY_TARGET,
+        "read_only": True,
+    }
+    return mount, host_dir
+
+
 async def create_or_reuse(
     scan_id: str,
     *,
@@ -248,105 +289,116 @@ async def create_or_reuse(
     ``/workspace/<workspace_subdir>`` inside the container — copied in, or
     bind-mounted read-only when the entry is flagged ``mount``.
 
-    When ``targets`` carries the scan's authorized network targets, a default
-    Caido scope derived from them is created before the agent starts, and the
-    authorized hosts are registered with the replay egress guard so
-    private-range traffic is only permitted toward explicitly authorized
-    internal targets.
+    When ``targets`` carries the scan's authorized network targets, the hosts
+    are written to a per-run read-only egress policy mounted into the
+    container, and a default Caido scope derived from them is created before
+    the agent starts, so private-range replay is only permitted toward
+    explicitly authorized internal targets. The whole check-create-insert
+    sequence runs under one lock, so concurrent calls for the same scan ID
+    share exactly one tracked session.
     """
-    async with _CACHE_LOCK:
-        cached = _SESSION_CACHE.get(scan_id)
+    async with _CREATION_LOCK:
+        async with _CACHE_LOCK:
+            cached = _SESSION_CACHE.get(scan_id)
         if cached is not None:
             logger.info("Reusing existing sandbox session for scan %s", scan_id)
             return cached
 
-    entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(local_sources)
-
-    # Caido runs as an in-container sidecar; HTTP(S) traffic from any
-    # process started via ``session.exec`` (the SDK's Shell tool, etc.)
-    # picks up these env vars automatically. ``NO_PROXY`` keeps the
-    # agent-browser CDP daemon's localhost traffic from looping back
-    # through Caido.
-    container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
-    manifest = Manifest(
-        entries=entries,
-        environment=Environment(value=build_sandbox_environment(container_caido_url)),
-        extra_path_grants=extra_path_grants,
-    )
-
-    backend_name = load_settings().runtime.backend
-    backend = get_backend(backend_name)
-
-    logger.info(
-        "Creating sandbox session for scan %s (backend=%s, image=%s)",
-        scan_id,
-        backend_name,
-        image,
-    )
-    client: Any | None = None
-    session: Any | None = None
-    caido_client: Any | None = None
-    try:
-        client, session = await backend(
-            image=image,
-            manifest=manifest,
-            exposed_ports=(_CONTAINER_CAIDO_PORT,),
-            bind_mounts=bind_mounts,
-        )
-
-        caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
-        scheme = "https" if caido_endpoint.tls else "http"
-        sandbox_host, sandbox_port = resolve_sandbox_endpoint(
-            caido_endpoint.host,
-            caido_endpoint.port,
-            container_ip=get_sandbox_container_ip(client, session),
-        )
-        host_caido_url = f"{scheme}://{sandbox_host}:{sandbox_port}"
-        logger.debug("Caido host endpoint resolved: %s", host_caido_url)
-
-        caido_client = await bootstrap_caido(
-            session,
-            scan_id=scan_id,
-            host_url=host_caido_url,
-            container_url=container_caido_url,
-        )
+        entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(local_sources)
 
         authorized_hosts = derive_authorized_target_hosts(targets)
-        caido_api.set_authorized_target_hosts(authorized_hosts)
-        default_scope_id, default_scope_allowlist = await _create_default_scope(
-            caido_client,
-            scan_id=scan_id,
-            authorized_hosts=authorized_hosts,
-        )
-    except Exception:
-        if caido_client is not None:
-            with contextlib.suppress(Exception):
-                await caido_client.aclose()
-        if client is not None and session is not None:
-            with contextlib.suppress(Exception):
-                await client.delete(session)
-        if client is not None:
-            with contextlib.suppress(Exception):
-                docker_client = getattr(client, "docker_client", None)
-                if docker_client is not None:
-                    docker_client.close()
-        raise
-    finally:
-        for staged in staged_dirs:
-            shutil.rmtree(staged, ignore_errors=True)
+        policy_mount, policy_host_dir = write_egress_policy(scan_id, authorized_hosts)
+        bind_mounts.append(policy_mount)
 
-    bundle = {
-        "client": client,
-        "session": session,
-        "caido_client": caido_client,
-        "default_scope_id": default_scope_id,
-        "default_scope_allowlist": default_scope_allowlist,
-        "authorized_hosts": sorted(authorized_hosts),
-    }
-    async with _CACHE_LOCK:
-        _SESSION_CACHE[scan_id] = bundle
-    logger.info("Sandbox session for scan %s ready and cached", scan_id)
-    return bundle
+        # Caido runs as an in-container sidecar; HTTP(S) traffic from any
+        # process started via ``session.exec`` (the SDK's Shell tool, etc.)
+        # picks up these env vars automatically. ``NO_PROXY`` keeps the
+        # agent-browser CDP daemon's localhost traffic from looping back
+        # through Caido. These variables steer clients toward the proxy; the
+        # enforced egress controls are the network policy admission check and
+        # the replay guard's policy file.
+        container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
+        environment = build_sandbox_environment(container_caido_url)
+        environment["LYRASHIELD_EGRESS_POLICY"] = _EGRESS_POLICY_TARGET
+        manifest = Manifest(
+            entries=entries,
+            environment=Environment(value=environment),
+            extra_path_grants=extra_path_grants,
+        )
+
+        backend_name = load_settings().runtime.backend
+        backend = get_backend(backend_name)
+
+        logger.info(
+            "Creating sandbox session for scan %s (backend=%s, image=%s)",
+            scan_id,
+            backend_name,
+            image,
+        )
+        client: Any | None = None
+        session: Any | None = None
+        caido_client: Any | None = None
+        try:
+            client, session = await backend(
+                image=image,
+                manifest=manifest,
+                exposed_ports=(_CONTAINER_CAIDO_PORT,),
+                bind_mounts=bind_mounts,
+            )
+
+            caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
+            scheme = "https" if caido_endpoint.tls else "http"
+            sandbox_host, sandbox_port = resolve_sandbox_endpoint(
+                caido_endpoint.host,
+                caido_endpoint.port,
+                container_ip=get_sandbox_container_ip(client, session),
+            )
+            host_caido_url = f"{scheme}://{sandbox_host}:{sandbox_port}"
+            logger.debug("Caido host endpoint resolved: %s", host_caido_url)
+
+            caido_client = await bootstrap_caido(
+                session,
+                scan_id=scan_id,
+                host_url=host_caido_url,
+                container_url=container_caido_url,
+            )
+
+            default_scope_id, default_scope_allowlist = await _create_default_scope(
+                caido_client,
+                scan_id=scan_id,
+                authorized_hosts=authorized_hosts,
+            )
+        except Exception:
+            if caido_client is not None:
+                with contextlib.suppress(Exception):
+                    await caido_client.aclose()
+            if client is not None and session is not None:
+                with contextlib.suppress(Exception):
+                    await client.delete(session)
+            if client is not None:
+                with contextlib.suppress(Exception):
+                    docker_client = getattr(client, "docker_client", None)
+                    if docker_client is not None:
+                        docker_client.close()
+            shutil.rmtree(policy_host_dir, ignore_errors=True)
+            raise
+        finally:
+            for staged in staged_dirs:
+                shutil.rmtree(staged, ignore_errors=True)
+
+        bundle = {
+            "client": client,
+            "session": session,
+            "caido_client": caido_client,
+            "default_scope_id": default_scope_id,
+            "default_scope_allowlist": default_scope_allowlist,
+            "authorized_hosts": sorted(authorized_hosts),
+            "egress_policy_dir": policy_host_dir,
+        }
+        async with _CACHE_LOCK:
+            _SESSION_CACHE[scan_id] = bundle
+        logger.info("Sandbox session for scan %s ready and cached", scan_id)
+        return bundle
 
 
 async def cleanup(scan_id: str) -> bool:
@@ -367,6 +419,10 @@ async def cleanup(scan_id: str) -> bool:
             await caido_client.aclose()
         except Exception:
             logger.debug("cleanup(%s): caido_client.aclose() raised", scan_id, exc_info=True)
+
+    policy_dir = bundle.get("egress_policy_dir")
+    if policy_dir:
+        shutil.rmtree(policy_dir, ignore_errors=True)
 
     client = bundle["client"]
     sandbox_removed = True
