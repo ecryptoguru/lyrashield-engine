@@ -22,6 +22,7 @@ from lyrashield.artifacts.writer import (
     write_run_record,
     write_vulnerabilities,
 )
+from lyrashield.runtime.session_manager import CLEANUP_FAILED, CLEANUP_REMOVED
 from lyrashield.telemetry import posthog, scarf
 from lyrashield.utils.redaction import redact_text
 from strix.config import codex
@@ -47,6 +48,67 @@ _ALLOWED_PHASES = frozenset({"setup", "running", "finalizing", "completed", "sto
 # fields. The worker's zod schema uses `.strip()`, so unknown keys are ignored —
 # additive changes are safe to ship ahead of a worker update.
 RUN_RECORD_SCHEMA_VERSION = "1.0"
+
+# Fields every run.json write must carry from its first observable appearance
+# (the worker parses this contract at any point in the run, not just at the
+# end). Writers validate against this list before persisting.
+REQUIRED_RUN_RECORD_FIELDS: tuple[str, ...] = (
+    "schema_version",
+    "run_id",
+    "run_name",
+    "start_time",
+    "end_time",
+    "status",
+    "phase",
+    "auth_mode",
+    "targets_info",
+    "llm_usage",
+    "seq",
+    "turn_count",
+)
+
+
+def validate_run_record(record: dict[str, Any]) -> None:
+    """Raise when ``record`` is not a complete versioned worker contract."""
+    missing = [field for field in REQUIRED_RUN_RECORD_FIELDS if field not in record]
+    if missing:
+        raise RuntimeError(f"run.json contract incomplete, missing fields: {missing}")
+    if record.get("schema_version") != RUN_RECORD_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"run.json contract carries unsupported schema_version: "
+            f"{record.get('schema_version')!r} (expected {RUN_RECORD_SCHEMA_VERSION!r})"
+        )
+
+
+def initial_run_record(
+    run_name: str | None,
+    *,
+    auth_mode: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the canonical first run record (the only constructor of it).
+
+    Both the CLI's pre-scan persistence and :class:`ReportState` build the
+    record here, so the first observable run.json is already a complete
+    versioned worker contract — never a partial hand-rolled dict.
+    """
+    record: dict[str, Any] = {
+        "schema_version": RUN_RECORD_SCHEMA_VERSION,
+        "run_id": run_name or f"run-{uuid4().hex[:8]}",
+        "run_name": run_name,
+        "start_time": datetime.now(UTC).isoformat(),
+        "end_time": None,
+        "status": "running",
+        "phase": "setup",
+        "auth_mode": auth_mode,
+        "targets_info": [],
+        "llm_usage": LLMUsageLedger().to_record(),
+        "seq": 0,
+        "turn_count": 0,
+    }
+    if extra:
+        record.update(extra)
+    return record
 
 
 def _strix_version() -> str | None:
@@ -136,9 +198,6 @@ class ReportState:
 
     def __init__(self, run_name: str | None = None):
         self.run_name = run_name
-        self.run_id = run_name or f"run-{uuid4().hex[:8]}"
-        self.start_time = datetime.now(UTC).isoformat()
-        self.end_time: str | None = None
 
         self.vulnerability_reports: list[dict[str, Any]] = []
         self.final_scan_result: str | None = None
@@ -148,20 +207,11 @@ class ReportState:
         self._llm_usage = LLMUsageLedger()
         auth_mode = codex.auth_mode(load_settings().llm.model)
         self._llm_usage.zero_cost = auth_mode == "subscription"
-        self.run_record: dict[str, Any] = {
-            "schema_version": RUN_RECORD_SCHEMA_VERSION,
-            "run_id": self.run_id,
-            "run_name": self.run_name,
-            "start_time": self.start_time,
-            "end_time": None,
-            "status": "running",
-            "phase": "setup",
-            "auth_mode": auth_mode,
-            "targets_info": [],
-            "llm_usage": self._build_llm_usage_record(),
-            "seq": 0,
-            "turn_count": 0,
-        }
+        self.run_record = initial_run_record(run_name, auth_mode=auth_mode)
+        # initial_run_record generated the run_id; adopt it on the instance.
+        self.run_id = str(self.run_record["run_id"])
+        self.start_time = str(self.run_record["start_time"])
+        self.end_time: str | None = None
         self._run_dir: Path | None = None
         self._saved_vuln_ids: set[str] = set()
         self._save_seq = 0
@@ -519,8 +569,41 @@ class ReportState:
             self.run_record["terminal_reason"] = reason
 
     def set_sandbox_cleanup_status(self, sandbox_removed: bool) -> None:
-        """Persist whether the owned sandbox was removed before process exit."""
-        self.run_record["cleanup"] = {"sandbox_removed": sandbox_removed}
+        """Backward-compatible boolean wrapper around :meth:`set_cleanup_outcome`."""
+        self.set_cleanup_outcome(CLEANUP_REMOVED if sandbox_removed else CLEANUP_FAILED)
+
+    def set_cleanup_outcome(
+        self,
+        outcome: str,
+        *,
+        last_error: str | None = None,
+    ) -> None:
+        """Persist the sandbox cleanup outcome monotonically.
+
+        ``removed`` is terminal; ``failed`` stays failed (optionally with a
+        fresher error) until a confirmed removal supersedes it; a later
+        ``not_found`` (cache miss) can never erase a recorded failure or
+        removal. ``sandbox_removed`` stays in the record for worker
+        backward-readability.
+        """
+        current = self.run_record.get("cleanup")
+        prior: dict[str, Any] = current if isinstance(current, dict) else {}
+        prior_status = prior.get("status")
+        if prior_status == CLEANUP_REMOVED:
+            return
+        if prior_status == CLEANUP_FAILED and outcome != CLEANUP_REMOVED:
+            outcome = CLEANUP_FAILED
+        record: dict[str, Any] = {
+            "status": outcome,
+            "sandbox_removed": outcome == CLEANUP_REMOVED,
+        }
+        if last_error is not None:
+            record["last_error"] = last_error
+        elif prior.get("last_error"):
+            record["last_error"] = prior["last_error"]
+        if prior.get("attempts"):
+            record["attempts"] = prior["attempts"]
+        self.run_record["cleanup"] = record
         self.save_run_data()
 
     def cleanup(self, status: str = "stopped") -> None:
@@ -577,6 +660,14 @@ class ReportState:
             logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
 
         try:
+            # Validate the full worker contract before any write: the first
+            # observable run.json must already be complete and versioned.
+            validate_run_record(self.run_record)
+            # Snapshot claims persistence optimistically so the durable record
+            # carries receipt_persisted=true the moment it lands on disk; a
+            # failed write reverts both the record flag and in-memory state.
+            self.receipt_persisted = True
+            self.run_record["receipt_persisted"] = True
             write_run_record(run_dir, self.run_record)
         except (OSError, RuntimeError):
             # The run record carries the cost receipt the worker reconciles
@@ -585,9 +676,6 @@ class ReportState:
             self.receipt_persisted = False
             self.run_record["receipt_persisted"] = False
             logger.exception("run.json receipt persist FAILED — cost receipt not written")
-        else:
-            self.receipt_persisted = True
-            self.run_record["receipt_persisted"] = True
         logger.info("Essential scan data saved to: %s", run_dir)
 
     def _sarif_repository_context(self) -> dict[str, Any] | None:

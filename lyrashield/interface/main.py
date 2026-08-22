@@ -11,7 +11,6 @@ import re
 import shutil
 import sys
 import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,7 +21,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.artifacts.state import get_global_report_state, initial_run_record
 from lyrashield.artifacts.writer import read_run_record, write_run_record
 from lyrashield.interface.cli import run_cli
 from lyrashield.interface.tui import run_tui
@@ -917,22 +916,23 @@ Examples:
 def _persist_run_record(args: argparse.Namespace) -> None:
     run_dir = run_dir_for(args.run_name)
     run_dir.mkdir(parents=True, exist_ok=True)
-    run_record = {
-        "run_id": args.run_name,
-        "run_name": args.run_name,
-        "status": "running",
-        "start_time": datetime.now(UTC).isoformat(),
-        "end_time": None,
-        "auth_mode": codex.auth_mode(load_settings().llm.model),
-        "targets_info": args.targets_info,
-        "scan_mode": args.scan_mode,
-        "instruction": args.instruction,
-        "non_interactive": args.non_interactive,
-        "local_sources": getattr(args, "local_sources", []),
-        "diff_scope": getattr(args, "diff_scope", {"active": False}),
-        "scope_mode": args.scope_mode,
-        "diff_base": args.diff_base,
-    }
+    # The first observable run.json must already be a complete versioned
+    # worker contract, so build it through the same canonical constructor
+    # ReportState uses — never a partial hand-rolled dict (I10).
+    run_record = initial_run_record(
+        args.run_name,
+        auth_mode=codex.auth_mode(load_settings().llm.model),
+        extra={
+            "targets_info": args.targets_info,
+            "scan_mode": args.scan_mode,
+            "instruction": args.instruction,
+            "non_interactive": args.non_interactive,
+            "local_sources": getattr(args, "local_sources", []),
+            "diff_scope": getattr(args, "diff_scope", {"active": False}),
+            "scope_mode": args.scope_mode,
+            "diff_base": args.diff_base,
+        },
+    )
     write_run_record(run_dir, run_record)
 
 

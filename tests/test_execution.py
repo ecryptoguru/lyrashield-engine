@@ -6,8 +6,12 @@ import asyncio
 import contextlib
 import json
 import types
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
+
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import pytest
 from agents.exceptions import MaxTurnsExceeded
@@ -17,6 +21,8 @@ from agents.models.interface import Model
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
 
+from lyrashield.artifacts import state as state_module
+from lyrashield.artifacts.state import ReportState
 from lyrashield.lifecycle import execution
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.execution import (
@@ -180,7 +186,13 @@ async def test_claim_reserve_sets_flag_and_wakes_parked_agents() -> None:
 
 
 @pytest.mark.asyncio
-async def test_finish_scan_bypasses_active_agent_guard_after_reserve() -> None:
+async def test_finish_scan_bypasses_active_agent_guard_after_reserve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report_state = ReportState(run_name="finish-reserve")
+    monkeypatch.setattr(state_module, "run_dir_for", lambda _name: tmp_path)
+    report_state._run_dir = tmp_path
+    monkeypatch.setattr(state_module, "get_global_report_state", lambda: report_state)
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     await coordinator.register("child", "recon", parent_id="root")

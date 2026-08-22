@@ -43,8 +43,18 @@ _CACHE_LOCK = asyncio.Lock()
 # locks only if measured throughput ever needs them.
 _CREATION_LOCK = asyncio.Lock()
 
+# Durable cleanup receipts: the last known cleanup outcome per scan ID. A
+# recorded failure stays failed (and retryable) until a real deletion
+# succeeds — a later cache miss can never rewrite it to success.
+_CLEANUP_RECEIPTS: dict[str, dict[str, Any]] = {}
+
 # Manifest root inside the container; entry keys hang off this path.
 _WORKSPACE_ROOT = "/workspace"
+
+# Cleanup outcomes (C3): explicit instead of ambiguous booleans.
+CLEANUP_REMOVED = "removed"
+CLEANUP_FAILED = "failed"
+CLEANUP_NOT_FOUND = "not_found"
 
 
 def build_sandbox_environment(
@@ -401,17 +411,25 @@ async def create_or_reuse(
         return bundle
 
 
-async def cleanup(scan_id: str) -> bool:
-    """Tear down ``scan_id``'s container and drop its cache entry.
+async def cleanup(scan_id: str) -> str:
+    """Tear down ``scan_id``'s container and report an explicit outcome.
 
-    Cleanup remains non-fatal for scan results, but the return value makes a
-    stranded container observable to the receipt and worker event paths.
+    Returns :data:`CLEANUP_REMOVED` when the sandbox is confirmed deleted,
+    :data:`CLEANUP_FAILED` when deletion raised (the session stays cached so a
+    retry has the handles it needs), or :data:`CLEANUP_NOT_FOUND` when nothing
+    is tracked for the ID. Outcomes are monotonic: a recorded failure cannot
+    be replaced by success through a later cache miss, and a confirmed removal
+    is terminal. Cleanup remains non-fatal for scan results, but the receipt
+    makes a stranded container observable to the run record and worker.
     """
     async with _CACHE_LOCK:
-        bundle = _SESSION_CACHE.pop(scan_id, None)
+        bundle = _SESSION_CACHE.get(scan_id)
     if bundle is None:
+        receipt = _CLEANUP_RECEIPTS.get(scan_id)
+        if receipt is not None:
+            return str(receipt["status"])
         logger.debug("cleanup(%s): no cached session", scan_id)
-        return True
+        return CLEANUP_NOT_FOUND
 
     caido_client = bundle.get("caido_client")
     if caido_client is not None:
@@ -420,26 +438,52 @@ async def cleanup(scan_id: str) -> bool:
         except Exception:
             logger.debug("cleanup(%s): caido_client.aclose() raised", scan_id, exc_info=True)
 
-    policy_dir = bundle.get("egress_policy_dir")
-    if policy_dir:
-        shutil.rmtree(policy_dir, ignore_errors=True)
-
     client = bundle["client"]
-    sandbox_removed = True
     try:
         await client.delete(bundle["session"])
         logger.info("Cleaned up sandbox session for scan %s", scan_id)
-    except Exception:
-        sandbox_removed = False
+    except Exception as exc:
         logger.exception(
             "cleanup(%s): client.delete raised; container may need manual reaping",
             scan_id,
         )
+        _record_cleanup_receipt(scan_id, CLEANUP_FAILED, last_error=str(exc))
+        return CLEANUP_FAILED
 
+    async with _CACHE_LOCK:
+        # Another creation for the same ID cannot have raced us here: it would
+        # still be waiting on _CREATION_LOCK, which callers hold through
+        # teardown sequencing. Pop only after confirmed deletion.
+        _SESSION_CACHE.pop(scan_id, None)
     docker_client = getattr(client, "docker_client", None)
     if docker_client is not None:
         try:
             docker_client.close()
         except Exception:
             logger.debug("cleanup(%s): docker_client.close() raised", scan_id, exc_info=True)
-    return sandbox_removed
+    policy_dir = bundle.get("egress_policy_dir")
+    if policy_dir:
+        shutil.rmtree(policy_dir, ignore_errors=True)
+    _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)
+    return CLEANUP_REMOVED
+
+
+def _record_cleanup_receipt(scan_id: str, status: str, *, last_error: str | None = None) -> None:
+    prior = _CLEANUP_RECEIPTS.get(scan_id) or {}
+    receipt: dict[str, Any] = {
+        "status": status,
+        "attempts": _int_or_zero(prior.get("attempts")) + 1,
+    }
+    if last_error is not None:
+        receipt["last_error"] = last_error
+    elif prior.get("last_error"):
+        # Retain the prior attempt's error for auditability.
+        receipt["last_error"] = prior["last_error"]
+    _CLEANUP_RECEIPTS[scan_id] = receipt
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0

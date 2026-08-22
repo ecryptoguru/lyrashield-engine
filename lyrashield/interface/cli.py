@@ -209,12 +209,13 @@ async def run_cli(args: Any) -> None:
                 await execute_scan()
             finally:
                 with contextlib.suppress(Exception):
-                    # This outer cleanup is the last owner to run before the worker reads
-                    # run.json. Persist its outcome so the worker can fail closed when a
-                    # sandbox is stranded, including when the lifecycle cleanup already
-                    # released the session cache.
-                    sandbox_removed = await session_manager.cleanup(args.run_name)
-                    report_state.set_sandbox_cleanup_status(sandbox_removed is not False)
+                    # This outer cleanup is the last owner to run before the worker
+                    # reads run.json. Persist its outcome (idempotent: a confirmed
+                    # removal or recorded failure from the lifecycle cleanup passes
+                    # through unchanged) so the worker can fail closed when a
+                    # sandbox is stranded.
+                    cleanup_outcome = await session_manager.cleanup(args.run_name)
+                    report_state.set_cleanup_outcome(cleanup_outcome)
         else:
             console.print()
             with Live(

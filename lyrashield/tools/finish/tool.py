@@ -49,12 +49,16 @@ def _do_finish(
 
         report_state = get_global_report_state()
         if report_state is None:
-            logger.warning("No global report state; scan results not persisted")
+            # Fail closed (I22): without report state there is no durable
+            # record of completion, so the scan must not report success.
+            logger.error("No global report state; finish_scan refused")
             return {
-                "success": True,
-                "scan_completed": True,
-                "message": "Scan completed (not persisted)",
-                "warning": "Results could not be persisted - report state unavailable",
+                "success": False,
+                "scan_completed": False,
+                "error": (
+                    "Scan completion not persisted: report state unavailable. "
+                    "The scan was NOT finalized."
+                ),
             }
         report_state.update_scan_final_fields(
             executive_summary=executive_summary.strip(),
@@ -62,6 +66,18 @@ def _do_finish(
             technical_analysis=technical_analysis.strip(),
             recommendations=recommendations.strip(),
         )
+        if not report_state.receipt_persisted:
+            # The completion receipt never reached disk; claiming success
+            # would finalize a lifecycle with no durable report state.
+            logger.error("finish_scan: run.json receipt did not persist; not finalizing")
+            return {
+                "success": False,
+                "scan_completed": False,
+                "error": (
+                    "Scan completion could not be persisted (run.json write failed); "
+                    "the scan was NOT finalized. Retry finish_scan."
+                ),
+            }
         vuln_count = len(report_state.vulnerability_reports)
     except (ImportError, AttributeError) as e:
         logger.exception("finish_scan persistence failed")
