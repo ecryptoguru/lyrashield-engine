@@ -173,8 +173,7 @@ def _private_range_block_reason(hostname: str) -> str | None:
     allow_private = (
         policy.allow_private_egress
         if policy is not None
-        else os.environ.get(_PRIVATE_EGRESS_OPT_IN_ENV, "").strip().lower()
-        in {"1", "true", "yes"}
+        else os.environ.get(_PRIVATE_EGRESS_OPT_IN_ENV, "").strip().lower() in {"1", "true", "yes"}
     )
     if allow_private:
         return None

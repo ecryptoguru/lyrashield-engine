@@ -24,7 +24,7 @@ from lyrashield.artifacts.writer import (
 )
 from lyrashield.runtime.session_manager import CLEANUP_FAILED, CLEANUP_REMOVED
 from lyrashield.telemetry import posthog, scarf
-from lyrashield.utils.redaction import redact_text
+from lyrashield.utils.redaction import redact_text, redact_url
 from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for
@@ -177,6 +177,125 @@ def _git_head(repo_path: str) -> tuple[str | None, str | None]:
 
 def get_global_report_state() -> Optional["ReportState"]:
     return _global_report_state
+
+
+# Finding fields sanitized as free text at the persistence boundary. Fields
+# not listed here (id, severity, timestamp, cvss, cve, cwe, method,
+# finding_class, control_ids, agent_id) are structural identifiers copied
+# verbatim — they carry no operator or target-derived secrets.
+_FINDING_TEXT_FIELDS = (
+    "title",
+    "description",
+    "impact",
+    "technical_analysis",
+    "poc_description",
+    "remediation_steps",
+    "evidence",
+    "assumptions",
+    "fix_pr_body",
+    "agent_name",
+)
+_FINDING_URL_FIELDS = ("target", "endpoint")
+
+
+def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) -> dict[str, Any]:
+    """Return the immutable sanitized snapshot of one finding.
+
+    Built once at the artifact persistence boundary; every durable/public
+    projection (vulnerabilities JSON/MD/CSV, SARIF, viewer, sync) consumes
+    only this snapshot, never the raw in-memory report.
+    """
+    snapshot: dict[str, Any] = {}
+    for key, value in report.items():
+        if key in _FINDING_TEXT_FIELDS and isinstance(value, str):
+            snapshot[key] = redact_text(value, include_internal_paths=include_internal_paths)
+        elif key in _FINDING_URL_FIELDS and isinstance(value, str):
+            snapshot[key] = redact_url(redact_text(value, include_internal_paths=False))
+        elif key == "poc_script_code" and isinstance(value, str):
+            # The weaponized payload stays a local artifact, but its copy in
+            # the durable snapshot is stripped of secrets and host identity;
+            # sandbox-internal workspace paths are preserved by policy.
+            snapshot[key] = redact_text(value, include_internal_paths=False)
+        elif key == "code_locations" and isinstance(value, list):
+            snapshot[key] = _sanitize_code_locations(value, include_internal_paths)
+        elif key == "dependency_metadata" and isinstance(value, dict):
+            snapshot[key] = {
+                str(k): redact_text(str(v), include_internal_paths=include_internal_paths)
+                if isinstance(v, str)
+                else v
+                for k, v in value.items()
+            }
+        elif key == "cvss_breakdown" and isinstance(value, dict):
+            snapshot[key] = {
+                str(k): redact_text(str(v), include_internal_paths=False) for k, v in value.items()
+            }
+        else:
+            snapshot[key] = value
+    return snapshot
+
+
+def _sanitize_code_locations(
+    locations: list[Any], include_internal_paths: bool
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        entry: dict[str, Any] = {}
+        for key, value in location.items():
+            if isinstance(value, str):
+                if key == "file":
+                    # Keep repo-relative paths; strip any host-absolute or
+                    # home-directory prefix that leaked into a location.
+                    entry[key] = redact_text(value, include_internal_paths=include_internal_paths)
+                else:  # snippet, fix_before, fix_after, label
+                    entry[key] = redact_text(value, include_internal_paths=include_internal_paths)
+            else:
+                entry[key] = value
+        sanitized.append(entry)
+    return sanitized
+
+
+def sanitize_targets_info(targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sanitized target identifiers for the durable run receipt.
+
+    URLs keep scheme/host/path shape but lose credentials and sensitive query
+    values; repository URLs get the same URL treatment; host filesystem paths
+    reduce to their basename; cloned host paths are dropped entirely.
+    """
+    sanitized: list[dict[str, Any]] = []
+    for target in targets:
+        entry: dict[str, Any] = {"type": target.get("type")}
+        details = target.get("details")
+        if isinstance(details, dict):
+            clean_details: dict[str, Any] = {}
+            for key, value in details.items():
+                if key == "cloned_repo_path":
+                    continue  # host path; private execution configuration
+                if isinstance(value, str) and value:
+                    if key in {"target_url", "target_repo"}:
+                        clean_details[key] = redact_url(
+                            redact_text(value, include_internal_paths=False)
+                        )
+                    else:
+                        clean_details[key] = redact_text(value, include_internal_paths=True)
+                elif value is not None:
+                    clean_details[key] = value
+            entry["details"] = clean_details
+        sanitized.append(entry)
+    return sanitized
+
+
+def sanitize_local_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Local source entries without host filesystem paths."""
+    sanitized: list[dict[str, Any]] = []
+    for source in sources:
+        entry: dict[str, Any] = {}
+        for key in ("workspace_subdir", "mount"):
+            if key in source:
+                entry[key] = source[key]
+        sanitized.append(entry)
+    return sanitized
 
 
 def set_global_report_state(report_state: Optional["ReportState"]) -> None:
@@ -529,14 +648,22 @@ class ReportState:
         self.end_time = None
         self.scan_results = None
         self.final_scan_result = None
+        targets = [t for t in (config.get("targets") or []) if isinstance(t, dict)]
+        # Keep raw repository target details in memory only (SARIF provenance
+        # needs the cloned path); the durable record carries sanitized forms.
+        self._repo_context_targets = [dict(t) for t in targets if t.get("type") == "repository"]
+        instruction = str(config.get("user_instructions") or "")
         self.run_record.update(
             {
-                "targets_info": config.get("targets", []),
-                "instruction": config.get("user_instructions", ""),
+                "targets_info": sanitize_targets_info(targets),
+                # Raw instructions are private execution configuration: the
+                # durable receipt records only that one existed and its size.
+                "instruction": None,
+                "instruction_chars": len(instruction),
                 "scan_mode": config.get("scan_mode", "deep"),
                 "diff_scope": config.get("diff_scope", {"active": False}),
                 "non_interactive": bool(config.get("non_interactive", False)),
-                "local_sources": config.get("local_sources", []),
+                "local_sources": sanitize_local_sources(config.get("local_sources", [])),
                 "scope_mode": config.get("scope_mode", "auto"),
                 "diff_base": config.get("diff_base"),
             }
@@ -632,6 +759,14 @@ class ReportState:
         run_dir = self.get_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        # One immutable sanitized snapshot feeds every durable/public
+        # projection; the raw in-memory reports never reach disk.
+        include_internal_paths = not self._is_whitebox
+        snapshot = [
+            sanitize_finding(report, include_internal_paths=include_internal_paths)
+            for report in self.vulnerability_reports
+        ]
+
         # Each artifact is isolated so a failure in one cannot skip the others;
         # run.json is the billing/cost receipt and is written last.
         if self.final_scan_result:
@@ -643,7 +778,7 @@ class ReportState:
         # The worker must distinguish a clean scan from missing output. Always
         # write this artifact, including for a valid zero-finding result.
         try:
-            write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
+            write_vulnerabilities(run_dir, snapshot, self._saved_vuln_ids)
         except (OSError, RuntimeError):
             logger.exception("Vulnerabilities artifact write failed (non-fatal)")
 
@@ -652,7 +787,7 @@ class ReportState:
         try:
             write_sarif(
                 run_dir,
-                self.vulnerability_reports,
+                snapshot,
                 tool_version=_strix_version(),
                 repository_context=self._sarif_repository_context(),
             )
@@ -691,18 +826,20 @@ class ReportState:
         return self._sarif_repo_ctx
 
     def _derive_repository_context(self) -> dict[str, Any] | None:
-        targets = self.run_record.get("targets_info")
-        if not isinstance(targets, list):
-            return None
-
-        repo_targets: list[dict[str, Any]] = []
-        for target in targets:
-            if not isinstance(target, dict):
-                continue
-            target = cast("dict[str, Any]", target)
-            if target.get("type") == "repository":
-                repo_targets.append(target)
-
+        # Prefer the in-memory raw repository targets; the durable record's
+        # targets_info is sanitized and carries no cloned paths.
+        raw_targets = getattr(self, "_repo_context_targets", None)
+        if raw_targets is None:
+            targets = self.run_record.get("targets_info")
+            if not isinstance(targets, list):
+                return None
+            repo_targets = [
+                cast("dict[str, Any]", t)
+                for t in targets
+                if isinstance(t, dict) and t.get("type") == "repository"
+            ]
+        else:
+            repo_targets = [cast("dict[str, Any]", t) for t in raw_targets]
         if len(repo_targets) != 1:
             return None
         target = repo_targets[0]
@@ -715,7 +852,8 @@ class ReportState:
         if not isinstance(uri, str) or not uri.strip():
             return None
 
-        context: dict[str, Any] = {"repositoryUri": uri.strip()}
+        # Public SARIF provenance: URL shape without credentials/query tokens.
+        context: dict[str, Any] = {"repositoryUri": redact_url(uri.strip())}
         full_name = _parse_repo_full_name(uri)
         if full_name:
             context["repositoryFullName"] = full_name

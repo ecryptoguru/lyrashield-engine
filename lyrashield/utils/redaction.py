@@ -150,6 +150,19 @@ _ALWAYS_REDACT_PATH_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
         re.compile(r"/tmp/\.strix[^\s\"'<>]*"),  # noqa: S108  # nosec B108
         _INTERNAL_PATH_PLACEHOLDER,
     ),
+    # Host-side home directories never belong in durable/public artifacts:
+    # they identify the operator's machine. Sandbox-internal /workspace paths
+    # are handled separately by the mode-dependent patterns.
+    (
+        "host_home_path",
+        re.compile(r"(?:/Users|/home)/[^\s\"'<>]+"),
+        _INTERNAL_PATH_PLACEHOLDER,
+    ),
+    (
+        "host_home_short",
+        re.compile(r"~/[^\s\"'<>]+"),
+        _INTERNAL_PATH_PLACEHOLDER,
+    ),
 ]
 
 # General workspace paths that are redacted in blackbox mode but preserved in
@@ -242,9 +255,10 @@ def redact_text(text: str, *, include_internal_paths: bool = True) -> str:
     Returns a copy of ``text`` with sensitive values replaced by clearly
     labelled placeholders. The original string is never modified.
 
-    When ``include_internal_paths=False`` (whitebox mode), spill paths and
-    tmp state are still redacted, but general ``/workspace/`` target paths
-    are preserved so findings reference the actual codebase.
+    When ``include_internal_paths=False`` (whitebox mode), spill paths, tmp
+    state, and host home directories are still redacted, but general
+    ``/workspace/`` target paths are preserved so findings reference the
+    actual codebase.
     """
     redacted = redact_secrets(text)
     if include_internal_paths:
@@ -252,3 +266,61 @@ def redact_text(text: str, *, include_internal_paths: bool = True) -> str:
     else:
         redacted = redact_spill_paths(redacted)
     return redacted
+
+
+# URL userinfo (``scheme://user:password@host``) is removed wholesale: the
+# credential is secret and the username can identify the operator.
+_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@:\s]+):([^@\s/]+)@", re.IGNORECASE)
+
+# Query parameters whose VALUES are redacted even when the key itself is not
+# secret-looking. Values are replaced, keys preserved, so the URL shape stays
+# useful for reproducing a request.
+_SENSITIVE_QUERY_KEYS = (
+    "token",
+    "access_token",
+    "id_token",
+    "refresh_token",
+    "api_key",
+    "apikey",
+    "key",
+    "secret",
+    "client_secret",
+    "password",
+    "passwd",
+    "signature",
+    "sig",
+    "session",
+    "sessionid",
+    "auth",
+    "authorization",
+    "credential",
+    "code",
+)
+
+
+def redact_url(url: str) -> str:
+    """Redact URL credentials and sensitive query values, keeping the shape.
+
+    Userinfo is replaced with ``[REDACTED]@`` and values of sensitive query
+    parameters are replaced with ``[REDACTED]``; scheme, host, port, path, and
+    non-sensitive parameters survive so the URL remains a usable target
+    identifier.
+    """
+    if not url:
+        return url
+    redacted = _URL_USERINFO_RE.sub(r"\1[REDACTED]@", url)
+    if "?" not in redacted:
+        return redacted
+    base, _, query = redacted.partition("?")
+    fragment = ""
+    if "#" in query:
+        query, _, fragment = query.partition("#")
+        fragment = f"#{fragment}"
+    kept: list[str] = []
+    for piece in query.split("&"):
+        key, sep, value = piece.partition("=")
+        if key.strip().lower() in _SENSITIVE_QUERY_KEYS and value:
+            kept.append(f"{key}{sep}[REDACTED]")
+        else:
+            kept.append(piece)
+    return f"{base}?{'&'.join(kept)}{fragment}"

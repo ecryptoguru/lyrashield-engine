@@ -200,19 +200,24 @@ def _estimate_cost(mode: str, settings: Any) -> float:
 
 
 def _target_hosts_from_report() -> set[str] | None:
-    """Extract target hostnames from the global report state, if any."""
+    """Extract target hostnames from the global report state, if any.
+
+    Reads the in-memory scan configuration (raw execution input); the durable
+    run record's targets_info is sanitized and no longer carries usable
+    hostnames for every target shape.
+    """
     from lyrashield.artifacts.state import get_global_report_state
 
     report_state = get_global_report_state()
     if report_state is None:
         return None
 
-    targets_info = report_state.run_record.get("targets_info", [])
-    if not isinstance(targets_info, list):
+    targets = report_state.scan_config.get("targets") if report_state.scan_config else None
+    if not isinstance(targets, list):
         return None
 
     hosts: set[str] = set()
-    for item in targets_info:
+    for item in targets:
         if isinstance(item, str):
             host = urlparse(item).hostname or item
             hosts.add(host)
@@ -224,7 +229,15 @@ def _target_hosts_from_report() -> set[str] | None:
                     host = urlparse(value).hostname or value
                     hosts.add(host)
                     hosts.add(value)
-    return hosts
+            details = item.get("details")
+            if isinstance(details, dict):
+                for key in ("target_url", "target_ip", "target_repo"):
+                    value = details.get(key)
+                    if isinstance(value, str):
+                        host = urlparse(value).hostname or value.split("/")[0]
+                        if host:
+                            hosts.add(host)
+    return hosts or None
 
 
 def _validate_web_search_call(
