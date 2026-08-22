@@ -132,6 +132,7 @@ def _model_rate_card(model: str) -> tuple[float, float, float, float]:
 def _fallback_model_rate_card(model: str) -> tuple[float, float, float, float]:
     """Fallback (input, cached, cache_write, output) rates for non-GPT-5.6 models."""
     cost_info = _lookup_litellm_cost(model)
+    rates: tuple[float, float, float, float] | None = None
     if cost_info is not None:
         input_cost = cost_info.get("input_cost_per_token")
         output_cost = cost_info.get("output_cost_per_token")
@@ -145,10 +146,11 @@ def _fallback_model_rate_card(model: str) -> tuple[float, float, float, float]:
                 cache_write_rate = _rate_or_fraction(
                     cost_info.get("cache_creation_input_token_cost"), input_rate
                 )
-                return input_rate, cached_rate, cache_write_rate, output_rate
+                rates = (input_rate, cached_rate, cache_write_rate, output_rate)
             except (TypeError, ValueError):
-                pass
-
+                rates = None
+    if rates is not None:
+        return rates
     logger.warning("No LiteLLM cost rates for model %s; using conservative fallback rates", model)
     return (
         _DEFAULT_FALLBACK_INPUT_RATE,
