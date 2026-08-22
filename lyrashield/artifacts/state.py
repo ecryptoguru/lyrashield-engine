@@ -811,6 +811,12 @@ class ReportState:
         self._set_phase("running")
 
     def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> None:
+        # Snapshot pre-completion state so a failed receipt write can revert
+        # in-memory completion eligibility — a failed persistence must not
+        # leave the lifecycle marked completed (E3 monotonic fail-closed).
+        prev_status = self.run_record.get("status")
+        prev_end_time = self.end_time
+
         if mark_complete:
             self.end_time = datetime.now(UTC).isoformat()
             self.run_record["end_time"] = self.end_time
@@ -829,6 +835,17 @@ class ReportState:
         self._sync_progress()
         self._sync_llm_usage_record()
         self._save_artifacts()
+
+        # If the receipt write failed and we had marked complete, revert the
+        # in-memory completion so a later incidental save cannot persist a
+        # completed record without a durable receipt. Keep receipt_persisted
+        # as False — the write actually failed.
+        if mark_complete and not self.receipt_persisted:
+            self.run_record["status"] = prev_status
+            self.run_record["end_time"] = prev_end_time
+            self.end_time = prev_end_time
+            if prev_status != "completed":
+                self._set_phase(str(prev_status or "running"))
 
     def set_terminal_reason(self, reason: str) -> None:
         """Record a machine-readable non-completion reason for worker callers."""

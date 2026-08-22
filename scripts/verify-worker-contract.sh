@@ -35,7 +35,13 @@ if [[ "$checked_out_sha" != "$PINNED_CONSUMER_SHA" ]]; then
 fi
 # Reject tracked modifications (staged or unstaged) but allow untracked files
 # (e.g. a nested lyrashield-engine/ checkout used by app deployment).
-if [[ -n "$(git -C "$app_checkout" status --porcelain --untracked-files=no 2>/dev/null || true)" ]]; then
+# Fail closed: if git status itself fails (corruption, permissions, unsafe
+# ownership), the checkout is NOT treated as clean.
+dirty_output="$(git -C "$app_checkout" status --porcelain --untracked-files=no 2>/dev/null)" || {
+  echo "Worker-consumer checkout git status failed; cannot verify cleanliness." >&2
+  exit 2
+}
+if [[ -n "$dirty_output" ]]; then
   echo "Worker-consumer checkout has local modifications; contract requires a clean checkout." >&2
   exit 2
 fi

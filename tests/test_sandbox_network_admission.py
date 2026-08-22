@@ -11,9 +11,12 @@ from docker import errors as docker_errors
 from lyrashield.runtime.docker_client import _assert_sandbox_network_admission
 
 
-def _container(network_mode: str) -> MagicMock:
+def _container(network_mode: str, *, attached_networks: dict[str, Any] | None = None) -> MagicMock:
     container = MagicMock()
-    container.attrs = {"HostConfig": {"NetworkMode": network_mode}}
+    attrs: dict[str, Any] = {"HostConfig": {"NetworkMode": network_mode}}
+    if attached_networks is not None:
+        attrs["NetworkSettings"] = {"Networks": attached_networks}
+    container.attrs = attrs
     return container
 
 
@@ -62,8 +65,26 @@ def test_attached_mode_must_match_configured_network(
 def test_configured_network_attachment_admits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", "lyrashield-sandbox")
     _assert_sandbox_network_admission(
-        _container("lyrashield-sandbox"), _docker_client("lyrashield-sandbox")
+        _container(
+            "lyrashield-sandbox",
+            attached_networks={"lyrashield-sandbox": {"EndpointID": "abc"}},
+        ),
+        _docker_client("lyrashield-sandbox"),
     )
+
+
+def test_network_mode_matches_but_actual_attachment_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E1: NetworkMode claims the expected network but NetworkSettings.Networks
+    does not contain it — admission must fail."""
+    monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", "lyrashield-sandbox")
+    container = _container(
+        "lyrashield-sandbox",
+        attached_networks={"bridge": {"EndpointID": "xyz"}},  # wrong network
+    )
+    with pytest.raises(RuntimeError, match="not attached to the configured network"):
+        _assert_sandbox_network_admission(container, _docker_client("lyrashield-sandbox"))
 
 
 def test_admission_reads_immutable_container_fact(monkeypatch: pytest.MonkeyPatch) -> None:

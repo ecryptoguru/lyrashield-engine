@@ -186,11 +186,20 @@ def load_egress_policy() -> EgressPolicy | None:
 def _private_range_block_reason(hostname: str) -> str | None:
     """Return a block reason when replay targets private space it may not reach."""
     policy = load_egress_policy()
-    allow_private = (
-        policy.allow_private_egress
-        if policy is not None
-        else os.environ.get(_PRIVATE_EGRESS_OPT_IN_ENV, "").strip().lower() in {"1", "true", "yes"}
-    )
+    if policy is not None:
+        allow_private = policy.allow_private_egress
+    elif _in_container():
+        # Inside the sandbox, a missing policy means no authorization — the
+        # mutable env opt-in is NOT honored. The per-run policy file is the
+        # only authority on private-range egress inside the container.
+        allow_private = False
+    else:
+        # Host-side legacy behavior: no policy file, env opt-in is honored.
+        allow_private = os.environ.get(_PRIVATE_EGRESS_OPT_IN_ENV, "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
     if allow_private:
         return None
     hostname = hostname.lower().rstrip(".")

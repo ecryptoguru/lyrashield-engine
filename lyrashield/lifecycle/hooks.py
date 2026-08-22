@@ -700,10 +700,18 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             self._reservations[key] = estimated_cost
 
     async def release_web_search_call(self, *, key: str, actual_cost: float) -> None:
-        """Drop a web search reservation and commit the observed per-call cost."""
+        """Drop a web search reservation and commit the observed per-call cost.
+
+        Idempotent: if the reservation key is absent (already released/committed),
+        this is a no-op and does NOT add ``actual_cost`` again — duplicate
+        finalization must not inflate committed cost.
+        """
         if not math.isfinite(actual_cost) or actual_cost < 0:
             actual_cost = 0.0
         async with self._reservation_lock:
+            if key not in self._reservations:
+                # Already released/committed — exactly-once finalization.
+                return
             self._reservations.pop(key, None)
             self._committed_cost_floor += actual_cost
 

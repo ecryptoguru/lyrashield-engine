@@ -269,9 +269,13 @@ def redact_text(text: str, *, include_internal_paths: bool = True) -> str:
     return redacted
 
 
-# URL userinfo (``scheme://user:password@host``) is removed wholesale: the
-# credential is secret and the username can identify the operator.
+# URL userinfo (``scheme://user:password@host`` and ``scheme://user@host``)
+# is removed wholesale: the credential is secret and the username can identify
+# the operator. Two patterns: the user:password form, then a username-only
+# form (no colon). Both must be stripped before urlparse, which may reject
+# placeholders in the netloc.
 _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@:\s]+):([^@\s/]+)@", re.IGNORECASE)
+_URL_USERINFO_USERONLY_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@:\s]+)@", re.IGNORECASE)
 
 # Query parameters whose VALUES are redacted even when the key itself is not
 # secret-looking. Values are replaced, keys preserved, so the URL shape stays
@@ -316,8 +320,11 @@ def redact_url(url: str) -> str:
     if not url:
         return url
     # Strip userinfo first using a simple scan — robust against placeholders
-    # that urlparse would reject as invalid IPv6 literals.
+    # that urlparse would reject as invalid IPv6 literals. Apply the
+    # user:password form first, then the username-only form, so a URL with
+    # both forms (or only a username) is fully redacted.
     redacted = _URL_USERINFO_RE.sub(r"\1[REDACTED]@", url)
+    redacted = _URL_USERINFO_USERONLY_RE.sub(r"\1[REDACTED]@", redacted)
     # Now parse for query redaction. urlparse may still fail on edge cases;
     # fall back to manual query splitting.
     try:

@@ -187,6 +187,30 @@ def test_receipt_persisted_true_on_disk_and_reverted_on_write_failure(
     assert state.run_record["receipt_persisted"] is False
 
 
+def test_mark_complete_with_failed_persistence_reverts_in_memory_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E3: when save_run_data(mark_complete=True) fails to persist the receipt,
+    the in-memory lifecycle must revert to its pre-completion state — a later
+    incidental save must not persist a completed record without a receipt."""
+    monkeypatch.setattr(state_module, "run_dir_for", lambda _n: tmp_path)
+    state = ReportState(run_name="revert-test")
+    state.save_run_data()  # initial write succeeds
+    assert state.run_record["status"] != "completed"
+
+    # Force the receipt write to fail during mark_complete.
+    def failing_write(_run_dir: Path, _record: dict[str, Any]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state_module, "write_run_record", failing_write)
+    state.save_run_data(mark_complete=True)
+
+    # In-memory state must NOT be completed.
+    assert state.receipt_persisted is False
+    assert state.run_record["status"] != "completed"
+    assert state.run_record["receipt_persisted"] is False
+
+
 def test_validate_run_record_rejects_incomplete_record() -> None:
     with pytest.raises(RuntimeError, match="missing fields"):
         validate_run_record({"schema_version": RUN_RECORD_SCHEMA_VERSION})

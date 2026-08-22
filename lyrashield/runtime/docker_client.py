@@ -161,6 +161,21 @@ def _assert_sandbox_network_admission(container: Any, docker_client: Any) -> Non
             "Recreate it with `docker network create --internal` to enforce "
             "deny-by-default egress."
         )
+    # Verify actual container attachment: NetworkMode can claim the expected
+    # network while NetworkSettings.Networks shows a different (or absent)
+    # attachment. The container must be a member of the configured network.
+    networks = cast(
+        "dict[str, Any]",
+        cast("dict[str, Any]", attrs.get("NetworkSettings", {})).get("Networks", {}) or {},
+    )
+    if configured not in networks:
+        attached = ", ".join(sorted(networks.keys())) or "<none>"
+        raise RuntimeError(
+            f"sandbox admission failed: container is not attached to the "
+            f"configured network {configured!r} (attached: {attached}). "
+            "The container's NetworkMode matches but its actual endpoint "
+            "attachment does not include the configured deny-by-default network."
+        )
 
 
 def _apply_sandbox_network(create_kwargs: dict[str, Any]) -> None:

@@ -309,6 +309,80 @@ async def test_cancellation_releases_both_reservation_layers(
 
 
 @pytest.mark.asyncio
+async def test_timeout_releases_active_hooks_reservation(
+    monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
+) -> None:
+    """E5: a timeout must release the active global hooks reservation, not
+    just the ReportState slot. Spies on ReportUsageHooks to prove it."""
+
+    class _TimeoutClient(_FakeParallelClient):
+        async def post(self, *_: object, **__: object) -> Any:
+            raise httpx.TimeoutException("request timed out")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _TimeoutClient)
+    hooks = ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=5.0)
+    monkeypatch.setattr("lyrashield.lifecycle.hooks.get_active_hooks", lambda: hooks)
+    args = {"query": "timeout with hooks"}
+    parsed = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
+    assert parsed["success"] is False
+    # ReportState slot released.
+    assert _web_search_enabled._web_search_inflight == 0
+    # Global hooks reservation released (no lingering reservation key).
+    assert len(hooks._reservations) == 0
+
+
+@pytest.mark.asyncio
+async def test_success_commits_hooks_reservation_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
+) -> None:
+    """E5: a successful web_search call must commit the hooks reservation
+    exactly once — the success-path release and the finally release must not
+    double-commit the actual cost."""
+
+    class _OkClient(_FakeParallelClient):
+        async def post(self, *_: object, **__: object) -> Any:
+            class _Resp:
+                status_code = 200
+
+                def raise_for_status(self) -> None:
+                    return None
+
+                def json(self) -> dict[str, Any]:
+                    return {"results": [{"title": "t", "url": "https://x.example", "content": "c"}]}
+
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _OkClient)
+    hooks = ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=5.0)
+    monkeypatch.setattr("lyrashield.lifecycle.hooks.get_active_hooks", lambda: hooks)
+    args = {"query": "success exactly once"}
+    parsed = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
+    assert parsed["success"] is True
+    # The hooks reservation is gone (released exactly once).
+    assert len(hooks._reservations) == 0
+    # The committed cost floor reflects exactly one call cost, not double.
+    # (Duplicate finalization must not inflate committed cost.)
+    assert hooks._committed_cost_floor > 0
+    # No lingering ReportState reservation.
+    assert _web_search_enabled._web_search_inflight == 0
+    assert _web_search_enabled._web_search_reserved_cost == 0.0
+
+
+@pytest.mark.asyncio
+async def test_duplicate_hooks_release_is_noop() -> None:
+    """E5: calling release_web_search_call twice for the same key must not
+    double-commit the cost — duplicate finalization is a no-op."""
+    hooks = ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=5.0)
+    await hooks.reserve_web_search_call(key="dup-key", estimated_cost=0.1)
+    await hooks.release_web_search_call(key="dup-key", actual_cost=0.1)
+    cost_after_first = hooks._committed_cost_floor
+    # Second release must be a no-op (key already gone).
+    await hooks.release_web_search_call(key="dup-key", actual_cost=0.1)
+    assert hooks._committed_cost_floor == cost_after_first
+    assert len(hooks._reservations) == 0
+
+
+@pytest.mark.asyncio
 async def test_cost_limit_counts_reserved_charges(
     monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
 ) -> None:

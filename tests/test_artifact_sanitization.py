@@ -240,6 +240,31 @@ def test_oversized_text_fields_are_truncated(report_state: ReportState, tmp_path
     assert len(desc) > 0, "description was over-truncated to empty"
 
 
+def test_finding_total_serialized_size_is_bounded(
+    report_state: ReportState, tmp_path: Path
+) -> None:
+    """E4: a finding whose total serialized size exceeds the bound must be
+    truncated so the persisted record stays bounded."""
+    huge_value = "B" * 50_000
+    report_state.add_vulnerability_report(
+        title="Size bound test",
+        severity="low",
+        description=huge_value,
+        impact=huge_value,
+        technical_analysis=huge_value,
+        evidence=huge_value,
+        assumptions=huge_value,
+        remediation_steps=huge_value,
+        poc_description=huge_value,
+        dependency_metadata={f"k{i}": huge_value for i in range(30)},
+    )
+    vulns = json.loads((tmp_path / "vulnerabilities.json").read_text(encoding="utf-8"))
+    serialized = json.dumps(vulns[0])
+    assert len(serialized) < 1_000_000, (
+        f"finding serialized to {len(serialized)} bytes, exceeds 1MB bound"
+    )
+
+
 def test_url_redaction_handles_case_insensitive_query_keys() -> None:
     """E4: sensitive query keys must be redacted regardless of case."""
     from lyrashield.utils.redaction import redact_url  # noqa: PLC0415
@@ -255,6 +280,25 @@ def test_url_redaction_handles_encoding_variants() -> None:
 
     # Percent-encoded key should still be caught after decoding.
     assert SENTINEL not in redact_url(f"https://app.example.com/x?%74oken={SENTINEL}")
+
+
+def test_url_redaction_strips_username_only_userinfo() -> None:
+    """E4: username-only userinfo (no password) must also be stripped."""
+    from lyrashield.utils.redaction import redact_url  # noqa: PLC0415
+
+    redacted = redact_url(f"https://{SENTINEL}@app.example.com/x")
+    assert SENTINEL not in redacted
+    assert "[REDACTED]" in redacted
+
+
+def test_url_redaction_strips_encoded_userinfo() -> None:
+    """E4: encoded userinfo (percent-encoded username) must also be stripped."""
+    from lyrashield.utils.redaction import redact_url  # noqa: PLC0415
+
+    encoded = "%73%65%63%72%65%74"  # 'secret'
+    redacted = redact_url(f"https://{encoded}:{SENTINEL}@app.example.com/x")
+    assert SENTINEL not in redacted
+    assert "secret" not in redacted.lower()
 
 
 def test_callback_receives_sanitized_report(

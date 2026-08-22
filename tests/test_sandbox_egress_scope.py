@@ -211,6 +211,24 @@ def test_legacy_opt_in_env_still_works_without_policy(monkeypatch: pytest.Monkey
     assert caido_api._check_replay_url_host("http://10.0.0.5/") is None
 
 
+def test_missing_policy_in_container_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """E1: inside a container, a missing egress policy must NOT fall back to
+    the mutable STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS env opt-in. The policy
+    file is the only authority on private-range egress inside the sandbox."""
+    monkeypatch.delenv(caido_api._EGRESS_POLICY_ENV, raising=False)
+    monkeypatch.delenv(caido_api._EGRESS_POLICY_TRUST_RW_ENV, raising=False)
+    monkeypatch.setattr(caido_api, "_in_container", lambda: True)
+    monkeypatch.setattr(caido_api, "_path_on_readonly_mount", lambda _p: False)
+    monkeypatch.setattr(caido_api, "_DEFAULT_EGRESS_POLICY_PATH", str(tmp_path / "absent.json"))
+    # Policy is absent.
+    assert caido_api.load_egress_policy() is None
+    # The agent-settable opt-in must NOT authorize private egress in-container.
+    monkeypatch.setenv("STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS", "1")
+    assert caido_api._check_replay_url_host("http://10.0.0.5/") is not None
+
+
 def test_policy_rejects_wrong_scan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A policy whose scan_id doesn't match the current run must fail closed."""
     path = _write_policy(tmp_path, authorized_hosts=["10.2.3.4"], scan_id="other-run")

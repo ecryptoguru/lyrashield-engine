@@ -322,11 +322,11 @@ def test_admission_checks_exactly_the_provider_routing_selects() -> None:
 
 
 def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPatch) -> None:
-    """E2: the provider delegated by StrixProvider._resolve_prefixed_model must
-    equal ModelRoute.provider for every accepted GPT-5.6 fixture. This spies on
-    the actual routing seam, not just static parsing."""
-    import contextlib  # noqa: PLC0415
-
+    """E2: for every accepted GPT-5.6 fixture, StrixProvider.get_model must
+    route through the same provider admission selected. This spies on the
+    actual SDK seam (super().get_model) and asserts the routed name equals
+    the canonical ``{provider}/{model_path}`` form admission parsed — no
+    fixture may pass vacuously without observed routing."""
     from lyrashield.policy import codex  # noqa: PLC0415
     from lyrashield.policy.models import StrixProvider  # noqa: PLC0415
 
@@ -346,29 +346,45 @@ def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPa
         route = parse_model_route(model_name)
         assert route is not None, model_name
         assert is_gpt56_supported_provider(model_name), model_name
+        assert (route.provider or "openai") == expected_provider, model_name
 
-        # Build a StrixProvider and spy on _resolve_prefixed_model.
         provider = StrixProvider()
         seen: list[str] = []
-        original_method = provider._resolve_prefixed_model
 
-        def _make_spy(seen_list: list[str], orig: Any) -> Any:
-            def _spy(*args: Any, **kwargs: Any) -> Any:
-                prefix = kwargs.get("prefix") or (args[1] if len(args) > 1 else None)
-                if prefix:
-                    seen_list.append(str(prefix))
-                return orig(*args, **kwargs)
+        # Spy on the SDK's get_model (the seam StrixProvider delegates to).
+        # This proves the routed name passed downstream matches admission's
+        # canonical {provider}/{model_path} form, not the raw wrapper string.
+        def _make_spy(seen_list: list[str]) -> Any:
+            def _spy(_self: Any, routed_name: str | None, *_args: Any, **_kwargs: Any) -> Any:
+                seen_list.append(str(routed_name))
+                # Raise to short-circuit network construction; the routed
+                # name is what we assert on, not the constructed model.
+                raise RuntimeError("spy-short-circuit")
 
             return _spy
 
-        monkeypatch.setattr(provider, "_resolve_prefixed_model", _make_spy(seen, original_method))
-        # get_model will call _resolve_prefixed_model for prefixed routes.
-        with contextlib.suppress(Exception):
+        # Bind the spy on the parent class so super().get_model() hits it.
+        parent_cls = type(provider).__mro__[1]
+        monkeypatch.setattr(parent_cls, "get_model", _make_spy(seen))
+
+        raised: Exception | None = None
+        try:
             provider.get_model(model_name)
-        if seen:
-            assert seen[0] == expected_provider, (
-                f"{model_name}: routing selected {seen[0]!r}, "
-                f"admission expected {expected_provider!r}"
+        except RuntimeError as exc:
+            raised = exc
+        # Every fixture MUST reach super().get_model — no vacuous pass.
+        assert raised is not None, f"{model_name}: did not reach super().get_model()"
+        assert len(seen) == 1, f"{model_name}: expected 1 routing call, got {len(seen)}"
+        routed = seen[0]
+        if route.wrapper is not None and route.provider is not None:
+            expected_routed = f"{route.provider}/{route.model_path}"
+            assert routed == expected_routed, (
+                f"{model_name}: routed {routed!r} != canonical {expected_routed!r}"
+            )
+        else:
+            # Bare or provider-only: routed name equals the original.
+            assert routed == model_name, (
+                f"{model_name}: routed {routed!r} changed bare/provider-only name"
             )
 
 
