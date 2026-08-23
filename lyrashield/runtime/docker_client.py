@@ -193,6 +193,16 @@ def _apply_sandbox_network(create_kwargs: dict[str, Any]) -> None:
     if network:
         create_kwargs["network"] = network
         create_kwargs.pop("ports", None)
+        # Pass the configured deny-by-default network name into the sandbox so
+        # the in-container agent and any observability tools see the same value
+        # the worker passed to the scan process. This also makes product Docker
+        # scans self-describing: the network is set before Caido boots and the
+        # proxy starts up.
+        env = create_kwargs.setdefault("environment", {})
+        if isinstance(env, list):
+            env.append(f"STRIX_DOCKER_SANDBOX_NETWORK={network}")
+        elif isinstance(env, dict):
+            env["STRIX_DOCKER_SANDBOX_NETWORK"] = network
 
 
 _DEFAULT_SANDBOX_MEM_LIMIT = "2g"

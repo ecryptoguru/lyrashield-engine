@@ -41,11 +41,12 @@ LyraShield Engine is a controlled derivative of [Strix](https://github.com/usest
 4. **Create the deny-by-default sandbox network (Docker scans only)**
 
    Sandboxed scans that run inside Docker must attach to an isolated network with
-   `Internal=true`. Create it once per host and set the environment variable that
-   the engine uses to select and verify it:
+   `Internal=true`. Create it once per host, set the environment variable that
+   the engine uses to select and verify it, and pass that same value to the
+   `lyrashield` process (or the worker that invokes it):
 
    ```bash
-   docker network create --internal lyrashield-sandbox
+   bash scripts/provision-sandbox-network.sh
    export STRIX_DOCKER_SANDBOX_NETWORK=lyrashield-sandbox
    ```
 
