@@ -15,7 +15,7 @@
     "revoked": false
   },
   "status": {
-    "active": true,
+    "active": false,
     "info": null,
     "message": "No license activated."
   }

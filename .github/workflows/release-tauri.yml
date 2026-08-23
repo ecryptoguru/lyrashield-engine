@@ -150,6 +150,8 @@ jobs:
           path: |
             desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.dmg
             desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.app
+            desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.app.tar.gz
+            desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.app.tar.gz.sig
 
   # ---------------------------------------------------------------------------
   # Windows — Authenticode sign (EV cert for SmartScreen reputation)
@@ -230,7 +232,9 @@ jobs:
           name: lyrashield-local-windows
           path: |
             desktop/src-tauri/target/release/bundle/**/*.msi
+            desktop/src-tauri/target/release/bundle/**/*.msi.sig
             desktop/src-tauri/target/release/bundle/**/*.exe
+            desktop/src-tauri/target/release/bundle/**/*.exe.sig
 
   # ---------------------------------------------------------------------------
   # Linux — .AppImage + .deb, GPG-signed .AppImage
@@ -303,6 +307,8 @@ jobs:
           path: |
             desktop/src-tauri/target/release/bundle/**/*.AppImage
             desktop/src-tauri/target/release/bundle/**/*.AppImage.sig
+            desktop/src-tauri/target/release/bundle/**/*.AppImage.tar.gz
+            desktop/src-tauri/target/release/bundle/**/*.AppImage.tar.gz.sig
             desktop/src-tauri/target/release/bundle/**/*.deb
 
   # ---------------------------------------------------------------------------
@@ -321,10 +327,12 @@ jobs:
           path: artifacts
 
       - name: Assemble updater manifest from the complete platform set
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, pathlib, sys, datetime, urllib.parse
+          import json, os, pathlib, sys, datetime, urllib.parse
 
           artifacts = pathlib.Path("artifacts")
           files = sorted(artifacts.rglob("*"))
@@ -336,14 +344,16 @@ jobs:
               return hits[0], sigs[0].read_text(encoding="utf-8").strip()
 
           darwin = find_one(".app.tar.gz")
-          windows = find_one("-setup.exe") or find_one(".msi.zip")
-          linux = find_one(".AppImage")
+          windows = find_one(".msi") or find_one("-setup.exe")
+          linux = find_one(".AppImage.tar.gz")
           missing = [name for name, hit in
                      (("darwin", darwin), ("windows", windows), ("linux", linux)) if hit is None]
           if missing:
               sys.exit(f"updater manifest incomplete, missing artifacts/signatures: {missing}")
 
-          full_tag = "${{ github.ref_name }}"
+          full_tag = os.environ.get("GITHUB_REF_NAME", "")
+          if not full_tag or full_tag.startswith("-"):
+              sys.exit("GITHUB_REF_NAME is missing or invalid")
           tag = full_tag.lstrip("v")
           base = "https://github.com/lyrashield/lyrashield-local/releases/download/" + full_tag
           def entry(pair):

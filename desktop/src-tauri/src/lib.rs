@@ -23,17 +23,8 @@ pub mod updater;
 use std::sync::OnceLock;
 
 /// Global scan supervisor shared across Tauri commands.
-pub struct AppState {
-    pub scan: scan::ScanSupervisor,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            scan: scan::ScanSupervisor::default(),
-        }
-    }
-}
+#[derive(Default)]
+pub struct AppState;
 
 static STATE: OnceLock<AppState> = OnceLock::new();
 

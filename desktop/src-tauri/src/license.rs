@@ -88,11 +88,12 @@ pub fn machine_id() -> Result<String, LicenseError> {
 /// Activate a license from an already-signed detached blob (offline / tests).
 /// Production activation goes through [`activate_online`].
 pub fn activate(blob_b64: &str, license_id: &str) -> Result<LicenseInfo, LicenseError> {
-    let payload = verify_blob(blob_b64, bundled_pubkey_hex())?;
-    let revocations = bundled_revocation_list();
-    if is_revoked(license_id, &revocations) {
-        return Err(LicenseError::Revoked);
-    }
+    let payload = lyrashield_desktop_logic::license::verify_and_check_revoked(
+        blob_b64,
+        license_id,
+        &bundled_pubkey_hex(),
+        &bundled_revocation_list(),
+    )?;
     let this_machine = machine_id()?;
     if !payload.machine_ids.is_empty() && !payload.machine_ids.iter().any(|m| m == &this_machine) {
         return Err(LicenseError::InvalidPayload(
@@ -121,6 +122,7 @@ fn revoked_status() -> LicenseStatus {
         active: false,
         info: None,
         message: "License revoked — contact support.".into(),
+        needs_revalidation: false,
     }
 }
 
@@ -142,6 +144,7 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
             active: false,
             info: None,
             message: "No license activated.".into(),
+            needs_revalidation: false,
         }),
         Some(blob) => {
             let payload = verify_blob(&blob, bundled_pubkey_hex())?;
@@ -153,6 +156,7 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
                         active: false,
                         info: None,
                         message: "License cache is incomplete — activate again.".into(),
+                        needs_revalidation: false,
                     });
                 }
                 Err(e) => return Err(LicenseError::from(e)),
@@ -180,6 +184,7 @@ pub fn status() -> Result<LicenseStatus, LicenseError> {
                 } else {
                     "License active (offline grace).".into()
                 },
+                needs_revalidation,
             })
         }
     }
@@ -197,6 +202,7 @@ pub async fn revalidate_online() -> Result<LicenseStatus, LicenseError> {
                 active: false,
                 info: None,
                 message: "License cache is incomplete — activate again.".into(),
+                needs_revalidation: false,
             });
         }
     };
@@ -264,14 +270,21 @@ pub async fn authorize_scan() -> Result<LicenseInfo, LicenseError> {
     if !current.active {
         return Err(LicenseError::InvalidPayload(current.message));
     }
-    if current.message.contains("revalidation due") {
+    if current.needs_revalidation {
         current = revalidate_online().await?;
     }
     admission_decision(current.active, &current.message, last_validated_stamp(), unix_now())
         .map_err(LicenseError::InvalidPayload)?;
-    current
+    let info = current
         .info
-        .ok_or_else(|| LicenseError::InvalidPayload("license state incomplete".into()))
+        .ok_or_else(|| LicenseError::InvalidPayload("license state incomplete".into()))?;
+    let this_machine = machine_id()?;
+    if !info.machine_ids.is_empty() && !info.machine_ids.iter().any(|m| m == &this_machine) {
+        return Err(LicenseError::InvalidPayload(
+            "license is not issued for this machine".into(),
+        ));
+    }
+    Ok(info)
 }
 
 /// One-time online activation: POST licenseKey + machine fingerprint to

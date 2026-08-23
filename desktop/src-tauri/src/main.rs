@@ -9,6 +9,7 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 
+use lyrashield_desktop_logic::scan_modes::is_valid_azure_endpoint;
 use lyrashield_local_lib::scan::Provider;
 use lyrashield_local_lib::{docker_detect, keychain, license, scan, sync, updater};
 
@@ -81,10 +82,11 @@ async fn doctor_run() -> Result<docker_detect::DoctorReport, String> {
     Ok(docker_detect::run_doctor().await)
 }
 
+/// Non-secret keychain keys that the webview is permitted to read.
+/// BYOK provider secrets (`chatgpt-oauth-token`, `azure-openai-api-key`)
+/// are write-only from the UI and are only read by the native side during
+/// scan spawn.
 const ALLOWED_KEYCHAIN_KEYS: &[&str] = &[
-    "chatgpt-oauth-token",
-    "azure-openai-api-key",
-    "license-cache",
     "license-id",
     "license-last-validated",
     "machine-id",
@@ -98,6 +100,8 @@ fn check_keychain_key(key: &str) -> Result<(), String> {
     }
 }
 
+/// Read a non-secret keychain value (e.g. license metadata).
+/// BYOK secrets are never exposed through this command.
 #[tauri::command]
 async fn keychain_get(key: String) -> Result<Option<String>, String> {
     check_keychain_key(&key)?;
@@ -114,10 +118,13 @@ async fn byok_save(
 ) -> Result<(), String> {
     match config.provider.as_str() {
         "azure" => {
-            if config.azure_endpoint.trim().is_empty()
-                || config.azure_deployment.trim().is_empty()
-            {
-                return Err("Azure BYOK requires an endpoint and a deployment name".into());
+            if config.azure_deployment.trim().is_empty() {
+                return Err("Azure BYOK requires a deployment name".into());
+            }
+            if !is_valid_azure_endpoint(&config.azure_endpoint) {
+                return Err(
+                    "Azure BYOK endpoint must be an HTTPS `.openai.azure.com` URL".into(),
+                );
             }
             if let Some(key) = azure_key {
                 if !key.trim().is_empty() {
@@ -203,10 +210,13 @@ async fn updater_check(app: tauri::AppHandle) -> Result<updater::UpdateInfo, Str
 /// Download + install an update through the Tauri updater plugin. The
 /// plugin's ed25519 verification of the manifest and artifact is the only
 /// cryptographic authority; eligibility is re-checked immediately before
-/// the offer turns into a download.
+/// the offer turns into a download. The accepted version must match the
+/// version the user was shown.
 #[tauri::command]
-async fn updater_install(app: tauri::AppHandle) -> Result<(), String> {
-    updater::install_with_verification(&app).await.map_err(|e| e.to_string())
+async fn updater_install(app: tauri::AppHandle, version: String) -> Result<(), String> {
+    updater::install_with_verification(&app, &version)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub fn run() {

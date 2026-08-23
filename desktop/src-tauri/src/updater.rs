@@ -41,9 +41,17 @@ pub const PINNED_UPDATE_ORIGIN: &str =
     "https://github.com/lyrashield/lyrashield-local/releases/latest/download/latest.json";
 
 /// Native eligibility immediately before an offer/download/install (I16):
-/// revoked, inactive, or build-ineligible licenses fail closed.
-fn update_eligibility(now: u64, candidate_version: &str) -> Result<(), UpdaterError> {
-    let status = crate::license::status().map_err(|e| UpdaterError::NotEligible(e.to_string()))?;
+/// revoked, inactive, stale, or build-ineligible licenses fail closed. A
+/// license that needs online revalidation must revalidate before an update
+/// is offered or installed, otherwise a recently revoked license can still
+/// update using stale local state.
+async fn update_eligibility(now: u64, candidate_version: &str) -> Result<(), UpdaterError> {
+    let mut status = crate::license::status().map_err(|e| UpdaterError::NotEligible(e.to_string()))?;
+    if status.active && status.needs_revalidation {
+        status = crate::license::revalidate_online()
+            .await
+            .map_err(|e| UpdaterError::NotEligible(e.to_string()))?;
+    }
     if !status.active {
         return Err(UpdaterError::NotEligible(status.message));
     }
@@ -90,7 +98,7 @@ pub async fn check_with_eligibility(app: &AppHandle) -> Result<UpdateInfo, Updat
             notes: "You are on the latest version.".into(),
         }),
         Some(update) => {
-            update_eligibility(unix_now(), &update.version)?;
+            update_eligibility(unix_now(), &update.version).await?;
             Ok(UpdateInfo {
                 available: true,
                 version: update.version.clone(),
@@ -105,7 +113,10 @@ pub async fn check_with_eligibility(app: &AppHandle) -> Result<UpdateInfo, Updat
 /// the pinned pubkey; a tampered manifest, tampered artifact, forged
 /// signature, or wrong origin fails here. Eligibility is re-checked
 /// immediately before the download begins.
-pub async fn install_with_verification(app: &AppHandle) -> Result<(), UpdaterError> {
+pub async fn install_with_verification(
+    app: &AppHandle,
+    accepted_version: &str,
+) -> Result<(), UpdaterError> {
     let updater = app
         .updater_builder()
         .build()
@@ -115,7 +126,13 @@ pub async fn install_with_verification(app: &AppHandle) -> Result<(), UpdaterErr
         .await
         .map_err(|e| UpdaterError::Check(e.to_string()))?
         .ok_or(UpdaterError::NoVerifiedUpdate)?;
-    update_eligibility(unix_now(), &update.version)?;
+    if update.version != accepted_version {
+        return Err(UpdaterError::Check(format!(
+            "accepted version {accepted_version} does not match the update server version {}",
+            update.version
+        )));
+    }
+    update_eligibility(unix_now(), &update.version).await?;
     // download() verifies the artifact signature against the pinned pubkey
     // before returning bytes; install() applies exactly those bytes.
     let downloaded = update

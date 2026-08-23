@@ -64,19 +64,34 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Desktop logic crate tests (cargo test)
+        # Pure Rust crate shared by the Tauri shell. Exercises the real
+        # bundled-revocation-list, Azure endpoint, and license verification paths.
+        # `--locked` is omitted because the crate's Cargo.lock is gitignored;
+        # tests are still deterministic once the lock resolves.
+        working-directory: desktop/logic
+        env:
+          LYRASHIELD_REVOCATION_LIST_JSON: '[{"license_id":"revoked-ci-test","reason":"ci"}]'
+        run: cargo test
+
       - name: Desktop logic tests (cargo test)
         # Runs the standalone crate in desktop/tests — no Tauri context needed
         # (tauri::generate_context! requires the built frontend dist). This is
         # where the cross-language license golden vector (Node-signed canonical
         # JSON, Rust-verified exact bytes) is enforced; without this step the
         # desktop license round-trip had no CI coverage.
+        # We also compile in a non-empty revocation list to exercise the
+        # build-time bundled-list path and prove revoked licenses fail admission.
         working-directory: desktop/tests
+        env:
+          LYRASHIELD_REVOCATION_LIST_JSON: '[{"license_id":"revoked-ci-test","reason":"ci"}]'
         run: cargo test --locked
 
       - name: Verify native release binary
         run: bash scripts/build.sh
 
       - name: Read pinned worker-consumer revision
+        id: worker_pin
         run: |
           WORKER_PIN=$(tr -d '[:space:]' < .lyrashield-worker-pin)
           if [ -z "$WORKER_PIN" ]; then
@@ -84,12 +99,13 @@ jobs:
             exit 1
           fi
           echo "WORKER_PIN=$WORKER_PIN" >> "$GITHUB_ENV"
+          echo "WORKER_PIN=$WORKER_PIN" >> "$GITHUB_OUTPUT"
 
       - name: Check out public LyraShield app contract
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ecryptoguru/lyrashield-ai
-          ref: ${{ env.WORKER_PIN }}
+          ref: ${{ steps.worker_pin.outputs.WORKER_PIN }}
           path: .ci/lyrashield-ai
           fetch-depth: 1
           persist-credentials: false

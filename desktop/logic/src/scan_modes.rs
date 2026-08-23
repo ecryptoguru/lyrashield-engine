@@ -25,6 +25,26 @@ pub enum Provider {
     Azure,
 }
 
+/// Azure OpenAI endpoints must be HTTPS and hosted on `.openai.azure.com`.
+/// This prevents sending the API key to an arbitrary attacker-controlled URL.
+pub fn is_valid_azure_endpoint(endpoint: &str) -> bool {
+    let e = endpoint.trim();
+    let Some(rest) = e.strip_prefix("https://") else {
+        return false;
+    };
+    // Userinfo (e.g. `user:pass@`) is never valid for Azure OpenAI and can
+    // be used to mask an attacker-controlled host. Reject it outright.
+    if rest.contains('@') {
+        return false;
+    }
+    // Reject any path, query, or fragment and keep only the host portion.
+    let host = rest.split_once('/').map(|(h, _)| h).unwrap_or(rest);
+    let host = host.split_once('?').map(|(h, _)| h).unwrap_or(host);
+    let host = host.split_once('#').map(|(h, _)| h).unwrap_or(host);
+    let host = host.to_lowercase();
+    host.ends_with(".openai.azure.com") && host.len() > ".openai.azure.com".len()
+}
+
 /// Non-secret BYOK route metadata; secrets are injected by the caller at
 /// spawn time (they never appear in this struct, argv, or logs).
 #[derive(Debug, Clone, Default)]
@@ -44,8 +64,13 @@ pub fn provider_env(
 ) -> Result<Vec<(String, String)>, String> {
     match route.provider {
         Provider::Azure => {
-            if route.azure_endpoint.trim().is_empty() || route.azure_deployment.trim().is_empty() {
-                return Err("Azure BYOK requires an endpoint and a deployment name".into());
+            if route.azure_deployment.trim().is_empty() {
+                return Err("Azure BYOK requires a deployment name".into());
+            }
+            if !is_valid_azure_endpoint(&route.azure_endpoint) {
+                return Err(
+                    "Azure BYOK endpoint must be an HTTPS `.openai.azure.com` URL".into(),
+                );
             }
             let key = azure_key
                 .map(str::trim)
@@ -89,6 +114,20 @@ mod tests {
     }
 
     #[test]
+    fn azure_endpoint_validation_rejects_non_azure_openai_urls() {
+        assert!(is_valid_azure_endpoint("https://example.openai.azure.com/"));
+        assert!(is_valid_azure_endpoint("https://my-org.openai.azure.com"));
+        assert!(!is_valid_azure_endpoint("http://my-org.openai.azure.com"));
+        assert!(!is_valid_azure_endpoint("https://my-org.example.com"));
+        assert!(!is_valid_azure_endpoint("https://x"));
+        assert!(!is_valid_azure_endpoint("https://evil.com/.openai.azure.com"));
+        assert!(!is_valid_azure_endpoint(
+            "https://my-org.openai.azure.com@attacker.example"
+        ));
+        assert!(!is_valid_azure_endpoint("https://user:pass@attacker.example"));
+    }
+
+    #[test]
     fn azure_route_requires_endpoint_deployment_and_key() {
         let route = ProviderRoute {
             provider: Provider::Azure,
@@ -102,6 +141,11 @@ mod tests {
             azure_deployment: "dep".into(),
         };
         assert!(provider_env(&route, None, true).is_err());
+        let route = ProviderRoute {
+            provider: Provider::Azure,
+            azure_endpoint: "https://my-org.openai.azure.com".into(),
+            azure_deployment: "dep".into(),
+        };
         let env = provider_env(&route, Some(" secret "), true).unwrap();
         assert_eq!(env[0].1, "azure/dep");
         assert_eq!(env[2].1, "secret"); // trimmed, env-only, never argv

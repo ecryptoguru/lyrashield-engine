@@ -70,14 +70,35 @@ pub fn resolve_engine_bin() -> Result<PathBuf, String> {
     let dir = exe
         .parent()
         .ok_or_else(|| "cannot locate app bundle directory".to_string())?;
-    let name = if cfg!(target_os = "windows") {
-        "lyrashield-engine.exe"
+    let base = "lyrashield-engine";
+    let names = if cfg!(target_os = "windows") {
+        vec![
+            "lyrashield-engine.exe",
+            "lyrashield-engine-x86_64-pc-windows-msvc.exe",
+            "lyrashield-engine-aarch64-pc-windows-msvc.exe",
+            base,
+        ]
+    } else if cfg!(target_os = "macos") {
+        vec![
+            base,
+            "lyrashield-engine-universal-apple-darwin",
+            "lyrashield-engine-aarch64-apple-darwin",
+            "lyrashield-engine-x86_64-apple-darwin",
+        ]
     } else {
-        "lyrashield-engine"
+        vec![
+            base,
+            "lyrashield-engine-x86_64-unknown-linux-gnu",
+            "lyrashield-engine-aarch64-unknown-linux-gnu",
+        ]
     };
     // Bundled as a resource: next to the executable on Windows/Linux, and in
     // ../Resources inside a macOS .app bundle.
-    let candidates = [dir.join(name), dir.join("../Resources").join(name)];
+    let mut candidates = Vec::with_capacity(names.len() * 2);
+    for name in &names {
+        candidates.push(dir.join(name));
+        candidates.push(dir.join("../Resources").join(name));
+    }
     let sidecar = candidates
         .iter()
         .find(|candidate| candidate.is_file())
@@ -90,20 +111,37 @@ pub fn resolve_engine_bin() -> Result<PathBuf, String> {
 }
 
 /// Startup version handshake: the bundled sidecar must execute and report a
-/// version. A mismatched or missing sidecar blocks scans with an actionable
-/// error instead of silently running a different engine.
+/// version matching the desktop shell. A mismatched or missing sidecar blocks
+/// scans with an actionable error instead of silently running a different
+/// engine.
 pub async fn engine_sidecar_version(bin: &PathBuf) -> Result<String, String> {
-    let out = tokio::process::Command::new(bin)
-        .arg("--version")
-        .output()
-        .await
-        .map_err(|e| format!("bundled engine failed to start: {e}"))?;
+    let expected = env!("CARGO_PKG_VERSION");
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new(bin)
+            .arg("--version")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "bundled engine version handshake timed out".to_string())?
+    .map_err(|e| format!("bundled engine failed to start: {e}"))?;
     if !out.status.success() {
         return Err("bundled engine version check failed".into());
     }
-    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let version = raw
+        .strip_prefix("lyrashield ")
+        .unwrap_or(&raw)
+        .trim()
+        .to_string();
     if version.is_empty() {
         return Err("bundled engine reported no version".into());
+    }
+    if version != expected {
+        return Err(format!(
+            "bundled engine version {version} does not match shell version {expected}"
+        ));
     }
     Ok(version)
 }

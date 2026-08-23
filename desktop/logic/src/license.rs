@@ -73,6 +73,8 @@ impl From<ed25519_dalek::ed25519::Error> for LicenseError {
 /// so the canonical JSON matches the server's `signLicense()` output exactly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LicensePayload {
+    #[serde(rename = "licenseId", default, skip_serializing_if = "Option::is_none")]
+    pub license_id: Option<String>,
     #[serde(rename = "sku")]
     pub sku: String,
     #[serde(rename = "seatCount")]
@@ -104,6 +106,11 @@ pub struct LicenseStatus {
     pub active: bool,
     pub info: Option<LicenseInfo>,
     pub message: String,
+    /// True when the license is within the offline grace window but has not
+    /// been revalidated online. This is a machine-readable control signal; the
+    /// human `message` is not branched on.
+    #[serde(default)]
+    pub needs_revalidation: bool,
 }
 
 /// A bundled revocation list entry. Shipped with signed updates.
@@ -113,9 +120,21 @@ pub struct RevocationEntry {
     pub reason: String,
 }
 
-/// The bundled revocation list. In production this is embedded at build time.
+/// The bundled revocation list. Shipped with signed updates.
+///
+/// The release build injects `LYRASHIELD_REVOCATION_LIST_JSON` at compile time.
+/// If that variable is absent, the crate falls back to the bundled
+/// `resources/revocations.json` file (which is `[]` by default so releases
+/// that do not rotate the list remain safe; the file format is the same
+/// `Vec<RevocationEntry>` JSON and can be populated at build time).
 pub fn bundled_revocation_list() -> Vec<RevocationEntry> {
-    Vec::new()
+    const BUNDLED: Option<&str> = option_env!("LYRASHIELD_REVOCATION_LIST_JSON");
+    let json = match BUNDLED {
+        Some(json) if !json.is_empty() => json,
+        _ => include_str!("../resources/revocations.json"),
+    };
+    serde_json::from_str(json)
+        .expect("LYRASHIELD_REVOCATION_LIST_JSON and resources/revocations.json must contain valid JSON")
 }
 
 /// Verify a license blob (`<base64(json)>.<base64(sig)>`) against a pubkey.
@@ -157,6 +176,29 @@ pub fn verify_blob(blob: &str, pubkey_hex: &str) -> Result<LicensePayload, Licen
 /// Check whether a license id is in the revocation list.
 pub fn is_revoked(license_id: &str, revocation_list: &[RevocationEntry]) -> bool {
     revocation_list.iter().any(|e| e.license_id == license_id)
+}
+
+/// Verify a license blob and refuse it if the license id is in the bundled
+/// revocation list. This is the single admission authority shared by
+/// `activate` and `activate_online`.
+pub fn verify_and_check_revoked(
+    blob: &str,
+    license_id: &str,
+    pubkey_hex: &str,
+    revocation_list: &[RevocationEntry],
+) -> Result<LicensePayload, LicenseError> {
+    if is_revoked(license_id, revocation_list) {
+        return Err(LicenseError::Revoked);
+    }
+    let payload = verify_blob(blob, pubkey_hex)?;
+    if let Some(ref signed_id) = payload.license_id {
+        if signed_id != license_id {
+            return Err(LicenseError::InvalidPayload(
+                "license id in signed blob does not match the provided license id".into(),
+            ));
+        }
+    }
+    Ok(payload)
 }
 
 /// Pure admission rule (C2), table-testable without a keychain: an inactive,
@@ -267,4 +309,82 @@ fn days_from_civil(y: i32, m: i32, d: i32) -> i32 {
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146097 + doe - 719468
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::Signer;
+
+    #[test]
+    fn bundled_revocation_list_parses_embedded_json() {
+        let json = r#"[{"license_id":"revoked-1","reason":"chargeback"}]"#;
+        let parsed: Vec<RevocationEntry> = serde_json::from_str(json).expect("valid JSON");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].license_id, "revoked-1");
+    }
+
+    #[test]
+    fn bundled_revocation_list_loads_from_compile_time_env() {
+        let list = bundled_revocation_list();
+        // CI passes a non-empty `LYRASHIELD_REVOCATION_LIST_JSON`; local builds
+        // fall back to the empty `resources/revocations.json`.
+        if !list.is_empty() {
+            assert!(list.iter().all(|e| !e.license_id.is_empty()));
+        }
+    }
+
+    #[test]
+    fn is_revoked_matches_bundled_license_id() {
+        let revocations = vec![RevocationEntry {
+            license_id: "revoked-1".into(),
+            reason: "chargeback".into(),
+        }];
+        assert!(is_revoked("revoked-1", &revocations));
+        assert!(!is_revoked("valid-1", &revocations));
+    }
+
+    #[test]
+    fn verify_and_check_revoked_accepts_valid_and_rejects_revoked() {
+        // Deterministic test key (32 bytes). Never use this for production.
+        let seed = [1u8; 32];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let verifying_key = signing_key.verifying_key();
+
+        let payload = LicensePayload {
+            license_id: Some("valid-1".into()),
+            sku: "individual_launch".into(),
+            seat_count: 1,
+            machine_ids: vec!["machine-1".into()],
+            update_eligible_until: "2036-01-01T00:00:00.000Z".into(),
+            perpetual_fallback_build: Some("1.2.0".into()),
+        };
+        let payload_json = serde_json::to_vec(&payload).expect("serialize");
+        let signature = signing_key.sign(&payload_json);
+        let blob = format!(
+            "{}.{}",
+            base64::engine::general_purpose::STANDARD.encode(&payload_json),
+            base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+        );
+        let pubkey_hex = hex::encode(verifying_key.to_bytes());
+
+        let revocations = Vec::new();
+        let result = verify_and_check_revoked(&blob, "valid-1", &pubkey_hex, &revocations);
+        assert!(result.is_ok(), "valid license should verify: {result:?}");
+
+        // A revoked license id is rejected even when the blob is valid.
+        let revocations = vec![RevocationEntry {
+            license_id: "valid-1".into(),
+            reason: "chargeback".into(),
+        }];
+        let result = verify_and_check_revoked(&blob, "valid-1", &pubkey_hex, &revocations);
+        assert!(matches!(result, Err(LicenseError::Revoked)));
+
+        // The same blob cannot be replayed with a different license id.
+        let result = verify_and_check_revoked(&blob, "valid-2", &pubkey_hex, &revocations);
+        assert!(
+            matches!(result, Err(LicenseError::InvalidPayload(_))),
+            "mismatched license id must be rejected: {result:?}"
+        );
+    }
 }

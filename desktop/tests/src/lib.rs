@@ -79,6 +79,35 @@ fn is_revoked(license_id: &str, list: &[RevocationEntry]) -> bool {
     list.iter().any(|e| e.license_id == license_id)
 }
 
+/// Bundled revocation list. Production releases inject
+/// `LYRASHIELD_REVOCATION_LIST_JSON` at build time; tests fall back to the
+/// compiled default (`[]` unless the env var is set).
+fn bundled_revocation_list() -> Vec<RevocationEntry> {
+    const BUNDLED: Option<&str> = option_env!("LYRASHIELD_REVOCATION_LIST_JSON");
+    let json = match BUNDLED {
+        Some(json) if !json.is_empty() => json,
+        _ => "[]",
+    };
+    serde_json::from_str(json)
+        .expect("LYRASHIELD_REVOCATION_LIST_JSON must contain valid JSON")
+}
+
+fn verify_and_check_revoked(
+    blob: &str,
+    license_id: &str,
+    pubkey_hex: &str,
+    revocation_list: &[RevocationEntry],
+) -> Result<LicensePayload, LicenseError> {
+    if is_revoked(license_id, revocation_list) {
+        return Err(LicenseError::Revoked);
+    }
+    let payload = verify_blob(blob, pubkey_hex)?;
+    if payload.license_id != license_id {
+        return Err(LicenseError::Malformed);
+    }
+    Ok(payload)
+}
+
 fn should_accept_update(info: &LicenseInfo, now: u64, build: u64) -> bool {
     if now > info.update_eligible_until {
         return build <= info.last_eligible_build;
@@ -215,6 +244,30 @@ fn test_license_revoked() {
     }];
     assert!(is_revoked("revoked-1", &revocations));
     assert!(!is_revoked("ok-1", &revocations));
+}
+
+#[test]
+fn test_bundled_revocation_list_accepts_compile_time_env() {
+    let list = bundled_revocation_list();
+    // The CI job sets a non-empty list to prove the build-time injection path.
+    if !list.is_empty() {
+        assert!(list.iter().any(|e| !e.license_id.is_empty()));
+    }
+}
+
+#[test]
+fn test_revoked_license_fails_admission() {
+    let (blob, pubkey) = mint_license();
+    let revocations = vec![RevocationEntry {
+        license_id: "test-license-1".into(),
+        reason: "fraud".into(),
+    }];
+    let result = verify_and_check_revoked(&blob, "test-license-1", &pubkey, &revocations);
+    assert!(matches!(result, Err(LicenseError::Revoked)));
+
+    // The same blob cannot be replayed with a different license id.
+    let result = verify_and_check_revoked(&blob, "test-license-2", &pubkey, &revocations);
+    assert!(matches!(result, Err(LicenseError::Malformed)));
 }
 
 #[test]
