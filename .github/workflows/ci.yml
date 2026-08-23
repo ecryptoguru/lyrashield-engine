@@ -34,6 +34,11 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Provision deny-by-default sandbox network
+        run: |
+          bash scripts/provision-sandbox-network.sh
+          echo "STRIX_DOCKER_SANDBOX_NETWORK=lyrashield-sandbox" >> "$GITHUB_ENV"
+
       - name: Verify source and policy gates
         run: scripts/verify-controlled-derivative.sh
 
@@ -179,7 +184,9 @@ jobs:
         run: |
           docker network create --internal ci-sandbox-internal
           trap 'docker network rm ci-sandbox-internal >/dev/null 2>&1 || true' EXIT
-          docker run --rm --network ci-sandbox-internal lyrashield-sandbox:ci sh -c '
+          docker run --rm --network ci-sandbox-internal \
+            -e STRIX_DOCKER_SANDBOX_NETWORK=ci-sandbox-internal \
+            lyrashield-sandbox:ci sh -c '
             # Direct IPv4, IPv6, DNS, metadata, and alternate-client egress
             # (proxy variables unset) must all be denied by the network layer.
             # --fail is required: the Caido proxy on 127.0.0.1:48080 accepts
