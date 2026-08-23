@@ -200,19 +200,24 @@ def _estimate_cost(mode: str, settings: Any) -> float:
 
 
 def _target_hosts_from_report() -> set[str] | None:
-    """Extract target hostnames from the global report state, if any."""
+    """Extract target hostnames from the global report state, if any.
+
+    Reads the in-memory scan configuration (raw execution input); the durable
+    run record's targets_info is sanitized and no longer carries usable
+    hostnames for every target shape.
+    """
     from lyrashield.artifacts.state import get_global_report_state
 
     report_state = get_global_report_state()
     if report_state is None:
         return None
 
-    targets_info = report_state.run_record.get("targets_info", [])
-    if not isinstance(targets_info, list):
+    targets = report_state.scan_config.get("targets") if report_state.scan_config else None
+    if not isinstance(targets, list):
         return None
 
     hosts: set[str] = set()
-    for item in targets_info:
+    for item in targets:
         if isinstance(item, str):
             host = urlparse(item).hostname or item
             hosts.add(host)
@@ -224,7 +229,15 @@ def _target_hosts_from_report() -> set[str] | None:
                     host = urlparse(value).hostname or value
                     hosts.add(host)
                     hosts.add(value)
-    return hosts
+            details = item.get("details")
+            if isinstance(details, dict):
+                for key in ("target_url", "target_ip", "target_repo"):
+                    value = details.get(key)
+                    if isinstance(value, str):
+                        host = urlparse(value).hostname or value.split("/")[0]
+                        if host:
+                            hosts.add(host)
+    return hosts or None
 
 
 def _validate_web_search_call(
@@ -232,7 +245,12 @@ def _validate_web_search_call(
     topic: str,
     report_state: ReportState | None,
 ) -> str | None:
-    """Return an error message if the call should not proceed, or None."""
+    """Return an error message for configuration problems, or None.
+
+    Count/cost limits are NOT checked here: they are enforced atomically at
+    reservation time (``ReportState.reserve_web_search_slot``) so concurrent
+    calls cannot overspend them.
+    """
     if not web_search_settings.enabled:
         return "Web search is disabled. Set LYRASHIELD_WEB_SEARCH_ENABLED=1 to enable."
     if not web_search_settings.api_key:
@@ -241,15 +259,7 @@ def _validate_web_search_call(
         )
     if topic not in _ALLOWED_TOPICS:
         return f"Invalid topic '{topic}'. Allowed: {sorted(_ALLOWED_TOPICS)}"
-    if report_state is None:
-        return None
-    call_count, total_cost = report_state.get_web_search_stats()
-    max_calls = web_search_settings.max_calls_per_scan
-    if max_calls > 0 and call_count >= max_calls:
-        return f"Web search call limit reached ({call_count}/{max_calls})."
-    budget = web_search_settings.budget_usd
-    if budget > 0 and total_cost >= budget:
-        return f"Web search budget exceeded (${total_cost:.4f}/${budget:.2f})."
+    del report_state
     return None
 
 
@@ -331,6 +341,21 @@ async def web_search(
     reservation_key = f"web_search:{uuid.uuid4().hex}"
 
     hooks = get_active_hooks()
+    if report_state is not None:
+        # Atomic count/cost reservation (I20): one boundary for call slots
+        # and the maximum charge, before any network I/O.
+        slot_error = report_state.reserve_web_search_slot(
+            estimated_cost,
+            max_calls=web_search_settings.max_calls_per_scan,
+            budget_usd=web_search_settings.budget_usd,
+        )
+        if slot_error:
+            return json.dumps(
+                {"success": False, "message": slot_error},
+                ensure_ascii=False,
+                default=str,
+            )
+    slot_reserved = report_state is not None
     try:
         if hooks is not None:
             await hooks.reserve_web_search_call(
@@ -379,11 +404,13 @@ async def web_search(
         }
 
         if report_state is not None:
-            report_state.record_web_search_cost(
+            report_state.commit_web_search_call(
                 estimated_cost,
                 query=redacted_query,
                 mode=mode,
+                estimated_cost=estimated_cost,
             )
+            slot_reserved = False
 
         if hooks is not None:
             await hooks.release_web_search_call(
@@ -393,27 +420,20 @@ async def web_search(
 
         return json.dumps(result, ensure_ascii=False, default=str)
 
-    except httpx.HTTPError as exc:
-        logger.exception("Parallel Search request failed")
-        if hooks is not None:
-            await hooks.release_web_search_call(
-                key=reservation_key,
-                actual_cost=0.0,
-            )
-        return json.dumps(
-            {"success": False, "message": f"Parallel Search failed: {exc}"},
-            ensure_ascii=False,
-            default=str,
-        )
     except Exception as exc:
         logger.exception("web_search tool failed")
-        if hooks is not None:
-            await hooks.release_web_search_call(
-                key=reservation_key,
-                actual_cost=0.0,
-            )
         return json.dumps(
             {"success": False, "message": f"Web search failed: {exc}"},
             ensure_ascii=False,
             default=str,
         )
+    finally:
+        # Release the global-budget reservation and the per-scan slot unless
+        # the success path already committed both.
+        if hooks is not None:
+            await hooks.release_web_search_call(
+                key=reservation_key,
+                actual_cost=0.0,
+            )
+        if slot_reserved and report_state is not None:
+            report_state.release_web_search_reservation(estimated_cost)

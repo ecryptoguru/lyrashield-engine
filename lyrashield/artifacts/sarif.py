@@ -21,7 +21,7 @@ Design notes:
     canonical ``CWE-NNN`` form so dedup works across runs.
   * SARIF only has three levels (error / warning / note). Strix's five
     severities collapse into them. The raw severity label and CVSS score
-    survive in ``result.properties.strix`` for downstream tools that can
+    survive in ``result.properties.lyrashield`` for downstream tools that can
     distinguish CRITICAL vs HIGH.
   * GitHub code-scanning uses ``rule.properties['security-severity']``
     (a 0.0-10.0 string) to rank alerts. We populate it from CVSS when
@@ -59,8 +59,10 @@ logger = logging.getLogger(__name__)
 
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
 SARIF_VERSION = "2.1.0"
-TOOL_NAME = "Strix"
-TOOL_INFORMATION_URI = "https://strix.ai"
+# Public SARIF identifiers are LyraShield-owned: the upstream engine name or
+# URL must never appear in a customer-facing artifact (I15).
+TOOL_NAME = "LyraShield"
+TOOL_INFORMATION_URI = "https://lyrashieldai.com"
 
 # Synthetic anchor for findings that have no safe code location. SARIF
 # requires every result to carry at least one location, and GitHub
@@ -74,7 +76,7 @@ _SYNTHETIC_LOCATION_URI = "SECURITY.md"
 
 
 # SARIF only has three result levels; Strix's five severities collapse here.
-# Original label survives in ``result.properties.strix.severity``.
+# Original label survives in ``result.properties.lyrashield.severity``.
 _SEVERITY_TO_LEVEL = {
     "critical": "error",
     "high": "error",
@@ -368,7 +370,7 @@ def build_sarif_document(
 def _apply_repository_context(run: dict[str, Any], context: dict[str, Any]) -> None:
     """Attach VCS provenance to a run for code-scanning alert binding.
 
-    ``automationDetails.id`` categorises the run (``strix/<owner>/<repo>``)
+    ``automationDetails.id`` categorises the run (``lyrashield/<owner>/<repo>``)
     so multiple Strix runs against the same repo reconcile rather than pile
     up. ``versionControlProvenance`` records the exact repo + commit + branch
     the findings came from. Both are omitted when the corresponding context
@@ -381,7 +383,7 @@ def _apply_repository_context(run: dict[str, Any], context: dict[str, Any]) -> N
     ref = _string_value(context.get("ref"))
 
     if full_name:
-        run["automationDetails"] = {"id": f"strix/{full_name}"}
+        run["automationDetails"] = {"id": f"lyrashield/{full_name}"}
 
     if uri:
         provenance: dict[str, Any] = {"repositoryUri": uri}
@@ -498,22 +500,25 @@ def _result_properties(
 
     The top-level ``security-severity`` matches GitHub code-scanning's
     expected property. Strix-specific fields are namespaced under
-    ``strix`` so generic SARIF consumers don't see them by default.
+    ``lyrashield`` so generic SARIF consumers don't see them by default.
     """
     properties: dict[str, Any] = {
         "security-severity": _security_severity(report),
     }
     if class_fingerprint:
         # Surfaced at top level so cross-rename dismissal tooling can
-        # filter alerts by it without parsing the nested strix.* tree.
-        properties["strix_vuln_class_hash"] = class_fingerprint
+        # filter alerts by it without parsing the nested lyrashield.* tree.
+        # The fingerprint value itself is unchanged, so prior dismissal
+        # determinations keyed on it carry over (neutral compatibility
+        # field, documented here).
+        properties["lyrashield_vuln_class_hash"] = class_fingerprint
     if is_synthetic:
         # Top-level so reviewers + downstream automation can filter
-        # synthetic-anchored alerts without parsing the nested strix.*
+        # synthetic-anchored alerts without parsing the nested lyrashield.*
         # tree.
         properties["synthetic_location"] = True
 
-    strix: dict[str, Any] = {}
+    product: dict[str, Any] = {}
     for key in (
         "id",
         "severity",
@@ -530,7 +535,7 @@ def _result_properties(
     ):
         value = report.get(key)
         if value not in (None, ""):
-            strix[key] = value
+            product[key] = value
 
     # SARIF is written for external upload (code-scanning / ASPM), so it must
     # NOT carry the weaponized exploit payload — that stays a local run
@@ -546,10 +551,10 @@ def _result_properties(
             poc["description"] = poc_description
         if poc_script:
             poc["script_available"] = True
-        strix["poc"] = poc
+        product["poc"] = poc
 
-    if strix:
-        properties["strix"] = strix
+    if product:
+        properties["lyrashield"] = product
 
     return properties
 
@@ -745,7 +750,7 @@ def _rule_id(report: dict[str, Any]) -> str:
     if finding_id:
         return finding_id
 
-    title = _string_value(report.get("title")) or "strix-finding"
+    title = _string_value(report.get("title")) or "lyrashield-finding"
     return _slugify(title)
 
 
@@ -1052,4 +1057,4 @@ def _slugify(value: str) -> str:
     """Convert arbitrary finding text into a stable lowercase slug."""
     chars = [char.lower() if char.isalnum() else "-" for char in value]
     slug = "-".join(part for part in "".join(chars).split("-") if part)
-    return slug or "strix-finding"
+    return slug or "lyrashield-finding"

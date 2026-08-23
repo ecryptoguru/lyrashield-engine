@@ -864,9 +864,9 @@ async def run_strix_scan(
             await coordinator.maybe_snapshot()
         if cleanup_on_exit:
             logger.info("Tearing down sandbox session for scan %s", scan_id)
-            sandbox_removed = await session_manager.cleanup(scan_id)
+            cleanup_outcome = await session_manager.cleanup(scan_id)
             state = artifact_state or get_global_report_state()
             if state is not None:
-                state.set_sandbox_cleanup_status(sandbox_removed is not False)
+                state.set_cleanup_outcome(cleanup_outcome)
         logger.info("Strix scan %s done", scan_id)
         teardown_logging()

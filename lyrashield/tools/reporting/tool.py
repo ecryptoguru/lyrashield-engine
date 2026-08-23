@@ -256,11 +256,15 @@ async def _do_create(  # noqa: PLR0912
 
         report_state = get_global_report_state()
         if report_state is None:
-            logger.warning("No global report state; vulnerability report not persisted")
+            # Fail closed: a finding that cannot be persisted must never be
+            # reported as filed — the run record is the only durable record.
+            logger.error("No global report state; vulnerability report rejected")
             return {
-                "success": True,
-                "message": f"Vulnerability report '{title}' created (not persisted)",
-                "warning": "Report could not be persisted - report state unavailable",
+                "success": False,
+                "error": (
+                    "Vulnerability report not persisted: report state unavailable. "
+                    "The finding was NOT recorded — do not treat it as filed."
+                ),
             }
 
         from lyrashield.artifacts.dedupe import check_duplicate
@@ -323,7 +327,7 @@ async def _do_create(  # noqa: PLR0912
             agent_id=agent_id if isinstance(agent_id, str) else None,
             agent_name=agent_name if isinstance(agent_name, str) else None,
         )
-    except (ImportError, AttributeError) as e:
+    except (ImportError, AttributeError, RuntimeError, OSError) as e:
         logger.exception("create_vulnerability_report persistence failed")
         return {"success": False, "error": f"Failed to create vulnerability report: {e!s}"}
     else:
@@ -813,11 +817,15 @@ async def _do_create_dependency(  # noqa: PLR0912
 
         report_state = get_global_report_state()
         if report_state is None:
-            logger.warning("No global report state; dependency report not persisted")
+            # Fail closed (I6): an unpersisted dependency finding must never
+            # be reported as filed.
+            logger.error("No global report state; dependency report rejected")
             return {
-                "success": True,
-                "message": f"Dependency finding '{title}' created (not persisted)",
-                "warning": "Report could not be persisted - report state unavailable",
+                "success": False,
+                "error": (
+                    "Dependency report not persisted: report state unavailable. "
+                    "The finding was NOT recorded — do not treat it as filed."
+                ),
             }
 
         from lyrashield.artifacts.dedupe import check_duplicate
@@ -865,7 +873,7 @@ async def _do_create_dependency(  # noqa: PLR0912
             agent_id=agent_id if isinstance(agent_id, str) else None,
             agent_name=agent_name if isinstance(agent_name, str) else None,
         )
-    except (ImportError, AttributeError) as e:
+    except (ImportError, AttributeError, RuntimeError, OSError) as e:
         logger.exception("create_dependency_report persistence failed")
         return {"success": False, "error": f"Failed to create dependency report: {e!s}"}
     else:

@@ -19,11 +19,13 @@ from lyrashield.artifacts.usage import LLMUsageLedger, _int_or_zero, _round_cost
 from lyrashield.artifacts.writer import (
     read_run_record,
     write_executive_report,
+    write_resume_record,
     write_run_record,
     write_vulnerabilities,
 )
+from lyrashield.runtime.session_manager import CLEANUP_FAILED, CLEANUP_REMOVED
 from lyrashield.telemetry import posthog, scarf
-from lyrashield.utils.redaction import redact_text
+from lyrashield.utils.redaction import redact_text, redact_url
 from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for
@@ -47,6 +49,75 @@ _ALLOWED_PHASES = frozenset({"setup", "running", "finalizing", "completed", "sto
 # fields. The worker's zod schema uses `.strip()`, so unknown keys are ignored —
 # additive changes are safe to ship ahead of a worker update.
 RUN_RECORD_SCHEMA_VERSION = "1.0"
+
+# Fields every run.json write must carry from its first observable appearance
+# (the worker parses this contract at any point in the run, not just at the
+# end). Writers validate against this list before persisting.
+REQUIRED_RUN_RECORD_FIELDS: tuple[str, ...] = (
+    "schema_version",
+    "run_id",
+    "run_name",
+    "start_time",
+    "end_time",
+    "status",
+    "phase",
+    "auth_mode",
+    "targets_info",
+    "llm_usage",
+    "seq",
+    "turn_count",
+)
+
+
+def validate_run_record(record: dict[str, Any]) -> None:
+    """Raise when ``record`` is not a complete versioned worker contract."""
+    missing = [field for field in REQUIRED_RUN_RECORD_FIELDS if field not in record]
+    if missing:
+        raise RuntimeError(f"run.json contract incomplete, missing fields: {missing}")
+    if record.get("schema_version") != RUN_RECORD_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"run.json contract carries unsupported schema_version: "
+            f"{record.get('schema_version')!r} (expected {RUN_RECORD_SCHEMA_VERSION!r})"
+        )
+
+
+def initial_run_record(
+    run_name: str | None,
+    *,
+    auth_mode: str,
+    targets_info: list[dict[str, Any]] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the canonical first run record (the only constructor of it).
+
+    Both the CLI's pre-scan persistence and :class:`ReportState` build the
+    record here, so the first observable run.json is already a complete
+    versioned worker contract — never a partial hand-rolled dict.
+
+    ``targets_info`` is a required contract field and is accepted as an
+    explicit parameter so it is never dropped by the ``extra`` filter that
+    protects required fields from caller override (comment #6).
+    """
+    record: dict[str, Any] = {
+        "schema_version": RUN_RECORD_SCHEMA_VERSION,
+        "run_id": run_name or f"run-{uuid4().hex[:8]}",
+        "run_name": run_name,
+        "start_time": datetime.now(UTC).isoformat(),
+        "end_time": None,
+        "status": "running",
+        "phase": "setup",
+        "auth_mode": auth_mode,
+        "targets_info": targets_info if isinstance(targets_info, list) else [],
+        "llm_usage": LLMUsageLedger().to_record(),
+        "seq": 0,
+        "turn_count": 0,
+    }
+    if extra:
+        # Required contract fields are immutable here: extra must not
+        # overwrite them. A caller cannot forge status, schema_version,
+        # run_id, or any other field the worker contract depends on.
+        record.update({k: v for k, v in extra.items() if k not in REQUIRED_RUN_RECORD_FIELDS})
+    return record
 
 
 def _strix_version() -> str | None:
@@ -117,6 +188,209 @@ def get_global_report_state() -> Optional["ReportState"]:
     return _global_report_state
 
 
+# Finding fields sanitized as free text at the persistence boundary. Fields
+# not listed here (id, severity, timestamp, cvss, cve, cwe, method,
+# finding_class, control_ids, agent_id) are structural identifiers copied
+# verbatim — they carry no operator or target-derived secrets.
+_FINDING_TEXT_FIELDS = (
+    "title",
+    "description",
+    "impact",
+    "technical_analysis",
+    "poc_description",
+    "remediation_steps",
+    "evidence",
+    "assumptions",
+    "fix_pr_body",
+    "agent_name",
+)
+_FINDING_URL_FIELDS = ("target", "endpoint")
+
+# Deterministic bounds for artifact fields (E4): unbounded model-controlled
+# text could exhaust disk/memory or smuggle payloads through projections.
+_MAX_TEXT_LENGTH = 10_000
+_MAX_COLLECTION_SIZE = 1_000
+_MAX_METADATA_DEPTH = 10
+_MAX_FINDING_SERIALIZED_SIZE = 1_000_000
+
+
+def _truncate_text(value: str, max_length: int = _MAX_TEXT_LENGTH) -> str:
+    """Deterministically truncate a string to ``max_length`` chars."""
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - 3] + "..."
+
+
+def _bound_collection(items: list[Any], max_size: int = _MAX_COLLECTION_SIZE) -> list[Any]:
+    """Deterministically bound a collection to ``max_size`` items."""
+    if len(items) <= max_size:
+        return items
+    return items[:max_size]
+
+
+def _recursive_sanitize_unknown(value: Any, *, include_internal_paths: bool, depth: int = 0) -> Any:
+    """Recursively sanitize unknown dict/list/string values from model-controlled fields.
+
+    Every string leaf is redacted; nested dicts/lists are descended up to
+    ``_MAX_METADATA_DEPTH``; collections are bounded to ``_MAX_COLLECTION_SIZE``.
+    """
+    if depth > _MAX_METADATA_DEPTH:
+        return "[truncated:depth]"
+    if isinstance(value, str):
+        return _truncate_text(redact_text(value, include_internal_paths=include_internal_paths))
+    if isinstance(value, dict):
+        bounded = list(value.items())[:_MAX_COLLECTION_SIZE]
+        return {
+            str(k): _recursive_sanitize_unknown(
+                v, include_internal_paths=include_internal_paths, depth=depth + 1
+            )
+            for k, v in bounded
+        }
+    if isinstance(value, list):
+        bounded = value[:_MAX_COLLECTION_SIZE]
+        return [
+            _recursive_sanitize_unknown(
+                item, include_internal_paths=include_internal_paths, depth=depth + 1
+            )
+            for item in bounded
+        ]
+    return value
+
+
+def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) -> dict[str, Any]:
+    """Return the immutable sanitized snapshot of one finding.
+
+    Built once at the artifact persistence boundary; every durable/public
+    projection (vulnerabilities JSON/MD/CSV, SARIF, viewer, sync) consumes
+    only this snapshot, never the raw in-memory report.
+    """
+    snapshot: dict[str, Any] = {}
+    for key, value in report.items():
+        if key in _FINDING_TEXT_FIELDS and isinstance(value, str):
+            snapshot[key] = _truncate_text(
+                redact_text(value, include_internal_paths=include_internal_paths)
+            )
+        elif key in _FINDING_URL_FIELDS and isinstance(value, str):
+            snapshot[key] = redact_url(redact_text(value, include_internal_paths=False))
+        elif key == "poc_script_code" and isinstance(value, str):
+            # The weaponized payload stays a local artifact, but its copy in
+            # the durable snapshot is stripped of secrets and host identity;
+            # sandbox-internal workspace paths are preserved by policy.
+            snapshot[key] = _truncate_text(redact_text(value, include_internal_paths=False))
+        elif key == "code_locations" and isinstance(value, list):
+            snapshot[key] = _bound_collection(
+                _sanitize_code_locations(value, include_internal_paths)
+            )
+        elif key == "dependency_metadata" and isinstance(value, dict):
+            snapshot[key] = {
+                str(k): _truncate_text(
+                    redact_text(str(v), include_internal_paths=include_internal_paths)
+                )
+                if isinstance(v, str)
+                else _recursive_sanitize_unknown(v, include_internal_paths=include_internal_paths)
+                for k, v in value.items()
+            }
+        elif key == "cvss_breakdown" and isinstance(value, dict):
+            snapshot[key] = {
+                str(k): redact_text(str(v), include_internal_paths=False) for k, v in value.items()
+            }
+        else:
+            # Unknown fields: recursively sanitize so model-controlled nested
+            # metadata cannot leak secrets through the catch-all branch.
+            snapshot[key] = _recursive_sanitize_unknown(
+                value, include_internal_paths=include_internal_paths
+            )
+
+    # E4: enforce the total serialized finding size bound as a last-line
+    # defense. The per-field limits above are the primary guard; this catch
+    # prevents a combination of many bounded fields from producing a single
+    # oversized record. If the snapshot still exceeds the bound, fall back to
+    # a minimal safe finding so persistence never writes an unbounded object.
+    try:
+        serialized = json.dumps(snapshot)
+    except (TypeError, ValueError):
+        serialized = ""
+    if len(serialized) > _MAX_FINDING_SERIALIZED_SIZE:
+        return {
+            "id": report.get("id", ""),
+            "title": redact_text(
+                _truncate_text(str(report.get("title", ""))),
+                include_internal_paths=include_internal_paths,
+            ),
+            "severity": str(report.get("severity", "info")).lower().strip() or "info",
+            "timestamp": report.get("timestamp", ""),
+            "error": (
+                "Finding exceeded the maximum serialized size and was reduced "
+                "to a safe stub. The original report could not be persisted."
+            ),
+        }
+    return snapshot
+
+
+def _sanitize_code_locations(
+    locations: list[Any], include_internal_paths: bool
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        entry: dict[str, Any] = {}
+        for key, value in location.items():
+            if isinstance(value, str):
+                if key == "file":
+                    # Keep repo-relative paths; strip any host-absolute or
+                    # home-directory prefix that leaked into a location.
+                    entry[key] = redact_text(value, include_internal_paths=include_internal_paths)
+                else:  # snippet, fix_before, fix_after, label
+                    entry[key] = redact_text(value, include_internal_paths=include_internal_paths)
+            else:
+                entry[key] = value
+        sanitized.append(entry)
+    return sanitized
+
+
+def sanitize_targets_info(targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sanitized target identifiers for the durable run receipt.
+
+    URLs keep scheme/host/path shape but lose credentials and sensitive query
+    values; repository URLs get the same URL treatment; host filesystem paths
+    reduce to their basename; cloned host paths are dropped entirely.
+    """
+    sanitized: list[dict[str, Any]] = []
+    for target in targets:
+        entry: dict[str, Any] = {"type": target.get("type")}
+        details = target.get("details")
+        if isinstance(details, dict):
+            clean_details: dict[str, Any] = {}
+            for key, value in details.items():
+                if key == "cloned_repo_path":
+                    continue  # host path; private execution configuration
+                if isinstance(value, str) and value:
+                    if key in {"target_url", "target_repo"}:
+                        clean_details[key] = redact_url(
+                            redact_text(value, include_internal_paths=False)
+                        )
+                    else:
+                        clean_details[key] = redact_text(value, include_internal_paths=True)
+                elif value is not None:
+                    clean_details[key] = value
+            entry["details"] = clean_details
+        sanitized.append(entry)
+    return sanitized
+
+
+def sanitize_local_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Local source entries without host filesystem paths."""
+    sanitized: list[dict[str, Any]] = []
+    for source in sources:
+        entry: dict[str, Any] = {}
+        for key in ("workspace_subdir", "mount"):
+            if key in source:
+                entry[key] = source[key]
+        sanitized.append(entry)
+    return sanitized
+
+
 def set_global_report_state(report_state: Optional["ReportState"]) -> None:
     global _global_report_state  # noqa: PLW0603
     _global_report_state = report_state
@@ -136,32 +410,26 @@ class ReportState:
 
     def __init__(self, run_name: str | None = None):
         self.run_name = run_name
-        self.run_id = run_name or f"run-{uuid4().hex[:8]}"
-        self.start_time = datetime.now(UTC).isoformat()
-        self.end_time: str | None = None
 
         self.vulnerability_reports: list[dict[str, Any]] = []
         self.final_scan_result: str | None = None
 
         self.scan_results: dict[str, Any] | None = None
         self.scan_config: dict[str, Any] | None = None
+        # Raw (unsanitized) targets and local sources are kept for SARIF
+        # provenance and for the private resume.json file. They are never
+        # written to the public worker contract (run.json).
+        self._repo_context_targets: list[dict[str, Any]] = []
+        self._raw_targets_info: list[dict[str, Any]] = []
+        self._raw_local_sources: list[dict[str, Any]] = []
         self._llm_usage = LLMUsageLedger()
         auth_mode = codex.auth_mode(load_settings().llm.model)
         self._llm_usage.zero_cost = auth_mode == "subscription"
-        self.run_record: dict[str, Any] = {
-            "schema_version": RUN_RECORD_SCHEMA_VERSION,
-            "run_id": self.run_id,
-            "run_name": self.run_name,
-            "start_time": self.start_time,
-            "end_time": None,
-            "status": "running",
-            "phase": "setup",
-            "auth_mode": auth_mode,
-            "targets_info": [],
-            "llm_usage": self._build_llm_usage_record(),
-            "seq": 0,
-            "turn_count": 0,
-        }
+        self.run_record = initial_run_record(run_name, auth_mode=auth_mode)
+        # initial_run_record generated the run_id; adopt it on the instance.
+        self.run_id = str(self.run_record["run_id"])
+        self.start_time = str(self.run_record["start_time"])
+        self.end_time: str | None = None
         self._run_dir: Path | None = None
         self._saved_vuln_ids: set[str] = set()
         self._save_seq = 0
@@ -170,6 +438,14 @@ class ReportState:
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
+
+        # Concurrency-safe web-search reservation boundary (I20): the scan's
+        # count/cost limits are checked and reserved atomically, so concurrent
+        # tool calls cannot overspend either limit. Process-local is the real
+        # boundary today — one engine process owns a scan's budget.
+        self._web_search_lock = threading.Lock()
+        self._web_search_inflight = 0
+        self._web_search_reserved_cost = 0.0
 
         self._sarif_repo_ctx: dict[str, Any] | None = None
         self._sarif_repo_ctx_ready: bool = False
@@ -355,14 +631,33 @@ class ReportState:
         scarf.finding(severity, cwe=cwe, is_cve=bool(cve))
 
         if self.vulnerability_found_callback:
-            self.vulnerability_found_callback(report)
+            # E4: callback receives the sanitized snapshot, not the raw report,
+            # so live CLI/TUI displays never show secrets or host paths.
+            sanitized = sanitize_finding(report, include_internal_paths=not _redact_paths)
+            self.vulnerability_found_callback(sanitized)
 
         self._set_phase("running")
-        self.save_run_data()
+        persisted = self.save_run_data()
+        if not persisted:
+            # The report was broadcast to the callback but not durably
+            # persisted. Remove the in-memory report and the durable ID marker
+            # so the next report does not reuse the same ID or skip its
+            # Markdown artifact (comment #16).
+            self.vulnerability_reports.pop()
+            self._saved_vuln_ids.discard(report_id)
+            raise RuntimeError(
+                f"Vulnerability report {report_id} was not durably persisted; "
+                "artifact write failed and the report has been rolled back."
+            )
         return report_id
 
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
-        return list(self.vulnerability_reports)
+        # E4: return sanitized snapshots so dedupe and other consumers never
+        # see raw secrets or host paths from the in-memory reports.
+        return [
+            sanitize_finding(report, include_internal_paths=not self._is_whitebox)
+            for report in self.vulnerability_reports
+        ]
 
     def record_sdk_usage(
         self,
@@ -399,6 +694,65 @@ class ReportState:
         """Live accumulated LLM cost, independent of the persisted run-record snapshot."""
         return self._llm_usage.total_cost
 
+    def reserve_web_search_slot(
+        self,
+        estimated_cost: float,
+        *,
+        max_calls: int,
+        budget_usd: float,
+    ) -> str | None:
+        """Atomically reserve one web-search call slot and its max charge.
+
+        Returns an error string when the call would exceed the scan's
+        call-count or web-search cost limit (counting in-flight calls and
+        reserved charges), or None when the slot is reserved. Pair with
+        :meth:`commit_web_search_call` on success or
+        :meth:`release_web_search_reservation` on failure/cancellation.
+        """
+        with self._web_search_lock:
+            committed_count, committed_cost = self.get_web_search_stats()
+            if max_calls > 0 and committed_count + self._web_search_inflight >= max_calls:
+                return (
+                    f"Web search call limit reached "
+                    f"({committed_count + self._web_search_inflight}/{max_calls})."
+                )
+            if (
+                budget_usd > 0
+                and committed_cost + self._web_search_reserved_cost + estimated_cost > budget_usd
+            ):
+                return (
+                    f"Web search budget exceeded "
+                    f"(${committed_cost + self._web_search_reserved_cost:.4f}/${budget_usd:.2f})."
+                )
+            self._web_search_inflight += 1
+            self._web_search_reserved_cost += max(0.0, estimated_cost)
+            return None
+
+    def release_web_search_reservation(self, estimated_cost: float) -> None:
+        """Roll back an uncommitted web-search reservation."""
+        with self._web_search_lock:
+            self._web_search_inflight = max(0, self._web_search_inflight - 1)
+            self._web_search_reserved_cost = max(
+                0.0, self._web_search_reserved_cost - max(0.0, estimated_cost)
+            )
+
+    def commit_web_search_call(
+        self,
+        cost: float,
+        *,
+        query: str,
+        mode: str,
+        provider: str = "parallel",
+        estimated_cost: float = 0.0,
+    ) -> None:
+        """Commit a reserved web-search call at its actual charge."""
+        with self._web_search_lock:
+            self._web_search_inflight = max(0, self._web_search_inflight - 1)
+            self._web_search_reserved_cost = max(
+                0.0, self._web_search_reserved_cost - max(0.0, estimated_cost)
+            )
+        self.record_web_search_cost(cost, query=query, mode=mode, provider=provider)
+
     def record_web_search_cost(
         self,
         cost: float,
@@ -409,7 +763,9 @@ class ReportState:
     ) -> None:
         """Record a web search call's cost and append it to the run record."""
         if cost > 0:
-            self._llm_usage.record_observed_cost(cost)
+            # Ancillary provider charge: stays metered even when the model
+            # tokens ride a subscription (I19).
+            self._llm_usage.record_ancillary_cost("web_search", cost)
         entry: dict[str, Any] = {
             "provider": provider,
             "mode": mode,
@@ -479,21 +835,48 @@ class ReportState:
         self.end_time = None
         self.scan_results = None
         self.final_scan_result = None
+        targets = [t for t in (config.get("targets") or []) if isinstance(t, dict)]
+        # Keep raw target and local-source details in memory only. The durable
+        # record carries sanitized forms; the private resume.json carries the
+        # originals for resume/SARIF provenance (comment #5).
+        self._repo_context_targets = [dict(t) for t in targets if t.get("type") == "repository"]
+        self._raw_targets_info = [dict(t) for t in targets]
+        self._raw_local_sources = [
+            dict(s) for s in config.get("local_sources", []) if isinstance(s, dict)
+        ]
+        instruction = str(config.get("user_instructions") or "")
         self.run_record.update(
             {
-                "targets_info": config.get("targets", []),
-                "instruction": config.get("user_instructions", ""),
+                "targets_info": sanitize_targets_info(targets),
+                # Raw instructions are private execution configuration: the
+                # durable receipt records only that one existed and its size.
+                "instruction": None,
+                "instruction_chars": len(instruction),
                 "scan_mode": config.get("scan_mode", "deep"),
                 "diff_scope": config.get("diff_scope", {"active": False}),
                 "non_interactive": bool(config.get("non_interactive", False)),
-                "local_sources": config.get("local_sources", []),
+                "local_sources": sanitize_local_sources(config.get("local_sources", [])),
                 "scope_mode": config.get("scope_mode", "auto"),
                 "diff_base": config.get("diff_base"),
             }
         )
         self._set_phase("running")
 
-    def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> None:
+    def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> bool:
+        """Persist scan artifacts and return whether all required writes
+        succeeded.
+
+        When ``mark_complete=True`` and the required receipt cannot be
+        persisted, the in-memory completion fields are reverted so a later
+        incidental save cannot persist a completed record without a durable
+        receipt.
+        """
+        # Snapshot pre-completion state so a failed receipt write can revert
+        # in-memory completion eligibility — a failed persistence must not
+        # leave the lifecycle marked completed (E3 monotonic fail-closed).
+        prev_status = self.run_record.get("status")
+        prev_end_time = self.end_time
+
         if mark_complete:
             self.end_time = datetime.now(UTC).isoformat()
             self.run_record["end_time"] = self.end_time
@@ -511,7 +894,19 @@ class ReportState:
 
         self._sync_progress()
         self._sync_llm_usage_record()
-        self._save_artifacts()
+        persisted = self._save_artifacts()
+
+        # If the receipt write failed and we had marked complete, revert the
+        # in-memory completion so a later incidental save cannot persist a
+        # completed record without a durable receipt. Keep receipt_persisted
+        # as False — the write actually failed.
+        if mark_complete and not self.receipt_persisted:
+            self.run_record["status"] = prev_status
+            self.run_record["end_time"] = prev_end_time
+            self.end_time = prev_end_time
+            if prev_status != "completed":
+                self._set_phase(str(prev_status or "running"))
+        return persisted
 
     def set_terminal_reason(self, reason: str) -> None:
         """Record a machine-readable non-completion reason for worker callers."""
@@ -519,8 +914,41 @@ class ReportState:
             self.run_record["terminal_reason"] = reason
 
     def set_sandbox_cleanup_status(self, sandbox_removed: bool) -> None:
-        """Persist whether the owned sandbox was removed before process exit."""
-        self.run_record["cleanup"] = {"sandbox_removed": sandbox_removed}
+        """Backward-compatible boolean wrapper around :meth:`set_cleanup_outcome`."""
+        self.set_cleanup_outcome(CLEANUP_REMOVED if sandbox_removed else CLEANUP_FAILED)
+
+    def set_cleanup_outcome(
+        self,
+        outcome: str,
+        *,
+        last_error: str | None = None,
+    ) -> None:
+        """Persist the sandbox cleanup outcome monotonically.
+
+        ``removed`` is terminal; ``failed`` stays failed (optionally with a
+        fresher error) until a confirmed removal supersedes it; a later
+        ``not_found`` (cache miss) can never erase a recorded failure or
+        removal. ``sandbox_removed`` stays in the record for worker
+        backward-readability.
+        """
+        current = self.run_record.get("cleanup")
+        prior: dict[str, Any] = current if isinstance(current, dict) else {}
+        prior_status = prior.get("status")
+        if prior_status == CLEANUP_REMOVED:
+            return
+        if prior_status == CLEANUP_FAILED and outcome != CLEANUP_REMOVED:
+            outcome = CLEANUP_FAILED
+        record: dict[str, Any] = {
+            "status": outcome,
+            "sandbox_removed": outcome == CLEANUP_REMOVED,
+        }
+        if last_error is not None:
+            record["last_error"] = last_error
+        elif prior.get("last_error"):
+            record["last_error"] = prior["last_error"]
+        if prior.get("attempts"):
+            record["attempts"] = prior["attempts"]
+        self.run_record["cleanup"] = record
         self.save_run_data()
 
     def cleanup(self, status: str = "stopped") -> None:
@@ -544,10 +972,25 @@ class ReportState:
 {str(scan_results.get("recommendations", "")).strip()}
 """
 
-    def _save_artifacts(self) -> None:
-        """Write scan artifacts under ``run_dir``."""
+    def _save_artifacts(self) -> bool:
+        """Write scan artifacts under ``run_dir``.
+
+        Returns ``True`` only when every required artifact (vulnerabilities,
+        run record) is successfully persisted. Non-fatal artifacts (executive
+        report, SARIF) may fail and be logged, but they do not make this
+        return ``False``. Callers that must know whether durability succeeded
+        (e.g. vulnerability report tools) should act on the return value.
+        """
         run_dir = self.get_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
+
+        # One immutable sanitized snapshot feeds every durable/public
+        # projection; the raw in-memory reports never reach disk.
+        include_internal_paths = not self._is_whitebox
+        snapshot = [
+            sanitize_finding(report, include_internal_paths=include_internal_paths)
+            for report in self.vulnerability_reports
+        ]
 
         # Each artifact is isolated so a failure in one cannot skip the others;
         # run.json is the billing/cost receipt and is written last.
@@ -559,17 +1002,21 @@ class ReportState:
 
         # The worker must distinguish a clean scan from missing output. Always
         # write this artifact, including for a valid zero-finding result.
+        # This is a required artifact: failure makes the whole save fail.
         try:
-            write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
+            write_vulnerabilities(run_dir, snapshot, self._saved_vuln_ids)
         except (OSError, RuntimeError):
-            logger.exception("Vulnerabilities artifact write failed (non-fatal)")
+            logger.exception("Vulnerabilities artifact write failed (required)")
+            self.receipt_persisted = False
+            self.run_record["receipt_persisted"] = False
+            return False
 
         # SARIF is an integration artifact; it must not hide a successful core
         # receipt when an optional formatter has a problem.
         try:
             write_sarif(
                 run_dir,
-                self.vulnerability_reports,
+                snapshot,
                 tool_version=_strix_version(),
                 repository_context=self._sarif_repository_context(),
             )
@@ -577,6 +1024,14 @@ class ReportState:
             logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
 
         try:
+            # Validate the full worker contract before any write: the first
+            # observable run.json must already be complete and versioned.
+            validate_run_record(self.run_record)
+            # Snapshot claims persistence optimistically so the durable record
+            # carries receipt_persisted=true the moment it lands on disk; a
+            # failed write reverts both the record flag and in-memory state.
+            self.receipt_persisted = True
+            self.run_record["receipt_persisted"] = True
             write_run_record(run_dir, self.run_record)
         except (OSError, RuntimeError):
             # The run record carries the cost receipt the worker reconciles
@@ -585,10 +1040,24 @@ class ReportState:
             self.receipt_persisted = False
             self.run_record["receipt_persisted"] = False
             logger.exception("run.json receipt persist FAILED — cost receipt not written")
-        else:
-            self.receipt_persisted = True
-            self.run_record["receipt_persisted"] = True
+            return False
+
+        # Write the private resume record with unsanitized execution fields so
+        # a resumed scan can recover cloned_repo_path / source_path values that
+        # the public run.json intentionally redacts (comment #5). This is
+        # non-fatal to the receipt; a missing resume file can still be recovered
+        # from the public record (resume will just lose host paths).
+        try:
+            write_resume_record(
+                run_dir,
+                targets_info=self._raw_targets_info,
+                local_sources=self._raw_local_sources,
+            )
+        except (OSError, RuntimeError):
+            logger.exception("Resume record write failed (non-fatal)")
+
         logger.info("Essential scan data saved to: %s", run_dir)
+        return True
 
     def _sarif_repository_context(self) -> dict[str, Any] | None:
         """Repo/commit/branch context for SARIF provenance (repo scans only).
@@ -603,18 +1072,22 @@ class ReportState:
         return self._sarif_repo_ctx
 
     def _derive_repository_context(self) -> dict[str, Any] | None:
-        targets = self.run_record.get("targets_info")
-        if not isinstance(targets, list):
-            return None
-
-        repo_targets: list[dict[str, Any]] = []
-        for target in targets:
-            if not isinstance(target, dict):
-                continue
-            target = cast("dict[str, Any]", target)
-            if target.get("type") == "repository":
-                repo_targets.append(target)
-
+        # Prefer the in-memory raw repository targets; the durable record's
+        # targets_info is sanitized and carries no cloned paths. An empty
+        # in-memory list means set_scan_config was never called, so fall back
+        # to the run record (e.g. tests that set it directly).
+        raw_targets = getattr(self, "_repo_context_targets", None) or []
+        if raw_targets:
+            repo_targets = [cast("dict[str, Any]", t) for t in raw_targets]
+        else:
+            targets = self.run_record.get("targets_info")
+            if not isinstance(targets, list):
+                return None
+            repo_targets = [
+                cast("dict[str, Any]", t)
+                for t in targets
+                if isinstance(t, dict) and t.get("type") == "repository"
+            ]
         if len(repo_targets) != 1:
             return None
         target = repo_targets[0]
@@ -627,7 +1100,8 @@ class ReportState:
         if not isinstance(uri, str) or not uri.strip():
             return None
 
-        context: dict[str, Any] = {"repositoryUri": uri.strip()}
+        # Public SARIF provenance: URL shape without credentials/query tokens.
+        context: dict[str, Any] = {"repositoryUri": redact_url(uri.strip())}
         full_name = _parse_repo_full_name(uri)
         if full_name:
             context["repositoryFullName"] = full_name

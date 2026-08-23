@@ -53,12 +53,13 @@ RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-f
     apt-get update && \
     echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
     apt-get full-upgrade -y --allow-downgrades && \
-    apt-get install -y kali-archive-keyring sudo && \
+    apt-get install -y kali-archive-keyring && \
     apt-get update
 
+# The runtime agent runs as the unprivileged `pentester` user with no sudo
+# grant; the entrypoint performs the privileged startup phase as root and then
+# irreversibly drops to `pentester` via setpriv before any agent work.
 RUN useradd -m -s /bin/bash pentester && \
-    usermod -aG sudo pentester && \
-    echo "pentester ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     touch /home/pentester/.hushlogin
 
 RUN mkdir -p /home/pentester/tools /app/certs && \
@@ -283,7 +284,11 @@ RUN python3 -m venv /app/.venv && \
         > /home/pentester/.local/bin/jwt_tool && \
     chmod +x /home/pentester/.local/bin/jwt_tool
 
-COPY --chown=pentester:pentester strix/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
+# Ship the guarded LyraShield proxy helper, not the upstream strix copy: the
+# import path documented in the agent prompt (`import caido_api`) must exercise
+# the replay egress guard. One implementation lives in
+# lyrashield/tools/proxy/caido_api.py; this COPY is its only packaging step.
+COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 
 # Login shells (e.g. `bash -lc`) source /etc/profile, which on Debian/Kali
@@ -299,7 +304,9 @@ RUN setcap cap_net_raw,cap_net_bind_service+eip /usr/lib/nmap/nmap
 COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-USER pentester
+# Start as root: the entrypoint performs the privileged startup phase, then
+# irreversibly execs the agent phase as the unprivileged pentester user.
+USER root
 WORKDIR /workspace
 
 ENTRYPOINT ["docker-entrypoint.sh"]

@@ -10,6 +10,9 @@ from agents.tool import FunctionTool
 
 from lyrashield.agents import factory
 from lyrashield.agents import overrides as deferred_overrides
+from lyrashield.policy.models import (
+    model_supports_programmatic_tool_calling as product_policy,
+)
 from lyrashield_adapter.cli import _register_lyrashield_tool_overrides
 
 
@@ -156,7 +159,11 @@ def test_register_tool_override_replaces_base_tool() -> None:
     agent = factory.build_strix_agent(is_root=True)
     web_search_tools = [t for t in agent.tools if t.name == "web_search"]
 
-    assert web_search_tools == [override]
+    # The agent owns a per-agent copy of the override, not the registry
+    # singleton itself (I21): same invoke function, distinct object.
+    assert len(web_search_tools) == 1
+    assert web_search_tools[0].name == override.name
+    assert web_search_tools[0] is not override
 
 
 def test_adapter_registration_defers_tool_module_imports() -> None:
@@ -250,4 +257,47 @@ def test_agent_build_resolves_deferred_overrides() -> None:
 
     assert "web_search" in factory._TOOL_OVERRIDES
     web_search_tools = [t for t in agent.tools if t.name == "web_search"]
-    assert web_search_tools == [factory._TOOL_OVERRIDES["web_search"]]
+    # Per-agent copy of the resolved override (I21), never the singleton.
+    assert len(web_search_tools) == 1
+    assert web_search_tools[0].name == factory._TOOL_OVERRIDES["web_search"].name
+    assert web_search_tools[0] is not factory._TOOL_OVERRIDES["web_search"]
+
+
+def test_opposite_policy_agents_own_distinct_tool_instances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I21: building an agent with the opposite allowed-caller policy must not
+    mutate the tools held by an already-built agent or the module singletons."""
+    monkeypatch.setitem(
+        factory._MODEL_POLICY,
+        "model_supports_programmatic_tool_calling",
+        product_policy,
+    )
+    monkeypatch.setenv("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "1")
+
+    programmatic_agent = factory.build_strix_agent(is_root=True, model="openai/gpt-5.6-luna")
+    programmatic_tool = next(t for t in programmatic_agent.tools if t.name == "web_search")
+    assert programmatic_tool.allowed_callers is factory._PROGRAMMATIC_ALLOWED_CALLERS
+
+    plain_agent = factory.build_strix_agent(is_root=True)
+    plain_tool = next(t for t in plain_agent.tools if t.name == "web_search")
+    assert plain_tool.allowed_callers is None
+
+    # Distinct instances, opposite policies, first agent unchanged.
+    assert plain_tool is not programmatic_tool
+    assert programmatic_tool.allowed_callers is factory._PROGRAMMATIC_ALLOWED_CALLERS
+
+    # Module-level singletons stay unconfigured.
+    base_by_name = {t.name: t for t in factory._BASE_TOOLS}
+    assert base_by_name["web_search"].allowed_callers is None
+
+
+def test_materialize_tool_copies_programmatic_tool_calling_tool() -> None:
+    """E2: ProgrammaticToolCallingTool is a dataclass and must be copied by
+    _materialize_tool so a per-agent mutation cannot leak to a shared instance."""
+    from agents import ProgrammaticToolCallingTool  # noqa: PLC0415
+
+    original = ProgrammaticToolCallingTool()
+    copy = factory._materialize_tool(original)
+    assert copy is not original
+    assert type(copy) is type(original)

@@ -638,7 +638,7 @@ async def _run_until_lifecycle(
             interactive,
             recoveries,
             recovery_limit,
-            _final_output_preview(result),
+            _final_output_metadata(result),
         )
 
         if recoveries >= recovery_limit:
@@ -989,16 +989,6 @@ def _final_output_metadata(result: object) -> str:
     if isinstance(final_output, str | bytes | list | tuple | dict):
         return f"type={output_type} length={len(cast(Sized, final_output))}"  # noqa: TC006
     return f"type={output_type}"
-
-
-def _final_output_preview(result: RunResultBase | None) -> str:
-    final_output = getattr(result, "final_output", None)
-    if final_output is None:
-        return "<none>"
-    text = str(final_output).replace("\n", " ").strip()
-    if not text:
-        return "<empty>"
-    return text[:300]
 
 
 async def _append_tool_required_message(

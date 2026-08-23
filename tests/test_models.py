@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from agents.model_settings import ModelSettings
 from agents.models.openai_responses import OpenAIResponsesModel
@@ -13,6 +15,7 @@ from lyrashield.policy.models import (
     is_gpt56_model,
     is_gpt56_supported_provider,
     is_recommended_or_frontier_model,
+    parse_model_route,
     request_timeout_extra_args,
     uses_chat_completions_tool_schema,
 )
@@ -258,3 +261,157 @@ def test_non_frontier_models_are_rejected(model_name: str) -> None:
 def test_gpt56_unsupported_providers_are_rejected(model_name: str) -> None:
     assert is_gpt56_model(model_name)
     assert not is_gpt56_supported_provider(model_name)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        # Structural rejects: nested/repeated wrappers and empty components can
+        # never reach routing, which parses through the same grammar.
+        "litellm/litellm/azure/gpt-5.6-luna",
+        "any-llm/litellm/azure/gpt-5.6-luna",
+        "azure//gpt-5.6-luna",
+        "azure/",
+        "/gpt-5.6-luna",
+        "litellm/",
+    ],
+)
+def test_structurally_invalid_route_forms_are_rejected(model_name: str) -> None:
+    with pytest.raises(ValueError, match="model route"):
+        parse_model_route(model_name)
+    assert not is_gpt56_supported_provider(model_name)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        # Permitted provider appearing only later in the string is a different,
+        # unapproved route (C6): routing selects the first component.
+        "evil/azure/gpt-5.6-luna",
+        "evil.azure/gpt-5.6-luna",
+        "evil/openai/gpt-5.6-terra",
+        "not-chatgpt/chatgpt/gpt-5.6-luna",
+        "litellm/evil/azure/gpt-5.6-luna",
+    ],
+)
+def test_late_permitted_provider_does_not_admit_route(model_name: str) -> None:
+    assert is_gpt56_model(model_name)
+    assert parse_model_route(model_name) is not None
+    assert not is_gpt56_supported_provider(model_name)
+
+
+def test_model_path_preserves_original_case_for_azure_deployments() -> None:
+    """E2: Azure deployment names are case-sensitive. parse_model_route must
+    match wrappers/providers case-insensitively but keep the original model
+    path case."""
+    route = parse_model_route("litellm/azure/MyDeployment-GPT")
+    assert route is not None
+    assert route.provider == "azure"
+    assert route.model_path == "MyDeployment-GPT"
+    assert parse_model_route("litellm/Azure/MyDeployment-GPT").model_path == "MyDeployment-GPT"
+    assert parse_model_route("azure/eu/MyDeployment-GPT").model_path == "eu/MyDeployment-GPT"
+
+
+def test_admission_checks_exactly_the_provider_routing_selects() -> None:
+    """For every accepted fixture, the admitted provider equals the leading
+    component routing will select (wrapper stripped, bare means OpenAI)."""
+    accepted = [
+        "gpt-5.6-luna",
+        "prod-gpt-5.6-luna",
+        "openai/gpt-5.6-luna",
+        "azure/eu/gpt-5.6-terra",
+        "azure_ai/gpt-5.6-luna",
+        "bedrock_mantle/openai.gpt-5.6-luna",
+        "chatgpt/gpt-5.6-luna",
+        "litellm/azure/gpt-5.6-luna",
+    ]
+    for model_name in accepted:
+        route = parse_model_route(model_name)
+        assert route is not None, model_name
+        assert is_gpt56_supported_provider(model_name), model_name
+        selected = route.provider or "openai"
+        assert selected in {"openai", "azure", "azure_ai", "bedrock_mantle", "chatgpt"}, model_name
+
+
+def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """E2: for every accepted GPT-5.6 fixture, StrixProvider.get_model must
+    route through the same provider admission selected. This spies on the
+    actual SDK seam (super().get_model) and asserts the routed name equals
+    the canonical ``{provider}/{model_path}`` form admission parsed — no
+    fixture may pass vacuously without observed routing."""
+    from lyrashield.policy import codex  # noqa: PLC0415
+    from lyrashield.policy.models import StrixProvider  # noqa: PLC0415
+
+    # Prevent subscription model shortcut from bypassing routing.
+    monkeypatch.setattr(codex, "subscription_model", lambda _name: None)
+
+    accepted = [
+        ("gpt-5.6-luna", "openai"),
+        ("openai/gpt-5.6-luna", "openai"),
+        ("azure/eu/gpt-5.6-terra", "azure"),
+        ("azure_ai/gpt-5.6-luna", "azure_ai"),
+        ("bedrock_mantle/openai.gpt-5.6-luna", "bedrock_mantle"),
+        ("litellm/azure/gpt-5.6-luna", "azure"),
+    ]
+
+    for model_name, expected_provider in accepted:
+        route = parse_model_route(model_name)
+        assert route is not None, model_name
+        assert is_gpt56_supported_provider(model_name), model_name
+        assert (route.provider or "openai") == expected_provider, model_name
+
+        provider = StrixProvider()
+        seen: list[str] = []
+
+        # Spy on the SDK's get_model (the seam StrixProvider delegates to).
+        # This proves the routed name passed downstream matches admission's
+        # canonical {provider}/{model_path} form, not the raw wrapper string.
+        def _make_spy(seen_list: list[str]) -> Any:
+            def _spy(_self: Any, routed_name: str | None, *_args: Any, **_kwargs: Any) -> Any:
+                seen_list.append(str(routed_name))
+                # Raise to short-circuit network construction; the routed
+                # name is what we assert on, not the constructed model.
+                raise RuntimeError("spy-short-circuit")
+
+            return _spy
+
+        # Bind the spy on the parent class so super().get_model() hits it.
+        parent_cls = type(provider).__mro__[1]
+        monkeypatch.setattr(parent_cls, "get_model", _make_spy(seen))
+
+        raised: Exception | None = None
+        try:
+            provider.get_model(model_name)
+        except RuntimeError as exc:
+            raised = exc
+        # Every fixture MUST reach super().get_model — no vacuous pass.
+        assert raised is not None, f"{model_name}: did not reach super().get_model()"
+        assert len(seen) == 1, f"{model_name}: expected 1 routing call, got {len(seen)}"
+        routed = seen[0]
+        if route.wrapper is not None and route.provider is not None:
+            expected_routed = f"{route.provider}/{route.model_path}"
+            assert routed == expected_routed, (
+                f"{model_name}: routed {routed!r} != canonical {expected_routed!r}"
+            )
+        else:
+            # Bare or provider-only: routed name equals the original.
+            assert routed == model_name, (
+                f"{model_name}: routed {routed!r} changed bare/provider-only name"
+            )
+
+
+def test_parse_model_route_documented_forms() -> None:
+    assert parse_model_route(None) is None
+    assert parse_model_route("   ") is None
+    bare = parse_model_route("gpt-5.6-luna")
+    assert (bare.wrapper, bare.provider, bare.model_path) == (None, None, "gpt-5.6-luna")
+    wrapped = parse_model_route("litellm/deepseek/deepseek-chat")
+    assert (wrapped.wrapper, wrapped.provider, wrapped.model_path) == (
+        "litellm",
+        "deepseek",
+        "deepseek-chat",
+    )
+    azure = parse_model_route("azure/eu/gpt-5.6-terra")
+    assert (azure.provider, azure.model_path) == ("azure", "eu/gpt-5.6-terra")
+    bedrock = parse_model_route("bedrock_mantle/openai.gpt-5.6-luna")
+    assert (bedrock.provider, bedrock.model_path) == ("bedrock_mantle", "openai.gpt-5.6-luna")

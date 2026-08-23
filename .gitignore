@@ -100,3 +100,4 @@ desktop/src-tauri/target/
 desktop/ui/node_modules/
 desktop/ui/dist/
 desktop/tests/target/
+.worktrees/

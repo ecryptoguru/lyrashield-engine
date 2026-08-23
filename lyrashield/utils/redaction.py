@@ -8,6 +8,7 @@ cross the trust boundary.
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote, urlparse, urlunparse
 
 
 _SECRET_PLACEHOLDER = "[SECRET]"  # noqa: S105  # nosec B105
@@ -150,6 +151,19 @@ _ALWAYS_REDACT_PATH_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
         re.compile(r"/tmp/\.strix[^\s\"'<>]*"),  # noqa: S108  # nosec B108
         _INTERNAL_PATH_PLACEHOLDER,
     ),
+    # Host-side home directories never belong in durable/public artifacts:
+    # they identify the operator's machine. Sandbox-internal /workspace paths
+    # are handled separately by the mode-dependent patterns.
+    (
+        "host_home_path",
+        re.compile(r"(?:/Users|/home)/[^\s\"'<>]+"),
+        _INTERNAL_PATH_PLACEHOLDER,
+    ),
+    (
+        "host_home_short",
+        re.compile(r"~/[^\s\"'<>]+"),
+        _INTERNAL_PATH_PLACEHOLDER,
+    ),
 ]
 
 # General workspace paths that are redacted in blackbox mode but preserved in
@@ -242,9 +256,10 @@ def redact_text(text: str, *, include_internal_paths: bool = True) -> str:
     Returns a copy of ``text`` with sensitive values replaced by clearly
     labelled placeholders. The original string is never modified.
 
-    When ``include_internal_paths=False`` (whitebox mode), spill paths and
-    tmp state are still redacted, but general ``/workspace/`` target paths
-    are preserved so findings reference the actual codebase.
+    When ``include_internal_paths=False`` (whitebox mode), spill paths, tmp
+    state, and host home directories are still redacted, but general
+    ``/workspace/`` target paths are preserved so findings reference the
+    actual codebase.
     """
     redacted = redact_secrets(text)
     if include_internal_paths:
@@ -252,3 +267,108 @@ def redact_text(text: str, *, include_internal_paths: bool = True) -> str:
     else:
         redacted = redact_spill_paths(redacted)
     return redacted
+
+
+# URL userinfo (``scheme://user:password@host`` and ``scheme://user@host``)
+# is removed wholesale: the credential is secret and the username can identify
+# the operator. Two patterns: the user:password form, then a username-only
+# form (no colon). Both must be stripped before urlparse, which may reject
+# placeholders in the netloc.
+#
+# The username and password classes exclude ``?`` and ``#`` so a query value
+# containing ``@`` (e.g. ``?email=foo@bar.com``) is not mistaken for userinfo.
+_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@?:\s]+):([^@?#\s/]+)@", re.IGNORECASE)
+_URL_USERINFO_USERONLY_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@?:\s]+)@", re.IGNORECASE)
+
+# Query parameters whose VALUES are redacted even when the key itself is not
+# secret-looking. Values are replaced, keys preserved, so the URL shape stays
+# useful for reproducing a request.
+_SENSITIVE_QUERY_KEYS = (
+    "token",
+    "access_token",
+    "id_token",
+    "refresh_token",
+    "api_key",
+    "apikey",
+    "key",
+    "secret",
+    "client_secret",
+    "password",
+    "passwd",
+    "signature",
+    "sig",
+    "session",
+    "sessionid",
+    "auth",
+    "authorization",
+    "credential",
+    "code",
+)
+
+
+def redact_url(url: str) -> str:
+    """Redact URL credentials and sensitive query values, keeping the shape.
+
+    Userinfo is replaced with ``[REDACTED]@`` and values of sensitive query
+    parameters are replaced with ``[REDACTED]``; scheme, host, port, path, and
+    non-sensitive parameters survive so the URL remains a usable target
+    identifier.
+
+    Uses ``urllib.parse`` for robust parsing that handles case-insensitive
+    query keys, URL-encoded key variants, and edge cases the regex approach
+    missed. Falls back to manual parsing when ``urlparse`` rejects the URL
+    (e.g. when a prior redaction pass left ``[PLACEHOLDER]`` in the netloc,
+    which urlparse interprets as an invalid IPv6 literal).
+    """
+    if not url:
+        return url
+    # Strip userinfo first using a simple scan — robust against placeholders
+    # that urlparse would reject as invalid IPv6 literals. Apply the
+    # user:password form first, then the username-only form, so a URL with
+    # both forms (or only a username) is fully redacted.
+    redacted = _URL_USERINFO_RE.sub(r"\1[REDACTED]@", url)
+    redacted = _URL_USERINFO_USERONLY_RE.sub(r"\1[REDACTED]@", redacted)
+    # Now parse for query redaction. urlparse may still fail on edge cases;
+    # fall back to manual query splitting.
+    use_fallback = False
+    try:
+        parsed = urlparse(redacted)
+        query = parsed.query
+        fragment = parsed.fragment
+        base = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
+    except ValueError:
+        # urlparse failed (e.g. bracketed placeholder in netloc); split
+        # query/fragment manually. ``base`` is the part before ``?``,
+        # ``query`` is between ``?`` and ``#``, and ``fragment`` is after ``#``
+        # (the leading ``#`` is re-added at reconstruction).
+        use_fallback = True
+        if "?" not in redacted and "#" not in redacted:
+            return redacted
+        base, _, rest = redacted.partition("?")
+        query, _, fragment = rest.partition("#")
+    # Redact sensitive query parameter values (case-insensitive, decoded).
+    if not query:
+        if fragment:
+            # Re-add the fragment delimiter; ``urlunparse`` does this, but the
+            # manual fallback path needs an explicit ``#``.
+            separator = "" if base.endswith("#") else "#"
+            return base + separator + fragment
+        return base
+    pairs = query.split("&")
+    kept: list[str] = []
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        decoded_key = unquote(key).strip().lower()
+        if decoded_key in _SENSITIVE_QUERY_KEYS and value:
+            kept.append(f"{key}{sep}[REDACTED]")
+        else:
+            kept.append(pair)
+    # Reconstruct via urlunparse so the fragment delimiter is preserved exactly
+    # once and query/fragment delimiters are not concatenated or dropped.
+    if use_fallback:
+        result = f"{base}?{'&'.join(kept)}{'#' + fragment if fragment else ''}"
+    else:
+        result = urlunparse(
+            (parsed.scheme, parsed.netloc, parsed.path, parsed.params, "&".join(kept), fragment)
+        )
+    return result

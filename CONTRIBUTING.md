@@ -38,7 +38,27 @@ LyraShield Engine is a controlled derivative of [Strix](https://github.com/usest
 
    Metered scans accept GPT-5.6 Terra and Luna deployments from the supported provider allowlist. Authenticated `chatgpt/*` subscription runs are also supported by default and can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`. See the [configuration reference](docs/advanced/configuration.mdx) for the exact routes and accounting behavior.
 
-4. **Run the engine against an authorized repository target**
+4. **Create the deny-by-default sandbox network (Docker scans only)**
+
+   Sandboxed scans that run inside Docker must attach to an isolated network with
+   `Internal=true`. Create it once per host, set the environment variable that
+   the engine uses to select and verify it, and pass that same value to the
+   `lyrashield` process (or the worker that invokes it):
+
+   ```bash
+   bash scripts/provision-sandbox-network.sh
+   export STRIX_DOCKER_SANDBOX_NETWORK=lyrashield-sandbox
+   ```
+
+   Without this variable the engine refuses to start the sandbox; with it the
+   admission check verifies that the container is actually attached to the named
+   network and that the network object has `Internal=true`. The default Docker
+   bridge (`bridge`, `host`, `default`, or an empty value) is never admitted.
+
+   Worker deployments must also set this variable before spawning the engine,
+   and product-local Docker scans must pass it through to the engine process.
+
+5. **Run the engine against an authorized repository target**
 
    ```bash
    uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
@@ -75,9 +95,23 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
    git diff --check
    ```
 
-   The gate runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit, Python package and native-binary smoke, sandbox smoke, and the public worker contract. It diffs `strix/**` against the pinned v1.5.3 base and fails on any path outside the two-file allowlist, more than 30 insertions, or any deletion. It also validates attribution and the `UPGRADES.md` ledger.
+   That script executes exactly: `uv sync --frozen --extra viewer` (so the PDF/viewer tests actually run), `ruff check .`, `ruff format --check .`, the full `pytest` suite with `-W error::pydantic.PydanticDeprecatedSince211`, `mypy strix lyrashield_adapter lyrashield`, and `bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q`. It also diffs `strix/**` against the pinned v1.5.3 base and fails on any path outside the two-file allowlist, more than 30 insertions, or any deletion.
 
-7. Require human approval and green Engine CI before merge. Engine CI (`.github/workflows/ci.yml`) enforces the same quality gates on every pull request and push to `main`. Test counts are intentionally omitted because the executable gate is authoritative.
+   The following are **separate gates** this script does not run — do not claim a local green gate covers them:
+
+   | Gate | What it covers | Where it runs |
+   |------|---------------|--------------|
+   | **Local** | Lint, type-check, unit/integration tests, controlled-derivative | `bash scripts/verify-controlled-derivative.sh` |
+   | **CI** | Same local gates + worker-contract checkout on pinned SHA | `.github/workflows/ci.yml` |
+   | **Docker** | Sandbox image build, non-root runtime, network probes, prompt import | `.github/workflows/ci.yml` (docker job) |
+   | **Worker-contract** | Pinned consumer SHA, declared contract tests, CLI flags | `scripts/verify-worker-contract.sh` |
+   | **Package** | Python package build, native-binary smoke | Separate release workflow |
+   | **Deployed** | Cross-repository egress probes from real engine-created sandbox | `lyrashield-ai` app/ops PR |
+   | **Signed-release** | Tauri updater cryptographic verification, signed artifacts | Release workflow |
+
+   Signed desktop-release evidence is a release workflow concern, not a local gate.
+
+7. Require human approval and green Engine CI before merge. Engine CI (`.github/workflows/ci.yml`) enforces the same quality gates on every pull request and push to `main`, checks out the pinned worker-consumer revision from `.lyrashield-worker-pin`, and runs the worker contract tests declared in `scripts/worker-contract-tests.txt` (including `packages/types/src/scan-profile.test.ts`). Test counts are intentionally omitted because the executable gate is authoritative.
 
 ## Dependency updates
 

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.dedupe import _check_dependency_duplicate, check_duplicate
 from lyrashield.artifacts.state import ReportState, set_global_report_state
 from lyrashield.tools.finish.tool import finish_scan
@@ -302,6 +303,39 @@ async def test_dependency_report_rejects_bad_cve(report_state: ReportState) -> N
     assert not report_state.vulnerability_reports
 
 
+async def test_dependency_report_fails_when_artifact_persistence_fails(
+    report_state: ReportState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E3: a required artifact write failure must also make the dependency
+    report tool return success=False and not keep the in-memory report."""
+
+    def failing_write(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state_module, "write_vulnerabilities", failing_write)
+    result = await _do_create_dependency(
+        title="CVE-2024-0001 in sample 1.0.0",
+        description="Published advisory affects the pinned version.",
+        target="repo/package.json",
+        cve="CVE-2024-0001",
+        package_name="sample",
+        installed_version="1.0.0",
+        impact="Low-impact dependency advisory.",
+        remediation_steps="Upgrade to 1.0.1.",
+        assumptions="Assumes the package is included in deployed builds.",
+        package_ecosystem="npm",
+        fixed_version="1.0.1",
+        cwe=None,
+        advisory_cvss=0.0,
+        technical_analysis=None,
+        fix_effort="low",
+    )
+    assert result["success"] is False
+    assert "not durably persisted" in result.get("error", "")
+    assert not report_state.vulnerability_reports
+
+
 async def test_dependency_report_requires_ecosystem(report_state: ReportState) -> None:
     result = await _do_create_dependency(
         title="CVE-2024-0001 in sample 1.0.0",
@@ -324,6 +358,79 @@ async def test_dependency_report_requires_ecosystem(report_state: ReportState) -
     assert result["success"] is False
     assert any("package_ecosystem" in error for error in result["errors"])
     assert not report_state.vulnerability_reports
+
+
+async def test_create_report_fails_when_artifact_persistence_fails(
+    report_state: ReportState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E3: a required artifact write failure must make the reporting tool
+    return success=False and not keep the in-memory report."""
+
+    def failing_write(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state_module, "write_vulnerabilities", failing_write)
+    result = await _do_create(
+        title="XSS",
+        description="reflected",
+        target="app",
+        impact="High impact.",
+        technical_analysis="t",
+        poc_description="poc",
+        poc_script_code="GET /?x=<script>alert(1)</script>",
+        remediation_steps="fix",
+        evidence="e",
+        assumptions="a",
+        fix_effort="high",
+        cvss_breakdown=_CVSS,
+        endpoint=None,
+        method=None,
+        cve=None,
+        cwe=None,
+        code_locations=None,
+    )
+    assert result["success"] is False
+    assert "not durably persisted" in result.get("error", "")
+    # The in-memory report should be rolled back so the caller can retry
+    # without a phantom duplicate.
+    assert not report_state.vulnerability_reports
+
+
+async def test_create_report_clears_saved_id_on_run_record_failure(
+    report_state: ReportState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E3: when write_vulnerabilities succeeds but write_run_record fails, the
+    saved ID marker must be cleared so the next report does not reuse the ID
+    and skip its Markdown artifact (comment #16)."""
+
+    def failing_run_record(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("run.json disk full")
+
+    monkeypatch.setattr(state_module, "write_run_record", failing_run_record)
+    result = await _do_create(
+        title="First",
+        description="d",
+        target="app",
+        impact="High impact.",
+        technical_analysis="t",
+        poc_description="poc",
+        poc_script_code="GET /?x=<script>alert(1)</script>",
+        remediation_steps="fix",
+        evidence="e",
+        assumptions="a",
+        fix_effort="high",
+        cvss_breakdown=_CVSS,
+        endpoint=None,
+        method=None,
+        cve=None,
+        cwe=None,
+        code_locations=None,
+    )
+    assert result["success"] is False
+    assert not report_state.vulnerability_reports
+    assert "vuln-0001" not in report_state._saved_vuln_ids
 
 
 async def test_dynamic_dedupe_requires_exact_location_identity() -> None:

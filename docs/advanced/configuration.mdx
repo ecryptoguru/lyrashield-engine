@@ -302,6 +302,20 @@ The optional `web_search` tool queries Parallel Search for real-time public secu
   worker.
 </ParamField>
 
+<ParamField
+  path="STRIX_DOCKER_SANDBOX_NETWORK"
+  type="string"
+  required
+>
+  Name of the Docker network the engine attaches sandboxes to. The network
+  must exist, must be created with `docker network create --internal` (deny-by-
+  default egress), and must not be `bridge`, `host`, `default`, or empty. The
+  engine both uses this value itself for container creation and injects it into
+  the sandbox environment as `STRIX_DOCKER_SANDBOX_NETWORK` so in-container
+  tooling sees the same boundary. Worker deployments must set this variable
+  before invoking `lyrashield` and pass it through to any engine-side process.
+</ParamField>
+
 ### Sandbox capabilities and image pinning
 
 The engine omits `NET_ADMIN` and `NET_RAW` by default. Add them only for authorized workflows that require advanced raw-socket operations such as SYN scans.

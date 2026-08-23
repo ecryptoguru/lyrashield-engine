@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import ipaddress
 import json
 import os
@@ -10,6 +11,7 @@ import re
 import socket
 import time
 import urllib.request
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -66,34 +68,142 @@ _PRIVATE_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
     ipaddress.IPv6Network("fc00::/7"),
 )
 _PRIVATE_EGRESS_OPT_IN_ENV = "STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS"
-_AUTHORIZED_TARGET_HOSTS: set[str] = set()
+_EGRESS_POLICY_ENV = "LYRASHIELD_EGRESS_POLICY"
+_EGRESS_POLICY_TRUST_RW_ENV = "LYRASHIELD_EGRESS_POLICY_TRUST_RW"
+_DEFAULT_EGRESS_POLICY_PATH = "/run/lyrashield-egress/policy.json"
 
 
-def set_authorized_target_hosts(hosts: set[str]) -> None:
-    """Register the current scan's authorized target hosts.
+@dataclasses.dataclass(frozen=True)
+class EgressPolicy:
+    """Run-scoped replay egress authorization.
 
-    Replay to a private-range host is allowed only when that host is an
-    authorized target (e.g. an internal staging scan) or the operator has
-    explicitly opted in via ``STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS``.
+    ``authorized_hosts`` and ``allow_private_egress`` come from a policy file
+    the trusted host wrote before launch and bind-mounted read-only into the
+    sandbox. The agent can point ``LYRASHIELD_EGRESS_POLICY`` at a file it
+    controls, but that file lives on a writable mount, so the read-only-mount
+    check in :func:`load_egress_policy` rejects it and the guard fails closed.
     """
-    _AUTHORIZED_TARGET_HOSTS.clear()
-    _AUTHORIZED_TARGET_HOSTS.update(h.lower().rstrip(".") for h in hosts if h)
+
+    authorized_hosts: frozenset[str] = frozenset()
+    allow_private_egress: bool = False
 
 
-def _private_egress_opt_in() -> bool:
-    return os.environ.get(_PRIVATE_EGRESS_OPT_IN_ENV, "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+_FAIL_CLOSED_POLICY = EgressPolicy()
+
+_SUPPORTED_POLICY_VERSIONS = frozenset({1})
+
+
+def _in_container() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _path_on_readonly_mount(path: str) -> bool:
+    """True when ``path`` sits on a mount the runtime user cannot write.
+
+    Parses ``/proc/self/mountinfo`` and checks the options of the deepest
+    mount point containing ``path``. The agent has no ``CAP_SYS_ADMIN``, so it
+    cannot remount or re-bind a writable path as read-only.
+    """
+    try:
+        lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    target = os.path.realpath(path)
+    best_prefix_len = -1
+    best_readonly = False
+    for line in lines:
+        parts = line.split()
+        # Fields: id parent major:minor root mountpoint mount-options ...
+        if len(parts) < 6:
+            continue
+        mount_point = os.path.realpath(parts[4])
+        if (target == mount_point or target.startswith(mount_point.rstrip("/") + "/")) and (
+            len(mount_point) > best_prefix_len
+        ):
+            best_prefix_len = len(mount_point)
+            best_readonly = "ro" in parts[5].split(",")
+    return best_readonly
+
+
+def _egress_policy_path() -> str | None:
+    override = os.environ.get(_EGRESS_POLICY_ENV, "").strip()
+    if override:
+        return override
+    if Path(_DEFAULT_EGRESS_POLICY_PATH).is_file():
+        return _DEFAULT_EGRESS_POLICY_PATH
+    return None
+
+
+def load_egress_policy() -> EgressPolicy | None:
+    """Load the run-scoped egress policy, or ``None`` when no policy exists.
+
+    ``None`` keeps the legacy host-side behavior (no authorized hosts; the
+    ``STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS`` opt-in is honored). When a policy
+    file exists but is not on a read-only mount — tampered, agent-supplied, or
+    a misconfigured launch — the fail-closed policy is returned and the env
+    opt-in is ignored: inside the sandbox the policy file is the only
+    authority on private-range egress.
+    """
+    path = _egress_policy_path()
+    if path is None:
+        return None
+    trusted_mount = _path_on_readonly_mount(path)
+    trusted_host_side = not _in_container() and os.environ.get(
+        _EGRESS_POLICY_TRUST_RW_ENV, ""
+    ).strip().lower() in {"1", "true", "yes"}
+    if not (trusted_mount or trusted_host_side):
+        return _FAIL_CLOSED_POLICY
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _FAIL_CLOSED_POLICY
+    if not isinstance(raw, dict):
+        return _FAIL_CLOSED_POLICY
+    # Validate version: must be present and supported.
+    version = raw.get("version")
+    if not isinstance(version, int) or version not in _SUPPORTED_POLICY_VERSIONS:
+        return _FAIL_CLOSED_POLICY
+    # Validate scan_id: must be present and match the current run when
+    # STRIX_RUN_ID is set (inside the container). A wrong-run policy is
+    # treated as malformed — the agent must not replay toward another run's
+    # authorized hosts.
+    scan_id = raw.get("scan_id")
+    if not isinstance(scan_id, str) or not scan_id:
+        return _FAIL_CLOSED_POLICY
+    expected_run_id = os.environ.get("STRIX_RUN_ID", "").strip()
+    if expected_run_id and scan_id != expected_run_id:
+        return _FAIL_CLOSED_POLICY
+    hosts_raw = raw.get("authorized_hosts")
+    if not isinstance(hosts_raw, list) or not all(isinstance(h, str) for h in hosts_raw):
+        return _FAIL_CLOSED_POLICY
+    allow_private = raw.get("allow_private_egress", False)
+    return EgressPolicy(
+        authorized_hosts=frozenset(h.lower().rstrip(".") for h in hosts_raw if h),
+        allow_private_egress=allow_private is True,
+    )
 
 
 def _private_range_block_reason(hostname: str) -> str | None:
     """Return a block reason when replay targets private space it may not reach."""
-    if _private_egress_opt_in():
+    policy = load_egress_policy()
+    if policy is not None:
+        allow_private = policy.allow_private_egress
+    elif _in_container():
+        # Inside the sandbox, a missing policy means no authorization — the
+        # mutable env opt-in is NOT honored. The per-run policy file is the
+        # only authority on private-range egress inside the container.
+        allow_private = False
+    else:
+        # Host-side legacy behavior: no policy file, env opt-in is honored.
+        allow_private = os.environ.get(_PRIVATE_EGRESS_OPT_IN_ENV, "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+    if allow_private:
         return None
     hostname = hostname.lower().rstrip(".")
-    if hostname in _AUTHORIZED_TARGET_HOSTS:
+    if policy is not None and hostname in policy.authorized_hosts:
         return None
     for raw in _resolve_hostname_ips(hostname):
         try:
@@ -102,8 +212,8 @@ def _private_range_block_reason(hostname: str) -> str | None:
             continue
         if any(ip in net for net in _PRIVATE_NETWORKS):
             return (
-                f"private-range address {ip} (not an authorized target; set "
-                f"{_PRIVATE_EGRESS_OPT_IN_ENV}=1 to allow)"
+                f"private-range address {ip} (not an authorized target; the "
+                "scan's read-only egress policy file controls this)"
             )
     return None
 

@@ -104,11 +104,106 @@ def _sandbox_network() -> str | None:
     return value or None
 
 
+# Network modes that give the sandbox unrestricted egress (docker default
+# bridge NATs anywhere, host shares the host stack). Admission fails when the
+# container actually landed on one of these.
+_DENIED_NETWORK_MODES = frozenset({"", "default", "bridge", "host", "slirp4netns"})
+
+
+def _assert_sandbox_network_admission(container: Any, docker_client: Any) -> None:
+    """Fail sandbox admission unless the container runs on the configured network.
+
+    Deny-by-default egress is supplied by the worker/network setup through
+    ``STRIX_DOCKER_SANDBOX_NETWORK``; this check binds admission to the
+    immutable runtime fact — the network mode Docker actually attached and the
+    Docker network object's ``Internal`` flag — not to an environment variable
+    the agent could influence. Proxy environment variables are steering only
+    and never count as enforcement.
+    """
+    configured = _sandbox_network()
+    attrs = cast("dict[str, Any]", getattr(container, "attrs", {}) or {})
+    mode = str(cast("dict[str, Any]", attrs.get("HostConfig", {})).get("NetworkMode", "") or "")
+    if configured is None:
+        raise RuntimeError(
+            "sandbox admission failed: STRIX_DOCKER_SANDBOX_NETWORK is not set. "
+            "Provision a deny-by-default network with "
+            "`bash scripts/provision-sandbox-network.sh`, export the variable, "
+            "and pass it to the worker/scan process; the docker default bridge "
+            "is not admitted. See docs/advanced/configuration.mdx."
+        )
+    if configured in _DENIED_NETWORK_MODES:
+        raise RuntimeError(
+            f"sandbox admission failed: STRIX_DOCKER_SANDBOX_NETWORK={configured!r} "
+            "is not a deny-by-default sandbox network."
+        )
+    if mode != configured:
+        raise RuntimeError(
+            f"sandbox admission failed: container network mode {mode!r} does not "
+            f"match the configured sandbox network {configured!r}."
+        )
+    # Inspect the Docker network object: the name alone is not attestation.
+    # The network must exist and have Internal=True (deny-by-default egress).
+    try:
+        network = docker_client.networks.get(configured)
+    except docker_errors.NotFound:
+        raise RuntimeError(
+            f"sandbox admission failed: configured network {configured!r} "
+            "not found. Create it with `docker network create --internal` "
+            "before starting a scan."
+        ) from None
+    except (docker_errors.APIError, RequestException, OSError) as exc:
+        raise RuntimeError(
+            f"sandbox admission failed: network inspect for {configured!r} failed: {exc}"
+        ) from exc
+    net_attrs = cast("dict[str, Any]", getattr(network, "attrs", {}) or {})
+    if not net_attrs.get("Internal", False):
+        raise RuntimeError(
+            f"sandbox admission failed: network {configured!r} is not internal. "
+            "Recreate it with `docker network create --internal` to enforce "
+            "deny-by-default egress."
+        )
+    # Verify actual container attachment: NetworkMode can claim the expected
+    # network while NetworkSettings.Networks shows a different (or absent)
+    # attachment. The container must be a member of the configured network and
+    # have no other endpoint attachments — an extra bridge/default attachment
+    # would provide an unauthorized egress path around the internal network.
+    networks = cast(
+        "dict[str, Any]",
+        cast("dict[str, Any]", attrs.get("NetworkSettings", {})).get("Networks", {}) or {},
+    )
+    if configured not in networks:
+        attached = ", ".join(sorted(networks.keys())) or "<none>"
+        raise RuntimeError(
+            f"sandbox admission failed: container is not attached to the "
+            f"configured network {configured!r} (attached: {attached}). "
+            "The container's NetworkMode matches but its actual endpoint "
+            "attachment does not include the configured deny-by-default network."
+        )
+    if set(networks.keys()) != {configured}:
+        attached = ", ".join(sorted(networks.keys()))
+        raise RuntimeError(
+            f"sandbox admission failed: container is attached to networks "
+            f"besides the configured sandbox network {configured!r} "
+            f"(attached: {attached}). An extra network can bypass deny-by-default "
+            "egress controls."
+        )
+
+
 def _apply_sandbox_network(create_kwargs: dict[str, Any]) -> None:
     network = _sandbox_network()
     if network:
         create_kwargs["network"] = network
         create_kwargs.pop("ports", None)
+        # Pass the configured deny-by-default network name into the sandbox so
+        # the in-container agent and any observability tools see the same value
+        # the worker passed to the scan process. This also makes product Docker
+        # scans self-describing: the network is set before Caido boots and the
+        # proxy starts up.
+        env = create_kwargs.setdefault("environment", {})
+        if isinstance(env, list):
+            env.append(f"STRIX_DOCKER_SANDBOX_NETWORK={network}")
+        elif isinstance(env, dict):
+            env["STRIX_DOCKER_SANDBOX_NETWORK"] = network
 
 
 _DEFAULT_SANDBOX_MEM_LIMIT = "2g"
@@ -271,7 +366,7 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         if not self.image_exists(image):
             raise docker_errors.DockerException(f"Docker image unavailable after pull: {image}")
 
-    async def _create_container(  # noqa: PLR0912 - mirrors the pinned SDK container builder
+    async def _create_container(  # noqa: PLR0912, PLR0915 - mirrors the pinned SDK container builder
         self,
         image: str,
         *,
@@ -383,6 +478,15 @@ class StrixDockerSandboxClient(DockerSandboxClient):
             list(exposed_ports),
         )
         container = self.docker_client.containers.create(**create_kwargs)
+        try:
+            # Admission check reads the created container's actual network
+            # attachment; on failure remove the never-started container so a
+            # rejected scan cannot leak one.
+            _assert_sandbox_network_admission(container, self.docker_client)
+        except Exception:
+            with contextlib.suppress(docker_errors.APIError, RequestException, OSError):
+                cast("Any", container).remove(force=True)
+            raise
         logger.info(
             "Sandbox container created: id=%s image=%s",
             container.short_id if hasattr(container, "short_id") else "?",
