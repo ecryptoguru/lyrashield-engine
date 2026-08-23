@@ -68,6 +68,22 @@ jobs:
         working-directory: desktop/ui
         run: npm ci || npm install
 
+      - name: Build engine sidecar (universal, version-matched)
+        run: |
+          set -euo pipefail
+          bash scripts/build.sh
+          ENGINE_VERSION="$(./dist/strix --version | tr -d '[:space:]')"
+          if [ "v${ENGINE_VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "engine sidecar version ${ENGINE_VERSION} does not match tag ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          mv dist/strix /tmp/engine-arm64
+          arch -x86_64 bash scripts/build.sh
+          mv dist/strix /tmp/engine-x64
+          mkdir -p desktop/src-tauri/binaries
+          lipo -create -output             desktop/src-tauri/binaries/lyrashield-engine-universal-apple-darwin             /tmp/engine-arm64 /tmp/engine-x64
+          chmod +x desktop/src-tauri/binaries/lyrashield-engine-universal-apple-darwin
+
       - name: Import Apple Developer certificate
         env:
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -164,6 +180,19 @@ jobs:
         working-directory: desktop/ui
         run: npm ci || npm install
 
+      - name: Build engine sidecar (version-matched)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build.sh
+          ENGINE_VERSION="$(./dist/strix.exe --version | tr -d '[:space:]')"
+          if [ "v${ENGINE_VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "engine sidecar version ${ENGINE_VERSION} does not match tag ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          mkdir -p desktop/src-tauri/binaries
+          cp dist/strix.exe desktop/src-tauri/binaries/lyrashield-engine-x86_64-pc-windows-msvc.exe
+
       - name: Import Windows Authenticode certificate
         env:
           WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
@@ -234,6 +263,19 @@ jobs:
         working-directory: desktop/ui
         run: npm ci || npm install
 
+      - name: Build engine sidecar (version-matched)
+        run: |
+          set -euo pipefail
+          bash scripts/build.sh
+          ENGINE_VERSION="$(./dist/strix --version | tr -d '[:space:]')"
+          if [ "v${ENGINE_VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "engine sidecar version ${ENGINE_VERSION} does not match tag ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          mkdir -p desktop/src-tauri/binaries
+          cp dist/strix desktop/src-tauri/binaries/lyrashield-engine-x86_64-unknown-linux-gnu
+          chmod +x desktop/src-tauri/binaries/lyrashield-engine-x86_64-unknown-linux-gnu
+
       - name: Build (Tauri)
         working-directory: desktop/src-tauri
         env:
@@ -278,6 +320,51 @@ jobs:
         with:
           path: artifacts
 
+      - name: Assemble updater manifest from the complete platform set
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, pathlib, sys, datetime, urllib.parse
+
+          artifacts = pathlib.Path("artifacts")
+          files = sorted(artifacts.rglob("*"))
+          def find_one(pattern):
+              hits = [f for f in files if f.is_file() and f.name.endswith(pattern) and not f.name.endswith(".sig")]
+              sigs = [f for f in files if f.is_file() and f.name.endswith(pattern + ".sig")]
+              if not hits or not sigs:
+                  return None
+              return hits[0], sigs[0].read_text(encoding="utf-8").strip()
+
+          darwin = find_one(".app.tar.gz")
+          windows = find_one("-setup.exe") or find_one(".msi.zip")
+          linux = find_one(".AppImage")
+          missing = [name for name, hit in
+                     (("darwin", darwin), ("windows", windows), ("linux", linux)) if hit is None]
+          if missing:
+              sys.exit(f"updater manifest incomplete, missing artifacts/signatures: {missing}")
+
+          full_tag = "${{ github.ref_name }}"
+          tag = full_tag.lstrip("v")
+          base = "https://github.com/lyrashield/lyrashield-local/releases/download/" + full_tag
+          def entry(pair):
+              artifact, sig = pair
+              return {"signature": sig, "url": base + "/" + urllib.parse.quote(artifact.name)}
+
+          manifest = {
+              "version": tag,
+              "notes": "LyraShield Local release " + tag,
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "platforms": {
+                  "darwin-aarch64": entry(darwin),
+                  "darwin-x86_64": entry(darwin),
+                  "windows-x86_64": entry(windows),
+                  "linux-x86_64": entry(linux),
+              },
+          }
+          pathlib.Path("latest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+          print("latest.json assembled for", tag)
+          PY
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -286,6 +373,10 @@ jobs:
             artifacts/**/*.dmg
             artifacts/**/*.msi
             artifacts/**/*.exe
+            artifacts/**/*.exe.sig
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.app.tar.gz.sig
             artifacts/**/*.AppImage
             artifacts/**/*.AppImage.sig
             artifacts/**/*.deb
+            latest.json

@@ -1,0 +1,22 @@
+{
+  "onlineRequest": {
+    "licenseKey": "LS-TEST-KEY"
+  },
+  "offlineRequest": {
+    "blobB64": "eyJzZWF0Q291bnQiOjEsIm1hY2hpbmVJZHMiOlsibWFjaGluZS0xIl0sInBlcnBldHVhbEZhbGxiYWNrQnVpbGQiOiIxLjIuMCIsInNrdSI6ImluZGl2aWR1YWxfbGF1bmNoIiwidXBkYXRlRWxpZ2libGVVbnRpbCI6IjIwMzYtMDEtMDFUMDA6MDA6MDAuMDAwWiJ9.f5rJ6rAhcL5+sCgngjFKKvpTz+IBeYuAgnwPyQArw/w9+AHRwIywUv5VYGdrx50ToUO0VVSJhFOOwU71F0UXCg==",
+    "licenseId": "test-license-1"
+  },
+  "response": {
+    "sku": "individual_launch",
+    "seatCount": 1,
+    "machineIds": ["machine-1"],
+    "updateEligibleUntil": "2036-01-01T00:00:00.000Z",
+    "perpetualFallbackBuild": "1.2.0",
+    "revoked": false
+  },
+  "status": {
+    "active": true,
+    "info": null,
+    "message": "No license activated."
+  }
+}
