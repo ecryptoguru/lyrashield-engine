@@ -6,7 +6,7 @@
 //! environment variables, and is owned by one supervisor: `stop_scan` kills
 //! and awaits the exact owned child before reporting the stop.
 
-use lyrashield_desktop_logic::scan_modes::{provider_env, ProviderRoute};
+pub use lyrashield_desktop_logic::scan_modes::{engine_scan_mode, provider_env, Provider, ProviderRoute};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -15,8 +15,6 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::oneshot;
-
-pub use lyrashield_desktop_logic::scan_modes::{engine_scan_mode, Provider, ProviderRoute};
 use crate::keychain;
 
 #[derive(Debug, Default)]

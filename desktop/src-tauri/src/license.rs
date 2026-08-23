@@ -18,11 +18,12 @@
 
 use lyrashield_desktop_logic::license::{
     admission_decision, bundled_revocation_list, is_revoked, verify_blob, LicenseError,
-    LicenseInfo, LicenseStatus, LAST_VALIDATED_KEY, MACHINE_ID_KEY, OFFLINE_GRACE_SECS,
+    LAST_VALIDATED_KEY, MACHINE_ID_KEY, OFFLINE_GRACE_SECS,
 };
 
 pub use lyrashield_desktop_logic::license::{
-    should_accept_update, LicensePayload, RevocationEntry, DEFAULT_API_BASE, LICENSE_CACHE_KEY,
+    should_accept_update, LicenseInfo, LicensePayload, LicenseStatus, RevocationEntry,
+    DEFAULT_API_BASE, LICENSE_CACHE_KEY,
 };
 
 use crate::keychain;

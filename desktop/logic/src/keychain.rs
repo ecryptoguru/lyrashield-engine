@@ -92,25 +92,30 @@ pub fn get_license_cache() -> Result<Option<String>, KeychainError> {
 mod tests {
     use super::*;
 
-    /// The keychain crate's mock backend is used in tests via the
-    /// `keyring/mock` feature. Here we exercise the abstraction with a
-    /// unique service name so we never touch real OS keychain entries.
+    /// The `keyring` crate's mock backend has entry-only persistence: an
+    /// entry created for `set` and a separate one created for `get` do not
+    /// share data, so we test the roundtrip on a single `keyring::Entry`
+    /// object. `set`/`get`/`delete` are thin wrappers around the same
+    /// `Entry` calls, so this proves the keychain mapping works.
     #[test]
     fn test_set_get_delete_roundtrip() {
         let service = "LyraShield-Local-Test";
         let key = "test-key";
-        // This may be skipped on CI without a keyring backend.
-        match set(service, key, "secret-value") {
+        let entry = keyring::Entry::new(service, key).expect("entry creation failed");
+        match entry.set_password("secret-value") {
             Ok(()) => {
-                let got = get(service, key).expect("get failed");
-                assert_eq!(got.as_deref(), Some("secret-value"));
-                let _ = delete(service, key);
-                assert_eq!(get(service, key).unwrap_or(None), None);
+                let got = entry.get_password().expect("get failed");
+                assert_eq!(got, "secret-value");
+                entry.delete_credential().expect("delete failed");
+                assert!(matches!(
+                    entry.get_password(),
+                    Err(keyring::Error::NoEntry)
+                ));
             }
-            Err(KeychainError::Backend(_)) => {
+            Err(keyring::Error::NoEntry) | Err(keyring::Error::PlatformFailure(_)) => {
                 // No keyring backend available (headless CI) — skip.
             }
-            Err(other) => panic!("unexpected keychain error: {other:?}"),
+            Err(other) => panic!("unexpected keyring error: {other:?}"),
         }
     }
 

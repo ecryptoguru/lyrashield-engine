@@ -13,7 +13,7 @@ use lyrashield_local_lib::scan::Provider;
 use lyrashield_local_lib::{docker_detect, keychain, license, scan, sync, updater};
 
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Selected BYOK provider + non-secret route metadata (I2). Secret values
 /// live only in the OS keychain and are read at spawn time.
