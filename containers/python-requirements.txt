@@ -1702,9 +1702,9 @@ urllib3==2.7.0 \
     #   dirsearch
     #   requests
     #   semgrep
-wafw00f==2.4.1 \
-    --hash=sha256:86dabb2cb7d41b2844d7a2a66fdef865758b93f38f1bb82c1710166b2d41952c \
-    --hash=sha256:f16ab9f51ba0758c76756fd866470fc5703de92a73b498b23c5aff9ccf5daa5a
+wafw00f==2.4.2 \
+    --hash=sha256:05e4a49f6de433793ad506e37ae2c6f537c832959ee6e2bbdf573900f22194ae \
+    --hash=sha256:c9a3df6e49b3ca913bd3a1a52dc7112ae0bc08c2bc0cfc0fd90e5982a202c05a
     # via -r /tmp/lyrashield-sandbox-lock/requirements.in
 wcmatch==8.5.2 \
     --hash=sha256:17d3ad3758f9d0b5b4dedc770b65420d4dac62e680229c287bf24c9db856a478 \
