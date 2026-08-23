@@ -126,9 +126,10 @@ def _assert_sandbox_network_admission(container: Any, docker_client: Any) -> Non
     if configured is None:
         raise RuntimeError(
             "sandbox admission failed: STRIX_DOCKER_SANDBOX_NETWORK is not set. "
-            "Attach the sandbox to an explicitly configured deny-by-default "
-            "network (e.g. docker network create + set the variable) before "
-            "starting a scan; the docker default bridge is not admitted."
+            "Provision a deny-by-default network with "
+            "`bash scripts/provision-sandbox-network.sh`, export the variable, "
+            "and pass it to the worker/scan process; the docker default bridge "
+            "is not admitted. See docs/advanced/configuration.mdx."
         )
     if configured in _DENIED_NETWORK_MODES:
         raise RuntimeError(
