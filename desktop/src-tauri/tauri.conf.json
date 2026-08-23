@@ -50,7 +50,7 @@
     "updater": {
       "pubkey": "LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER",
       "endpoints": [
-        "https://github.com/ecryptoguru/lyrashield-engine/releases/latest/download/latest.json"
+        "https://github.com/ecryptoguru/lyrashield-ai/releases/latest/download/latest.json"
       ],
       "dialog": true,
       "windows": {

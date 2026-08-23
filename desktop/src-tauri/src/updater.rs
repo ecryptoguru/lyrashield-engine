@@ -38,7 +38,7 @@ pub struct UpdateInfo {
 /// The pinned update-channel origin. Must match the endpoint in
 /// `tauri.conf.json`. Updates from any other origin are refused.
 pub const PINNED_UPDATE_ORIGIN: &str =
-    "https://github.com/ecryptoguru/lyrashield-engine/releases/latest/download/latest.json";
+    "https://github.com/ecryptoguru/lyrashield-ai/releases/latest/download/latest.json";
 
 /// Native eligibility immediately before an offer/download/install (I16):
 /// revoked, inactive, stale, or build-ineligible licenses fail closed. A

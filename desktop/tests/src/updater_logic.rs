@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     const PINNED_ORIGIN: &str =
-        "https://github.com/ecryptoguru/lyrashield-engine/releases/latest/download/latest.json";
+        "https://github.com/ecryptoguru/lyrashield-ai/releases/latest/download/latest.json";
 
     fn verify_origin(origin: &str) -> Result<(), ()> {
         if origin == PINNED_ORIGIN {
