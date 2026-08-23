@@ -19,7 +19,7 @@ from lyrashield.lifecycle.hooks import (
     _reservation_input_rate,
     _usage_cost_upper_bound,
 )
-from lyrashield.tools.web_search.tool import web_search
+from lyrashield.tools.web_search.tool import _estimate_cost, web_search
 from strix.config.loader import load_settings
 from tests.test_web_search import _clear_settings_cache, _tool_ctx
 
@@ -356,13 +356,18 @@ async def test_success_commits_hooks_reservation_exactly_once(
     hooks = ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=5.0)
     monkeypatch.setattr("lyrashield.lifecycle.hooks.get_active_hooks", lambda: hooks)
     args = {"query": "success exactly once"}
+    # Compute the expected per-call cost from the same settings the tool uses
+    # so the assertion is comparing floor to estimated cost, not just > 0.
+    _clear_settings_cache()
+    web_search_settings = load_settings().web_search
+    expected_cost = _estimate_cost("turbo", web_search_settings)
     parsed = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
     assert parsed["success"] is True
     # The hooks reservation is gone (released exactly once).
     assert len(hooks._reservations) == 0
     # The committed cost floor reflects exactly one call cost, not double.
     # (Duplicate finalization must not inflate committed cost.)
-    assert hooks._committed_cost_floor == pytest.approx(0.001)
+    assert hooks._committed_cost_floor == pytest.approx(expected_cost)
     # No lingering ReportState reservation.
     assert _web_search_enabled._web_search_inflight == 0
     assert _web_search_enabled._web_search_reserved_cost == 0.0

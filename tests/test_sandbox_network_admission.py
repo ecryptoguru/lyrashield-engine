@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import os
+import uuid
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import docker as docker_sdk
 import pytest
 from docker import errors as docker_errors
 
 from lyrashield.runtime.docker_client import _assert_sandbox_network_admission
+
+
+_docker_available = Path("/var/run/docker.sock").exists() or bool(os.environ.get("DOCKER_HOST"))
 
 
 def _container(network_mode: str, *, attached_networks: dict[str, Any] | None = None) -> MagicMock:
@@ -134,3 +141,29 @@ def test_network_inspect_error_rejected(monkeypatch: pytest.MonkeyPatch) -> None
     client.networks.get.side_effect = docker_errors.APIError("daemon unavailable")
     with pytest.raises(RuntimeError, match=r"network.*inspect|lookup.*fail"):
         _assert_sandbox_network_admission(_container("lyrashield-sandbox"), client)
+
+
+@pytest.mark.skipif(not _docker_available, reason="Docker daemon not available")
+def test_real_internal_network_admission_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """E1: product admission must pass against a real Docker internal network and
+    a container actually attached to it. This exercises the full runtime path
+    beyond mocks and the CI built-image smoke probe (comment #8)."""
+    client = docker_sdk.from_env()
+    network_name = f"lyrashield-test-{uuid.uuid4().hex[:8]}"
+    network = client.networks.create(network_name, internal=True)
+    try:
+        container = client.containers.run(
+            "alpine:3.19",
+            command="sleep 30",
+            network=network_name,
+            detach=True,
+            auto_remove=True,
+        )
+        try:
+            container.reload()
+            monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", network_name)
+            _assert_sandbox_network_admission(container, client)
+        finally:
+            container.stop(timeout=5)
+    finally:
+        network.remove()

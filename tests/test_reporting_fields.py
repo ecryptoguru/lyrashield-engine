@@ -303,6 +303,39 @@ async def test_dependency_report_rejects_bad_cve(report_state: ReportState) -> N
     assert not report_state.vulnerability_reports
 
 
+async def test_dependency_report_fails_when_artifact_persistence_fails(
+    report_state: ReportState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E3: a required artifact write failure must also make the dependency
+    report tool return success=False and not keep the in-memory report."""
+
+    def failing_write(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state_module, "write_vulnerabilities", failing_write)
+    result = await _do_create_dependency(
+        title="CVE-2024-0001 in sample 1.0.0",
+        description="Published advisory affects the pinned version.",
+        target="repo/package.json",
+        cve="CVE-2024-0001",
+        package_name="sample",
+        installed_version="1.0.0",
+        impact="Low-impact dependency advisory.",
+        remediation_steps="Upgrade to 1.0.1.",
+        assumptions="Assumes the package is included in deployed builds.",
+        package_ecosystem="npm",
+        fixed_version="1.0.1",
+        cwe=None,
+        advisory_cvss=0.0,
+        technical_analysis=None,
+        fix_effort="low",
+    )
+    assert result["success"] is False
+    assert "not durably persisted" in result.get("error", "")
+    assert not report_state.vulnerability_reports
+
+
 async def test_dependency_report_requires_ecosystem(report_state: ReportState) -> None:
     result = await _do_create_dependency(
         title="CVE-2024-0001 in sample 1.0.0",
