@@ -313,7 +313,10 @@ def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) ->
     if len(serialized) > _MAX_FINDING_SERIALIZED_SIZE:
         return {
             "id": report.get("id", ""),
-            "title": _truncate_text(str(report.get("title", ""))),
+            "title": redact_text(
+                _truncate_text(str(report.get("title", ""))),
+                include_internal_paths=include_internal_paths,
+            ),
             "severity": str(report.get("severity", "info")).lower().strip() or "info",
             "timestamp": report.get("timestamp", ""),
             "error": (
@@ -637,9 +640,11 @@ class ReportState:
         persisted = self.save_run_data()
         if not persisted:
             # The report was broadcast to the callback but not durably
-            # persisted. Remove the in-memory report so the caller can retry
-            # without a duplicate, and raise a clear error for the tool layer.
+            # persisted. Remove the in-memory report and the durable ID marker
+            # so the next report does not reuse the same ID or skip its
+            # Markdown artifact (comment #16).
             self.vulnerability_reports.pop()
+            self._saved_vuln_ids.discard(report_id)
             raise RuntimeError(
                 f"Vulnerability report {report_id} was not durably persisted; "
                 "artifact write failed and the report has been rolled back."

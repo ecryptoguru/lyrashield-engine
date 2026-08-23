@@ -1,14 +1,16 @@
 # Trivy ignore rules for the LyraShield engine container.
 #
-# DS-0002 (running as root) is intentionally scoped to containers/Dockerfile:
+# AVD-DS-0002 (running as root) is intentionally scoped to containers/Dockerfile:
 # the image starts as root so the entrypoint can install the system-wide
 # transparent proxy certificate and drop privileges with setpriv(1) to the
 # unprivileged `pentester` user before any agent code runs. The image ships
 # without sudo, the docker socket is not mounted, and the Dockerfile never
 # grants passwordless elevation; therefore the final process is non-root.
 # This is a reviewed trust-boundary decision, not a misconfiguration.
-ids:
-  - id: DS-0002
+# Use: trivy config . --ignorefile .trivyignore.yaml
+misconfigurations:
+  - id: AVD-DS-0002
     paths:
       - containers/Dockerfile
+      - Dockerfile
     statement: Container starts as root then immediately drops to unprivileged pentester user via setpriv; no sudo or docker socket is available to the agent.

@@ -397,6 +397,42 @@ async def test_create_report_fails_when_artifact_persistence_fails(
     assert not report_state.vulnerability_reports
 
 
+async def test_create_report_clears_saved_id_on_run_record_failure(
+    report_state: ReportState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E3: when write_vulnerabilities succeeds but write_run_record fails, the
+    saved ID marker must be cleared so the next report does not reuse the ID
+    and skip its Markdown artifact (comment #16)."""
+
+    def failing_run_record(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("run.json disk full")
+
+    monkeypatch.setattr(state_module, "write_run_record", failing_run_record)
+    result = await _do_create(
+        title="First",
+        description="d",
+        target="app",
+        impact="High impact.",
+        technical_analysis="t",
+        poc_description="poc",
+        poc_script_code="GET /?x=<script>alert(1)</script>",
+        remediation_steps="fix",
+        evidence="e",
+        assumptions="a",
+        fix_effort="high",
+        cvss_breakdown=_CVSS,
+        endpoint=None,
+        method=None,
+        cve=None,
+        cwe=None,
+        code_locations=None,
+    )
+    assert result["success"] is False
+    assert not report_state.vulnerability_reports
+    assert "vuln-0001" not in report_state._saved_vuln_ids
+
+
 async def test_dynamic_dedupe_requires_exact_location_identity() -> None:
     candidate = {
         "title": "SQL injection in repository query",
