@@ -155,6 +155,30 @@ def test_extra_cannot_override_required_run_record_fields() -> None:
     assert record["phase"] == "setup"
 
 
+def test_targets_info_is_first_class_run_record_field() -> None:
+    """E3: targets_info must survive initial_run_record as a required contract
+    field, not be dropped by the extra filter."""
+    targets = [{"type": "repository", "value": "git@example.com:org/repo.git"}]
+    record = initial_run_record(
+        "test-run",
+        auth_mode="byok",
+        targets_info=targets,
+        extra={"scan_mode": "deep"},
+    )
+    assert record["targets_info"] == targets
+    assert record["scan_mode"] == "deep"
+
+
+def test_initial_run_record_rejects_invalid_targets_info() -> None:
+    """E3: targets_info must be a list or None, not an arbitrary type."""
+    record = initial_run_record(
+        "test-run",
+        auth_mode="byok",
+        targets_info="not-a-list",  # type: ignore[arg-type]
+    )
+    assert record["targets_info"] == []
+
+
 def test_extra_non_required_fields_are_preserved() -> None:
     """E3: extra fields that don't conflict with required fields are kept."""
     record = initial_run_record(

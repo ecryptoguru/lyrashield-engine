@@ -300,6 +300,18 @@ def test_late_permitted_provider_does_not_admit_route(model_name: str) -> None:
     assert not is_gpt56_supported_provider(model_name)
 
 
+def test_model_path_preserves_original_case_for_azure_deployments() -> None:
+    """E2: Azure deployment names are case-sensitive. parse_model_route must
+    match wrappers/providers case-insensitively but keep the original model
+    path case."""
+    route = parse_model_route("litellm/azure/MyDeployment-GPT")
+    assert route is not None
+    assert route.provider == "azure"
+    assert route.model_path == "MyDeployment-GPT"
+    assert parse_model_route("litellm/Azure/MyDeployment-GPT").model_path == "MyDeployment-GPT"
+    assert parse_model_route("azure/eu/MyDeployment-GPT").model_path == "eu/MyDeployment-GPT"
+
+
 def test_admission_checks_exactly_the_provider_routing_selects() -> None:
     """For every accepted fixture, the admitted provider equals the leading
     component routing will select (wrapper stripped, bare means OpenAI)."""

@@ -38,7 +38,26 @@ LyraShield Engine is a controlled derivative of [Strix](https://github.com/usest
 
    Metered scans accept GPT-5.6 Terra and Luna deployments from the supported provider allowlist. Authenticated `chatgpt/*` subscription runs are also supported by default and can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`. See the [configuration reference](docs/advanced/configuration.mdx) for the exact routes and accounting behavior.
 
-4. **Run the engine against an authorized repository target**
+4. **Create the deny-by-default sandbox network (Docker scans only)**
+
+   Sandboxed scans that run inside Docker must attach to an isolated network with
+   `Internal=true`. Create it once per host and set the environment variable that
+   the engine uses to select and verify it:
+
+   ```bash
+   docker network create --internal lyrashield-sandbox
+   export STRIX_DOCKER_SANDBOX_NETWORK=lyrashield-sandbox
+   ```
+
+   Without this variable the engine refuses to start the sandbox; with it the
+   admission check verifies that the container is actually attached to the named
+   network and that the network object has `Internal=true`. The default Docker
+   bridge (`bridge`, `host`, `default`, or an empty value) is never admitted.
+
+   Worker deployments must also set this variable before spawning the engine,
+   and product-local Docker scans must pass it through to the engine process.
+
+5. **Run the engine against an authorized repository target**
 
    ```bash
    uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20

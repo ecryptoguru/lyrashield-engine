@@ -17,7 +17,7 @@ from agents.run import RunResult
 
 from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.sarif import build_sarif_report
-from lyrashield.artifacts.state import ReportState
+from lyrashield.artifacts.state import _MAX_COLLECTION_SIZE, ReportState
 from lyrashield.lifecycle import execution
 
 
@@ -31,7 +31,11 @@ SENTINEL = "ZX9SENTINELQW"  # unique marker for sensitive substrings
 def _artifact_texts(run_dir: Path) -> str:
     chunks: list[str] = []
     for path in sorted(run_dir.rglob("*")):
-        if path.is_file():
+        if path.is_file() and path.name != "resume.json":
+            # resume.json is a private execution record and intentionally
+            # preserves host filesystem paths (cloned_repo_path, source_path)
+            # that public durable artifacts redact. It is not part of the
+            # public worker contract (comment #5).
             try:
                 chunks.append(path.read_text(encoding="utf-8"))
             except (UnicodeDecodeError, OSError):
@@ -244,8 +248,10 @@ def test_finding_total_serialized_size_is_bounded(
     report_state: ReportState, tmp_path: Path
 ) -> None:
     """E4: a finding whose total serialized size exceeds the bound must be
-    truncated so the persisted record stays bounded."""
-    huge_value = "B" * 50_000
+    reduced so the persisted record stays bounded. Per-field limits alone can
+    still allow 1000 metadata values at the text bound; the total bound must
+    catch that case."""
+    huge_value = "B" * 20_000
     report_state.add_vulnerability_report(
         title="Size bound test",
         severity="low",
@@ -256,7 +262,9 @@ def test_finding_total_serialized_size_is_bounded(
         assumptions=huge_value,
         remediation_steps=huge_value,
         poc_description=huge_value,
-        dependency_metadata={f"k{i}": huge_value for i in range(30)},
+        # Max out the metadata collection bound so the per-field limit still
+        # permits an oversized total serialized finding.
+        dependency_metadata={f"k{i}": huge_value for i in range(_MAX_COLLECTION_SIZE)},
     )
     vulns = json.loads((tmp_path / "vulnerabilities.json").read_text(encoding="utf-8"))
     serialized = json.dumps(vulns[0])
@@ -289,6 +297,25 @@ def test_url_redaction_strips_username_only_userinfo() -> None:
     redacted = redact_url(f"https://{SENTINEL}@app.example.com/x")
     assert SENTINEL not in redacted
     assert "[REDACTED]" in redacted
+
+
+def test_url_redaction_preserves_query_and_fragment_delimiters() -> None:
+    """E4: an ``@`` inside a query value or a URL fragment must not be
+    mistaken for userinfo, and the fragment ``#`` must survive reconstruction."""
+    from lyrashield.utils.redaction import redact_url  # noqa: PLC0415
+
+    # ``@`` in a query value must not corrupt the host.
+    redacted = redact_url("https://app.example.com/page?email=user@example.com")
+    assert "app.example.com" in redacted
+    assert "user@example.com" in redacted  # not replaced by [REDACTED]
+
+    # Fragment delimiter must be preserved exactly once.
+    redacted = redact_url("https://app.example.com/page?token=abc#section")
+    assert redacted.endswith("#section")
+    assert "?token=[REDACTED]" in redacted
+
+    redacted = redact_url("https://app.example.com/page#section")
+    assert redacted == "https://app.example.com/page#section"
 
 
 def test_url_redaction_strips_encoded_userinfo() -> None:

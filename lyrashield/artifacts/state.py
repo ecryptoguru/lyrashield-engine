@@ -19,6 +19,7 @@ from lyrashield.artifacts.usage import LLMUsageLedger, _int_or_zero, _round_cost
 from lyrashield.artifacts.writer import (
     read_run_record,
     write_executive_report,
+    write_resume_record,
     write_run_record,
     write_vulnerabilities,
 )
@@ -84,6 +85,7 @@ def initial_run_record(
     run_name: str | None,
     *,
     auth_mode: str,
+    targets_info: list[dict[str, Any]] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the canonical first run record (the only constructor of it).
@@ -91,6 +93,10 @@ def initial_run_record(
     Both the CLI's pre-scan persistence and :class:`ReportState` build the
     record here, so the first observable run.json is already a complete
     versioned worker contract — never a partial hand-rolled dict.
+
+    ``targets_info`` is a required contract field and is accepted as an
+    explicit parameter so it is never dropped by the ``extra`` filter that
+    protects required fields from caller override (comment #6).
     """
     record: dict[str, Any] = {
         "schema_version": RUN_RECORD_SCHEMA_VERSION,
@@ -101,7 +107,7 @@ def initial_run_record(
         "status": "running",
         "phase": "setup",
         "auth_mode": auth_mode,
-        "targets_info": [],
+        "targets_info": targets_info if isinstance(targets_info, list) else [],
         "llm_usage": LLMUsageLedger().to_record(),
         "seq": 0,
         "turn_count": 0,
@@ -294,6 +300,27 @@ def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) ->
             snapshot[key] = _recursive_sanitize_unknown(
                 value, include_internal_paths=include_internal_paths
             )
+
+    # E4: enforce the total serialized finding size bound as a last-line
+    # defense. The per-field limits above are the primary guard; this catch
+    # prevents a combination of many bounded fields from producing a single
+    # oversized record. If the snapshot still exceeds the bound, fall back to
+    # a minimal safe finding so persistence never writes an unbounded object.
+    try:
+        serialized = json.dumps(snapshot)
+    except (TypeError, ValueError):
+        serialized = ""
+    if len(serialized) > _MAX_FINDING_SERIALIZED_SIZE:
+        return {
+            "id": report.get("id", ""),
+            "title": _truncate_text(str(report.get("title", ""))),
+            "severity": str(report.get("severity", "info")).lower().strip() or "info",
+            "timestamp": report.get("timestamp", ""),
+            "error": (
+                "Finding exceeded the maximum serialized size and was reduced "
+                "to a safe stub. The original report could not be persisted."
+            ),
+        }
     return snapshot
 
 
@@ -386,6 +413,12 @@ class ReportState:
 
         self.scan_results: dict[str, Any] | None = None
         self.scan_config: dict[str, Any] | None = None
+        # Raw (unsanitized) targets and local sources are kept for SARIF
+        # provenance and for the private resume.json file. They are never
+        # written to the public worker contract (run.json).
+        self._repo_context_targets: list[dict[str, Any]] = []
+        self._raw_targets_info: list[dict[str, Any]] = []
+        self._raw_local_sources: list[dict[str, Any]] = []
         self._llm_usage = LLMUsageLedger()
         auth_mode = codex.auth_mode(load_settings().llm.model)
         self._llm_usage.zero_cost = auth_mode == "subscription"
@@ -601,7 +634,16 @@ class ReportState:
             self.vulnerability_found_callback(sanitized)
 
         self._set_phase("running")
-        self.save_run_data()
+        persisted = self.save_run_data()
+        if not persisted:
+            # The report was broadcast to the callback but not durably
+            # persisted. Remove the in-memory report so the caller can retry
+            # without a duplicate, and raise a clear error for the tool layer.
+            self.vulnerability_reports.pop()
+            raise RuntimeError(
+                f"Vulnerability report {report_id} was not durably persisted; "
+                "artifact write failed and the report has been rolled back."
+            )
         return report_id
 
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
@@ -789,9 +831,14 @@ class ReportState:
         self.scan_results = None
         self.final_scan_result = None
         targets = [t for t in (config.get("targets") or []) if isinstance(t, dict)]
-        # Keep raw repository target details in memory only (SARIF provenance
-        # needs the cloned path); the durable record carries sanitized forms.
+        # Keep raw target and local-source details in memory only. The durable
+        # record carries sanitized forms; the private resume.json carries the
+        # originals for resume/SARIF provenance (comment #5).
         self._repo_context_targets = [dict(t) for t in targets if t.get("type") == "repository"]
+        self._raw_targets_info = [dict(t) for t in targets]
+        self._raw_local_sources = [
+            dict(s) for s in config.get("local_sources", []) if isinstance(s, dict)
+        ]
         instruction = str(config.get("user_instructions") or "")
         self.run_record.update(
             {
@@ -810,7 +857,15 @@ class ReportState:
         )
         self._set_phase("running")
 
-    def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> None:
+    def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> bool:
+        """Persist scan artifacts and return whether all required writes
+        succeeded.
+
+        When ``mark_complete=True`` and the required receipt cannot be
+        persisted, the in-memory completion fields are reverted so a later
+        incidental save cannot persist a completed record without a durable
+        receipt.
+        """
         # Snapshot pre-completion state so a failed receipt write can revert
         # in-memory completion eligibility — a failed persistence must not
         # leave the lifecycle marked completed (E3 monotonic fail-closed).
@@ -834,7 +889,7 @@ class ReportState:
 
         self._sync_progress()
         self._sync_llm_usage_record()
-        self._save_artifacts()
+        persisted = self._save_artifacts()
 
         # If the receipt write failed and we had marked complete, revert the
         # in-memory completion so a later incidental save cannot persist a
@@ -846,6 +901,7 @@ class ReportState:
             self.end_time = prev_end_time
             if prev_status != "completed":
                 self._set_phase(str(prev_status or "running"))
+        return persisted
 
     def set_terminal_reason(self, reason: str) -> None:
         """Record a machine-readable non-completion reason for worker callers."""
@@ -911,8 +967,15 @@ class ReportState:
 {str(scan_results.get("recommendations", "")).strip()}
 """
 
-    def _save_artifacts(self) -> None:
-        """Write scan artifacts under ``run_dir``."""
+    def _save_artifacts(self) -> bool:
+        """Write scan artifacts under ``run_dir``.
+
+        Returns ``True`` only when every required artifact (vulnerabilities,
+        run record) is successfully persisted. Non-fatal artifacts (executive
+        report, SARIF) may fail and be logged, but they do not make this
+        return ``False``. Callers that must know whether durability succeeded
+        (e.g. vulnerability report tools) should act on the return value.
+        """
         run_dir = self.get_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -934,10 +997,14 @@ class ReportState:
 
         # The worker must distinguish a clean scan from missing output. Always
         # write this artifact, including for a valid zero-finding result.
+        # This is a required artifact: failure makes the whole save fail.
         try:
             write_vulnerabilities(run_dir, snapshot, self._saved_vuln_ids)
         except (OSError, RuntimeError):
-            logger.exception("Vulnerabilities artifact write failed (non-fatal)")
+            logger.exception("Vulnerabilities artifact write failed (required)")
+            self.receipt_persisted = False
+            self.run_record["receipt_persisted"] = False
+            return False
 
         # SARIF is an integration artifact; it must not hide a successful core
         # receipt when an optional formatter has a problem.
@@ -968,7 +1035,24 @@ class ReportState:
             self.receipt_persisted = False
             self.run_record["receipt_persisted"] = False
             logger.exception("run.json receipt persist FAILED — cost receipt not written")
+            return False
+
+        # Write the private resume record with unsanitized execution fields so
+        # a resumed scan can recover cloned_repo_path / source_path values that
+        # the public run.json intentionally redacts (comment #5). This is
+        # non-fatal to the receipt; a missing resume file can still be recovered
+        # from the public record (resume will just lose host paths).
+        try:
+            write_resume_record(
+                run_dir,
+                targets_info=self._raw_targets_info,
+                local_sources=self._raw_local_sources,
+            )
+        except (OSError, RuntimeError):
+            logger.exception("Resume record write failed (non-fatal)")
+
         logger.info("Essential scan data saved to: %s", run_dir)
+        return True
 
     def _sarif_repository_context(self) -> dict[str, Any] | None:
         """Repo/commit/branch context for SARIF provenance (repo scans only).
@@ -984,9 +1068,13 @@ class ReportState:
 
     def _derive_repository_context(self) -> dict[str, Any] | None:
         # Prefer the in-memory raw repository targets; the durable record's
-        # targets_info is sanitized and carries no cloned paths.
-        raw_targets = getattr(self, "_repo_context_targets", None)
-        if raw_targets is None:
+        # targets_info is sanitized and carries no cloned paths. An empty
+        # in-memory list means set_scan_config was never called, so fall back
+        # to the run record (e.g. tests that set it directly).
+        raw_targets = getattr(self, "_repo_context_targets", None) or []
+        if raw_targets:
+            repo_targets = [cast("dict[str, Any]", t) for t in raw_targets]
+        else:
             targets = self.run_record.get("targets_info")
             if not isinstance(targets, list):
                 return None
@@ -995,8 +1083,6 @@ class ReportState:
                 for t in targets
                 if isinstance(t, dict) and t.get("type") == "repository"
             ]
-        else:
-            repo_targets = [cast("dict[str, Any]", t) for t in raw_targets]
         if len(repo_targets) != 1:
             return None
         target = repo_targets[0]

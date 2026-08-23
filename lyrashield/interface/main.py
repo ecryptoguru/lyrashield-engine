@@ -21,8 +21,17 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from lyrashield.artifacts.state import get_global_report_state, initial_run_record
-from lyrashield.artifacts.writer import read_run_record, write_run_record
+from lyrashield.artifacts.state import (
+    get_global_report_state,
+    initial_run_record,
+    validate_run_record,
+)
+from lyrashield.artifacts.writer import (
+    read_resume_record,
+    read_run_record,
+    write_resume_record,
+    write_run_record,
+)
 from lyrashield.interface.cli import run_cli
 from lyrashield.interface.tui import run_tui
 from lyrashield.interface.utils import (
@@ -922,8 +931,8 @@ def _persist_run_record(args: argparse.Namespace) -> None:
     run_record = initial_run_record(
         args.run_name,
         auth_mode=codex.auth_mode(load_settings().llm.model),
+        targets_info=args.targets_info,
         extra={
-            "targets_info": args.targets_info,
             "scan_mode": args.scan_mode,
             "instruction": args.instruction,
             "non_interactive": args.non_interactive,
@@ -933,7 +942,17 @@ def _persist_run_record(args: argparse.Namespace) -> None:
             "diff_base": args.diff_base,
         },
     )
+    # Validate the pre-scan contract before writing, so an incomplete record
+    # never reaches the run directory (I10/C3).
+    validate_run_record(run_record)
     write_run_record(run_dir, run_record)
+    # Preserve the unsanitized execution fields needed for resume in a private
+    # file that is not part of the public worker contract (comment #5).
+    write_resume_record(
+        run_dir,
+        targets_info=args.targets_info,
+        local_sources=getattr(args, "local_sources", []),
+    )
 
 
 def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
@@ -960,7 +979,18 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
     except RuntimeError as exc:
         parser.error(f"--resume {args.resume}: run.json unreadable: {exc}")
 
-    raw_targets_info: Any = state.get("targets_info") or []
+    # Prefer the private resume record: it preserves unsanitized execution
+    # fields (cloned_repo_path, source_path) that run.json redacts for the
+    # public worker contract (comment #5). Fall back to the public record.
+    resume_state = read_resume_record(run_dir)
+    targets_info_source = resume_state.get("targets_info")
+    local_sources_source = resume_state.get("local_sources")
+    if not isinstance(targets_info_source, list):
+        targets_info_source = state.get("targets_info")
+    if not isinstance(local_sources_source, list):
+        local_sources_source = state.get("local_sources")
+
+    raw_targets_info: Any = targets_info_source or []
     if not isinstance(raw_targets_info, list):
         parser.error(f"--resume {args.resume}: run.json targets_info is not a list")
     raw_targets_info = cast("list[Any]", raw_targets_info)
@@ -1000,7 +1030,9 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
 
     if args.instruction is None:
         args.instruction = state.get("instruction")
-    if state.get("local_sources"):
+    if local_sources_source:
+        args.local_sources = local_sources_source
+    elif state.get("local_sources"):
         args.local_sources = state.get("local_sources")
     if state.get("diff_scope"):
         args.diff_scope = state.get("diff_scope")

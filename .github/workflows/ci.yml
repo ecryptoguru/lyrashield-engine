@@ -72,7 +72,13 @@ jobs:
         run: bash scripts/build.sh
 
       - name: Read pinned worker-consumer revision
-        run: echo "WORKER_PIN=$(tr -d '[:space:]' < .lyrashield-worker-pin)" >> "$GITHUB_ENV"
+        run: |
+          WORKER_PIN=$(tr -d '[:space:]' < .lyrashield-worker-pin)
+          if [ -z "$WORKER_PIN" ]; then
+            echo "::error::.lyrashield-worker-pin is missing or empty"
+            exit 1
+          fi
+          echo "WORKER_PIN=$WORKER_PIN" >> "$GITHUB_ENV"
 
       - name: Check out public LyraShield app contract
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

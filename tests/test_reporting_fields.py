@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.dedupe import _check_dependency_duplicate, check_duplicate
 from lyrashield.artifacts.state import ReportState, set_global_report_state
 from lyrashield.tools.finish.tool import finish_scan
@@ -323,6 +324,43 @@ async def test_dependency_report_requires_ecosystem(report_state: ReportState) -
 
     assert result["success"] is False
     assert any("package_ecosystem" in error for error in result["errors"])
+    assert not report_state.vulnerability_reports
+
+
+async def test_create_report_fails_when_artifact_persistence_fails(
+    report_state: ReportState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E3: a required artifact write failure must make the reporting tool
+    return success=False and not keep the in-memory report."""
+
+    def failing_write(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state_module, "write_vulnerabilities", failing_write)
+    result = await _do_create(
+        title="XSS",
+        description="reflected",
+        target="app",
+        impact="High impact.",
+        technical_analysis="t",
+        poc_description="poc",
+        poc_script_code="GET /?x=<script>alert(1)</script>",
+        remediation_steps="fix",
+        evidence="e",
+        assumptions="a",
+        fix_effort="high",
+        cvss_breakdown=_CVSS,
+        endpoint=None,
+        method=None,
+        cve=None,
+        cwe=None,
+        code_locations=None,
+    )
+    assert result["success"] is False
+    assert "not durably persisted" in result.get("error", "")
+    # The in-memory report should be rolled back so the caller can retry
+    # without a phantom duplicate.
     assert not report_state.vulnerability_reports
 
 

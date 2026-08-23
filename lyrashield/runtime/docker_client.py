@@ -163,7 +163,9 @@ def _assert_sandbox_network_admission(container: Any, docker_client: Any) -> Non
         )
     # Verify actual container attachment: NetworkMode can claim the expected
     # network while NetworkSettings.Networks shows a different (or absent)
-    # attachment. The container must be a member of the configured network.
+    # attachment. The container must be a member of the configured network and
+    # have no other endpoint attachments — an extra bridge/default attachment
+    # would provide an unauthorized egress path around the internal network.
     networks = cast(
         "dict[str, Any]",
         cast("dict[str, Any]", attrs.get("NetworkSettings", {})).get("Networks", {}) or {},
@@ -175,6 +177,14 @@ def _assert_sandbox_network_admission(container: Any, docker_client: Any) -> Non
             f"configured network {configured!r} (attached: {attached}). "
             "The container's NetworkMode matches but its actual endpoint "
             "attachment does not include the configured deny-by-default network."
+        )
+    if set(networks.keys()) != {configured}:
+        attached = ", ".join(sorted(networks.keys()))
+        raise RuntimeError(
+            f"sandbox admission failed: container is attached to networks "
+            f"besides the configured sandbox network {configured!r} "
+            f"(attached: {attached}). An extra network can bypass deny-by-default "
+            "egress controls."
         )
 
 

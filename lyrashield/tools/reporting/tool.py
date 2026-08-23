@@ -327,7 +327,7 @@ async def _do_create(  # noqa: PLR0912
             agent_id=agent_id if isinstance(agent_id, str) else None,
             agent_name=agent_name if isinstance(agent_name, str) else None,
         )
-    except (ImportError, AttributeError) as e:
+    except (ImportError, AttributeError, RuntimeError, OSError) as e:
         logger.exception("create_vulnerability_report persistence failed")
         return {"success": False, "error": f"Failed to create vulnerability report: {e!s}"}
     else:

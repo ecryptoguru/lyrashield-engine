@@ -274,8 +274,11 @@ def redact_text(text: str, *, include_internal_paths: bool = True) -> str:
 # the operator. Two patterns: the user:password form, then a username-only
 # form (no colon). Both must be stripped before urlparse, which may reject
 # placeholders in the netloc.
-_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@:\s]+):([^@\s/]+)@", re.IGNORECASE)
-_URL_USERINFO_USERONLY_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@:\s]+)@", re.IGNORECASE)
+#
+# The username and password classes exclude ``?`` and ``#`` so a query value
+# containing ``@`` (e.g. ``?email=foo@bar.com``) is not mistaken for userinfo.
+_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@?:\s]+):([^@?#\s/]+)@", re.IGNORECASE)
+_URL_USERINFO_USERONLY_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@?:\s]+)@", re.IGNORECASE)
 
 # Query parameters whose VALUES are redacted even when the key itself is not
 # secret-looking. Values are replaced, keys preserved, so the URL shape stays
@@ -327,6 +330,7 @@ def redact_url(url: str) -> str:
     redacted = _URL_USERINFO_USERONLY_RE.sub(r"\1[REDACTED]@", redacted)
     # Now parse for query redaction. urlparse may still fail on edge cases;
     # fall back to manual query splitting.
+    use_fallback = False
     try:
         parsed = urlparse(redacted)
         query = parsed.query
@@ -334,15 +338,22 @@ def redact_url(url: str) -> str:
         base = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
     except ValueError:
         # urlparse failed (e.g. bracketed placeholder in netloc); split
-        # query/fragment manually.
-        if "?" not in redacted:
+        # query/fragment manually. ``base`` is the part before ``?``,
+        # ``query`` is between ``?`` and ``#``, and ``fragment`` is after ``#``
+        # (the leading ``#`` is re-added at reconstruction).
+        use_fallback = True
+        if "?" not in redacted and "#" not in redacted:
             return redacted
         base, _, rest = redacted.partition("?")
         query, _, fragment = rest.partition("#")
-        fragment = f"#{fragment}" if fragment else ""
     # Redact sensitive query parameter values (case-insensitive, decoded).
     if not query:
-        return base + (f"#{fragment}" if fragment and not base.endswith("#") else "")
+        if fragment:
+            # Re-add the fragment delimiter; ``urlunparse`` does this, but the
+            # manual fallback path needs an explicit ``#``.
+            separator = "" if base.endswith("#") else "#"
+            return base + separator + fragment
+        return base
     pairs = query.split("&")
     kept: list[str] = []
     for pair in pairs:
@@ -352,7 +363,12 @@ def redact_url(url: str) -> str:
             kept.append(f"{key}{sep}[REDACTED]")
         else:
             kept.append(pair)
-    result = f"{base}?{'&'.join(kept)}"
-    if fragment and not result.endswith(fragment):
-        result += fragment
+    # Reconstruct via urlunparse so the fragment delimiter is preserved exactly
+    # once and query/fragment delimiters are not concatenated or dropped.
+    if use_fallback:
+        result = f"{base}?{'&'.join(kept)}{'#' + fragment if fragment else ''}"
+    else:
+        result = urlunparse(
+            (parsed.scheme, parsed.netloc, parsed.path, parsed.params, "&".join(kept), fragment)
+        )
     return result

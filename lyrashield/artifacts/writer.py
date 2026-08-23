@@ -114,6 +114,57 @@ def write_run_record(run_dir: Path, run_record: dict[str, Any]) -> None:
     )
 
 
+# Resume state is a private, non-contract file that preserves host filesystem
+# paths and other execution fields that must not appear in the public worker
+# contract (run.json) but are needed to resume a local scan. It lives in the
+# same run directory but is never sent to or parsed by the cloud worker.
+_RESUME_RECORD_FILENAME = "resume.json"
+
+
+def resume_record_path(run_dir: Path) -> Path:
+    return run_dir / _RESUME_RECORD_FILENAME
+
+
+def read_resume_record(run_dir: Path) -> dict[str, Any]:
+    """Read the private resume record, or an empty dict if absent/invalid."""
+    path = resume_record_path(run_dir)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("resume.json at %s is unreadable: %s", path, exc)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("resume.json at %s is not an object", path)
+        return {}
+    return cast("dict[str, Any]", data)
+
+
+def write_resume_record(
+    run_dir: Path,
+    *,
+    targets_info: list[dict[str, Any]] | None = None,
+    local_sources: list[dict[str, Any]] | None = None,
+) -> None:
+    """Write the private resume record preserving unsanitized execution fields.
+
+    ``targets_info`` and ``local_sources`` are stored exactly as supplied so
+    resume can recover ``cloned_repo_path`` and ``source_path`` values that
+    the public run.json intentionally redacts.
+    """
+    path = resume_record_path(run_dir)
+    payload: dict[str, Any] = {"schema_version": 1}
+    if targets_info is not None:
+        payload["targets_info"] = targets_info
+    if local_sources is not None:
+        payload["local_sources"] = local_sources
+    _atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+    )
+
+
 def write_executive_report(run_dir: Path, final_scan_result: str) -> None:
     path = run_dir / "penetration_test_report.md"
     with path.open("w", encoding="utf-8") as f:

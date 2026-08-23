@@ -54,13 +54,27 @@ def _url_target(url: str) -> dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
+    # Keep the original module-level objects so they can be restored after the
+    # test. Rebinding the locks is fine for the loop scoping, but mutation of
+    # the cache and cleanup receipts must be reverted so later test files do
+    # not see stale state from this module.
+    original_cache = dict(session_manager._SESSION_CACHE)
+    original_cleanup = dict(session_manager._CLEANUP_RECEIPTS)
+    original_cache_lock = session_manager._CACHE_LOCK
+    original_creation_lock = session_manager._CREATION_LOCK
+
     session_manager._SESSION_CACHE.clear()
+    session_manager._CLEANUP_RECEIPTS.clear()
     # Module locks bind to the event loop that first acquires them; give each
     # test (pytest-asyncio creates a loop per test) fresh locks.
     session_manager._CACHE_LOCK = asyncio.Lock()
     session_manager._CREATION_LOCK = asyncio.Lock()
     yield
-    session_manager._SESSION_CACHE.clear()
+    # Restore the module globals to their pre-test state.
+    session_manager._SESSION_CACHE = original_cache
+    session_manager._CLEANUP_RECEIPTS = original_cleanup
+    session_manager._CACHE_LOCK = original_cache_lock
+    session_manager._CREATION_LOCK = original_creation_lock
 
 
 @pytest.fixture

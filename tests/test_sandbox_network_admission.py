@@ -73,6 +73,22 @@ def test_configured_network_attachment_admits(monkeypatch: pytest.MonkeyPatch) -
     )
 
 
+def test_extra_network_attachment_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """E1: a container attached to the configured network plus an extra
+    network (e.g. bridge) has an unauthorized egress path and must be
+    rejected."""
+    monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", "lyrashield-sandbox")
+    container = _container(
+        "lyrashield-sandbox",
+        attached_networks={
+            "lyrashield-sandbox": {"EndpointID": "abc"},
+            "bridge": {"EndpointID": "xyz"},
+        },
+    )
+    with pytest.raises(RuntimeError, match="attached to networks besides"):
+        _assert_sandbox_network_admission(container, _docker_client("lyrashield-sandbox"))
+
+
 def test_network_mode_matches_but_actual_attachment_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -118,20 +118,28 @@ def parse_model_route(model_name: str | None) -> ModelRoute | None:
     nested/repeated wrappers, leading/trailing/doubled separators — raises
     ``ValueError`` so admission and routing can never disagree by interpreting
     the raw string differently.
+
+    Validation and wrapper matching are performed on the lowercased string,
+    but ``provider`` and ``model_path`` are sliced out of the original-case
+    string. The provider is then lowercased for canonical admission/routing
+    decisions, while the model path keeps its original case — Azure
+    deployment names and other case-sensitive identifiers are not corrupted.
     """
     name = (model_name or "").strip()
     if not name:
         return None
     lowered = name.lower()
     wrapper: str | None = None
-    remainder = lowered
+    wrapper_offset = 0
     for candidate in _ROUTE_WRAPPER_PREFIXES:
         prefix = f"{candidate}/"
         if lowered.startswith(prefix):
             wrapper = candidate
-            remainder = lowered[len(prefix) :]
+            wrapper_offset = len(prefix)
             break
-    if remainder.startswith(tuple(f"{w}/" for w in _ROUTE_WRAPPER_PREFIXES)):
+    remainder = name[wrapper_offset:]  # original case
+    remainder_lower = remainder.lower()
+    if remainder_lower.startswith(tuple(f"{w}/" for w in _ROUTE_WRAPPER_PREFIXES)):
         raise ValueError(f"model route nests a wrapper prefix: {model_name!r}")
     if not remainder:
         raise ValueError(f"model route ends at its wrapper prefix: {model_name!r}")
@@ -143,7 +151,7 @@ def parse_model_route(model_name: str | None) -> ModelRoute | None:
         provider, model_path = None, remainder
     return ModelRoute(
         wrapper=wrapper,
-        provider=provider,
+        provider=provider.lower() if provider is not None else None,
         model_path=model_path,
         original=name,
     )

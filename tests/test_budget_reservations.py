@@ -362,7 +362,7 @@ async def test_success_commits_hooks_reservation_exactly_once(
     assert len(hooks._reservations) == 0
     # The committed cost floor reflects exactly one call cost, not double.
     # (Duplicate finalization must not inflate committed cost.)
-    assert hooks._committed_cost_floor > 0
+    assert hooks._committed_cost_floor == pytest.approx(0.001)
     # No lingering ReportState reservation.
     assert _web_search_enabled._web_search_inflight == 0
     assert _web_search_enabled._web_search_reserved_cost == 0.0

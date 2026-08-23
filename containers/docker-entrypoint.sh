@@ -121,8 +121,13 @@ echo "✅ System-wide proxy configuration complete"
 
 echo "Adding CA to browser trust store..."
 mkdir -p /home/pentester/.pki/nssdb
-certutil -N -d sql:/home/pentester/.pki/nssdb --empty-password
-certutil -A -n "Testing Root CA" -t "C,," -i /app/certs/ca.crt -d sql:/home/pentester/.pki/nssdb
+NSSDB="sql:/home/pentester/.pki/nssdb"
+if [ ! -f /home/pentester/.pki/nssdb/cert9.db ]; then
+    certutil -N -d "$NSSDB" --empty-password
+fi
+if ! certutil -L -d "$NSSDB" | grep -q "Testing Root CA"; then
+    certutil -A -n "Testing Root CA" -t "C,," -i /app/certs/ca.crt -d "$NSSDB"
+fi
 echo "✅ CA added to browser trust store"
 
 mkdir -p /workspace/.agent-browser-screenshots
