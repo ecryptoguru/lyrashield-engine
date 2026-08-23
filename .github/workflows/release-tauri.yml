@@ -20,69 +20,115 @@ permissions:
   contents: write
 
 jobs:
+  preflight:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+      LYRASHIELD_UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Verify release inputs and version
+        run: |
+          set -euo pipefail
+          for name in \
+            APPLE_CERTIFICATE_P12 APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
+            WINDOWS_CERTIFICATE_PFX WINDOWS_CERTIFICATE_PASSWORD GPG_PRIVATE_KEY GPG_PASSPHRASE \
+            TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+            LYRASHIELD_LICENSE_PUBKEY_HEX LYRASHIELD_UPDATER_PUBKEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Required release secret $name is missing"
+              exit 1
+            fi
+          done
+          python3 - <<'PY'
+          import json, os, pathlib, tomllib
+
+          engine = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
+          shell = json.loads(pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text())["version"]
+          ui = json.loads(pathlib.Path("desktop/ui/package.json").read_text())["version"]
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          if len({engine, shell, ui, tag}) != 1:
+              raise SystemExit(f"release version mismatch: engine={engine}, shell={shell}, ui={ui}, tag={tag}")
+          PY
+
   # ---------------------------------------------------------------------------
   # macOS — codesign + notarize + staple
   # ---------------------------------------------------------------------------
   release-macos:
-    runs-on: macos-latest
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            artifact: lyrashield-local-macos-aarch64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: lyrashield-local-macos-x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
 
       - name: Inject release public keys (fail-closed)
         env:
-          LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
-          UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${LICENSE_PUBKEY_HEX}" ] || [ "${LICENSE_PUBKEY_HEX}" = "0000000000000000000000000000000000000000000000000000000000000000" ]; then
-            echo "LYRASHIELD_LICENSE_PUBKEY_HEX is missing or still the zero placeholder." >&2
-            exit 1
-          fi
-          if [ -z "${UPDATER_PUBKEY}" ] || [ "${UPDATER_PUBKEY}" = "LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER" ]; then
-            echo "LYRASHIELD_UPDATER_PUBKEY is missing or still the placeholder." >&2
-            exit 1
-          fi
-          echo "LYRASHIELD_LICENSE_PUBKEY_HEX=$LICENSE_PUBKEY_HEX" >> "$GITHUB_ENV"
-          python3 - <<'PY'
-          import os, pathlib
-          p = pathlib.Path("desktop/src-tauri/tauri.conf.json")
-          text = p.read_text()
-          old = "LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER"
-          new = os.environ["UPDATER_PUBKEY"]
-          if old not in text:
-              raise SystemExit("updater pubkey placeholder not found in tauri.conf.json")
-          p.write_text(text.replace(old, new, 1))
-          PY
+          LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
+          LYRASHIELD_UPDATER_PUBKEY: ${{ secrets.LYRASHIELD_UPDATER_PUBKEY }}
+        run: bash scripts/inject-release-pubkeys.sh
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-22
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/ui/package-lock.json
 
       - name: Install UI dependencies
         working-directory: desktop/ui
-        run: npm ci || npm install
+        run: npm ci
 
-      - name: Build engine sidecar (universal, version-matched)
+      - name: Build engine sidecar (version-matched)
         run: |
           set -euo pipefail
           bash scripts/build.sh
-          ENGINE_VERSION="$(./dist/strix --version | tr -d '[:space:]')"
+          ENGINE_VERSION="$(./dist/strix --version | awk '{print $NF}' | tr -d '[:space:]')"
           if [ "v${ENGINE_VERSION}" != "${GITHUB_REF_NAME}" ]; then
             echo "engine sidecar version ${ENGINE_VERSION} does not match tag ${GITHUB_REF_NAME}" >&2
             exit 1
           fi
-          mv dist/strix /tmp/engine-arm64
-          arch -x86_64 bash scripts/build.sh
-          mv dist/strix /tmp/engine-x64
           mkdir -p desktop/src-tauri/binaries
-          lipo -create -output             desktop/src-tauri/binaries/lyrashield-engine-universal-apple-darwin             /tmp/engine-arm64 /tmp/engine-x64
-          chmod +x desktop/src-tauri/binaries/lyrashield-engine-universal-apple-darwin
+          cp dist/strix "desktop/src-tauri/binaries/lyrashield-engine-${{ matrix.target }}"
+          chmod +x "desktop/src-tauri/binaries/lyrashield-engine-${{ matrix.target }}"
 
       - name: Import Apple Developer certificate
         env:
@@ -99,67 +145,59 @@ jobs:
           security import "$CERT_FILE" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_FILE"
           security set-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
           security list-keychain -d user -s "$KEYCHAIN_FILE"
+          APPLE_SIGNING_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_FILE" | awk -F'"' 'NR == 1 { print $2 }')"
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "No usable Apple code-signing identity was imported." >&2
+            exit 1
+          fi
           echo "KEYCHAIN_FILE=$KEYCHAIN_FILE" >> "$GITHUB_ENV"
+          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
 
       - name: Build + codesign + notarize (Tauri)
-        working-directory: desktop/src-tauri
+        uses: tauri-apps/tauri-action@2d793bf2c8c505b9b76211601b09aab48922225d # v1.0.0
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Tauri's updater signing key (ed25519). The public key is baked into
-          # tauri.conf.json; the private key signs update artifacts.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
-        run: |
-          # Build the universal macOS binary via Tauri's bundler.
-          cargo tauri build --target universal-apple-darwin
+        with:
+          projectPath: desktop/src-tauri
+          args: --target ${{ matrix.target }}
 
-      - name: Deep codesign bundle
+      - name: Verify notarization staple
         run: |
           BUNDLE=$(find desktop/src-tauri/target -name "LyraShield Local.app" | head -1)
-          if [ -z "$BUNDLE" ]; then
-            echo "error: LyraShield Local.app not found" >&2
-            exit 1
-          fi
-          codesign --deep --force --options runtime --timestamp "$BUNDLE"
-
-      - name: Notarize + staple
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          BUNDLE=$(find desktop/src-tauri/target -name "LyraShield Local.app" | head -1)
-          ZIP=$(mktemp /tmp/lyrashield.XXXXXX.zip)
-          ditto -c -k --keepParent "$BUNDLE" "$ZIP"
-          xcrun notarytool submit "$ZIP" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait
-          xcrun stapler staple "$BUNDLE"
-          # Verify stapling — fail the build if not stapled.
+          test -n "$BUNDLE"
           xcrun stapler validate "$BUNDLE"
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: lyrashield-local-macos
+          name: ${{ matrix.artifact }}
           path: |
-            desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.dmg
-            desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.app
-            desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.app.tar.gz
-            desktop/src-tauri/target/universal-apple-darwin/release/bundle/**/*.app.tar.gz.sig
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz.sig
 
   # ---------------------------------------------------------------------------
   # Windows — Authenticode sign (EV cert for SmartScreen reputation)
   # ---------------------------------------------------------------------------
   release-windows:
+    needs: preflight
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
 
       - name: Inject release public keys (fail-closed)
         shell: bash
@@ -169,25 +207,27 @@ jobs:
         run: bash scripts/inject-release-pubkeys.sh
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-22
         with:
           targets: x86_64-pc-windows-msvc
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/ui/package-lock.json
 
       - name: Install UI dependencies
         working-directory: desktop/ui
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Build engine sidecar (version-matched)
         shell: bash
         run: |
           set -euo pipefail
           bash scripts/build.sh
-          ENGINE_VERSION="$(./dist/strix.exe --version | tr -d '[:space:]')"
+          ENGINE_VERSION="$(./dist/strix.exe --version | awk '{print $NF}' | tr -d '[:space:]')"
           if [ "v${ENGINE_VERSION}" != "${GITHUB_REF_NAME}" ]; then
             echo "engine sidecar version ${ENGINE_VERSION} does not match tag ${GITHUB_REF_NAME}" >&2
             exit 1
@@ -202,32 +242,45 @@ jobs:
         run: |
           $certPath = [System.IO.Path]::GetTempFileName() + ".pfx"
           [System.Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX) | Set-Content $certPath -AsByteStream
-          $env:CERT_PATH = $certPath
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $certificate = Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if (-not $certificate.HasPrivateKey) { throw "Imported Windows signing certificate has no private key." }
+          $config = @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $certificate.Thumbprint
+                digestAlgorithm = "sha256"
+                timestampUrl = "http://timestamp.digicert.com"
+              }
+            }
+          }
+          $config | ConvertTo-Json -Depth 4 | Set-Content desktop/src-tauri/tauri.windows.conf.json
           echo "CERT_PATH=$certPath" >> $env:GITHUB_ENV
 
       - name: Build (Tauri)
-        working-directory: desktop/src-tauri
+        uses: tauri-apps/tauri-action@2d793bf2c8c505b9b76211601b09aab48922225d # v1.0.0
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
-        run: cargo tauri build
+        with:
+          projectPath: desktop/src-tauri
+          args: --config tauri.windows.conf.json
 
-      - name: Sign Windows installers (signtool)
-        env:
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      - name: Verify Windows installer signatures
         run: |
           $msi = Get-ChildItem -Path desktop/src-tauri/target -Recurse -Filter "*.msi" | Select-Object -First 1
           $nsis = Get-ChildItem -Path desktop/src-tauri/target -Recurse -Filter "*.exe" | Where-Object { $_.Name -notmatch "LyraShield Local\.exe$" } | Select-Object -First 1
+          if (-not $msi -and -not $nsis) { throw "No Windows installer was built." }
           foreach ($f in @($msi, $nsis)) {
             if ($f) {
-              signtool sign /f $env:CERT_PATH /p $env:WINDOWS_CERTIFICATE_PASSWORD /fd SHA256 /td http://timestamp.digicert.com $f.FullName
               signtool verify /pa /v $f.FullName
+              if ($LASTEXITCODE -ne 0) { throw "Signature verification failed for $($f.FullName)." }
             }
           }
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lyrashield-local-windows
           path: |
@@ -240,9 +293,18 @@ jobs:
   # Linux — .AppImage + .deb, GPG-signed .AppImage
   # ---------------------------------------------------------------------------
   release-linux:
+    needs: preflight
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
 
       - name: Inject release public keys (fail-closed)
         env:
@@ -251,12 +313,14 @@ jobs:
         run: bash scripts/inject-release-pubkeys.sh
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-22
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/ui/package-lock.json
 
       - name: Install system dependencies
         run: |
@@ -265,13 +329,13 @@ jobs:
 
       - name: Install UI dependencies
         working-directory: desktop/ui
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Build engine sidecar (version-matched)
         run: |
           set -euo pipefail
           bash scripts/build.sh
-          ENGINE_VERSION="$(./dist/strix --version | tr -d '[:space:]')"
+          ENGINE_VERSION="$(./dist/strix --version | awk '{print $NF}' | tr -d '[:space:]')"
           if [ "v${ENGINE_VERSION}" != "${GITHUB_REF_NAME}" ]; then
             echo "engine sidecar version ${ENGINE_VERSION} does not match tag ${GITHUB_REF_NAME}" >&2
             exit 1
@@ -281,12 +345,13 @@ jobs:
           chmod +x desktop/src-tauri/binaries/lyrashield-engine-x86_64-unknown-linux-gnu
 
       - name: Build (Tauri)
-        working-directory: desktop/src-tauri
+        uses: tauri-apps/tauri-action@2d793bf2c8c505b9b76211601b09aab48922225d # v1.0.0
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           LYRASHIELD_LICENSE_PUBKEY_HEX: ${{ secrets.LYRASHIELD_LICENSE_PUBKEY_HEX }}
-        run: cargo tauri build
+        with:
+          projectPath: desktop/src-tauri
 
       - name: GPG-sign AppImage
         env:
@@ -295,13 +360,16 @@ jobs:
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           APPIMAGE=$(find desktop/src-tauri/target -name "*.AppImage" | head -1)
-          if [ -n "$APPIMAGE" ]; then
-            echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
-              --detach-sign --armor "$APPIMAGE"
+          if [ -z "$APPIMAGE" ]; then
+            echo "No AppImage was built." >&2
+            exit 1
           fi
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --detach-sign --armor --output "$APPIMAGE.sig" "$APPIMAGE"
+          gpg --verify "$APPIMAGE.sig" "$APPIMAGE"
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lyrashield-local-linux
           path: |
@@ -319,10 +387,12 @@ jobs:
     needs: [release-macos, release-windows, release-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           path: artifacts
 
@@ -335,19 +405,21 @@ jobs:
           import json, os, pathlib, sys, datetime, urllib.parse
 
           artifacts = pathlib.Path("artifacts")
-          files = sorted(artifacts.rglob("*"))
-          def find_one(pattern):
+          def find_one(artifact_dir, pattern):
+              files = sorted((artifacts / artifact_dir).rglob("*"))
               hits = [f for f in files if f.is_file() and f.name.endswith(pattern) and not f.name.endswith(".sig")]
               sigs = [f for f in files if f.is_file() and f.name.endswith(pattern + ".sig")]
               if not hits or not sigs:
                   return None
               return hits[0], sigs[0].read_text(encoding="utf-8").strip()
 
-          darwin = find_one(".app.tar.gz")
-          windows = find_one(".msi") or find_one("-setup.exe")
-          linux = find_one(".AppImage.tar.gz")
+          darwin_arm = find_one("lyrashield-local-macos-aarch64", ".app.tar.gz")
+          darwin_x64 = find_one("lyrashield-local-macos-x86_64", ".app.tar.gz")
+          windows = find_one("lyrashield-local-windows", ".msi") or find_one("lyrashield-local-windows", "-setup.exe")
+          linux = find_one("lyrashield-local-linux", ".AppImage.tar.gz")
           missing = [name for name, hit in
-                     (("darwin", darwin), ("windows", windows), ("linux", linux)) if hit is None]
+                     (("darwin-aarch64", darwin_arm), ("darwin-x86_64", darwin_x64),
+                      ("windows", windows), ("linux", linux)) if hit is None]
           if missing:
               sys.exit(f"updater manifest incomplete, missing artifacts/signatures: {missing}")
 
@@ -355,7 +427,7 @@ jobs:
           if not full_tag or full_tag.startswith("-"):
               sys.exit("GITHUB_REF_NAME is missing or invalid")
           tag = full_tag.lstrip("v")
-          base = "https://github.com/lyrashield/lyrashield-local/releases/download/" + full_tag
+          base = "https://github.com/ecryptoguru/lyrashield-engine/releases/download/" + full_tag
           def entry(pair):
               artifact, sig = pair
               return {"signature": sig, "url": base + "/" + urllib.parse.quote(artifact.name)}
@@ -365,8 +437,8 @@ jobs:
               "notes": "LyraShield Local release " + tag,
               "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "platforms": {
-                  "darwin-aarch64": entry(darwin),
-                  "darwin-x86_64": entry(darwin),
+                  "darwin-aarch64": entry(darwin_arm),
+                  "darwin-x86_64": entry(darwin_x64),
                   "windows-x86_64": entry(windows),
                   "linux-x86_64": entry(linux),
               },
@@ -376,8 +448,9 @@ jobs:
           PY
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          draft: false
           generate_release_notes: true
           files: |
             artifacts/**/*.dmg

@@ -38,7 +38,7 @@ pub struct UpdateInfo {
 /// The pinned update-channel origin. Must match the endpoint in
 /// `tauri.conf.json`. Updates from any other origin are refused.
 pub const PINNED_UPDATE_ORIGIN: &str =
-    "https://github.com/lyrashield/lyrashield-local/releases/latest/download/latest.json";
+    "https://github.com/ecryptoguru/lyrashield-engine/releases/latest/download/latest.json";
 
 /// Native eligibility immediately before an offer/download/install (I16):
 /// revoked, inactive, stale, or build-ineligible licenses fail closed. A
@@ -46,7 +46,8 @@ pub const PINNED_UPDATE_ORIGIN: &str =
 /// is offered or installed, otherwise a recently revoked license can still
 /// update using stale local state.
 async fn update_eligibility(now: u64, candidate_version: &str) -> Result<(), UpdaterError> {
-    let mut status = crate::license::status().map_err(|e| UpdaterError::NotEligible(e.to_string()))?;
+    let mut status =
+        crate::license::status().map_err(|e| UpdaterError::NotEligible(e.to_string()))?;
     if status.active && status.needs_revalidation {
         status = crate::license::revalidate_online()
             .await
@@ -162,5 +163,15 @@ mod tests {
     fn test_verify_origin_pinned() {
         assert!(verify_origin(PINNED_UPDATE_ORIGIN).is_ok());
         assert!(verify_origin("https://evil.example.com/update.json").is_err());
+    }
+
+    #[test]
+    fn config_uses_pinned_origin() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(
+            config["plugins"]["updater"]["endpoints"][0],
+            PINNED_UPDATE_ORIGIN
+        );
     }
 }

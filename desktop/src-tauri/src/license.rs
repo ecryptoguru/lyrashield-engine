@@ -91,7 +91,7 @@ pub fn activate(blob_b64: &str, license_id: &str) -> Result<LicenseInfo, License
     let payload = lyrashield_desktop_logic::license::verify_and_check_revoked(
         blob_b64,
         license_id,
-        &bundled_pubkey_hex(),
+        bundled_pubkey_hex(),
         &bundled_revocation_list(),
     )?;
     let this_machine = machine_id()?;
@@ -251,7 +251,11 @@ pub async fn revalidate_online() -> Result<LicenseStatus, LicenseError> {
         return status();
     }
     if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        let _ = keychain::set(keychain::SERVICE, LAST_VALIDATED_KEY, &now.as_secs().to_string());
+        let _ = keychain::set(
+            keychain::SERVICE,
+            LAST_VALIDATED_KEY,
+            &now.as_secs().to_string(),
+        );
     }
     status()
 }
@@ -273,8 +277,13 @@ pub async fn authorize_scan() -> Result<LicenseInfo, LicenseError> {
     if current.needs_revalidation {
         current = revalidate_online().await?;
     }
-    admission_decision(current.active, &current.message, last_validated_stamp(), unix_now())
-        .map_err(LicenseError::InvalidPayload)?;
+    admission_decision(
+        current.active,
+        &current.message,
+        last_validated_stamp(),
+        unix_now(),
+    )
+    .map_err(LicenseError::InvalidPayload)?;
     let info = current
         .info
         .ok_or_else(|| LicenseError::InvalidPayload("license state incomplete".into()))?;
@@ -293,7 +302,9 @@ pub async fn authorize_scan() -> Result<LicenseInfo, LicenseError> {
 /// until `OFFLINE_GRACE_SECS` elapses.
 pub async fn activate_online(license_key: &str) -> Result<LicenseInfo, LicenseError> {
     if license_key.is_empty() {
-        return Err(LicenseError::ActivationRefused("license key is required".into()));
+        return Err(LicenseError::ActivationRefused(
+            "license key is required".into(),
+        ));
     }
     let machine = machine_id()?;
     let api_base =
@@ -334,10 +345,7 @@ pub async fn activate_online(license_key: &str) -> Result<LicenseInfo, LicenseEr
         .get("blob")
         .and_then(|v| v.as_str())
         .ok_or_else(|| LicenseError::ActivationRefused("missing blob".into()))?;
-    let license_id = data
-        .get("licenseId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let license_id = data.get("licenseId").and_then(|v| v.as_str()).unwrap_or("");
 
     activate(blob, license_id)
 }

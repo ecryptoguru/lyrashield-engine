@@ -6,7 +6,10 @@
 //! environment variables, and is owned by one supervisor: `stop_scan` kills
 //! and awaits the exact owned child before reporting the stop.
 
-pub use lyrashield_desktop_logic::scan_modes::{engine_scan_mode, provider_env, Provider, ProviderRoute};
+use crate::keychain;
+pub use lyrashield_desktop_logic::scan_modes::{
+    engine_scan_mode, provider_env, Provider, ProviderRoute,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -15,7 +18,6 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::oneshot;
-use crate::keychain;
 
 #[derive(Debug, Default)]
 pub struct ScanState {
@@ -49,7 +51,9 @@ fn chatgpt_auth_path() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default();
-    PathBuf::from(home).join(".strix").join("subscription-auth.json")
+    PathBuf::from(home)
+        .join(".strix")
+        .join("subscription-auth.json")
 }
 
 /// Resolve the engine executable (I18).

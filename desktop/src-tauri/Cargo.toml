@@ -1,6 +1,6 @@
 [package]
 name = "lyrashield-local"
-version = "1.2.0"
+version = "1.2.1"
 description = "LyraShield Local — desktop shell for the LyraShield engine"
 authors = ["LyraShield"]
 license = "Apache-2.0"

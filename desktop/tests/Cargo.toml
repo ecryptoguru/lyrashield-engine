@@ -7,7 +7,7 @@
 # works without a Tauri context.
 [package]
 name = "lyrashield-local-tests"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 publish = false
 

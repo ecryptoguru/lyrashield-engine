@@ -8,7 +8,6 @@
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
-
 use lyrashield_desktop_logic::scan_modes::is_valid_azure_endpoint;
 use lyrashield_local_lib::scan::Provider;
 use lyrashield_local_lib::{docker_detect, keychain, license, scan, sync, updater};
@@ -86,11 +85,7 @@ async fn doctor_run() -> Result<docker_detect::DoctorReport, String> {
 /// BYOK provider secrets (`chatgpt-oauth-token`, `azure-openai-api-key`)
 /// are write-only from the UI and are only read by the native side during
 /// scan spawn.
-const ALLOWED_KEYCHAIN_KEYS: &[&str] = &[
-    "license-id",
-    "license-last-validated",
-    "machine-id",
-];
+const ALLOWED_KEYCHAIN_KEYS: &[&str] = &["license-id", "license-last-validated", "machine-id"];
 
 fn check_keychain_key(key: &str) -> Result<(), String> {
     if ALLOWED_KEYCHAIN_KEYS.contains(&key) {
@@ -122,9 +117,7 @@ async fn byok_save(
                 return Err("Azure BYOK requires a deployment name".into());
             }
             if !is_valid_azure_endpoint(&config.azure_endpoint) {
-                return Err(
-                    "Azure BYOK endpoint must be an HTTPS `.openai.azure.com` URL".into(),
-                );
+                return Err("Azure BYOK endpoint must be an HTTPS `.openai.azure.com` URL".into());
             }
             if let Some(key) = azure_key {
                 if !key.trim().is_empty() {
@@ -165,9 +158,7 @@ async fn byok_config(app: tauri::AppHandle) -> Result<ByokConfig, String> {
 }
 
 #[tauri::command]
-async fn license_activate(
-    license_key: String,
-) -> Result<license::LicenseInfo, String> {
+async fn license_activate(license_key: String) -> Result<license::LicenseInfo, String> {
     license::activate_online(&license_key)
         .await
         .map_err(|e| e.to_string())
@@ -185,7 +176,9 @@ async fn license_activate_blob(
 async fn license_status() -> Result<license::LicenseStatus, String> {
     let local = license::status().map_err(|e| e.to_string())?;
     if local.message.contains("revalidation due") {
-        return license::revalidate_online().await.map_err(|e| e.to_string());
+        return license::revalidate_online()
+            .await
+            .map_err(|e| e.to_string());
     }
     Ok(local)
 }
@@ -204,7 +197,9 @@ async fn sync_status() -> Result<sync::SyncState, String> {
 /// downloader permission of its own.
 #[tauri::command]
 async fn updater_check(app: tauri::AppHandle) -> Result<updater::UpdateInfo, String> {
-    updater::check_with_eligibility(&app).await.map_err(|e| e.to_string())
+    updater::check_with_eligibility(&app)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Download + install an update through the Tauri updater plugin. The

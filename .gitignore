@@ -101,6 +101,5 @@ desktop/logic/target/
 desktop/logic/Cargo.lock
 desktop/ui/node_modules/
 desktop/ui/dist/
-desktop/ui/package-lock.json
 desktop/tests/target/
 .worktrees/
