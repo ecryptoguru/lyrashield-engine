@@ -1058,9 +1058,9 @@ opentelemetry-sdk==1.25.0 \
     # via
     #   opentelemetry-exporter-otlp-proto-http
     #   semgrep
-opentelemetry-semantic-conventions==0.46b0 \
-    --hash=sha256:6daef4ef9fa51d51855d9f8e0ccd3a1bd59e0e545abe99ac6203804e36ab3e07 \
-    --hash=sha256:fbc982ecbb6a6e90869b15c1673be90bd18c8a56ff1cffc0864e38e2edffaefa
+opentelemetry-semantic-conventions==0.65b0 \
+    --hash=sha256:1cacde7b0ad306f84c5ef08c3dbe1bbaf20165bba6f8bff43b670e555a086bcb \
+    --hash=sha256:f9b2b81e9d5b64f11bc952075e7e9c7fb0aab075c7fd1c46d597f1b919852d60
     # via
     #   opentelemetry-instrumentation-requests
     #   opentelemetry-sdk
