@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LyraShield Local",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "identifier": "dev.lyrashield.local",
   "build": {
     "frontendDist": "../ui/dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm --prefix ui run dev",
+    "beforeBuildCommand": "npm --prefix ui run build"
   },
   "app": {
     "windows": [
@@ -50,7 +50,7 @@
     "updater": {
       "pubkey": "LYRASHIELD_UPDATER_ED25519_PUBKEY_PLACEHOLDER",
       "endpoints": [
-        "https://github.com/lyrashield/lyrashield-local/releases/latest/download/latest.json"
+        "https://github.com/ecryptoguru/lyrashield-ai/releases/latest/download/latest.json"
       ],
       "dialog": true,
       "windows": {

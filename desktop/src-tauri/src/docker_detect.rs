@@ -76,7 +76,9 @@ fn probe_tcp_host(host: &str) -> bool {
         .or_else(|| host.strip_prefix("http://"))
         .unwrap_or(host);
     TcpStream::connect_timeout(
-        &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+        &addr
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
         Duration::from_secs(2),
     )
     .is_ok()
