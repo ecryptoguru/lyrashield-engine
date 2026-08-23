@@ -38,9 +38,13 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "LyraShield Local — local security scanning",
+    "shortDescription": "LyraShield Local \u2014 local security scanning",
     "longDescription": "LyraShield Local is a desktop app that runs the LyraShield engine locally with your own AI keys. Bring your own ChatGPT subscription or Azure OpenAI deployment.",
-    "publisher": "LyraShield"
+    "publisher": "LyraShield",
+    "createUpdaterArtifacts": true,
+    "resources": [
+      "binaries/*"
+    ]
   },
   "plugins": {
     "updater": {

@@ -1,0 +1,15 @@
+# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
+[package]
+name = "lyrashield-desktop-logic"
+version = "1.2.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }
+hex = "0.4"
+keyring = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

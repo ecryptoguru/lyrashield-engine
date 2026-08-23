@@ -28,16 +28,19 @@ export default function App() {
         setProgress((prev) => [...prev, `[${e.payload.stream}] ${e.payload.line}`]);
       }
     );
-    const unlistenDone = listen<{ run_id: string; success: boolean }>(
-      "scan-done",
-      (e) => {
-        setRunning(false);
-        setFindings((prev) => [
-          ...prev,
-          `Scan ${e.payload.success ? "completed" : "failed"} (run ${e.payload.run_id}).`,
-        ]);
-      }
-    );
+    const unlistenDone = listen<{
+      run_id: string;
+      success: boolean;
+      cancelled: boolean;
+    }>("scan-done", (e) => {
+      setRunning(false);
+      setFindings((prev) => [
+        ...prev,
+        e.payload.cancelled
+          ? `Scan cancelled (run ${e.payload.run_id}).`
+          : `Scan ${e.payload.success ? "completed" : "failed"} (run ${e.payload.run_id}).`,
+      ]);
+    });
     const unlistenDoctor = listen<{ runtime_ok: boolean; remediation: string }>(
       "doctor-report",
       (e) => {
@@ -120,7 +123,7 @@ export default function App() {
           <div className="panel">
             <h2>2. Pick a scan mode (all depths available locally)</h2>
             <select value={scanMode} onChange={(e) => setScanMode(e.target.value)}>
-              {["SAFE", "QUICK", "STANDARD", "DEEP", "CUSTOM"].map((m) => (
+              {["QUICK", "STANDARD", "DEEP"].map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
