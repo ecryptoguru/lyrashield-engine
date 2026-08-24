@@ -11,7 +11,7 @@ help:
 	@echo "  format-check  - Check code formatting with ruff"
 	@echo "  lint          - Lint code with ruff"
 	@echo "  lint-check    - Check code with ruff (no auto-fix)"
-	@echo "  type-check    - Run type checking with mypy and pyright"
+	@echo "  type-check    - Run type checking with mypy"
 	@echo "  security      - Run security checks with bandit"
 	@echo "  check-all     - Run all code quality checks"
 	@echo ""
