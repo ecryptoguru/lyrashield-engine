@@ -1,10 +1,21 @@
 ---
-title: "AWS Bedrock (unsupported upstream reference)"
-description: "Not supported by LyraShield Engine"
+title: "AWS Bedrock"
+description: "GPT-5.6 Terra and Luna through Bedrock Mantle only"
 ---
 
 <Warning>
-AWS Bedrock is not supported by LyraShield Engine. The optional upstream dependency and provider code are outside the LyraShield production contract. Use only an approved GPT-5.6 Terra or Luna deployment through the documented OpenAI/Azure-compatible boundary.
+Standard AWS Bedrock routes are not supported by LyraShield Engine. The only
+supported Bedrock provider is `bedrock_mantle`, and its route must identify an
+approved GPT-5.6 Terra or Luna deployment. All other Bedrock models and provider
+markers remain outside the LyraShield production contract.
 </Warning>
 
-Do not install upstream provider extras or forward AWS credentials to the engine worker.
+Example:
+
+```bash
+export LYRASHIELD_LLM="bedrock_mantle/openai.gpt-5.6-luna"
+```
+
+Do not use the `bedrock` provider marker. Provide only credentials required by
+the approved `bedrock_mantle` deployment; never forward unrelated AWS
+credentials to the engine worker.
