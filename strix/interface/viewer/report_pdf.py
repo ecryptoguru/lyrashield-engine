@@ -88,7 +88,11 @@ class _NumberedCanvas(pdfcanvas.Canvas):  # type: ignore[misc]  # reportlab base
 
     def showPage(self) -> None:  # noqa: N802 - reportlab API
         self._saved_states.append(dict(self.__dict__))
-        self._startPage()
+        start_page = getattr(self, "_startPage", None)
+        if not callable(start_page):
+            msg = "reportlab Canvas no longer exposes _startPage"
+            raise TypeError(msg)
+        start_page()
 
     def save(self) -> None:
         total = len(self._saved_states)

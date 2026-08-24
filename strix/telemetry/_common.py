@@ -5,7 +5,7 @@ import platform
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 
@@ -19,7 +19,21 @@ SESSION_ID: str = uuid4().hex[:16]
 # still feels immediate.
 SEND_TIMEOUT: tuple[float, float] = (2.0, 3.0)
 
-_FIRST_RUN_CACHED: bool | None = None
+_first_run_cached: bool | None = None
+
+
+class TelemetryReportState(Protocol):
+    """Report data consumed by telemetry without importing report state."""
+
+    posthog_scan_ended_sent: bool
+    scarf_scan_ended_sent: bool
+    scan_ended_exit_reason: str | None
+    vulnerability_reports: list[dict[str, Any]]
+    start_time: str
+    end_time: str | None
+    run_record: dict[str, Any]
+
+    def get_total_llm_usage(self) -> dict[str, Any]: ...
 
 
 def get_version() -> str:
@@ -31,19 +45,19 @@ def get_version() -> str:
 
 
 def is_first_run() -> bool:
-    global _FIRST_RUN_CACHED  # noqa: PLW0603
-    if _FIRST_RUN_CACHED is not None:
-        return _FIRST_RUN_CACHED
+    global _first_run_cached  # noqa: PLW0603
+    if _first_run_cached is not None:
+        return _first_run_cached
     marker = Path.home() / ".strix" / ".seen"
     if marker.exists():
-        _FIRST_RUN_CACHED = False
+        _first_run_cached = False
         return False
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
     except Exception:  # noqa: BLE001, S110
         pass  # nosec B110
-    _FIRST_RUN_CACHED = True
+    _first_run_cached = True
     return True
 
 
