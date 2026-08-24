@@ -10,9 +10,9 @@ The root [CONTRIBUTING.md](https://github.com/ecryptoguru/lyrashield-engine/blob
 1. Branch from current `main`; never push directly to `main`.
 2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.
 3. Put LyraShield model, budget, lifecycle, identity, evidence, and artifact behavior behind explicit reviewed boundaries in `lyrashield/**`.
-4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The current hard allowlist contains only `strix/config/loader.py` and `strix/skills/__init__.py`. Preserve the LyraShield modification banner on those files.
+4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The hard allowlist contains the two product seams plus the twelve typing/import-cycle compatibility fixes recorded in `UPGRADES.md`, and the gate pins the complete Strix patch digest.
 5. Add tests and update `NOTICE`, `UPGRADES.md`, and operator docs when the contract changes.
-6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate diffs `strix/**` against the pinned v1.5.3 base and fails on any path outside the two-file allowlist, more than 30 insertions, or any deletion. It also runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit, package and binary smoke, sandbox smoke, and the public worker contract.
+6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate diffs `strix/**` against the pinned v1.5.3 base and fails on an unlisted path, footprint growth beyond the reviewed +151/-57 lines, or any change to the pinned complete-patch digest. It also runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit, package and binary smoke, sandbox smoke, and the public worker contract.
 7. Require human approval and green Engine CI.
 
 <Warning>

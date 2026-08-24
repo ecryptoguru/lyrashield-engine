@@ -434,6 +434,12 @@ class ReportState:
         self._saved_vuln_ids: set[str] = set()
         self._save_seq = 0
         self._turn_count = 0
+        # Finding/report projections are much larger than run.json and do not
+        # change on an LLM usage update. Write them once per content change;
+        # run.json still persists every usage/cost update for billing safety.
+        self._report_artifacts_revision = 0
+        self._persisted_report_artifacts_revision = -1
+        self._report_artifacts_lock = threading.RLock()
         self.receipt_persisted: bool = True
 
         self.caido_url: str | None = None
@@ -483,6 +489,7 @@ class ReportState:
         run_dir = self.get_run_dir()
 
         data = read_run_record(run_dir)
+        persisted_report_revision: int | None = None
         if data:
             self.run_record.update(data)
             if isinstance(data.get("start_time"), str):
@@ -499,6 +506,9 @@ class ReportState:
             self._turn_count = max(self._turn_count, _int_or_zero(data.get("turn_count")))
             self.run_record["seq"] = self._save_seq
             self.run_record["turn_count"] = self._turn_count
+            revision = data.get("report_artifacts_revision")
+            if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0:
+                persisted_report_revision = revision
             logger.info("report state hydrated run.json from %s", run_dir)
 
         json_path = run_dir / "vulnerabilities.json"
@@ -526,6 +536,14 @@ class ReportState:
                 "report state hydrated %d vulnerability report(s)",
                 len(self.vulnerability_reports),
             )
+
+        if data and json_path.exists():
+            # Legacy records predate the durable revision and are revision 0.
+            # Both counters must agree so usage-only resume saves do not rewrite
+            # unchanged report projections.
+            restored_revision = persisted_report_revision or 0
+            self._report_artifacts_revision = restored_revision
+            self._persisted_report_artifacts_revision = restored_revision
 
     def add_vulnerability_report(
         self,
@@ -626,6 +644,7 @@ class ReportState:
             report["agent_name"] = agent_name
 
         self.vulnerability_reports.append(report)
+        self._report_artifacts_revision += 1
         logger.info(f"Added vulnerability report: {report_id} - {title}")
         posthog.finding(severity, cwe=cwe, is_cve=bool(cve))
         scarf.finding(severity, cwe=cwe, is_cve=bool(cve))
@@ -810,6 +829,7 @@ class ReportState:
         self.final_scan_result = self._format_final_scan_result(self.scan_results)
         self.run_record["scan_results"] = self.scan_results
         self.run_record.pop("terminal_reason", None)
+        self._report_artifacts_revision += 1
 
         logger.info("Updated scan final fields")
         self._set_phase("finalizing")
@@ -844,6 +864,7 @@ class ReportState:
         self._raw_local_sources = [
             dict(s) for s in config.get("local_sources", []) if isinstance(s, dict)
         ]
+        self._report_artifacts_revision += 1
         instruction = str(config.get("user_instructions") or "")
         self.run_record.update(
             {
@@ -863,6 +884,10 @@ class ReportState:
         self._set_phase("running")
 
     def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> bool:
+        with self._report_artifacts_lock:
+            return self._save_run_data_locked(mark_complete=mark_complete, status=status)
+
+    def _save_run_data_locked(self, mark_complete: bool = False, status: str | None = None) -> bool:
         """Persist scan artifacts and return whether all required writes
         succeeded.
 
@@ -984,44 +1009,59 @@ class ReportState:
         run_dir = self.get_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        # One immutable sanitized snapshot feeds every durable/public
-        # projection; the raw in-memory reports never reach disk.
-        include_internal_paths = not self._is_whitebox
-        snapshot = [
-            sanitize_finding(report, include_internal_paths=include_internal_paths)
-            for report in self.vulnerability_reports
-        ]
+        report_artifacts_revision = self._report_artifacts_revision
+        write_report_artifacts = (
+            self._persisted_report_artifacts_revision != report_artifacts_revision
+        )
+        report_artifacts_persisted = not write_report_artifacts
+        if write_report_artifacts:
+            # One immutable sanitized snapshot feeds every durable/public
+            # projection; the raw in-memory reports never reach disk.
+            include_internal_paths = not self._is_whitebox
+            snapshot = [
+                sanitize_finding(report, include_internal_paths=include_internal_paths)
+                for report in self.vulnerability_reports
+            ]
 
-        # Each artifact is isolated so a failure in one cannot skip the others;
-        # run.json is the billing/cost receipt and is written last.
-        if self.final_scan_result:
+            # Each artifact is isolated so a failure in one cannot skip the others;
+            # run.json is the billing/cost receipt and is written last.
+            optional_artifacts_persisted = True
+            if self.final_scan_result:
+                try:
+                    write_executive_report(run_dir, self.final_scan_result)
+                except (OSError, RuntimeError):
+                    optional_artifacts_persisted = False
+                    logger.exception("Executive report write failed (non-fatal)")
+
+            # The worker must distinguish a clean scan from missing output. Always
+            # write this artifact after a content change, including for a valid
+            # zero-finding result. Failure makes the whole save fail.
             try:
-                write_executive_report(run_dir, self.final_scan_result)
+                write_vulnerabilities(run_dir, snapshot, self._saved_vuln_ids)
             except (OSError, RuntimeError):
-                logger.exception("Executive report write failed (non-fatal)")
+                logger.exception("Vulnerabilities artifact write failed (required)")
+                self.receipt_persisted = False
+                self.run_record["receipt_persisted"] = False
+                return False
 
-        # The worker must distinguish a clean scan from missing output. Always
-        # write this artifact, including for a valid zero-finding result.
-        # This is a required artifact: failure makes the whole save fail.
-        try:
-            write_vulnerabilities(run_dir, snapshot, self._saved_vuln_ids)
-        except (OSError, RuntimeError):
-            logger.exception("Vulnerabilities artifact write failed (required)")
-            self.receipt_persisted = False
-            self.run_record["receipt_persisted"] = False
-            return False
+            # SARIF is an integration artifact; it must not hide a successful core
+            # receipt when an optional formatter has a problem.
+            try:
+                write_sarif(
+                    run_dir,
+                    snapshot,
+                    tool_version=_strix_version(),
+                    repository_context=self._sarif_repository_context(),
+                )
+            except Exception:
+                optional_artifacts_persisted = False
+                logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
+            report_artifacts_persisted = optional_artifacts_persisted
 
-        # SARIF is an integration artifact; it must not hide a successful core
-        # receipt when an optional formatter has a problem.
-        try:
-            write_sarif(
-                run_dir,
-                snapshot,
-                tool_version=_strix_version(),
-                repository_context=self._sarif_repository_context(),
-            )
-        except Exception:
-            logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
+        persisted_report_revision = self._persisted_report_artifacts_revision
+        if report_artifacts_persisted:
+            persisted_report_revision = report_artifacts_revision
+        self.run_record["report_artifacts_revision"] = persisted_report_revision
 
         try:
             # Validate the full worker contract before any write: the first
@@ -1047,14 +1087,19 @@ class ReportState:
         # the public run.json intentionally redacts (comment #5). This is
         # non-fatal to the receipt; a missing resume file can still be recovered
         # from the public record (resume will just lose host paths).
-        try:
-            write_resume_record(
-                run_dir,
-                targets_info=self._raw_targets_info,
-                local_sources=self._raw_local_sources,
-            )
-        except (OSError, RuntimeError):
-            logger.exception("Resume record write failed (non-fatal)")
+        if write_report_artifacts:
+            try:
+                write_resume_record(
+                    run_dir,
+                    targets_info=self._raw_targets_info,
+                    local_sources=self._raw_local_sources,
+                )
+            except (OSError, RuntimeError):
+                report_artifacts_persisted = False
+                logger.exception("Resume record write failed (non-fatal)")
+
+        if report_artifacts_persisted:
+            self._persisted_report_artifacts_revision = persisted_report_revision
 
         logger.info("Essential scan data saved to: %s", run_dir)
         return True

@@ -71,8 +71,9 @@ def _to_tool_json(value: Any) -> Any:
         return value.isoformat()
     if is_dataclass(value) and not isinstance(value, type):
         return {k: _to_tool_json(v) for k, v in dataclasses.asdict(value).items()}
-    if hasattr(value, "model_dump"):
-        return _to_tool_json(value.model_dump())
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _to_tool_json(model_dump())
     if isinstance(value, dict):
         return {str(k): _to_tool_json(v) for k, v in value.items()}
     if isinstance(value, list | tuple | set):

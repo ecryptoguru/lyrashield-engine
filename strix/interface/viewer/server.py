@@ -27,7 +27,17 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from strix.core.paths import run_record_path
-from strix.interface.viewer import auth
+from strix.interface.viewer.auth import (
+    RelayError,
+    feedback_submit,
+    forget,
+    is_verified,
+    otp_start,
+    otp_verify,
+    read_auth,
+    report_send,
+    write_auth,
+)
 from strix.interface.viewer.transcript import (
     build_run_state,
     primary_target,
@@ -240,7 +250,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             # verified, so merely reaching an exposed --host port never leaks the
             # run list (the payload still advertises the count as a teaser).
             if path == "/api/runs":
-                unlocked = self._has_session() and auth.is_verified()
+                unlocked = self._has_session() and is_verified()
                 payload = build_runs_payload(state.base_dir, verified=unlocked)
                 self._send_json(HTTPStatus.OK, payload)
                 return
@@ -269,7 +279,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 if not self._has_session():
                     self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
                     return
-                if not auth.is_verified():
+                if not is_verified():
                     self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unverified"})
                     return
 
@@ -294,11 +304,11 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             if not self._has_session():
                 self._send_json(HTTPStatus.OK, {"verified": False, "email": None})
                 return
-            record = auth.read_auth()
+            record = read_auth()
             self._send_json(
                 HTTPStatus.OK,
                 {
-                    "verified": auth.is_verified(),
+                    "verified": is_verified(),
                     "email": record.get("email") if record else None,
                 },
             )
@@ -312,8 +322,8 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_email"})
                 return
             try:
-                auth.otp_start(email)
-            except auth.RelayError as exc:
+                otp_start(email)
+            except RelayError as exc:
                 self._send_relay_error(exc)
                 return
             self._send_json(HTTPStatus.OK, {"ok": True})
@@ -329,11 +339,11 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_code"})
                 return
             try:
-                result = auth.otp_verify(email, code)
-            except auth.RelayError as exc:
+                result = otp_verify(email, code)
+            except RelayError as exc:
                 self._send_relay_error(exc)
                 return
-            auth.write_auth(
+            write_auth(
                 email=result.get("email") or email,
                 token=result["token"],
                 verified_at=result.get("expires_at") or "",
@@ -348,14 +358,14 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             if not self._has_session():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
                 return
-            auth.forget()
+            forget()
             self._send_json(HTTPStatus.OK, {"ok": True})
 
         def _handle_report_send(self) -> None:
             if not self._has_session():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
                 return
-            record = auth.read_auth()
+            record = read_auth()
             if record is None:
                 self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unverified"})
                 return
@@ -381,8 +391,8 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             try:
                 # The password is intentionally NOT passed here; only the
                 # encrypted PDF bytes reach the relay.
-                auth.report_send(record["token"], pdf_bytes, filename, run_name, target)
-            except auth.RelayError as exc:
+                report_send(record["token"], pdf_bytes, filename, run_name, target)
+            except RelayError as exc:
                 self._send_relay_error(exc)
                 return
             # The password is returned only to the local (127.0.0.1) browser.
@@ -411,8 +421,8 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 return
             message = message[: self._FEEDBACK_MESSAGE_MAX]
             try:
-                auth.feedback_submit(email, message)
-            except auth.RelayError as exc:
+                feedback_submit(email, message)
+            except RelayError as exc:
                 self._send_relay_error(exc)
                 return
             # Server-authoritative: fire only after a successful relay (respects
@@ -452,7 +462,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             else:
                 self._send_json(HTTPStatus.OK, {"ok": False, "error": "not_delivered"})
 
-        def _send_relay_error(self, exc: auth.RelayError) -> None:
+        def _send_relay_error(self, exc: RelayError) -> None:
             status_by_code = {
                 "rate_limited": HTTPStatus.TOO_MANY_REQUESTS,
                 "invalid_email": HTTPStatus.BAD_REQUEST,

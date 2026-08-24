@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Verify the controlled-derivative invariants:
 # - pinned upstream base exists and is fetchable
-# - the working strix/** tree differs only at the two reviewed generic seams
+# - the working strix/** tree differs only at the reviewed generic seams
 # - added, deleted, renamed, copied, or otherwise changed upstream files fail
 # - the micro-fork footprint is a hard invariant
 # - lint, format, tests, types, and security checks pass
@@ -43,7 +43,19 @@ fi
 
 ALLOWED_MODIFIED=(
   "strix/config/loader.py"
+  "strix/config/models.py"
+  "strix/interface/auth_cli.py"
+  "strix/interface/viewer/__init__.py"
+  "strix/interface/viewer/report_pdf.py"
+  "strix/interface/viewer/server.py"
+  "strix/interface/viewer/transcript.py"
   "strix/skills/__init__.py"
+  "strix/telemetry/_common.py"
+  "strix/telemetry/posthog.py"
+  "strix/telemetry/scarf.py"
+  "strix/tools/agents_graph/tools.py"
+  "strix/tools/proxy/caido_api.py"
+  "strix/tools/proxy/tools.py"
 )
 unexpected=()
 
@@ -64,11 +76,12 @@ if [[ ${#unexpected[@]} -gt 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Hard footprint invariant for the v1.5.3 micro-fork.
+# Hard footprint and exact-patch invariants for the v1.5.3 micro-fork.
 # ---------------------------------------------------------------------------
-MAX_FILES=2
-MAX_INSERTIONS=30
-MAX_DELETIONS=0
+MAX_FILES=14
+MAX_INSERTIONS=151
+MAX_DELETIONS=57
+EXPECTED_PATCH_OID="fafe7c8e0a7f58c4c10e5619a6579880cf1457c4"
 
 # git diff --shortstat prints a single line like:
 #   " 4 files changed, 76 insertions(+), 720 deletions(-)"
@@ -94,6 +107,12 @@ if (( FP_DELETIONS > MAX_DELETIONS )); then
   footprint_failed=true
 fi
 if [[ "$footprint_failed" == true ]]; then
+  exit 1
+fi
+
+ACTUAL_PATCH_OID=$(git diff --no-ext-diff --binary "$BASE" -- strix/ | git hash-object --stdin)
+if [[ "$ACTUAL_PATCH_OID" != "$EXPECTED_PATCH_OID" ]]; then
+  echo "error: reviewed Strix patch digest changed: expected $EXPECTED_PATCH_OID, got $ACTUAL_PATCH_OID" >&2
   exit 1
 fi
 

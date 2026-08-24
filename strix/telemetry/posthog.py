@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import requests
 
@@ -8,13 +8,10 @@ from strix.config import load_settings
 from strix.telemetry._common import (
     SEND_TIMEOUT,
     SESSION_ID,
+    TelemetryReportState,
     base_props,
     is_first_run,
 )
-
-
-if TYPE_CHECKING:
-    from strix.report.state import ReportState
 
 
 logger = logging.getLogger(__name__)
@@ -93,7 +90,7 @@ def skill_loaded(skill_name: str) -> None:
     )
 
 
-def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
+def end(report_state: TelemetryReportState, exit_reason: str = "completed") -> None:
     if report_state.posthog_scan_ended_sent:
         return
     if report_state.scan_ended_exit_reason is None:
