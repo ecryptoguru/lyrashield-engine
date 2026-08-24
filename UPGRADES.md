@@ -12,15 +12,31 @@ upstream tree. Preserve this reviewed boundary while syncing releases.
 > in `lyrashield/**` and `lyrashield_adapter/**`. Only two generic fixes remain:
 > `strix/config/loader.py` provides the settings-loader composition seam and
 > `strix/skills/__init__.py` avoids starting telemetry threads when telemetry is
-> disabled. The agent factory and prompt renderer now remain exact upstream;
-> product callers use their LyraShield implementations directly. The verification
-> gate checks staged and unstaged files, enforces this exact two-file allowlist,
-> and fails when the +30/-0 line ceiling is exceeded.
+> disabled. A reviewed 2026-08-24 compatibility patch also corrects upstream
+> typing and import cycles without changing model policy. The verification gate
+> checks staged and unstaged files, enforces the exact 14-file allowlist and
+> +151/-57 footprint, and pins the complete patch-object digest.
 >
 > **Historical note.** Deep Review v12 introduced a warning-only footprint
 > budget when product behavior still lived throughout `strix/**`. The v1.5.3
-> product-outside-Strix migration superseded it with the hard two-file,
-> +30/-0 gate above. The larger v1.4.1-era measurements below remain only as an
+> audit trail and are not the current contribution policy.
+> product-outside-Strix migration superseded it with a hard reviewed-patch gate.
+> The larger v1.4.1-era measurements below remain only as an audit trail and are
+> not the current contribution policy.
+
+## Upstream typing and import-cycle compatibility (2026-08-24)
+
+Repository-wide Pyright exposed 18 errors in the pinned v1.5.3 substrate. The
+reviewed compatibility patch fixes those errors at source: exact handler and
+async callable types, safe optional-callable access, typed Caido overloads, and
+lazy viewer/telemetry imports that remove cycles. It does not change model
+routing, budgets, provider selection, scan behavior, or public claims.
+
+The controlled-derivative gate now allows exactly 14 modified Strix files (the
+two existing integration seams plus these twelve compatibility files), enforces
+the reviewed +151/-57 footprint, and requires patch object
+`fafe7c8e0a7f58c4c10e5619a6579880cf1457c4`. Any byte-level change requires an
+explicit review and digest update.
 > audit trail and are not the current contribution policy.
 
 ## Upgrade to v1.5.3 product-outside-strix (2026-08-11)
