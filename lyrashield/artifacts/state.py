@@ -439,6 +439,7 @@ class ReportState:
         # run.json still persists every usage/cost update for billing safety.
         self._report_artifacts_revision = 0
         self._persisted_report_artifacts_revision = -1
+        self._report_artifacts_lock = threading.RLock()
         self.receipt_persisted: bool = True
 
         self.caido_url: str | None = None
@@ -488,6 +489,7 @@ class ReportState:
         run_dir = self.get_run_dir()
 
         data = read_run_record(run_dir)
+        persisted_report_revision: int | None = None
         if data:
             self.run_record.update(data)
             if isinstance(data.get("start_time"), str):
@@ -504,6 +506,9 @@ class ReportState:
             self._turn_count = max(self._turn_count, _int_or_zero(data.get("turn_count")))
             self.run_record["seq"] = self._save_seq
             self.run_record["turn_count"] = self._turn_count
+            revision = data.get("report_artifacts_revision")
+            if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0:
+                persisted_report_revision = revision
             logger.info("report state hydrated run.json from %s", run_dir)
 
         json_path = run_dir / "vulnerabilities.json"
@@ -531,6 +536,14 @@ class ReportState:
                 "report state hydrated %d vulnerability report(s)",
                 len(self.vulnerability_reports),
             )
+
+        if data and json_path.exists():
+            # Legacy records predate the durable revision and are revision 0.
+            # Both counters must agree so usage-only resume saves do not rewrite
+            # unchanged report projections.
+            restored_revision = persisted_report_revision or 0
+            self._report_artifacts_revision = restored_revision
+            self._persisted_report_artifacts_revision = restored_revision
 
     def add_vulnerability_report(
         self,
@@ -871,6 +884,10 @@ class ReportState:
         self._set_phase("running")
 
     def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> bool:
+        with self._report_artifacts_lock:
+            return self._save_run_data_locked(mark_complete=mark_complete, status=status)
+
+    def _save_run_data_locked(self, mark_complete: bool = False, status: str | None = None) -> bool:
         """Persist scan artifacts and return whether all required writes
         succeeded.
 
@@ -1041,6 +1058,11 @@ class ReportState:
                 logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
             report_artifacts_persisted = optional_artifacts_persisted
 
+        persisted_report_revision = self._persisted_report_artifacts_revision
+        if report_artifacts_persisted:
+            persisted_report_revision = report_artifacts_revision
+        self.run_record["report_artifacts_revision"] = persisted_report_revision
+
         try:
             # Validate the full worker contract before any write: the first
             # observable run.json must already be complete and versioned.
@@ -1077,10 +1099,7 @@ class ReportState:
                 logger.exception("Resume record write failed (non-fatal)")
 
         if report_artifacts_persisted:
-            # A concurrent finding may have advanced the live revision while
-            # this snapshot was being written. Persist only the captured
-            # revision so the next save cannot skip that newer content.
-            self._persisted_report_artifacts_revision = report_artifacts_revision
+            self._persisted_report_artifacts_revision = persisted_report_revision
 
         logger.info("Essential scan data saved to: %s", run_dir)
         return True
