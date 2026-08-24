@@ -4,7 +4,7 @@ description: "Local models are not a supported LyraShield production path"
 ---
 
 <Warning>
-Local models are not supported by LyraShield Engine. Production accepts only approved GPT-5.6 Terra or Luna deployments through the documented OpenAI/Azure-compatible boundary. This unlinked page is retained only as operator reference for offline experimentation and to make the inherited upstream documentation history explicit. Do not configure local-model endpoints in the worker or forward local-model credentials to production.
+Local models are not supported by LyraShield Engine. Production accepts only approved GPT-5.6 Terra or Luna deployments through the documented OpenAI, Azure/Azure AI, or Bedrock Mantle provider boundary. This unlinked page is retained only as operator reference for offline experimentation and to make the inherited upstream documentation history explicit. Do not configure local-model endpoints in the worker or forward local-model credentials to production.
 </Warning>
 
 The upstream-derived engine can be pointed at a self-hosted LLM for completely offline, privacy-first experimentation. Data never leaves your machine, which can be useful for sensitive internal networks or air-gapped operator testing. This is not a production path: most local models lack the agentic reliability the GPT-5.6 Terra/Luna contract requires, and the LyraShield product entry point rejects non-GPT-5.6 deployments before scan start.

@@ -6,7 +6,7 @@ See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the owne
 
 ## Project map
 
-- [LyraShield AI public site](https://lyrashieldai.com) · [public Lite Check](https://lyrashieldai.com/scan) · [methodology](https://lyrashieldai.com/methodology) · [synthetic sample report](https://lyrashieldai.com/sample-report).
+- [LyraShield AI public site](https://lyrashieldai.com) · [public Lite Check](https://lyrashieldai.com/scan) · [methodology](https://lyrashieldai.com/methodology).
 - [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai): public Lite Check, authenticated evidence console, worker integration, and release-assurance product; see its [Build Week judge path](https://github.com/ecryptoguru/lyrashield-ai#openai-build-week-judge-path).
 - [Ownership boundary](#ownership-boundary): which execution behavior LyraShield owns versus the retained Strix substrate.
 - [Worker artifact contract](#worker-artifact-contract): compatibility-sensitive `run.json` and `vulnerabilities.json` boundary.
@@ -55,7 +55,7 @@ Requirements:
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - Docker with the reviewed, pinned sandbox image available
-- an OpenAI- or Azure-compatible endpoint serving a GPT-5.6 Terra or Luna deployment
+- a supported OpenAI, Azure/Azure AI, or Bedrock Mantle endpoint serving a GPT-5.6 Terra or Luna deployment
 
 ```bash
 uv sync --frozen
