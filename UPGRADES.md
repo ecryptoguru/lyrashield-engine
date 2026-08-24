@@ -9,7 +9,7 @@ upstream tree. Preserve this reviewed boundary while syncing releases.
 > **Upgrade to v1.5.3 product-outside-strix (2026-08-11).** The `strix/**`
 > substrate is pinned to upstream release v1.5.3
 > (`7cc9fa9faa0179fc7e35111102fe3d20a9028393`). Product-specific behavior lives
-> in `lyrashield/**` and `lyrashield_adapter/**`. Only two generic fixes remain:
+> in `lyrashield/**` and `lyrashield_adapter/**`. Two generic integration seams remain:
 > `strix/config/loader.py` provides the settings-loader composition seam and
 > `strix/skills/__init__.py` avoids starting telemetry threads when telemetry is
 > disabled. A reviewed 2026-08-24 compatibility patch also corrects upstream
@@ -19,10 +19,34 @@ upstream tree. Preserve this reviewed boundary while syncing releases.
 >
 > **Historical note.** Deep Review v12 introduced a warning-only footprint
 > budget when product behavior still lived throughout `strix/**`. The v1.5.3
-> audit trail and are not the current contribution policy.
 > product-outside-Strix migration superseded it with a hard reviewed-patch gate.
 > The larger v1.4.1-era measurements below remain only as an audit trail and are
 > not the current contribution policy.
+
+## Artifact persistence optimization (2026-08-24)
+
+Merged revision `944a84f` avoids rewriting unchanged report projections during
+usage-only state saves. `run.json` still persists on every save because it is
+the lifecycle and model-usage/cost receipt. Finding JSON/Markdown, executive
+Markdown, and SARIF now write only after report content changes.
+
+The durable `report_artifacts_revision` in `run.json` is restored on resume, so
+a usage-only save after process restart does not regenerate unchanged report
+artifacts. An in-process re-entrant lock serializes saves and prevents an older
+concurrent snapshot from replacing newer findings. Required-artifact failures
+remain fail-closed; optional executive/SARIF failures retain their established
+non-fatal semantics.
+
+This change reduces redundant serialization and filesystem I/O. It does not
+change model selection, prompts, token consumption, provider-reported cost,
+worker artifact schemas, or detection results. Any latency or infrastructure
+cost improvement depends on scan workload and storage and requires a separate
+benchmark before a quantified claim.
+
+Verification at `944a84f`: 1,302 tests passed and 1 skipped; repository-wide
+Pyright reported 0 errors and 0 warnings. Ruff, Mypy, Bandit, controlled-
+derivative policy, build/CLI, Desktop logic, native binary, sandbox image, and
+worker-contract CI gates also passed.
 
 ## Upstream typing and import-cycle compatibility (2026-08-24)
 
@@ -37,14 +61,13 @@ two existing integration seams plus these twelve compatibility files), enforces
 the reviewed +151/-57 footprint, and requires patch object
 `fafe7c8e0a7f58c4c10e5619a6579880cf1457c4`. Any byte-level change requires an
 explicit review and digest update.
-> audit trail and are not the current contribution policy.
 
 ## Upgrade to v1.5.3 product-outside-strix (2026-08-11)
 
 The vendored substrate was advanced to upstream release v1.5.3
 (`7cc9fa9faa0179fc7e35111102fe3d20a9028393`). All product-specific behavior
 remains outside `strix/**` in `lyrashield/**` and `lyrashield_adapter/**`.
-Only two generic patches remain:
+The original product-outside-Strix migration retained only two generic seams:
 
 - `strix/config/loader.py`: registers a pluggable product settings loader and
   falls back to the upstream `Settings` class when none is registered.
@@ -52,11 +75,12 @@ Only two generic patches remain:
   settings disable telemetry. v1.5.3 already provides skill-directory
   registration, so that extension no longer requires a local patch.
 
-The footprint vs v1.5.3 is two modified files with +24/-0 lines. The
+At that migration revision, the footprint vs v1.5.3 was two modified files with
++24/-0 lines, and the gate rejected more than two files, 30 insertions, or any
+deletions. That historical limit was superseded by the exact 14-file
+compatibility patch documented above. The current
 `scripts/verify-controlled-derivative.sh` gate compares the actual working tree
-to the pin, including staged and unstaged changes. Added, deleted, renamed, and
-unlisted modified files fail; exceeding two files, 30 insertions, or any
-deletions also fails.
+to the pin, including staged and unstaged changes.
 
 Prior `strix/**` product-ownership claims in this ledger (e.g., product behavior
 in `strix/core/hooks.py`, `strix/core/inputs.py`, `strix/config/settings.py`,
@@ -68,8 +92,8 @@ owns that behavior in `lyrashield/**` and `lyrashield_adapter/**`, while
 ## LyraShield-owned contract
 
 All product-critical behavior lives in `lyrashield/**` and
-`lyrashield_adapter/**`. The retained `strix/**` substrate is exact upstream
-v1.5.3 except for the two generic seams documented above.
+`lyrashield_adapter/**`. The retained `strix/**` substrate is upstream v1.5.3
+plus the exact review-gated compatibility patch documented above.
 
 - GPT-5.6 Terra and Luna acceptance (Sol retired in PR #22); only
   LiteLLM/Strix-supported providers whose cost map lists `gpt-5.6-*` are allowed
@@ -101,9 +125,10 @@ v1.5.3 except for the two generic seams documented above.
 ## Compatibility patches retained across imports
 
 After the v1.5.3 product-outside-strix migration (PR #58), product behavior
-lives in `lyrashield/**` and `lyrashield_adapter/**`. Only two generic patches
-remain inside `strix/**`; everything else below is owned in the product tree and
-has no upstream equivalent to reconcile with.
+lives in `lyrashield/**` and `lyrashield_adapter/**`. The two generic seams below
+remain inside `strix/**`; the additional 2026-08-24 type/import compatibility
+files are separately pinned by exact patch digest. Everything else below is
+owned in the product tree and has no upstream equivalent to reconcile with.
 
 - `strix/config/loader.py` (one of two `strix/**` seams): registers a pluggable
   product settings loader via `register_settings_loader` and falls back to the
