@@ -1,6 +1,6 @@
 # LyraShield Engine
 
-LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.5.3, pinned at `7cc9fa9faa0179fc7e35111102fe3d20a9028393` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only at two small, gated registration seams.
+LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.5.3, pinned at `7cc9fa9faa0179fc7e35111102fe3d20a9028393` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only through an exact, review-gated 14-file compatibility patch described in [UPGRADES.md](UPGRADES.md).
 
 See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
 
@@ -106,6 +106,8 @@ Each non-interactive run writes bounded machine-readable artifacts under `strix_
 - `run.json` records lifecycle, model/reasoning metadata, usage, limits, and reproducibility fields;
 - `vulnerabilities.json` contains bounded structured finding candidates, control IDs, evidence metadata, and deterministic identities.
 
+`run.json` remains the durable lifecycle and usage/cost receipt and is written on every state save. Larger report projections (`vulnerabilities.json`, finding Markdown, executive Markdown, and SARIF) are rewritten only when report content changes. Their revision is stored as `report_artifacts_revision`, restored on resume, and protected by an in-process re-entrant lock so concurrent saves cannot leave an older projection over newer findings. This reduces repeated serialization and filesystem writes; it does not change model routing, token usage, provider billing, artifact schemas, or detection behavior. No fixed latency or cost reduction is claimed without a workload-specific benchmark.
+
 Deep scans use a deterministic two-tier route: the Terra/medium root owns coordination and cross-file judgment, while Luna/high child specialists handle focused tasks with smaller output reservations. Only the root can create or stop specialists, so child work cannot fan out recursively. Child agents start with a focused task and system-owned scope instead of copying the full parent conversation unless the coordinator explicitly requests inherited context. Stable role-specific cache keys improve repeated-prefix reuse, and per-request usage receipts retain the actual model plus cache-read/cache-write buckets so mixed-model spend can be reconciled against the rate card.
 
 The TypeScript worker treats all engine output as untrusted. It schema-validates these artifacts, never persists raw stdout/stderr, and does not allow model confidence to become independent verification proof. Existing artifact keys are compatibility-sensitive; coordinate changes with the worker contract tests in `lyrashield-ai`.
@@ -124,9 +126,9 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-controlled-derivative.sh
 ```
 
-The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), mypy, Bandit, and the public worker contract. It also enforces a hard **footprint budget** on `strix/**` drift versus the pinned upstream base: at most two changed files, 30 insertions, and no deletions. Any other Strix path or change type fails the gate.
+The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), mypy, Bandit, and the public worker contract. It also enforces the exact reviewed `strix/**` compatibility patch: a 14-file allowlist, a +151/-57 footprint ceiling, and patch-object digest `fafe7c8e0a7f58c4c10e5619a6579880cf1457c4`. Any path or byte-level change outside that reviewed patch fails the gate.
 
-Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`, in addition to CLI/native build, sandbox smoke, and cross-repository worker contract checks. Test counts are intentionally not copied here because the executable gate is the source of truth.
+Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`, in addition to CLI/native build, sandbox smoke, and cross-repository worker contract checks. Repository-wide Pyright is an additional compatibility check; merged revision `944a84f` reports 0 errors and 0 warnings. The same revision's full pytest receipt is 1,302 passed and 1 skipped. These counts are a revision-bound snapshot; the executable gates remain the current source of truth.
 
 Budget enforcement now falls back to LiteLLM's `model_cost` table and then to conservative default rates for non-GPT-5.6 models, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-5.6 Terra/Luna deployments before scan start.
 
