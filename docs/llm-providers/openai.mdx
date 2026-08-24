@@ -13,4 +13,4 @@ export LLM_API_BASE="https://<approved-endpoint>"
 
 Use `LYRASHIELD_REASONING_EFFORT` only for operator-controlled local execution. The application worker owns reasoning selection in production.
 
-Never commit credentials or place them in scan instructions. The worker passes only the bounded OpenAI/Azure credential surface to the engine subprocess.
+Never commit credentials or place them in scan instructions. The worker passes only the bounded credentials for the selected supported provider to the engine subprocess.
