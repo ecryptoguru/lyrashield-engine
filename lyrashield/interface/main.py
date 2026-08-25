@@ -1002,6 +1002,7 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
     if not targets_info:
         parser.error(f"--resume {args.resume}: run.json has no targets_info")
 
+    cloned_repo_paths: set[Path] = set()
     for target in targets_info:
         details_raw: Any = target.get("details")
         details: dict[str, Any] = (
@@ -1025,6 +1026,7 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
                 f"It was deleted between runs. Pick a fresh --run-name to "
                 f"re-clone, or restore the directory before resuming."
             )
+        cloned_repo_paths.add(cloned_path)
 
     args.targets_info = targets_info
 
@@ -1034,6 +1036,16 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
         args.local_sources = local_sources_source
     elif state.get("local_sources"):
         args.local_sources = state.get("local_sources")
+    if is_lyrashield_product() and load_settings().runtime.backend == "docker":
+        for source in getattr(args, "local_sources", []):
+            if not isinstance(source, dict):
+                continue
+            source_path = source.get("source_path")
+            if (
+                isinstance(source_path, str)
+                and Path(source_path).expanduser().resolve() in cloned_repo_paths
+            ):
+                source["mount"] = True
     if state.get("diff_scope"):
         args.diff_scope = state.get("diff_scope")
     persisted_scan_mode = state.get("scan_mode")
