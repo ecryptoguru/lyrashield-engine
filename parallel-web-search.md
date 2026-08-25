@@ -1,5 +1,11 @@
 # Plan: Parallel Search Turbo web_search tool for LyraShield
 
+> **Historical plan — completed and superseded.** This checklist records the
+> original design work and is not current implementation guidance. Use the
+> [worker artifact contract](README.md#worker-artifact-contract) and the
+> [upgrade ledger](UPGRADES.md#parallel-search-web_search-tool-2026-08-04) for
+> the current `web_search` ownership, paths, budget, and artifact contract.
+
 ## Context
 User chose: inline agent tool, Parallel Search `turbo` default, accuracy-first redaction sanitizer.
 
