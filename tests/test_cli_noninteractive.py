@@ -49,6 +49,21 @@ def test_noninteractive_failure_label_rejects_unbounded_provider_details(body: o
     assert cli._noninteractive_failure_label(_ProviderFailureError(body)) == "_ProviderFailureError"
 
 
+@pytest.mark.parametrize(
+    ("module", "expected"),
+    [
+        ("docker.errors", "DockerAPIError"),
+        ("openai._exceptions", "ProviderAPIError"),
+    ],
+)
+def test_noninteractive_failure_label_disambiguates_api_error_source(
+    module: str, expected: str
+) -> None:
+    failure_type = type("APIError", (RuntimeError,), {"__module__": module})
+
+    assert cli._noninteractive_failure_label(failure_type("bounded failure")) == expected
+
+
 @pytest.mark.asyncio
 async def test_non_interactive_scan_bypasses_live_display() -> None:
     args = SimpleNamespace(

@@ -1305,7 +1305,14 @@ def main() -> None:
                 )
                 target_info["details"]["cloned_repo_path"] = cloned_path
 
-        args.local_sources = collect_local_sources(args.targets_info)
+        runtime = load_settings().runtime
+        args.local_sources = collect_local_sources(
+            args.targets_info,
+            # Product Docker scans own the fresh clone and keep TMPDIR on the
+            # host-visible worker root. A read-only bind avoids streaming the
+            # entire Git tree through Docker's archive API before every scan.
+            mount_cloned_repositories=is_lyrashield_product() and runtime.backend == "docker",
+        )
         try:
             diff_scope = resolve_diff_scope_context(
                 local_sources=args.local_sources,
