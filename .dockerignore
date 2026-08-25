@@ -13,6 +13,7 @@ __pycache__
 .superpowers
 build
 dist
+desktop
 *.egg-info
 *.log
 strix_runs
