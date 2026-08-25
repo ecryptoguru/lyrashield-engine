@@ -155,6 +155,17 @@ def test_collect_local_sources_repository_is_never_mounted() -> None:
     assert sources == [{"source_path": "/clone", "workspace_subdir": "clone", "mount": False}]
 
 
+def test_collect_local_sources_can_mount_product_owned_repository_clone() -> None:
+    repo = {
+        "type": "repository",
+        "details": {"cloned_repo_path": "/clone", "workspace_subdir": "clone"},
+    }
+
+    sources = collect_local_sources([repo], mount_cloned_repositories=True)
+
+    assert sources == [{"source_path": "/clone", "workspace_subdir": "clone", "mount": True}]
+
+
 def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path) -> None:
     repo_url = "-upload-pack=malicious-command"
     with (

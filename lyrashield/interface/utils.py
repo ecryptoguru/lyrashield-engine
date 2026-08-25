@@ -1290,7 +1290,11 @@ def is_whitebox_scan(targets_info: list[dict[str, Any]]) -> bool:
     return any(t.get("type") == "local_code" for t in targets_info or [])
 
 
-def collect_local_sources(targets_info: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def collect_local_sources(
+    targets_info: list[dict[str, Any]],
+    *,
+    mount_cloned_repositories: bool = False,
+) -> list[dict[str, Any]]:
     local_sources: list[dict[str, Any]] = []
 
     for target_info in targets_info:
@@ -1311,7 +1315,7 @@ def collect_local_sources(targets_info: list[dict[str, Any]]) -> list[dict[str, 
                 {
                     "source_path": str(details["cloned_repo_path"]),
                     "workspace_subdir": workspace_subdir,
-                    "mount": False,
+                    "mount": mount_cloned_repositories,
                 }
             )
 

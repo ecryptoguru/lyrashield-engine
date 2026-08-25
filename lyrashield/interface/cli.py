@@ -32,6 +32,11 @@ _SAFE_PROVIDER_ERROR_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 def _noninteractive_failure_label(exc: Exception) -> str:
     label = type(exc).__name__
+    module = type(exc).__module__
+    if label == "APIError" and module.startswith("docker."):
+        label = "DockerAPIError"
+    elif label == "APIError" and module.startswith("openai."):
+        label = "ProviderAPIError"
     body = getattr(exc, "body", None)
     if not isinstance(body, dict):
         return label
