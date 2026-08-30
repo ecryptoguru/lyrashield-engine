@@ -176,9 +176,9 @@ bracex==3.0.1 \
     --hash=sha256:4e38e32392e4a4780fe15d644bfc7c8514057cfc3861e060b11814ce829c25e4 \
     --hash=sha256:6523ad83aeb5098a4ee597cff0f964442ff74e460bd3fafaffab6a013ff2288c
     # via wcmatch
-caido-sdk-client==0.3.0 \
-    --hash=sha256:9700234a6adb7920d5269ee6e8f47ace44fa86c0d9fc0f483b47708971cc2adc \
-    --hash=sha256:f7f7754ca9382a15da1fe4e7d57244e6828be100555008f6374510c12f79e6db
+caido-sdk-client==0.3.1 \
+    --hash=sha256:16af5cfd19fef9bd676e2705551331247fd107a68505a69c8ba78aaa09c14dd2 \
+    --hash=sha256:f63bdde3d41e3e16e8c6d1c30f259cba696234b5fc9f66df3a336371958b283b
     # via -r /tmp/lyrashield-sandbox-lock/requirements.in
 caido-server-auth==0.1.2 \
     --hash=sha256:40c6cd3728e24cdff402c4efa5d8f55bf6e6cc73ac0169bdea1ad1e34faff8ff \
