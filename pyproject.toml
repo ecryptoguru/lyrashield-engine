@@ -6,7 +6,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [
-  { name = "Strix", email = "hi@usestrix.com" },
+  { name = "LyraShield" },
 ]
 maintainers = [
   { name = "LyraShield" },

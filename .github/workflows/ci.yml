@@ -42,6 +42,9 @@ jobs:
       - name: Verify source and policy gates
         run: scripts/verify-controlled-derivative.sh
 
+      - name: Verify customer branding
+        run: python scripts/verify-customer-branding.py
+
       - name: Verify Python packages and CLI
         run: |
           uv build

@@ -276,7 +276,7 @@ async def test_root_prompt_options_default_to_none(
 
     kwargs = captured["kwargs"]
     assert kwargs["instructions_override"] is not None
-    assert "You are Strix" in kwargs["instructions_override"]
+    assert "You are LyraShield" in kwargs["instructions_override"]
     assert kwargs["system_prompt_context"] == {"scope": "built-in"}
 
 

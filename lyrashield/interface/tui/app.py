@@ -112,14 +112,7 @@ class ChatTextArea(TextArea):  # type: ignore[misc]
 class SplashScreen(Static):  # type: ignore[misc]
     ALLOW_SELECT = False
     PRIMARY_GREEN = "#22c55e"
-    BANNER = (
-        " ███████╗████████╗██████╗ ██╗██╗  ██╗\n"
-        " ██╔════╝╚══██╔══╝██╔══██╗██║╚██╗██╔╝\n"
-        " ███████╗   ██║   ██████╔╝██║ ╚███╔╝\n"
-        " ╚════██║   ██║   ██╔══██╗██║ ██╔██╗\n"
-        " ███████║   ██║   ██║  ██║██║██╔╝ ██╗\n"
-        " ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝"
-    )
+    BANNER = "LyraShield"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

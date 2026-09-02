@@ -1,5 +1,47 @@
 # LyraShield ownership and upstream-import ledger
 
+## Customer branding and viewer rebuild
+
+The owned viewer uses a LyraShield wordmark and local functionality only. Upstream
+Cloud/Pro, PR, integration and member upsells have been removed. The unapproved
+`logo.png` asset is retained pending founder approval, but is not displayed by the
+viewer. Existing `lyrashield.dev` references outside the SARIF product-information
+URL remain pending the domain decision. Legal attribution remains in NOTICE and LICENSE.
+
+Export downloads the already-loaded Markdown report locally. Legacy email delivery,
+feedback and OTP unlock entrypoints are not offered: they depend on an upstream relay.
+The backend's existing history authorization remains intact; locked history points
+to `lyrashield view <name>`. PDF generation remains available to existing internal
+callers, but the viewer does not promise an unimplemented local PDF download.
+
+Rebuild the tracked viewer assets from source; never patch a minified bundle:
+
+```sh
+cd lyrashield/interface/viewer/frontend
+npm ci
+npx tsc --noEmit
+npm run build
+npm audit
+cd ../../../..
+uv run python scripts/verify-customer-branding.py
+uv run pytest -q tests/test_customer_branding.py
+```
+
+The CI branding gate checks all text in the owned interface, TUI and skills,
+including frontend source and generated static assets. Its reviewed allowlist
+retains exact source lines for module/class names, environment variables, persisted
+paths and keys, package/release names, and legal/historical attribution. The system
+prompt's bytes after the first newline are intentionally preserved. Legacy updater
+code remains unreachable from the product CLI, whose `--update` fails closed.
+Bundles allow only the three exact persisted preference keys and terminal-prompt
+regex; adding visible upstream branding on the same line still fails the gate.
+
+Removed the obsolete `scripts/install.sh` and its installer-only tests: it downloaded
+and replaced upstream executables and pulled an unrelated upstream image. The owned
+release workflow still produces compatibility-named binaries, but does not establish
+a reviewed shell installation/upgrade contract. Use reviewed release artifacts or
+the documented source installation. No installer was executed for this change.
+
 LyraShield Engine is a controlled derivative over a pinned Strix substrate. It
 is not a thin wrapper: the adapter is the public entry point, while significant
 model, lifecycle, budget, result, and worker-contract behavior is intentionally

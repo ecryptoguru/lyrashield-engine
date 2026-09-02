@@ -525,7 +525,7 @@ async def run_strix_scan(
             report_state.save_run_data()
 
         root_agent = build_strix_agent(
-            name="Strix",
+            name="LyraShield",
             skills=skills,
             is_root=True,
             scan_mode=scan_mode,
@@ -541,7 +541,7 @@ async def run_strix_scan(
         if not is_resume:
             await coordinator.register(
                 root_id,
-                "Strix",
+                "LyraShield",
                 parent_id=None,
                 task=root_task,
                 skills=skills,
@@ -730,7 +730,7 @@ async def run_strix_scan(
                 extra_headers=llm_settings.extra_headers,
             )
             fallback_agent = build_strix_agent(
-                name="Strix",
+                name="LyraShield",
                 skills=skills,
                 is_root=True,
                 scan_mode=scan_mode,

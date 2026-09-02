@@ -386,7 +386,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                         "error": "pdf_export_unavailable",
                         "detail": (
                             "Encrypted PDF export requires the optional 'viewer' extra. "
-                            'Install with: pipx install "strix-agent[viewer]"'
+                            "Install the viewer extra from your reviewed LyraShield Engine release."
                         ),
                     },
                 )

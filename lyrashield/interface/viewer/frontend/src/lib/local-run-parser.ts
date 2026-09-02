@@ -70,7 +70,7 @@ function parseJson(text: string, label: string): unknown {
     return JSON.parse(text);
   } catch {
     throw new RunParseError(
-      `${label} isn't valid JSON. Make sure you selected a Strix run directory.`
+      `${label} isn't valid JSON. Make sure you selected a LyraShield run directory.`
     );
   }
 }
