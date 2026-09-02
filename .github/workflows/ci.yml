@@ -229,7 +229,7 @@ jobs:
           chmod +x desktop/src-tauri/binaries/lyrashield-engine-x86_64-unknown-linux-gnu
 
       - name: Build unsigned Debian package
-        uses: tauri-apps/tauri-action@2d793bf2c8c505b9b76211601b09aab48922225d # v1.0.0
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           LYRASHIELD_LICENSE_PUBKEY_HEX: 1111111111111111111111111111111111111111111111111111111111111111
         with:
