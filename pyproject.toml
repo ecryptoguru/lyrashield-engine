@@ -6,7 +6,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [
-  { name = "Strix", email = "hi@usestrix.com" },
+  { name = "LyraShield" },
 ]
 maintainers = [
   { name = "LyraShield" },
@@ -51,9 +51,8 @@ dependencies = [
   "requests>=2.32.0",
   "cvss>=3.2",
   "caido-sdk-client>=0.2.0",
-  # Cap <49: 49.x drops the universal2 macOS wheel (arm64-only), which breaks
-  # the Intel macOS (macos-x86_64) release build's `uv sync --frozen`.
-  "cryptography>=48.0.1,<49",
+  # Security-fixed line; Intel macOS release builds compile against static OpenSSL.
+  "cryptography>=50.0.0,<51",
   # OS keychain storage for BYOK credentials (ChatGPT OAuth token, Azure keys)
   # and the local results-store envelope key. Never written to plaintext files.
   "keyring>=25.0.0",
@@ -74,6 +73,9 @@ lyrashield = "lyrashield_adapter.cli:main"
 lyrashield-local = "lyrashield.tui:run_tui"
 
 [dependency-groups]
+audit = [
+  "pip-audit==2.10.1",
+]
 dev = [
   "mypy>=1.16.0",
   "ruff>=0.11.13",

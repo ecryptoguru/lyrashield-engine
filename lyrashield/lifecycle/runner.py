@@ -236,7 +236,7 @@ async def run_strix_scan(
     is_resume = resume
 
     logger.info(
-        "%s Strix scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
+        "%s LyraShield scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
         "Resuming" if is_resume else "Starting",
         scan_id,
         image,
@@ -525,7 +525,7 @@ async def run_strix_scan(
             report_state.save_run_data()
 
         root_agent = build_strix_agent(
-            name="Strix",
+            name="LyraShield",
             skills=skills,
             is_root=True,
             scan_mode=scan_mode,
@@ -541,7 +541,7 @@ async def run_strix_scan(
         if not is_resume:
             await coordinator.register(
                 root_id,
-                "Strix",
+                "LyraShield",
                 parent_id=None,
                 task=root_task,
                 skills=skills,
@@ -730,7 +730,7 @@ async def run_strix_scan(
                 extra_headers=llm_settings.extra_headers,
             )
             fallback_agent = build_strix_agent(
-                name="Strix",
+                name="LyraShield",
                 skills=skills,
                 is_root=True,
                 scan_mode=scan_mode,
@@ -847,7 +847,7 @@ async def run_strix_scan(
             report_state.set_terminal_reason("rate_limited")
         return None
     except BaseException:
-        logger.exception("Strix scan %s failed", scan_id)
+        logger.exception("LyraShield scan %s failed", scan_id)
         await coordinator.cancel_descendants(root_id)
         with contextlib.suppress(Exception):
             await coordinator.set_status(root_id, "failed")
@@ -868,5 +868,5 @@ async def run_strix_scan(
             state = artifact_state or get_global_report_state()
             if state is not None:
                 state.set_cleanup_outcome(cleanup_outcome)
-        logger.info("Strix scan %s done", scan_id)
+        logger.info("LyraShield scan %s done", scan_id)
         teardown_logging()

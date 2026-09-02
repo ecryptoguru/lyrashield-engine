@@ -80,12 +80,14 @@ HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 BEDROCK_MODEL_PREFIX = "bedrock/"
 BEDROCK_MISSING_MODULE_ERROR = "No module named 'boto3'"
 BEDROCK_EXTRA_HINT = (
-    'Bedrock support is optional. Install it with: pipx install "strix-agent[bedrock]"'
+    "Bedrock support is optional. Install the bedrock extra "
+    "from your reviewed LyraShield Engine release."
 )
 VERTEX_MODEL_MARKER = "vertex"
 VERTEX_MISSING_MODULE_ERROR = "No module named 'google"
 VERTEX_EXTRA_HINT = (
-    'Vertex AI support is optional. Install it with: pipx install "strix-agent[vertex]"'
+    "Vertex AI support is optional. Install the vertex extra "
+    "from your reviewed LyraShield Engine release."
 )
 
 

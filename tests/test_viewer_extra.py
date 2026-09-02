@@ -47,7 +47,7 @@ def test_viewer_extra_is_optional_and_includes_pdf_packages() -> None:
 
     assert "cryptography" in base_names, "cryptography must remain a base dependency"
     cryptography = next(d for d in deps if d.startswith("cryptography"))
-    assert "<49" in cryptography, "cryptography must keep its <49 cap"
+    assert ">=50.0.0,<51" in cryptography, "require the reviewed security-fixed major"
 
 
 def test_build_and_ci_sync_with_viewer_extra() -> None:

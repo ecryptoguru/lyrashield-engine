@@ -1,0 +1,278 @@
+{
+  "reasons": {
+    "imports": "Preserve upstream module, class, environment, storage, package and artifact compatibility identifiers.",
+    "attribution": "Preserve upstream legal attribution and historical implementation comments.",
+    "prompt": "Only the system prompt first line may change; remaining two upstream references are byte-preserved.",
+    "dormantUpdater": "update_check.py is legacy compatibility code, unreachable from the product CLI: --update fails closed in main.py. Do not reactivate it."
+  },
+  "source_lines": {
+    "lyrashield/lifecycle/agents.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"SDK-native state for Strix's addressable agent graph.\"\"\""
+    ],
+    "lyrashield/lifecycle/compaction.py": [
+      "from lyrashield.policy.models import StrixProvider",
+      "from strix.config import load_settings",
+      "from strix.llm.context_budget import context_window, count_tokens, output_limit",
+      "        model_provider = StrixProvider()"
+    ],
+    "lyrashield/lifecycle/execution.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"Execution loop for addressable SDK-backed Strix agents.\"\"\""
+    ],
+    "lyrashield/lifecycle/hooks.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"SDK run hooks used by Strix orchestration.\"\"\""
+    ],
+    "lyrashield/lifecycle/inputs.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"Pure input builders for Strix scan runs.\"\"\"",
+      "        \"authorization_source\": \"strix_platform_verified_targets\","
+    ],
+    "lyrashield/lifecycle/runner.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"Top-level Strix scan runner.\"\"\"",
+      "from lyrashield.agents.factory import build_strix_agent, make_child_factory",
+      "    StrixProvider,",
+      "from strix.core.paths import run_dir_for, runtime_state_dir",
+      "async def run_strix_scan(",
+      "    \"\"\"Run or resume one Strix scan against a sandbox.",
+      "            \"No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().\",",
+      "    from strix.tools.notes.tools import hydrate_notes_from_disk",
+      "            model_provider=StrixProvider(settings=settings),",
+      "        root_agent = build_strix_agent(",
+      "            fallback_agent = build_strix_agent("
+    ],
+    "lyrashield/lifecycle/sessions.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"SDK session helpers for Strix agents.\"\"\""
+    ],
+    "lyrashield/interface/viewer/frontend/package-lock.json": [
+      "  \"name\": \"strix-viewer\",",
+      "      \"name\": \"strix-viewer\","
+    ],
+    "lyrashield/tui/scan_flow.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/interface/auth_cli.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "Signing in only stores OAuth tokens (``~/.strix/subscription-auth.json``); model",
+      "selection stays with ``STRIX_LLM``. A ``chatgpt/<model>`` STRIX_LLM runs on the",
+      "from strix.config import load_settings",
+      "        console.print(f\"  Runs use the subscription (STRIX_LLM=[bold]{settings.llm.model}[/]).\")",
+      "            \"  [yellow]Note:[/] set [cyan]STRIX_LLM[/] to e.g. [cyan]chatgpt/gpt-5.4[/] \"",
+      "    text.append(\"STRIX_LLM\", style=\"bold white\")",
+      "    \"\"\"Return an ``<img>`` for the Strix logo as an inline data URI, or \"\".",
+      "    \"Strix\" wordmark."
+    ],
+    "lyrashield/tui/app.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/tui/byok_config.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "            # The engine resolves ``STRIX_LLM``/``LYRASHIELD_LLM``; an Azure"
+    ],
+    "lyrashield/tui/doctor.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/tui/__init__.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "``lyrashield_adapter/`` or ``strix/**``. Flows:"
+    ],
+    "lyrashield/skills/__init__.py": [
+      "\"\"\"LyraShield-specific skill overlays that shadow built-in strix/skills/.\"\"\""
+    ],
+    "lyrashield/tui/results_store.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/interface/tui/history.py": [
+      "from strix.core.paths import runtime_state_dir"
+    ],
+    "lyrashield/interface/provider_contract_cli.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.config import apply_config_override"
+    ],
+    "lyrashield/interface/main.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "Strix Agent Interface",
+      "    StrixProvider,",
+      "from strix.config import apply_config_override",
+      "from strix.core.paths import run_dir_for, runs_base_dir, runtime_state_dir",
+      "        \"STRIX_LLM\": settings.llm.model,",
+      "        \"STRIX_DELEGATE_LLM\": getattr(settings.llm, \"delegate_model\", None),",
+      "        \"STRIX_DEDUPE_MODEL\": getattr(settings, \"dedupe\", None) and settings.dedupe.model,",
+      "        if name == \"STRIX_LLM\" and settings.product.allow_chatgpt_subscription:",
+      "    # merged. Enforced for every entry point so `strix.interface.main.main()`",
+      "                f\"[bold red]STRIX_LLM={settings.llm.model} routes through a ChatGPT \"",
+      "                f\"[red]STRIX_LLM={settings.llm.model} uses your ChatGPT subscription, \"",
+      "        missing_required_vars.append(\"STRIX_LLM or LYRASHIELD_LLM\")",
+      "            if var in {\"STRIX_LLM or LYRASHIELD_LLM\", \"STRIX_LLM\"}:",
+      "                error_text.append(\"STRIX_LLM / LYRASHIELD_LLM\", style=\"bold cyan\")",
+      "                elif var in {\"STRIX_REASONING_EFFORT\", \"LYRASHIELD_REASONING_EFFORT\"}:",
+      "                        \"STRIX_REASONING_EFFORT / LYRASHIELD_REASONING_EFFORT\",",
+      "            \"export STRIX_LLM='openai/gpt-5.6-luna'  # or LYRASHIELD_LLM\\n\",",
+      "                elif var in {\"STRIX_REASONING_EFFORT\", \"LYRASHIELD_REASONING_EFFORT\"}:",
+      "                        \"export STRIX_REASONING_EFFORT='high'  # or LYRASHIELD_REASONING_EFFORT\\n\",",
+      "            \"Set STRIX_LLM to a model your plan includes (e.g. chatgpt/gpt-5.4).\"",
+      "        model = StrixProvider(settings=settings).get_model(raw_model)",
+      "            deduper = StrixProvider(settings=settings).get_model(dedupe_model)",
+      "        help=\"Path to a custom config file (JSON) to use instead of ~/.strix/cli-config.json\",",
+      "            \"Resume a prior scan by its run name (the dir under ./strix_runs/). \"",
+      "        # Upstream self-update fetches usestrix/strix release artifacts (or the",
+      "        # strix-agent package), which would replace this controlled derivative",
+      "                \"(set STRIX_MAX_LOCAL_COPY_MB to change it). Re-run with \"",
+      "        repo_base = (Path(tempfile.gettempdir()) / \"strix_repos\").resolve()",
+      "    \"\"\"Pull the configured sandbox image, optionally verifying ``STRIX_IMAGE_DIGEST``.",
+      "    If ``STRIX_IMAGE_DIGEST`` is set, the pulled image's ``RepoDigests`` must",
+      "    expected_digest = os.environ.get(\"STRIX_IMAGE_DIGEST\", \"\").strip()"
+    ],
+    "lyrashield/interface/update_check.py": [
+      "\"\"\"Update notifications and self-update for the strix CLI.",
+      "result in ``~/.strix``, a non-intrusive notice with the upgrade command",
+      "for the detected install method, and a ``strix --update`` self-update",
+      "GITHUB_REPO = \"usestrix/strix\"",
+      "PYPI_PACKAGE = \"strix-agent\"",
+      "_CACHE_PATH = Path.home() / \".strix\" / \"update-check.json\"",
+      "    return bool(os.environ.get(\"STRIX_NO_UPDATE_CHECK\")) or any(",
+      "        \"binary\": \"strix --update\",",
+      "        \"pipx\": \"pipx upgrade strix-agent\",",
+      "        \"uv\": \"uv tool upgrade strix-agent\",",
+      "        \"pip\": \"pip install --upgrade strix-agent\",",
+      "        f\"[#eab308]A new version of strix is available:[/] \"",
+      "    console.print(\"[#22c55e]✓ strix updated — restart the scan to use the new version[/]\")",
+      "    Returns True if strix was updated (caller should re-exec / exit).",
+      "        f\"[#eab308]A new version of strix is available:[/] \"",
+      "    choice = Prompt.ask(\"Update strix?\", choices=[\"y\", \"n\", \"s\"], default=\"n\")",
+      "    filename = f\"strix-{version}-{target}{archive_ext}\"",
+      "    binary_name = f\"strix-{version}-{target}\" + (\".exe\" if is_windows else \"\")",
+      "            f\"[#eab308]This strix was installed via {method};[/] \"",
+      "        console.print(\"[bold red]Could not determine the latest strix version.[/]\")",
+      "        console.print(f\"[#22c55e]strix {current} is already the latest version.[/]\")",
+      "            \"[#60a5fa]curl -sSL https://strix.ai/install | bash[/]\"",
+      "    console.print(f\"[#22c55e]✓ Updated strix to {latest}[/]\")"
+    ],
+    "lyrashield/interface/tui/renderers/__init__.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/interface/utils.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.config import load_settings",
+      "    from strix.config import codex",
+      "        resp = requests.get(check_url, headers={\"User-Agent\": \"git/strix\"}, timeout=10)",
+      "    base = Path(tempfile.gettempdir()) / \"strix_repos\""
+    ],
+    "lyrashield/interface/tui/renderers/web_search_renderer.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/interface/tui/__init__.py": [
+      "from lyrashield.interface.tui.app import StrixTUIApp, run_tui",
+      "__all__ = [\"StrixTUIApp\", \"run_tui\"]"
+    ],
+    "lyrashield/interface/viewer/cli.py": [
+      "from strix.core.paths import ("
+    ],
+    "lyrashield/interface/cli.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from lyrashield.lifecycle.runner import run_strix_scan",
+      "from strix.config import load_settings",
+      "            \"strix_image is not configured. Set it in ~/.strix/cli-config.json.\",",
+      "    results_text.append(f\"strix_runs/{args.run_name}\", style=\"#60a5fa\")",
+      "        await run_strix_scan("
+    ],
+    "lyrashield/interface/viewer/__init__.py": [
+      "\"\"\"Local web viewer for Strix runs."
+    ],
+    "lyrashield/interface/viewer/frontend/src/stores/auth.ts": [
+      "// Local stub of the strix-app auth store. The local viewer has no accounts:"
+    ],
+    "lyrashield/interface/tui/app.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from lyrashield.lifecycle.runner import run_strix_scan",
+      "from strix.config import load_settings",
+      "        return pkg_version(\"strix-agent\")",
+      "        self._app_reference: StrixTUIApp | None = None",
+      "    def set_app_reference(self, app: \"StrixTUIApp\") -> None:",
+      "class StrixTUIApp(App):  # type: ignore[misc]",
+      "            StrixTUIApp._append_renderable(combined, item)",
+      "        return StrixTUIApp._sanitize_text(combined)",
+      "            combined.append_text(StrixTUIApp._sanitize_text(item))",
+      "                StrixTUIApp._append_renderable(combined, sub)",
+      "                StrixTUIApp._append_renderable(combined, inner)",
+      "                        image = load_settings().runtime.image or \"strix-sandbox:latest\"",
+      "                            run_strix_scan(",
+      "            if stripped in StrixTUIApp._DECORATIVE_LINES:",
+      "            for prefix in StrixTUIApp._ICON_PREFIXES:",
+      "    app = StrixTUIApp(args)"
+    ],
+    "lyrashield/interface/viewer/auth.py": [
+      "the Strix relay (``STRIX_APP_URL``). The browser never talks to the relay",
+      "State lives in ``~/.strix/viewer-auth.json`` (0600). ``is_verified`` is a local",
+      "from strix.config.loader import load_settings",
+      "AUTH_PATH = Path.home() / \".strix\" / \"viewer-auth.json\"",
+      "    \"\"\"Relay a feedback message + email to Strix. No verification is required;"
+    ],
+    "lyrashield/interface/viewer/report_pdf.py": [
+      "The layout mirrors the Strix cloud pentest report (cover page, executive",
+      "the user's own hands. Strix cannot read the delivered report.",
+      "    \"\"\"The rounded-square Strix mark drawn inline (no raster asset to ship).\"\"\""
+    ],
+    "lyrashield/interface/tui/live_view.py": [
+      "from strix.core.paths import runtime_state_dir"
+    ],
+    "lyrashield/interface/viewer/transcript.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.core.paths import run_record_path",
+      "    # Imported lazily so importing strix.interface.viewer does not eagerly pull the TUI."
+    ],
+    "lyrashield/interface/viewer/frontend/src/components/AddRepositoryDialog.tsx": [
+      "// Extracted ProviderIcon from strix-app's AddRepositoryDialog. The dialog itself"
+    ],
+    "lyrashield/skills/system_prompt.jinja": [
+      "- NEVER use \"Strix\" or any identifiable names/markers in HTTP requests, payloads, user-agents, or any inputs",
+      "- The following scope metadata is injected by the Strix platform into the system prompt and is authoritative"
+    ],
+    "lyrashield/interface/viewer/frontend/package.json": [
+      "  \"name\": \"strix-viewer\","
+    ],
+    "lyrashield/interface/viewer/frontend/src/lib/display-number.ts": [
+      "// Slim, dependency-free extract of strix-app's display-number helper. The full"
+    ],
+    "lyrashield/interface/viewer/frontend/vite.config.ts": [
+      "// The build output is committed at strix/interface/viewer/static and shipped."
+    ],
+    "lyrashield/interface/viewer/frontend/src/components/TrustToast.tsx": [
+      "const DISMISS_KEY = \"strix_viewer_trust_dismissed\";"
+    ],
+    "lyrashield/interface/viewer/frontend/src/lib/local-run-parser.ts": [
+      " * Pure, dependency-free parsers that turn a Strix CLI local run",
+      " * (`strix_runs/<run>/{run.json,vulnerabilities.json}`) into the app's own"
+    ],
+    "lyrashield/interface/viewer/frontend/src/components/FeedbackView.tsx": [
+      " * verification — the email is taken as-is) and relays it to Strix via the local"
+    ],
+    "lyrashield/interface/viewer/frontend/src/components/live/tool-renderers/TerminalRenderer.tsx": [
+      "// TUI strips them in strix/interface/tui/renderers/shell_renderer.py). Only a",
+      "      // Skip [STRIX_N]$ prompt lines",
+      "      if (/^\\[STRIX_\\d+\\]\\$\\s*/.test(line)) continue;",
+      "    // Strip trailing [STRIX_N]$ lines",
+      "    while (filtered.length > 0 && /^\\[STRIX_\\d+\\]\\$\\s*/.test(filtered[filtered.length - 1])) {"
+    ],
+    "lyrashield/interface/viewer/server.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.core.paths import run_record_path",
+      "# port is appended (``strix_viewer_session_<port>``) because browsers scope",
+      "SESSION_COOKIE_PREFIX = \"strix_viewer_session\"",
+      "        # The strix_runs directory that holds the launched run; used to",
+      "    thread = threading.Thread(target=httpd.serve_forever, name=\"strix-viewer\", daemon=True)"
+    ],
+    "lyrashield/interface/viewer/frontend/src/components/Sidebar.tsx": [
+      "const WIDTH_KEY = \"strix_viewer_sidebar_width\";",
+      "const COLLAPSE_KEY = \"strix_viewer_sidebar_collapsed\";"
+    ],
+    "lyrashield/interface/viewer/frontend/src/components/live/tool-renderers/index.ts": [
+      " * The OSS strix engine (usestrix/strix) is the source of truth for tool names:",
+      " * see `strix/tools/**` for definitions and `strix/interface/tui/renderers/` for",
+      "  // scan_start_info / subagent_start_info are strix-app synthetic events; finish_scan is the engine's"
+    ]
+  }
+}

@@ -34,6 +34,21 @@ def _make_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ResultsStore
     return ResultsStore(path=tmp_path / "results.db")
 
 
+def test_decrypts_cryptography_48_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Synthetic fixed-key ciphertext generated with cryptography 48.0.1."""
+    from lyrashield.tui.results_store import _decrypt
+
+    monkeypatch.setattr(
+        "lyrashield.tui.results_store.keyring_get",
+        lambda *_: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    )
+    token = (
+        "gAAAAABqmIzPp44yVJo_i9Gbh4Q8QOUzpeDSOLBHEcMPlzURNbjxFm4AWisietHV7Y2f6h_b"
+        "odHs23pyB25_AjOUjF5Huw_mtYRBWaz50Wkn0gu20jCBsMg="
+    )
+    assert _decrypt(token) == "legacy local results"
+
+
 def test_store_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = _make_store(tmp_path, monkeypatch)
     run_id = new_run_id()

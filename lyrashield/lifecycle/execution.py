@@ -1014,7 +1014,7 @@ async def _append_tool_required_message(
         )
     else:
         message = (
-            "Your previous response ended the autonomous Strix run without a lifecycle tool "
+            "Your previous response ended the autonomous LyraShield run without a lifecycle tool "
             "call. That is invalid in non-interactive mode; plain text final answers are "
             "ignored. Continue immediately and call exactly one tool. "
             f"If your work is complete, call {finish_tool}. "

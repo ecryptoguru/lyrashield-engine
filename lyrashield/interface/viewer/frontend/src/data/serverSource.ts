@@ -204,7 +204,7 @@ export type SubmitFeedbackResult = { ok: true } | { ok: false; error: string };
 
 /**
  * POST /api/feedback. Sends a feedback message plus a work email (no
- * verification) to the local server, which relays it to Strix.
+ * verification) to the local server, which handles it.
  */
 export async function submitFeedback(
   message: string,
@@ -244,7 +244,7 @@ export async function sendReport(runName?: string | null): Promise<SendReportRes
     return {
       ok: true,
       password: String(data.password ?? ""),
-      filename: String(data.filename ?? "strix-report.pdf"),
+      filename: String(data.filename ?? "lyrashield-report.pdf"),
     };
   }
   return { ok: false, error: String(data.error ?? "unavailable") };

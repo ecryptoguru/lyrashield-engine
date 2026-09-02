@@ -243,7 +243,7 @@ def export_sarif(run_id: str, store: ResultsStore, dest: Path) -> Path:
                 "tool": {
                     "driver": {
                         "name": "LyraShield Local",
-                        "informationUri": "https://lyrashield.dev",
+                        "informationUri": "https://lyrashieldai.com",
                     }
                 },
                 "results": [

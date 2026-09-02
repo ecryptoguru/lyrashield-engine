@@ -39,6 +39,17 @@ jobs:
 
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
+      - name: Prepare static cryptography build for Intel macOS
+        if: matrix.target == 'macos-x86_64'
+        shell: bash
+        run: |
+          brew install openssl@3 rust
+          {
+            echo "OPENSSL_DIR=$(brew --prefix openssl@3)"
+            echo "OPENSSL_STATIC=1"
+            echo "UV_NO_BINARY_PACKAGE=cryptography"
+          } >> "$GITHUB_ENV"
+
       - name: Build
         shell: bash
         run: |
@@ -47,6 +58,14 @@ jobs:
           # omit it and the build would succeed while breaking PDF export at
           # runtime).
           uv sync --frozen --extra viewer
+          if [[ "${{ matrix.target }}" == "macos-x86_64" ]]; then
+            CRYPTOGRAPHY_EXTENSION=$(uv run python -c 'import cryptography.hazmat.bindings._rust as rust; print(rust.__file__)')
+            CRYPTOGRAPHY_LINKS=$(otool -L "$CRYPTOGRAPHY_EXTENSION")
+            if grep -E 'lib(ssl|crypto).*dylib' <<< "$CRYPTOGRAPHY_LINKS"; then
+              echo "::error::cryptography must statically link OpenSSL for distribution"
+              exit 1
+            fi
+          fi
           uv run pyinstaller strix.spec --noconfirm
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then

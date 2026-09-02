@@ -10,6 +10,8 @@ import urllib.request
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+import pytest
+
 from lyrashield.interface.viewer.server import serve
 from lyrashield.interface.viewer.transcript import (
     build_run_state,
@@ -23,8 +25,6 @@ from strix.core.paths import latest_run_dir, runs_base_dir
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
-
-    import pytest
 
 
 def _make_run(base: Path, name: str, *, status: str, end_time: str | None) -> Path:
@@ -446,7 +446,7 @@ def test_auth_status_reflects_expiry(tmp_path: Path, monkeypatch: pytest.MonkeyP
         _, _, body = _get(f"{url}/api/auth/status", cookie=cookie)
         assert json.loads(body) == {"verified": True, "email": "a@b.com"}
 
-        # Once expired, status must advertise unverified so the SPA re-prompts.
+        # Once expired, status must advertise unverified.
         verified["value"] = False
         _, _, body = _get(f"{url}/api/auth/status", cookie=cookie)
         assert json.loads(body)["verified"] is False
@@ -553,15 +553,15 @@ def test_report_send_rejects_live_run(tmp_path: Path, monkeypatch: pytest.Monkey
         httpd.server_close()
 
 
-def test_historical_run_data_requires_verification(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("verified", [False, True])
+def test_historical_run_data_requires_session_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verified: bool
 ) -> None:
     launched = _make_run(tmp_path, "launched", status="completed", end_time="2026-01-01T00:00:00Z")
     _make_run(tmp_path, "other", status="completed", end_time="2026-01-01T00:00:00Z")
     _bundle(tmp_path, monkeypatch)
 
-    verified = {"value": False}
-    monkeypatch.setattr("lyrashield.interface.viewer.auth.is_verified", lambda: verified["value"])
+    monkeypatch.setattr("lyrashield.interface.viewer.auth.is_verified", lambda: verified)
 
     httpd, url, token = serve(launched, open_browser=False)
     try:
@@ -571,31 +571,27 @@ def test_historical_run_data_requires_verification(
 
         cookie = _session_cookie(url, token)
 
-        # A different run needs the session capability first: a cookie-less
-        # caller is forbidden even once the machine is verified.
-        verified["value"] = True
-        assert _get_status(f"{url}/api/run?run=other") == 403
-
-        # With the cookie but not verified, the history gate returns 401.
-        verified["value"] = False
-        assert _get_status(f"{url}/api/run?run=other", cookie=cookie) == 401
-
-        # With both the cookie and verification, the historical run resolves.
-        verified["value"] = True
-        assert _get_status(f"{url}/api/run?run=other", cookie=cookie) == 200
+        # All historical data needs this process's capability, regardless of
+        # email verification. Missing and forged cookies never authorize it.
+        for endpoint in ("run", "vulnerabilities", "report", "transcript"):
+            historical_url = f"{url}/api/{endpoint}?run=other"
+            assert _get_status(historical_url) == 403
+            assert _get_status(historical_url, cookie=f"{_cookie_name(url)}=wrong") == 403
+            assert _get_status(historical_url, cookie=cookie) == 200
     finally:
         httpd.shutdown()
         httpd.server_close()
 
 
-def test_runs_list_requires_session_and_verification(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("verified", [False, True])
+def test_runs_list_requires_session_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verified: bool
 ) -> None:
     launched = _make_run(tmp_path, "launched", status="completed", end_time="2026-01-01T00:00:00Z")
     _make_run(tmp_path, "other", status="completed", end_time="2026-01-01T00:00:00Z")
     _bundle(tmp_path, monkeypatch)
 
-    monkeypatch.setattr("lyrashield.interface.viewer.auth.is_verified", lambda: True)
+    monkeypatch.setattr("lyrashield.interface.viewer.auth.is_verified", lambda: verified)
 
     def _runs(cookie: str | None) -> dict[str, object]:
         headers = {"Cookie": cookie} if cookie else {}
@@ -612,7 +608,9 @@ def test_runs_list_requires_session_and_verification(
         assert payload["count"] == 2
         assert payload["runs"] == []
 
-        # With the session cookie and verification, the entries unlock.
+        assert _runs(f"{_cookie_name(url)}=wrong")["locked"] is True
+
+        # The session cookie unlocks local history without email verification.
         payload = _runs(_session_cookie(url, token))
         assert payload["locked"] is False
         assert {r["name"] for r in payload["runs"]} == {"launched", "other"}  # type: ignore[attr-defined]

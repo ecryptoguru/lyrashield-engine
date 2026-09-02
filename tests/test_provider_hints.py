@@ -7,9 +7,9 @@ from lyrashield.interface.main import _provider_import_hint
 
 VERTEX_MODEL = "vertex_ai/gemini-3-pro-preview"
 BEDROCK_MODEL = "bedrock/anthropic.claude-4-5-sonnet"
-VERTEX_EXTRA_NAME = "vertex"
-BEDROCK_EXTRA_NAME = "bedrock"
-INSTALL_EXTRA_COMMAND_FRAGMENT = 'pipx install "strix-agent['
+VERTEX_EXTRA_NAME = "Install the vertex extra"
+BEDROCK_EXTRA_NAME = "Install the bedrock extra"
+INSTALL_EXTRA_COMMAND_FRAGMENT = "from your reviewed LyraShield Engine release."
 WRAPPED_VERTEX_GOOGLE_ERROR = "litellm.APIConnectionError: No module named 'google'"
 WRAPPED_BEDROCK_BOTO3_ERROR = "litellm.APIConnectionError: No module named 'boto3'"
 
