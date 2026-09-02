@@ -30,7 +30,32 @@ jobs:
       - name: Export and audit the locked dependency graph
         run: |
           uv export --frozen --all-extras --all-groups --no-emit-project --format requirements.txt -o "$RUNNER_TEMP/engine-requirements.txt"
-          uvx pip-audit==2.10.1 --require-hashes --disable-pip -r "$RUNNER_TEMP/engine-requirements.txt"
+          uv run --frozen --group audit pip-audit --require-hashes --disable-pip -r "$RUNNER_TEMP/engine-requirements.txt"
+
+      - name: Prove the audit-tool lock rejects tampered artifacts
+        run: |
+          negative_dir="$RUNNER_TEMP/pip-audit-hash-negative"
+          mkdir -p "$negative_dir"
+          cp pyproject.toml uv.lock "$negative_dir/"
+          NEGATIVE_DIR="$negative_dir" python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          lock_path = Path(os.environ["NEGATIVE_DIR"]) / "uv.lock"
+          lock = lock_path.read_text()
+          start = lock.index('[[package]]\nname = "pip-audit"')
+          end = lock.find('\n[[package]]', start + 1)
+          block = lock[start:] if end == -1 else lock[start:end]
+          tampered = re.sub(r'sha256:[0-9a-f]{64}', 'sha256:' + '0' * 64, block)
+          if tampered == block:
+              raise SystemExit("pip-audit lock entry has no artifact hash")
+          lock_path.write_text(lock[:start] + tampered + ("" if end == -1 else lock[end:]))
+          PY
+          if UV_CACHE_DIR="$RUNNER_TEMP/pip-audit-hash-negative-cache" uv sync --frozen --no-install-project --no-default-groups --group audit --directory "$negative_dir"; then
+            echo "::error::tampered pip-audit artifact hash unexpectedly installed"
+            exit 1
+          fi
 
   desktop-audit:
     name: Audit locked Desktop dependencies

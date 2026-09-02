@@ -73,6 +73,9 @@ lyrashield = "lyrashield_adapter.cli:main"
 lyrashield-local = "lyrashield.tui:run_tui"
 
 [dependency-groups]
+audit = [
+  "pip-audit==2.10.1",
+]
 dev = [
   "mypy>=1.16.0",
   "ruff>=0.11.13",
