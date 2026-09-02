@@ -301,16 +301,17 @@ filecache = [
 
 [[package]]
 name = "caido-sdk-client"
-version = "0.2.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "caido-server-auth" },
     { name = "gql", extra = ["aiohttp", "websockets"] },
     { name = "pydantic" },
+    { name = "semver" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/62/d7/5381d8d94fec799bec7004decbf33a4c5581a8374941fe784e730e01cf80/caido_sdk_client-0.2.0.tar.gz", hash = "sha256:39988fe07b3fa9c69adbd49662db660d7707d60d9245109b1623def97b39bac8", size = 57436, upload-time = "2026-04-12T22:25:12.084Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/d1/9e2165528347370e42b94d8568c6a083e485c3e1176b29d9ab1a5498f0b3/caido_sdk_client-0.3.1.tar.gz", hash = "sha256:f63bdde3d41e3e16e8c6d1c30f259cba696234b5fc9f66df3a336371958b283b", size = 79891, upload-time = "2026-08-20T21:47:04.001Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/ae/3530caa6a79bafb8049374ca09515686d98532aca73c4fdbd0f6e06de5c9/caido_sdk_client-0.2.0-py3-none-any.whl", hash = "sha256:bc573651681c093ee9663c7924d38d522a89cea60e2ce00d34ba9b02942b1da1", size = 96207, upload-time = "2026-04-12T22:25:11.168Z" },
+    { url = "https://files.pythonhosted.org/packages/88/2d/fd45f5464abe005ac6688ee49b4e54eabe4c59343608a542c72f3ef194db/caido_sdk_client-0.3.1-py3-none-any.whl", hash = "sha256:16af5cfd19fef9bd676e2705551331247fd107a68505a69c8ba78aaa09c14dd2", size = 131116, upload-time = "2026-08-20T21:47:02.853Z" },
 ]
 
 [[package]]
@@ -2718,6 +2719,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/46/f5af3402b579fd5e11573ce652019a67074317e18c1935cc0b4ba9b35552/secretstorage-3.5.0-py3-none-any.whl", hash = "sha256:0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137", size = 15554, upload-time = "2025-11-23T19:02:51.545Z" },
+]
+
+[[package]]
+name = "semver"
+version = "3.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/d1/d3159231aec234a59dd7d601e9dd9fe96f3afff15efd33c1070019b26132/semver-3.0.4.tar.gz", hash = "sha256:afc7d8c584a5ed0a11033af086e8af226a9c0b206f313e0301f8dd7b6b589602", size = 269730, upload-time = "2025-01-24T13:19:27.617Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/24/4d91e05817e92e3a61c8a21e08fd0f390f5301f1c448b137c57c4bc6e543/semver-3.0.4-py3-none-any.whl", hash = "sha256:9c824d87ba7f7ab4a1890799cec8596f15c1241cb473404ea1cb0c55e4b04746", size = 17912, upload-time = "2025-01-24T13:19:24.949Z" },
 ]
 
 [[package]]
