@@ -26,6 +26,18 @@ def test_release_workflow_syncs_with_viewer_extra() -> None:
         assert "--extra viewer" in line
 
 
+def test_intel_release_builds_security_fixed_crypto_statically() -> None:
+    workflow = (ROOT / ".github/workflows/build-release.yml").read_text()
+    assert "target: macos-x86_64" in workflow
+    assert "if: matrix.target == 'macos-x86_64'" in workflow
+    assert "brew install openssl@3 rust" in workflow
+    assert "UV_NO_BINARY_PACKAGE=cryptography" in workflow
+    assert "OPENSSL_STATIC=1" in workflow
+    assert "brew --prefix openssl@3" in workflow
+    assert 'otool -L "$CRYPTOGRAPHY_EXTENSION"' in workflow
+    assert "cryptography must statically link OpenSSL" in workflow
+
+
 def test_verify_thin_fork_syncs_with_viewer_extra() -> None:
     lines = _uv_sync_lines(ROOT / "scripts" / "verify-controlled-derivative.sh")
     assert lines, "expected a uv sync line in scripts/verify-controlled-derivative.sh"

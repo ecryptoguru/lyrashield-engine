@@ -1,5 +1,25 @@
 # LyraShield ownership and upstream-import ledger
 
+## Security dependency audit and Intel macOS packaging
+
+CI audits the frozen Python dependency graph (all extras and groups) and the
+Desktop Cargo lockfile. Dependabot uses the uv ecosystem without blanket major
+version ignores. Known vulnerabilities fail the audit rather than being ignored.
+
+The reviewed lock advances aiohttp to 3.14.3, pypdf to 6.16.1 and cryptography to
+50.0.0; cryptography matches the existing sandbox requirements. Version 49 removed
+Intel macOS wheels, so the existing Intel release target now builds cryptography
+from source with Homebrew Rust and OpenSSL, requests static linking, and rejects
+dynamic libssl/libcrypto linkage before packaging. Other targets use normal wheels.
+The owned Fernet results format is unchanged; a cryptography 48 ciphertext regression
+checks backward decryption. See the upstream [changelog](https://cryptography.io/en/50.0.0/changelog/)
+and [static macOS build instructions](https://cryptography.io/en/50.0.0/installation/).
+
+Local ARM macOS source compilation and linkage checks validate the build mechanism,
+not an Intel binary. Intel runner compilation, packaging and runtime remain release
+gates; upstream no longer lists Intel macOS as a tested platform. No release target,
+signing configuration or crypto format is removed or weakened by this change.
+
 ## Customer branding and viewer rebuild
 
 The owned viewer uses a LyraShield wordmark and local functionality only. Upstream
