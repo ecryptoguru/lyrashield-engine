@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCOPES = ("lyrashield/interface", "lyrashield/tui", "lyrashield/skills")
+SCOPES = ("lyrashield/interface", "lyrashield/tui", "lyrashield/skills", "lyrashield/lifecycle")
 # Exact non-visible compatibility strings; never exempt a bundle or an entire line.
 STATIC_IDENTIFIERS = (
     '"strix_viewer_sidebar_width"',

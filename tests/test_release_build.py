@@ -3,6 +3,8 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,15 +29,43 @@ def test_release_workflow_syncs_with_viewer_extra() -> None:
 
 
 def test_intel_release_builds_security_fixed_crypto_statically() -> None:
-    workflow = (ROOT / ".github/workflows/build-release.yml").read_text()
-    assert "target: macos-x86_64" in workflow
-    assert "if: matrix.target == 'macos-x86_64'" in workflow
-    assert "brew install openssl@3 rust" in workflow
-    assert "UV_NO_BINARY_PACKAGE=cryptography" in workflow
-    assert "OPENSSL_STATIC=1" in workflow
-    assert "brew --prefix openssl@3" in workflow
-    assert 'otool -L "$CRYPTOGRAPHY_EXTENSION"' in workflow
-    assert "cryptography must statically link OpenSSL" in workflow
+    workflow = yaml.safe_load((ROOT / ".github/workflows/build-release.yml").read_text())
+    build_job = workflow["jobs"]["build"]
+    assert any(
+        target["target"] == "macos-x86_64" for target in build_job["strategy"]["matrix"]["include"]
+    )
+    steps = build_job["steps"]
+    setup = next(
+        s for s in steps if s.get("name") == "Prepare static cryptography build for Intel macOS"
+    )
+    build = next(s for s in steps if s.get("name") == "Build")
+    assert steps.index(setup) < steps.index(build)
+    assert setup["if"] == "matrix.target == 'macos-x86_64'"
+    setup_script = "\n".join(
+        line for line in setup["run"].splitlines() if not line.lstrip().startswith("#")
+    )
+    for command in (
+        "brew install openssl@3 rust",
+        'echo "OPENSSL_DIR=$(brew --prefix openssl@3)"',
+        'echo "OPENSSL_STATIC=1"',
+        'echo "UV_NO_BINARY_PACKAGE=cryptography"',
+        '} >> "$GITHUB_ENV"',
+    ):
+        assert command in setup_script
+    build_script = "\n".join(
+        line for line in build["run"].splitlines() if not line.lstrip().startswith("#")
+    )
+    sync = build_script.index("uv sync --frozen --extra viewer")
+    intel = build_script.index('if [[ "${{ matrix.target }}" == "macos-x86_64" ]]; then')
+    intel_end = build_script.index("\nfi", intel)
+    package = build_script.index("uv run pyinstaller")
+    assert sync < intel < intel_end < package
+    check = build_script[intel:intel_end]
+    inspect = check.index('otool -L "$CRYPTOGRAPHY_EXTENSION"')
+    reject = check.index("if grep -E 'lib(ssl|crypto).*dylib'")
+    error = check.index("cryptography must statically link OpenSSL")
+    fail = check.index("exit 1", error)
+    assert inspect < reject < error < fail
 
 
 def test_verify_thin_fork_syncs_with_viewer_extra() -> None:

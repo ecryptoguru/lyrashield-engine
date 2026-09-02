@@ -80,11 +80,7 @@ def run_list_entry(run_dir: Path) -> dict[str, Any]:
 
 
 def build_runs_payload(base_dir: Path, *, verified: bool) -> dict[str, Any]:
-    """The /api/runs payload. Gates the run list behind email verification.
-
-    The count is always advertised so the UI can tease the history, but the
-    entries only appear once the viewer is verified.
-    """
+    """The /api/runs payload, unlocked by a verified process session capability."""
     run_dirs = _iter_run_dirs(base_dir)
     count = len(run_dirs)
     if not verified:
@@ -237,13 +233,10 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
 
         def _handle_api(self, path: str, query: dict[str, list[str]]) -> None:
-            # The launched run is always viewable with no verification. The
-            # cross-run history list (/api/runs) unlocks its entries only for a
-            # caller that holds this process's session capability *and* is email
-            # verified, so merely reaching an exposed --host port never leaks the
-            # run list (the payload still advertises the count as a teaser).
+            # History requires this process's session capability. Email
+            # verification is not required to access the operator's local runs.
             if path == "/api/runs":
-                unlocked = self._has_session() and auth.is_verified()
+                unlocked = self._has_session()
                 payload = build_runs_payload(state.base_dir, verified=unlocked)
                 self._send_json(HTTPStatus.OK, payload)
                 return
@@ -264,17 +257,11 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 return
 
             # The launched run is always viewable. Any *other* run's data is part
-            # of the gated history: it needs this process's session capability
-            # (so merely reaching an exposed --host port is not enough) *and*
-            # email verification -- otherwise knowing a run name would leak its
-            # metadata, vulnerabilities, report, and transcript.
-            if run_dir.resolve() != state.run_dir.resolve():
-                if not self._has_session():
-                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
-                    return
-                if not auth.is_verified():
-                    self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unverified"})
-                    return
+            # of the gated history: it needs this process's session capability,
+            # so merely reaching an exposed --host port is not enough.
+            if run_dir.resolve() != state.run_dir.resolve() and not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
 
             if path == "/api/run":
                 self._send_json(HTTPStatus.OK, read_run_summary(run_dir))
@@ -291,9 +278,8 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             # The cached verified email is only disclosed to a caller holding this
             # process's session capability, so a cookie-less client on an exposed
             # --host port cannot read it; everyone else looks unverified.
-            # Verification is reported through is_verified() so an expired record
-            # is advertised as unverified -- otherwise the SPA would suppress
-            # re-verification while history stays locked, stranding the user.
+            # Verification is reported through is_verified() so an expired
+            # record is never advertised as verified.
             if not self._has_session():
                 self._send_json(HTTPStatus.OK, {"verified": False, "email": None})
                 return

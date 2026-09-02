@@ -52,3 +52,10 @@ def test_compatibility_allowlist_does_not_hide_same_line_injection(tmp_path: Pat
     assert GATE.violations(tmp_path, allowed) == []
     path.write_text(allowed_line + '; print("Strix Cloud")')
     assert GATE.violations(tmp_path, allowed)
+
+
+def test_lifecycle_output_is_checked(tmp_path: Path) -> None:
+    path = tmp_path / "lyrashield/lifecycle/runner.py"
+    path.parent.mkdir(parents=True)
+    path.write_text('logger.info("Strix scan done")')
+    assert GATE.violations(tmp_path, {})

@@ -6,6 +6,47 @@
     "dormantUpdater": "update_check.py is legacy compatibility code, unreachable from the product CLI: --update fails closed in main.py. Do not reactivate it."
   },
   "source_lines": {
+    "lyrashield/lifecycle/agents.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"SDK-native state for Strix's addressable agent graph.\"\"\""
+    ],
+    "lyrashield/lifecycle/compaction.py": [
+      "from lyrashield.policy.models import StrixProvider",
+      "from strix.config import load_settings",
+      "from strix.llm.context_budget import context_window, count_tokens, output_limit",
+      "        model_provider = StrixProvider()"
+    ],
+    "lyrashield/lifecycle/execution.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"Execution loop for addressable SDK-backed Strix agents.\"\"\""
+    ],
+    "lyrashield/lifecycle/hooks.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"SDK run hooks used by Strix orchestration.\"\"\""
+    ],
+    "lyrashield/lifecycle/inputs.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"Pure input builders for Strix scan runs.\"\"\"",
+      "        \"authorization_source\": \"strix_platform_verified_targets\","
+    ],
+    "lyrashield/lifecycle/runner.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"Top-level Strix scan runner.\"\"\"",
+      "from lyrashield.agents.factory import build_strix_agent, make_child_factory",
+      "    StrixProvider,",
+      "from strix.core.paths import run_dir_for, runtime_state_dir",
+      "async def run_strix_scan(",
+      "    \"\"\"Run or resume one Strix scan against a sandbox.",
+      "            \"No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().\",",
+      "    from strix.tools.notes.tools import hydrate_notes_from_disk",
+      "            model_provider=StrixProvider(settings=settings),",
+      "        root_agent = build_strix_agent(",
+      "            fallback_agent = build_strix_agent("
+    ],
+    "lyrashield/lifecycle/sessions.py": [
+      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "\"\"\"SDK session helpers for Strix agents.\"\"\""
+    ],
     "lyrashield/interface/viewer/frontend/package-lock.json": [
       "  \"name\": \"strix-viewer\",",
       "      \"name\": \"strix-viewer\","
