@@ -20,6 +20,8 @@ def test_owned_customer_branding() -> None:
     allowed = json.loads((ROOT / "scripts/customer-branding-allowlist.json").read_text())
     assert GATE.violations(ROOT, allowed["source_lines"]) == []
     assert not (ROOT / "scripts/install.sh").exists()
+    for index in ("frontend/index.html", "static/index.html"):
+        assert "logo.png" not in (ROOT / "lyrashield/interface/viewer" / index).read_text()
     source = (ROOT / "lyrashield/interface/viewer/frontend/src").rglob("*.tsx")
     for path in source:
         assert "UpgradeModal" not in path.read_text() or path.name == "AgentDetailModal.tsx"
