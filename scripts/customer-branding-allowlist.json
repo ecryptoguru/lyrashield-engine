@@ -227,10 +227,6 @@
     "lyrashield/interface/viewer/frontend/src/components/AddRepositoryDialog.tsx": [
       "// Extracted ProviderIcon from strix-app's AddRepositoryDialog. The dialog itself"
     ],
-    "lyrashield/skills/system_prompt.jinja": [
-      "- NEVER use \"Strix\" or any identifiable names/markers in HTTP requests, payloads, user-agents, or any inputs",
-      "- The following scope metadata is injected by the Strix platform into the system prompt and is authoritative"
-    ],
     "lyrashield/interface/viewer/frontend/package.json": [
       "  \"name\": \"strix-viewer\","
     ],

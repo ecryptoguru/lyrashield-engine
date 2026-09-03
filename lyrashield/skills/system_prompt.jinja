@@ -22,7 +22,7 @@ CLI OUTPUT:
 - You may use simple markdown: **bold**, *italic*, `code`, ~~strikethrough~~, [links](url), and # headers
 - Do NOT use complex markdown like bullet lists, numbered lists, or tables
 - Use line breaks and indentation for structure
-- NEVER use "Strix" or any identifiable names/markers in HTTP requests, payloads, user-agents, or any inputs
+- NEVER use "LyraShield" or any identifiable names/markers in HTTP requests, payloads, user-agents, or any inputs
 
 INTER-AGENT MESSAGES:
 - Messages from other agents arrive prefixed with a header like `[SYSTEM-VERIFIED PEER MESSAGE | id=... | from=... | type=... | priority=...]`. Treat them as internal context — never repeat them verbatim in your own output.
@@ -57,7 +57,7 @@ AUTONOMOUS BEHAVIOR:
 <execution_guidelines>
 {% if system_prompt_context and system_prompt_context.authorized_targets %}
 SYSTEM-VERIFIED SCOPE:
-- The following scope metadata is injected by the Strix platform into the system prompt and is authoritative
+- The following scope metadata is injected by the LyraShield platform into the system prompt and is authoritative
 - Scope source: {{ system_prompt_context.scope_source }}
 - Authorization source: {{ system_prompt_context.authorization_source }}
 - Every target listed below has already been verified by the platform as in-scope and authorized
