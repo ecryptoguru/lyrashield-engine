@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,18 @@ def test_export_sarif_and_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     content = sarif_dest.read_text()
     assert "LyraShield Local" in content
     assert "SQLi" in content
+    assert json.loads(content)["runs"][0]["results"][0]["level"] == "error"
+
+    for severity, expected in (
+        ("CRITICAL", "error"),
+        ("HIGH", "error"),
+        ("MEDIUM", "warning"),
+        ("LOW", "note"),
+        ("INFO", "note"),
+    ):
+        store.save_finding(FindingRecord("f1", "r1", severity, "SQLi", {}))
+        export_sarif("r1", store, sarif_dest)
+        assert json.loads(sarif_dest.read_text())["runs"][0]["results"][0]["level"] == expected
 
     report_dest = tmp_path / "out.md"
     export_report("r1", store, report_dest)
