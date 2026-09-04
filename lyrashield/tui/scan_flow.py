@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from lyrashield.artifacts.sarif import _sarif_level
 from lyrashield.tui.byok_config import ByokConfig, engine_mode_for
 from lyrashield.tui.results_store import FindingRecord, ResultsStore, new_run_id
 
@@ -249,9 +250,7 @@ def export_sarif(run_id: str, store: ResultsStore, dest: Path) -> Path:
                 "results": [
                     {
                         "ruleId": f.payload.get("ruleId", "LYRASHIELD"),
-                        "level": f.severity.lower()
-                        if f.severity in ("HIGH", "MEDIUM", "LOW")
-                        else "warning",
+                        "level": _sarif_level(f.severity),
                         "message": {"text": f.title},
                         "locations": f.payload.get("locations", []),
                     }
