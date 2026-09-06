@@ -63,6 +63,7 @@ def _dedupe_model_settings(
     model_settings = make_model_settings(
         dedupe.reasoning_effort,
         model_name=model_name,
+        max_output_tokens=_DEDUPE_MAX_OUTPUT_TOKENS,
         force_required_tool_choice=False,
         request_timeout=request_timeout,
         # The main model's headers apply only when dedupe falls back to the main
@@ -192,6 +193,11 @@ _PER_ITEM_ENCODING_OVERHEAD = 8
 # JSON object, so this is deliberately generous rather than tuned.
 _DEDUPE_MAX_OUTPUT_TOKENS = 512
 
+# A model duplicate decision is only safe to suppress when it identifies a
+# report that was actually compared and has enough certainty to overcome the
+# default preference for preserving a finding.
+_MIN_DUPLICATE_CONFIDENCE = 0.5
+
 
 class DedupeJudgement(BaseModel):
     """Enforced response schema for the LLM deduplication judge.
@@ -238,6 +244,9 @@ async def _request_dedupe_judgement(
     This call is metered but does not flow through the agent run hooks, so it
     reserves explicitly. Without a reservation, dedupe traffic is only counted
     after the fact and a scan can overshoot ``max_budget_usd``.
+
+    Direct Azure/OpenAI calls use the native HTTP client's bounded retries;
+    ModelSettings.retry belongs to Runner and does not wrap this call.
     """
     # Lazy import avoids the lifecycle-hooks/artifact-state import cycle.
     from lyrashield.lifecycle.hooks import get_active_hooks
@@ -488,6 +497,68 @@ def _dynamic_identity(report: dict[str, Any]) -> tuple[str, ...] | None:
     )
 
 
+def _related_reports(
+    candidate: dict[str, Any], reports: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return a bounded semantic-dedupe pool after an exact identity miss."""
+    candidate_target = _normalized_text(candidate.get("target"))
+    candidate_endpoint = _normalized_text(candidate.get("endpoint"))
+    candidate_method = _normalized_text(candidate.get("method"))
+    candidate_cwe = _normalized_text(candidate.get("cwe"))
+    candidate_identity = _dynamic_identity(candidate)
+    candidate_location = candidate_identity[3] if candidate_identity is not None else ""
+    related: list[dict[str, Any]] = []
+    for report in reports:
+        report_identity = _dynamic_identity(report)
+        report_location = report_identity[3] if report_identity is not None else ""
+        same_endpoint = (
+            candidate_target
+            and candidate_endpoint
+            and candidate_target == _normalized_text(report.get("target"))
+            and candidate_endpoint == _normalized_text(report.get("endpoint"))
+            and (not candidate_method or candidate_method == _normalized_text(report.get("method")))
+        )
+        # Nearby source locations need semantic judgment even with the same
+        # title: inserted lines can shift an otherwise unchanged finding.
+        candidate_parts = candidate_location.rsplit(":", 2)
+        report_parts = report_location.rsplit(":", 2)
+        same_location = (
+            len(candidate_parts) == 3
+            and len(report_parts) == 3
+            and candidate_parts[0] == report_parts[0]
+            and candidate_parts[1].isdigit()
+            and report_parts[1].isdigit()
+            and abs(int(candidate_parts[1]) - int(report_parts[1])) <= 20
+        )
+        same_weakness = candidate_cwe and candidate_cwe == _normalized_text(report.get("cwe"))
+        if (same_endpoint or same_location) and same_weakness:
+            related.append(report)
+    return related
+
+
+def _validated_dedupe_result(
+    result: dict[str, Any], existing_reports: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Fail open when a model decision cannot name a trustworthy duplicate."""
+    if not result.get("is_duplicate"):
+        return result
+    duplicate_id = str(result.get("duplicate_id") or "")
+    try:
+        confidence = float(result.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    known_ids = {str(report.get("id") or "") for report in existing_reports}
+    if duplicate_id and duplicate_id in known_ids and confidence >= _MIN_DUPLICATE_CONFIDENCE:
+        return result
+    logger.warning("Ignoring ungrounded semantic duplicate decision")
+    return {
+        "is_duplicate": False,
+        "duplicate_id": "",
+        "confidence": 0.0,
+        "reason": "Semantic duplicate decision was not grounded in a compared report",
+    }
+
+
 def _first_unquoted_brace(text: str) -> int:
     """Return the index of the first '{' that is not inside a JSON string."""
     in_string = False
@@ -612,6 +683,7 @@ async def check_duplicate(
     if dependency_duplicate is not None:
         return dependency_duplicate
 
+    reports_to_compare = existing_reports
     candidate_identity = _dynamic_identity(candidate)
     if candidate_identity is not None:
         for report in existing_reports:
@@ -622,12 +694,14 @@ async def check_duplicate(
                     "confidence": 1.0,
                     "reason": "Exact target, location, weakness, and title identity",
                 }
-        return {
-            "is_duplicate": False,
-            "duplicate_id": "",
-            "confidence": 1.0,
-            "reason": "No exact deterministic report identity matched",
-        }
+        reports_to_compare = _related_reports(candidate, existing_reports)
+        if not reports_to_compare:
+            return {
+                "is_duplicate": False,
+                "duplicate_id": "",
+                "confidence": 0.0,
+                "reason": "No related report requires semantic comparison",
+            }
 
     # Lazy import avoids the lifecycle-hooks/artifact-state import cycle.
     from lyrashield.lifecycle.hooks import BudgetExceededError
@@ -646,7 +720,7 @@ async def check_duplicate(
 
         candidate_cleaned = _prepare_report_for_comparison(candidate)
         existing_cleaned = _bound_existing_reports(
-            [_prepare_report_for_comparison(r) for r in existing_reports]
+            [_prepare_report_for_comparison(r) for r in reports_to_compare]
         )
         comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
 
@@ -684,7 +758,7 @@ async def check_duplicate(
                 "reason": "Empty response from LLM",
             }
 
-        result = _parse_dedupe_response(content)
+        result = _validated_dedupe_result(_parse_dedupe_response(content), existing_cleaned)
 
         logger.info(
             "Deduplication check: is_duplicate=%s, confidence=%.2f, reason=%s",

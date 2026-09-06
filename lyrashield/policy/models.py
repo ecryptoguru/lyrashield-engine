@@ -533,7 +533,7 @@ DEFAULT_MODEL_RETRY = ModelRetrySettings(
         initial_delay=2.0,
         max_delay=90.0,
         multiplier=2.0,
-        jitter=False,
+        jitter=True,
     ),
     policy=retry_policies.any(
         retry_policies.provider_suggested(),

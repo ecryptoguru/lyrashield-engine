@@ -109,6 +109,7 @@ def run_triage_cli(argv: Sequence[str]) -> int:
             model_route=model_route,
             enabled=bool(args.enabled),
             max_budget_usd=args.max_budget_usd,
+            checkpoint=lambda progress: write_artifact(args.output, progress),
         )
     )
     write_artifact(args.output, artifact)

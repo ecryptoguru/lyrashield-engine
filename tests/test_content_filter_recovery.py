@@ -41,6 +41,27 @@ def test_is_content_filter_error_detects_incomplete() -> None:
     assert execution._is_content_filter_error(exc) is True
 
 
+def test_output_token_truncation_is_not_a_content_filter() -> None:
+    exc = ModelBehaviorError(
+        "Responses stream ended with terminal event `response.incomplete`. "
+        "status=incomplete; incomplete_details=IncompleteDetails(reason='max_output_tokens')."
+    )
+    assert execution._is_content_filter_error(exc) is False
+    assert execution._is_transient_model_error(exc) is False
+    assert execution._is_output_token_truncation(exc) is True
+
+
+def test_output_token_reason_uses_structured_details() -> None:
+    exc = ModelBehaviorError("Provider stopped")
+    exc.body = {"incomplete_details": {"reason": "max_output_tokens"}}
+    assert execution._is_output_token_truncation(exc) is True
+    assert execution._is_output_token_truncation(ModelBehaviorError("response.incomplete")) is False
+    assert (
+        execution._is_output_token_truncation(ModelBehaviorError("Invalid max_output_tokens"))
+        is False
+    )
+
+
 def test_is_content_filter_error_detects_response_failed_with_content_filter() -> None:
     """``response.failed`` with a content_filter context marker is content-filter.
 
@@ -536,13 +557,14 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("truncated", [False, True])
 async def test_runner_falls_back_to_delegate_on_non_content_filter_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
+    truncated: bool,
 ) -> None:
     """When the coordinator model hits a non-content-filter ModelBehaviorError,
-    the scan still switches to the delegate model (any model error triggers the
-    fallback, not just content_filter)."""
+    the scan switches to the delegate model unless its output budget ran out."""
     monkeypatch.setattr(runner, "run_dir_for", lambda _scan_id: tmp_path)
     monkeypatch.setattr(runner, "runtime_state_dir", lambda _run_dir: tmp_path)
     monkeypatch.setattr(runner, "setup_scan_logging", lambda _run_dir: lambda: None)
@@ -592,6 +614,10 @@ async def test_runner_falls_back_to_delegate_on_non_content_filter_error(
     async def _run_agent_loop(*_args: Any, **_kwargs: Any) -> Any:
         call_count["n"] += 1
         if call_count["n"] == 1:
+            if truncated:
+                raise ModelBehaviorError(
+                    "response.incomplete: incomplete_details(reason='max_output_tokens')"
+                )
             # Coordinator hits a non-content-filter error
             raise ModelBehaviorError("Max turns exceeded")
         return types.SimpleNamespace(final_output='{"scan_completed": true}')
@@ -606,8 +632,12 @@ async def test_runner_falls_back_to_delegate_on_non_content_filter_error(
         coordinator=coordinator,
     )
 
-    assert result is not None
-    assert call_count["n"] == 2  # One coordinator failure + one delegate success
+    if truncated:
+        assert result is None
+        assert call_count["n"] == 1
+    else:
+        assert result is not None
+        assert call_count["n"] == 2  # One coordinator failure + one delegate success
 
 
 @pytest.mark.asyncio

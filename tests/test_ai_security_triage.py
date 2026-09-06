@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from agents.usage import Usage
 
 from lyrashield.lifecycle.hooks import BudgetExceededError
 from lyrashield.triage import service
@@ -29,7 +30,7 @@ def _input(*, candidates: int = 1) -> service.TriageInput:
                     "controlId": "AI-01",
                     "ruleId": "unsafe-log",
                     "severity": "MEDIUM",
-                    "selectionReason": "MEDIUM_CONFIDENCE",
+                    "selectionReason": "MEDIUM_SEVERITY",
                     "evidenceChecksum": "b" * 64,
                     "evidenceExcerpt": "token=keep-secret email@example.com https://private.example/a",
                 }
@@ -244,3 +245,70 @@ async def test_failure_cancels_and_awaits_sibling_requests(monkeypatch: pytest.M
 
     assert artifact["terminalReason"] == "TRIAGE_PROVIDER_UNAVAILABLE"
     assert sibling_cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_invalid_triage_output_keeps_returned_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_response(**_kwargs: object) -> object:
+        return SimpleNamespace(usage=Usage(requests=1, input_tokens=1_000, output_tokens=100))
+
+    monkeypatch.setattr(service, "_extract_text", lambda _response: '{"disposition":"bad"}')
+    artifact = await service.run_triage(
+        _input(),
+        model_route="azure_ai/gpt-5.6-luna",
+        enabled=True,
+        model=SimpleNamespace(get_response=fake_response),
+    )
+
+    assert artifact["status"] == "FAILED"
+    assert artifact["terminalReason"] == "INVALID_TRIAGE_OUTPUT"
+    assert artifact["llmUsage"]["requests"] == 1
+    assert artifact["llmUsage"]["input_tokens"] == 1_000
+    assert artifact["llmUsage"]["output_tokens"] == 100
+    assert artifact["llmUsage"]["accountingComplete"] is True
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_preserves_usage_when_sibling_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkpoint_path = tmp_path / "triage.json"
+    completed = asyncio.Event()
+    calls = 0
+
+    async def fake_request(**_kwargs: object) -> tuple[service.TriageJudgement, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            completed.set()
+            return (
+                service.TriageJudgement(
+                    disposition="NEEDS_REVIEW", confidence=0.5, explanation="Review"
+                ),
+                SimpleNamespace(usage=Usage(requests=1, input_tokens=100, output_tokens=10)),
+            )
+        await asyncio.Future()
+        raise AssertionError("cancelled request returned")
+
+    monkeypatch.setattr(service, "_request_judgement", fake_request)
+    task = asyncio.create_task(
+        service.run_triage(
+            _input(candidates=2),
+            model_route="azure_ai/gpt-5.6-luna",
+            enabled=True,
+            model=SimpleNamespace(),
+            checkpoint=lambda artifact: service.write_artifact(checkpoint_path, artifact),
+        )
+    )
+    await completed.wait()
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    artifact = json.loads(checkpoint_path.read_text())
+    assert artifact["terminalReason"] == "TRIAGE_INTERRUPTED"
+    assert artifact["results"] == []
+    assert artifact["llmUsage"]["requests"] == 1
+    assert artifact["llmUsage"]["input_tokens"] == 100
+    assert artifact["llmUsage"]["accountingComplete"] is False
+    assert list(tmp_path.glob("*.tmp")) == []
