@@ -26,6 +26,7 @@ from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.execution import (
     _is_content_filter_error,
+    _is_output_token_truncation,
     respawn_subagents,
     run_agent_loop,
 )
@@ -651,6 +652,20 @@ async def run_strix_scan(
                 hooks=hooks,
             )
         except ModelBehaviorError as exc:
+            if _is_output_token_truncation(exc):
+                # Output exhaustion is a budget boundary, not evidence that a
+                # different model should retry the same investigation.
+                logger.warning(
+                    "Scan %s: root output-token limit reached; preserving partial findings.",
+                    scan_id,
+                )
+                await coordinator.cancel_descendants(root_id)
+                with contextlib.suppress(Exception):
+                    await coordinator.set_status(root_id, "stopped")
+                report_state = get_global_report_state()
+                if report_state is not None:
+                    report_state.set_terminal_reason("engine_stopped")
+                return None
             # The root agent (Terra) hit a model error. This may be a content
             # filter, max-turns exhaustion, malformed JSON, or any other model
             # behavior issue. Rather than re-raising and losing all partial

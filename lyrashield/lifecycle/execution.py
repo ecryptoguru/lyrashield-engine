@@ -96,6 +96,25 @@ def _is_content_filter_error(exc: BaseException) -> bool:
     )
 
 
+def _is_output_token_truncation(exc: BaseException) -> bool:
+    """Recognize the provider's explicit output-cap reason, never generic incompleteness."""
+    for value in (exc, getattr(exc, "response", None), getattr(exc, "body", None)):
+        details = (
+            value.get("incomplete_details")
+            if isinstance(value, dict)
+            else getattr(value, "incomplete_details", None)
+        )
+        reason = (
+            details.get("reason") if isinstance(details, dict) else getattr(details, "reason", None)
+        )
+        if isinstance(reason, str):
+            return reason == "max_output_tokens"
+    text = str(exc).lower()
+    return "max_output_tokens" in text and (
+        "response.incomplete" in text or "incomplete_details" in text
+    )
+
+
 class ProviderRefusalError(AgentsException):
     """Raised when a provider returns a structured refusal instead of an exception."""
 
