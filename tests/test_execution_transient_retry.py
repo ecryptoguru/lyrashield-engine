@@ -106,16 +106,10 @@ class _FakeStream:
             yield event
 
 
-def _patch_fast_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(execution, "_TRANSIENT_MODEL_RETRY_BASE_DELAY_S", 0.0)
-    monkeypatch.setattr(execution, "_TRANSIENT_MODEL_RETRY_MAX_DELAY_S", 0.0)
-
-
 async def _run_once(
     monkeypatch: pytest.MonkeyPatch,
     streams: list[_FakeStream],
 ) -> Any:
-    _patch_fast_backoff(monkeypatch)
     calls = {"n": 0}
 
     def _fake_run_streamed(*_args: Any, **_kwargs: Any) -> _FakeStream:
@@ -145,14 +139,12 @@ async def _run_once(
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_retries_transient_midstream_error(
+async def test_run_cycle_does_not_replay_a_transient_stream_after_sdk_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     streams = [_FakeStream(exc=_midstream_api_error()), _FakeStream()]
-    result, attempts, _coordinator = await _run_once(monkeypatch, streams)
-
-    assert result is streams[1]
-    assert attempts == 2
+    with pytest.raises(APIError):
+        await _run_once(monkeypatch, streams)
 
 
 @pytest.mark.asyncio

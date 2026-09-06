@@ -11,10 +11,48 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
+import pytest
+from agents.models.openai_responses import OpenAIResponsesModel
 from agents.retry import ModelRetryNormalizedError, RetryPolicyContext
+from openai import APIStatusError, AsyncOpenAI
 
+from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy import codex
 from lyrashield.policy.models import DEFAULT_MODEL_RETRY, _retry_statusless_provider_errors
+from lyrashield.triage.service import TriageLimits, _request_judgement
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 500])
+async def test_direct_triage_has_one_native_transport_retry_owner(status: int) -> None:
+    attempts = 0
+
+    def rate_limited(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            status,
+            headers={"retry-after-ms": "1"},
+            json={"error": {"message": "offline quota", "type": "rate_limit"}},
+        )
+
+    async with AsyncOpenAI(
+        api_key="offline-test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(rate_limited)),
+    ) as client:
+        model = OpenAIResponsesModel("gpt-5.6-luna", openai_client=client)
+        with pytest.raises(APIStatusError):
+            await _request_judgement(
+                model=model,
+                model_route="openai/gpt-5.6-luna",
+                model_settings=make_model_settings("medium", model_name="openai/gpt-5.6-luna"),
+                prompt="offline test",
+                limits=TriageLimits(),
+            )
+    # Direct calls bypass Runner; its five-retry policy must not multiply the
+    # native client's default of two retries (three total HTTP attempts).
+    assert attempts == 3
 
 
 def _context(

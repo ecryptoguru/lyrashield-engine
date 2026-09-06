@@ -41,6 +41,15 @@ def test_is_content_filter_error_detects_incomplete() -> None:
     assert execution._is_content_filter_error(exc) is True
 
 
+def test_output_token_truncation_is_not_a_content_filter() -> None:
+    exc = ModelBehaviorError(
+        "Responses stream ended with terminal event `response.incomplete`. "
+        "status=incomplete; incomplete_details=IncompleteDetails(reason='max_output_tokens')."
+    )
+    assert execution._is_content_filter_error(exc) is False
+    assert execution._is_transient_model_error(exc) is False
+
+
 def test_is_content_filter_error_detects_response_failed_with_content_filter() -> None:
     """``response.failed`` with a content_filter context marker is content-filter.
 

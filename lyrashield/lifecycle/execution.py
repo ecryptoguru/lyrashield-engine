@@ -63,8 +63,7 @@ _MAX_CONTENT_FILTER_RETRIES = 2
 # Markers that unambiguously indicate a content-filter / guardrail block.
 _CONTENT_FILTER_MARKERS = (
     "content_filter",
-    "response.incomplete",
-    "incomplete_details",
+    "content_policy",
 )
 
 # ``response.failed`` can follow a content_filter block on retry — Azure's
@@ -78,7 +77,9 @@ _CONTENT_FILTER_CONTEXT_MARKERS = ("content_filter", "content_policy")
 def _is_content_filter_error(exc: BaseException) -> bool:
     """Return True if ``exc`` is a content-filter / guardrail block.
 
-    Covers Azure AI ``response.incomplete`` with ``reason='content_filter'``
+    Covers Azure AI ``response.incomplete`` only when its structured reason is
+    ``content_filter``. Generic incomplete events also represent output-token
+    truncation and must not trigger evidence-sanitizing filter recovery.
     and the ChatGPT cybersecurity guardrail. ``response.failed`` is only
     treated as content-filter when the error text also contains a
     filter-specific marker (``content_filter`` or ``content_policy``).
@@ -167,9 +168,9 @@ async def _compact_session(
     )
 
 
-_MAX_TRANSIENT_MODEL_RETRIES = 5
-_TRANSIENT_MODEL_RETRY_BASE_DELAY_S = 2.0
-_TRANSIENT_MODEL_RETRY_MAX_DELAY_S = 90.0
+# ModelSettings owns provider-safe retries. Replaying an entire streamed agent
+# turn here can repeat completed tool work and compound provider retries.
+_MAX_TRANSIENT_MODEL_RETRIES = 0
 
 
 def _model_error_status_code(exc: BaseException) -> int | None:
@@ -206,11 +207,6 @@ def _is_transient_model_error(exc: BaseException) -> bool:
     if code is not None:
         return bool(litellm._should_retry(code))
     return isinstance(exc, APIError)
-
-
-def _transient_model_retry_delay(attempt: int) -> float:
-    delay = _TRANSIENT_MODEL_RETRY_BASE_DELAY_S * float(2 ** (attempt - 1))
-    return min(delay, _TRANSIENT_MODEL_RETRY_MAX_DELAY_S)
 
 
 async def _salvage_stream_to_session(
@@ -895,17 +891,13 @@ async def _run_cycle(  # noqa: PLR0915
                     continue
             if model_retries < _MAX_TRANSIENT_MODEL_RETRIES and _is_transient_model_error(exc):
                 model_retries += 1
-                delay = _transient_model_retry_delay(model_retries)
                 logger.warning(
-                    "transient model/provider error for %s; replaying turn "
-                    "(attempt %d/%d, backoff %.1fs): %r",
+                    "transient model/provider error for %s; replaying turn (attempt %d/%d): %r",
                     agent_id,
                     model_retries,
                     _MAX_TRANSIENT_MODEL_RETRIES,
-                    delay,
                     exc,
                 )
-                await asyncio.sleep(delay)
                 if session is not None:
                     input_data = []
                 continue

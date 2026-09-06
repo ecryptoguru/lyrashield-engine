@@ -11,12 +11,15 @@ import pytest
 
 from lyrashield.artifacts import dedupe as dedupe_module
 from lyrashield.artifacts.dedupe import (
+    _DEDUPE_MAX_OUTPUT_TOKENS,
     _MAX_EXISTING_REPORTS_CHARS,
     DedupeJudgement,
     _bound_existing_reports,
     _dedupe_model_settings,
     _extract_balanced_json,
     _parse_dedupe_response,
+    _related_reports,
+    _validated_dedupe_result,
 )
 from lyrashield.lifecycle import hooks as hooks_module
 from lyrashield.policy import loader
@@ -55,6 +58,11 @@ def test_dedupe_omits_parallel_tool_setting_for_azure_gpt56() -> None:
     """Azure GPT-5.6 rejects ``parallel_tool_calls`` even when false."""
     settings = _dedupe_model_settings(DedupeSettings(), "azure_ai/gpt-5.6-luna", 300)
     assert settings.parallel_tool_calls is None
+
+
+def test_dedupe_settings_cap_matches_reserved_output() -> None:
+    settings = _dedupe_model_settings(DedupeSettings(), "azure_ai/gpt-5.6-luna", 300)
+    assert settings.max_tokens == _DEDUPE_MAX_OUTPUT_TOKENS
 
 
 def test_dedicated_dedupe_model_uses_own_headers_not_main() -> None:
@@ -182,9 +190,12 @@ async def test_dedupe_call_reserves_and_releases_against_the_scan_budget() -> No
     """The dedupe model call is metered, so it must reserve like any agent request."""
     events: list[str] = []
 
+    reserved: list[object] = []
+
     class _Hooks:
         async def reserve_out_of_band_request(self, **kwargs: object) -> None:
             events.append(f"reserve:{kwargs['key']}")
+            reserved.append(kwargs["max_output_tokens"])
 
         async def release_out_of_band_request(self, **kwargs: object) -> None:
             events.append(f"release:{kwargs['key']}")
@@ -206,6 +217,45 @@ async def test_dedupe_call_reserves_and_releases_against_the_scan_budget() -> No
 
     assert response is not None
     assert [e.split(":")[0] for e in events] == ["reserve", "request", "release"]
+    assert reserved == [_DEDUPE_MAX_OUTPUT_TOKENS]
+
+
+def test_semantic_duplicate_requires_compared_id_and_confidence() -> None:
+    reports = [{"id": "known"}]
+    for result in (
+        {"is_duplicate": True, "duplicate_id": "", "confidence": 1.0},
+        {"is_duplicate": True, "duplicate_id": "unknown", "confidence": 1.0},
+        {"is_duplicate": True, "duplicate_id": "known", "confidence": 0.01},
+    ):
+        assert _validated_dedupe_result(result, reports)["is_duplicate"] is False
+    assert (
+        _validated_dedupe_result(
+            {"is_duplicate": True, "duplicate_id": "known", "confidence": 0.8}, reports
+        )["is_duplicate"]
+        is True
+    )
+
+
+def test_related_reports_allow_title_and_line_drift_without_broad_comparison() -> None:
+    candidate = {
+        "target": "repo",
+        "endpoint": "/login",
+        "method": "POST",
+        "cwe": "CWE-89",
+        "title": "Unsanitized login SQL query",
+        "code_locations": [{"file": "app/login.py", "start_line": 20, "end_line": 22}],
+    }
+    related = {
+        "id": "related",
+        "target": "repo",
+        "endpoint": "/login",
+        "method": "POST",
+        "cwe": "CWE-89",
+        "title": "SQL injection in login",
+        "code_locations": [{"file": "app/login.py", "start_line": 10, "end_line": 12}],
+    }
+    unrelated = {**related, "id": "other", "cwe": "CWE-79"}
+    assert _related_reports(candidate, [related, unrelated]) == [related]
 
 
 @pytest.mark.asyncio

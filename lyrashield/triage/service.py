@@ -32,6 +32,8 @@ from lyrashield.utils.redaction import redact_text
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from agents.model_settings import ModelSettings
 
 
@@ -74,6 +76,7 @@ class TriageCandidate(_StrictModel):
     rule_id: str = Field(alias="ruleId", min_length=1, max_length=128)
     severity: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
     selection_reason: Literal[
+        "MEDIUM_SEVERITY",
         "MEDIUM_CONFIDENCE",
         "CORROBORATING",
         "CONTEXT_SENSITIVE_HIGH_IMPACT",
@@ -97,6 +100,14 @@ class TriageJudgement(_StrictModel):
     disposition: Literal["LIKELY_VALID", "NEEDS_REVIEW", "LIKELY_FALSE_POSITIVE"]
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str = Field(min_length=1, max_length=MAX_EXPLANATION_CHARS)
+
+
+class TriageOutputError(ValueError):
+    """A provider response arrived, but its structured judgement was unusable."""
+
+    def __init__(self, message: str, response: Any) -> None:
+        super().__init__(message)
+        self.response = response
 
 
 _TRIAGE_OUTPUT_SCHEMA = AgentOutputSchema(TriageJudgement, strict_json_schema=True)
@@ -176,7 +187,10 @@ async def _request_judgement(
     model_settings: ModelSettings,
     prompt: str,
     limits: TriageLimits,
+    on_response: Callable[[Any], None] | None = None,
 ) -> tuple[TriageJudgement, Any]:
+    # This direct call bypasses Runner. On Azure/OpenAI the native HTTP client
+    # owns bounded retries (two by default); do not add a second retry loop.
     reservation_key = f"ai-triage:{uuid4().hex}"
     hooks = get_active_hooks()
     if hooks is not None:
@@ -202,6 +216,10 @@ async def _request_judgement(
             conversation_id=None,
             prompt=None,
         )
+        # Save returned usage before reservation release or judgement parsing:
+        # either can fail or be cancelled after provider work completed.
+        if on_response is not None:
+            on_response(response)
     finally:
         if hooks is not None:
             await hooks.release_out_of_band_request(
@@ -211,8 +229,12 @@ async def _request_judgement(
             )
     raw = _extract_text(response)
     if not raw:
-        raise ValueError("empty structured triage response")
-    return TriageJudgement.model_validate_json(raw), response
+        raise TriageOutputError("empty structured triage response", response)
+    try:
+        judgement = TriageJudgement.model_validate_json(raw)
+    except ValidationError as exc:
+        raise TriageOutputError(str(exc), response) from exc
+    return judgement, response
 
 
 def _terminal_artifact(
@@ -247,6 +269,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
     max_budget_usd: float | None = None,
     limits: TriageLimits | None = None,
     model: _Model | None = None,
+    checkpoint: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Return an additive triage artifact; never mutate deterministic findings."""
     limits = limits or TriageLimits()
@@ -305,6 +328,15 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
             receipt=receipt,
             llm_usage=ledger.to_record(),
         )
+    started_requests = 0
+    received_usage = 0
+
+    def usage_record() -> dict[str, Any]:
+        return {
+            **ledger.to_record(),
+            "accountingComplete": started_requests == received_usage,
+        }
+
     try:
         if model is None:
             settings = load_settings()
@@ -334,29 +366,67 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
         if active_hooks is None:
             set_active_hooks(triage_hooks)
 
-        async def evaluate(candidate: TriageCandidate, excerpt: str) -> dict[str, Any]:
-            async with semaphore:
-                judgement, response = await _request_judgement(
-                    model=model,
-                    model_route=model_route,
-                    model_settings=model_settings,
-                    prompt=_triage_prompt(candidate, excerpt),
-                    limits=limits,
+        def persist_progress() -> None:
+            if checkpoint is not None:
+                checkpoint(
+                    _terminal_artifact(
+                        status="FAILED",
+                        reason="TRIAGE_INTERRUPTED",
+                        model_route=model_route,
+                        input_checksum=input_checksum,
+                        cache_key=cache_key,
+                        receipt=receipt,
+                        llm_usage=usage_record(),
+                    )
                 )
+
+        def record_usage(response: Any) -> None:
+            nonlocal received_usage
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                received_usage += 1
             report_state = get_global_report_state()
             if report_state is not None:
                 report_state.record_sdk_usage(
                     agent_id="ai-security-triage",
                     agent_name="ai-security-triage",
                     model=model_route,
-                    usage=getattr(response, "usage", None),
+                    usage=usage,
                 )
             ledger.record(
                 agent_id="ai-security-triage",
                 agent_name="ai-security-triage",
                 model=model_route,
-                usage=getattr(response, "usage", None),
+                usage=usage,
             )
+            persist_progress()
+
+        async def evaluate(candidate: TriageCandidate, excerpt: str) -> dict[str, Any]:
+            nonlocal started_requests
+            recorded = False
+
+            def record_once(response: Any) -> None:
+                nonlocal recorded
+                if not recorded:
+                    recorded = True
+                    record_usage(response)
+
+            async with semaphore:
+                started_requests += 1
+                persist_progress()
+                try:
+                    judgement, response = await _request_judgement(
+                        model=model,
+                        model_route=model_route,
+                        model_settings=model_settings,
+                        prompt=_triage_prompt(candidate, excerpt),
+                        limits=limits,
+                        on_response=record_once,
+                    )
+                except TriageOutputError as exc:
+                    record_once(exc.response)
+                    raise
+            record_once(response)
             return {
                 "findingIdentity": candidate.evidence_checksum,
                 "disposition": judgement.disposition,
@@ -391,7 +461,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
-            llm_usage=ledger.to_record(),
+            llm_usage=usage_record(),
         )
     except TimeoutError:
         return _terminal_artifact(
@@ -401,9 +471,9 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
-            llm_usage=ledger.to_record(),
+            llm_usage=usage_record(),
         )
-    except ValidationError:
+    except (TriageOutputError, ValidationError):
         return _terminal_artifact(
             status="FAILED",
             reason="INVALID_TRIAGE_OUTPUT",
@@ -411,7 +481,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
-            llm_usage=ledger.to_record(),
+            llm_usage=usage_record(),
         )
     except (OSError, RuntimeError, ValueError):
         # Provider and content-filter errors remain a bounded overlay state.
@@ -422,7 +492,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
             input_checksum=input_checksum,
             cache_key=cache_key,
             receipt=receipt,
-            llm_usage=ledger.to_record(),
+            llm_usage=usage_record(),
         )
     return {
         "schemaVersion": TRIAGE_OUTPUT_SCHEMA_VERSION,
@@ -433,7 +503,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
         "inputChecksum": input_checksum,
         "cacheKey": cache_key,
         "redactionReceipt": receipt,
-        "llmUsage": ledger.to_record(),
+        "llmUsage": usage_record(),
         "results": results,
     }
 
@@ -444,7 +514,14 @@ def load_input(path: Path) -> TriageInput:
 
 def write_artifact(path: Path, artifact: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def invalid_input_artifact(raw_input: str, *, model_route: str) -> dict[str, Any]:
