@@ -236,11 +236,12 @@ def test_semantic_duplicate_requires_compared_id_and_confidence() -> None:
     )
 
 
-def test_related_reports_allow_title_and_line_drift_without_broad_comparison() -> None:
+@pytest.mark.parametrize("same_title", [False, True])
+def test_related_reports_allow_title_and_line_drift_without_broad_comparison(
+    same_title: bool,
+) -> None:
     candidate = {
         "target": "repo",
-        "endpoint": "/login",
-        "method": "POST",
         "cwe": "CWE-89",
         "title": "Unsanitized login SQL query",
         "code_locations": [{"file": "app/login.py", "start_line": 20, "end_line": 22}],
@@ -248,14 +249,53 @@ def test_related_reports_allow_title_and_line_drift_without_broad_comparison() -
     related = {
         "id": "related",
         "target": "repo",
-        "endpoint": "/login",
-        "method": "POST",
         "cwe": "CWE-89",
-        "title": "SQL injection in login",
+        "title": candidate["title"] if same_title else "SQL injection in login",
         "code_locations": [{"file": "app/login.py", "start_line": 10, "end_line": 12}],
     }
     unrelated = {**related, "id": "other", "cwe": "CWE-79"}
-    assert _related_reports(candidate, [related, unrelated]) == [related]
+    distant = {
+        **related,
+        "id": "distant",
+        "code_locations": [{"file": "app/login.py", "start_line": 100, "end_line": 102}],
+    }
+    assert _related_reports(candidate, [related, unrelated, distant]) == [related]
+
+
+@pytest.mark.asyncio
+async def test_semantic_duplicate_must_name_a_transmitted_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = [{"id": f"vuln-{i:04d}", "description": "x" * 8000} for i in range(100)]
+    settings = SimpleNamespace(
+        dedupe=DedupeSettings(), llm=SimpleNamespace(model="openai/test", timeout=300)
+    )
+    monkeypatch.setattr(dedupe_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(dedupe_module, "configure_sdk_model_defaults", lambda _: None)
+    monkeypatch.setattr(dedupe_module, "_dedupe_model_settings", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        dedupe_module, "StrixProvider", lambda **_kw: SimpleNamespace(get_model=lambda _: None)
+    )
+    monkeypatch.setattr(dedupe_module, "get_global_report_state", lambda: None)
+    transmitted_ids: list[str] = []
+
+    async def fake_request(**kwargs: Any) -> SimpleNamespace:
+        payload = json.loads(dedupe_module._extract_balanced_json(kwargs["user_msg"]))
+        transmitted_ids.extend(r["id"] for r in payload["existing_reports"])
+        return SimpleNamespace(usage=None)
+
+    monkeypatch.setattr(dedupe_module, "_request_dedupe_judgement", fake_request)
+    monkeypatch.setattr(
+        dedupe_module,
+        "_extract_text",
+        lambda _: json.dumps(
+            {"is_duplicate": True, "duplicate_id": reports[0]["id"], "confidence": 0.99}
+        ),
+    )
+    result = await dedupe_module.check_duplicate({"title": "candidate"}, reports)
+    assert transmitted_ids
+    assert reports[0]["id"] not in transmitted_ids
+    assert result["is_duplicate"] is False
 
 
 @pytest.mark.asyncio

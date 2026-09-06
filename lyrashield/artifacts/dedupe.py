@@ -505,7 +505,6 @@ def _related_reports(
     candidate_endpoint = _normalized_text(candidate.get("endpoint"))
     candidate_method = _normalized_text(candidate.get("method"))
     candidate_cwe = _normalized_text(candidate.get("cwe"))
-    candidate_title = _normalized_text(candidate.get("title"))
     candidate_identity = _dynamic_identity(candidate)
     candidate_location = candidate_identity[3] if candidate_identity is not None else ""
     related: list[dict[str, Any]] = []
@@ -519,15 +518,14 @@ def _related_reports(
             and candidate_endpoint == _normalized_text(report.get("endpoint"))
             and (not candidate_method or candidate_method == _normalized_text(report.get("method")))
         )
-        # A title-only exact-identity miss at a distant line is a distinct
-        # finding. Only title/nearby-line drift enters semantic comparison.
+        # Nearby source locations need semantic judgment even with the same
+        # title: inserted lines can shift an otherwise unchanged finding.
         candidate_parts = candidate_location.rsplit(":", 2)
         report_parts = report_location.rsplit(":", 2)
         same_location = (
             len(candidate_parts) == 3
             and len(report_parts) == 3
             and candidate_parts[0] == report_parts[0]
-            and candidate_title != _normalized_text(report.get("title"))
             and candidate_parts[1].isdigit()
             and report_parts[1].isdigit()
             and abs(int(candidate_parts[1]) - int(report_parts[1])) <= 20
@@ -760,7 +758,7 @@ async def check_duplicate(
                 "reason": "Empty response from LLM",
             }
 
-        result = _validated_dedupe_result(_parse_dedupe_response(content), reports_to_compare)
+        result = _validated_dedupe_result(_parse_dedupe_response(content), existing_cleaned)
 
         logger.info(
             "Deduplication check: is_duplicate=%s, confidence=%.2f, reason=%s",

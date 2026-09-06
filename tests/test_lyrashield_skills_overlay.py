@@ -67,3 +67,16 @@ def test_lyrashield_system_prompt_overlay_shadows_builtin() -> None:
     """The product system prompt template in lyra`shield/skills` replaces the built-in one."""
     rendered = render_system_prompt(is_root=True)
     assert "[SYSTEM-NOTICE]" in rendered
+
+
+@pytest.mark.parametrize("is_root", [True, False])
+def test_reporting_remains_available_without_an_agent_slot(is_root: bool) -> None:
+    rendered = render_system_prompt(is_root=is_root, is_whitebox=True)
+    assert "assigned specialist or reporting agent uses create_vulnerability_report" in rendered
+    assert "investigating specialist reports directly" in rendered
+    assert "spawns a reporting agent that files" not in rendered
+    assert "by the reporting agent" not in rendered
+    if is_root:
+        assert "finishing a child does not restore a slot" in rendered
+    else:
+        assert "before agent_finish" in rendered

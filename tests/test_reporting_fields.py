@@ -443,7 +443,7 @@ async def test_dynamic_dedupe_requires_exact_location_identity() -> None:
     different_location = {
         **candidate,
         "id": "vuln-0001",
-        "code_locations": [{"file": "src/query.py", "start_line": 30, "end_line": 32}],
+        "code_locations": [{"file": "src/query.py", "start_line": 100, "end_line": 102}],
     }
     exact_location = {**candidate, "id": "vuln-0002"}
 

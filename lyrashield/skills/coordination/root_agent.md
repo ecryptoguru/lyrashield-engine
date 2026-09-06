@@ -69,10 +69,12 @@ Before creating agents:
 
 **Root-Owned Delegation**
 
-The root creates each specialized phase; children return evidence instead of spawning their own agents:
+The root owns delegation; children never spawn their own agents. Agent limits are cumulative, and finishing a child does not restore a slot. Separate phases require remaining capacity:
 - Discovery agent finds potential vulnerability
 - Validation agent confirms exploitability
 - Reporting agent documents with reproduction steps AND supplies the fix inline (the report tool carries the patch via `code_locations`/`fix_pr_body`) — do not add a separate fix agent that re-derives the same patch
+
+When no slot remains, the investigating specialist validates within its assigned scope and directly calls `create_vulnerability_report` (or `create_dependency_report`) with the inline patch where applicable. Record that validation was not independent, and preserve inconclusive evidence as inconclusive. Do not require reporting fan-out before the specialist can file its findings.
 
 **Resource Efficiency**
 
