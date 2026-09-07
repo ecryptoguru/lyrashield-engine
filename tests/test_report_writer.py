@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -161,6 +162,33 @@ def test_write_vulnerabilities_creates_markdown_csv_and_json(tmp_path: Path) -> 
     )
     assert [row["id"] for row in csv_rows] == ["vuln-0002", "vuln-0001"]
     assert csv_rows[0]["severity"] == "CRITICAL"
+
+
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\uff1d", "\uff0b", "\uff0d", "\uff20"])
+def test_write_vulnerabilities_makes_formula_like_cells_spreadsheet_safe(
+    tmp_path: Path, prefix: str
+) -> None:
+    formula = f'{prefix}1+1,"quoted"'
+    reports = [
+        _sample_report(
+            id=formula,
+            title=f" \t{formula}",
+            severity=formula,
+            timestamp=f"\n{formula}",
+        )
+    ]
+
+    write_vulnerabilities(tmp_path, reports, set())
+
+    # CSV is presentation-safe while JSON retains the canonical values.
+    assert json.loads((tmp_path / "vulnerabilities.json").read_text(encoding="utf-8")) == reports
+    csv_text = (tmp_path / "vulnerabilities.csv").read_text(encoding="utf-8")
+    row = next(csv.DictReader(io.StringIO(csv_text)))
+    assert row["id"] == f"\t{formula}"
+    assert row["title"] == f"\t \t{formula}"
+    assert row["severity"] == f"\t{formula.upper()}"
+    assert row["timestamp"] == f"\t\n{formula}"
+    assert row["file"] == f"vulnerabilities/{formula}.md"
 
 
 def test_write_vulnerabilities_skips_already_saved_ids(tmp_path: Path) -> None:

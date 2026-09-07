@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from lyrashield.artifacts.state import ReportState
+from lyrashield.artifacts.state import ReportState, sanitize_finding
 from lyrashield.utils.redaction import redact_internal_paths, redact_secrets, redact_text
 
 
@@ -19,6 +19,57 @@ def test_redact_secrets_strips_passwords() -> None:
     redacted = redact_secrets(text)
     assert "hunter2" not in redacted
     assert "[SECRET]" in redacted
+
+
+def test_redact_secrets_strips_quoted_key_values_and_known_provider_tokens() -> None:
+    fixtures = {
+        "quoted_json": ('{"api_key":"demo-secret-value"}', "demo-secret-value"),
+        "quoted_shell": ('password="demo-secret-value"', "demo-secret-value"),
+        "multiline": ("secret='line-one\\nline-two'", "line-one\\nline-two"),
+        "github": ("ghp_abcdefghijklmnopqrstuvwxyz123456", "ghp_abcdefghijklmnopqrstuvwxyz123456"),
+        "slack": ("xoxb-12345678901234567890-abcdefgh", "xoxb-12345678901234567890-abcdefgh"),
+        "stripe": ("sk_test_abcdefghijklmnopqrstuvwxyz", "sk_test_abcdefghijklmnopqrstuvwxyz"),
+    }
+    for case, (text, secret) in fixtures.items():
+        redacted = redact_secrets(text)
+        assert secret not in redacted, case
+        assert redacted == redact_secrets(redacted), case
+
+
+def test_redact_secrets_preserves_safe_lookalikes() -> None:
+    text = "api-keyboard=expected sketch ghp_short package-sha256=deadbeef"
+    assert redact_secrets(text) == text
+
+
+def test_sanitize_finding_redacts_normalized_nested_sensitive_keys() -> None:
+    secret = "demo-secret-value"  # noqa: S105 - harmless redaction fixture
+    snapshot = sanitize_finding(
+        {
+            "id": "vuln-0001",
+            "title": "Safe title",
+            "severity": "high",
+            "timestamp": "2026-09-07T00:00:00Z",
+            "dependency_metadata": {
+                "api-key": secret,
+                "nested": {"Client Secret": secret, "sha256": "deadbeef"},
+            },
+            "unstructured": {"Authorization": secret, "revision": "abc123"},
+        },
+        include_internal_paths=True,
+    )
+    assert secret not in str(snapshot)
+    assert snapshot["dependency_metadata"]["api-key"] == "[SECRET]"
+    assert snapshot["dependency_metadata"]["nested"]["Client Secret"] == "[SECRET]"
+    assert snapshot["dependency_metadata"]["nested"]["sha256"] == "deadbeef"
+    assert snapshot["unstructured"]["Authorization"] == "[SECRET]"
+    assert snapshot["unstructured"]["revision"] == "abc123"
+
+
+def test_redaction_masks_x_api_key_and_space_separated_api_key() -> None:
+    snapshot = sanitize_finding({"X-API-Key": "demo-secret-value"}, include_internal_paths=False)
+
+    assert snapshot["X-API-Key"] == "[SECRET]"
+    assert "demo-secret-value" not in redact_secrets('"API Key": "demo-secret-value"')
 
 
 def test_redact_secrets_strips_bearer_tokens() -> None:
