@@ -270,7 +270,9 @@ def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) ->
     """
     snapshot: dict[str, Any] = {}
     for key, value in report.items():
-        if key in _FINDING_TEXT_FIELDS and isinstance(value, str):
+        if is_sensitive_key(key):
+            snapshot[key] = "[SECRET]"
+        elif key in _FINDING_TEXT_FIELDS and isinstance(value, str):
             snapshot[key] = _truncate_text(
                 redact_text(value, include_internal_paths=include_internal_paths)
             )

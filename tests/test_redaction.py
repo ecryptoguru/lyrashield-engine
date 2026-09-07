@@ -65,6 +65,13 @@ def test_sanitize_finding_redacts_normalized_nested_sensitive_keys() -> None:
     assert snapshot["unstructured"]["revision"] == "abc123"
 
 
+def test_redaction_masks_x_api_key_and_space_separated_api_key() -> None:
+    snapshot = sanitize_finding({"X-API-Key": "demo-secret-value"}, include_internal_paths=False)
+
+    assert snapshot["X-API-Key"] == "[SECRET]"
+    assert "demo-secret-value" not in redact_secrets('"API Key": "demo-secret-value"')
+
+
 def test_redact_secrets_strips_bearer_tokens() -> None:
     text = "Authorization: Bearer abc123def456"
     redacted = redact_secrets(text)

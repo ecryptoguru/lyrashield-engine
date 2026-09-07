@@ -39,6 +39,7 @@ _SENSITIVE_KEY_NAMES = frozenset(
         "secret",
         "sessiontoken",
         "token",
+        "xapikey",
     }
 )
 
@@ -134,7 +135,7 @@ _KEYWORD_GATED_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     (
         "api_key",
         re.compile(
-            r"(?<![A-Za-z0-9_-])(?:[\"']?(?:api[_-]?key|apikey)[\"']?)(?![A-Za-z0-9_-])\s*[:=]\s*"
+            r"(?<![A-Za-z0-9_-])(?:[\"']?(?:api[\s_-]?key|apikey)[\"']?)(?![A-Za-z0-9_-])\s*[:=]\s*"
             r"(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s\"'<>]+)",
             re.IGNORECASE,
         ),
@@ -232,6 +233,7 @@ _SECRET_FAST_PATH_MARKERS = (
     "api_key",
     "apikey",
     "api-key",
+    "api key",
     "password",
     "passwd",
     "pwd",
