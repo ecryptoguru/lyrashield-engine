@@ -10,7 +10,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}🦉 Strix Build Script${NC}"
+echo -e "${BLUE}LyraShield Engine Build${NC}"
 echo "================================"
 
 OS="$(uname -s)"
@@ -46,7 +46,9 @@ echo -e "\n${BLUE}Installing dependencies...${NC}"
 uv sync --frozen --extra viewer
 
 VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-echo -e "${YELLOW}Version:${NC} $VERSION"
+UPSTREAM_BASE=$(tr -d '[:space:]' < .lyrashield-upstream-base)
+echo -e "${YELLOW}LyraShield Engine version:${NC} $VERSION"
+echo -e "${YELLOW}Strix substrate:${NC} v1.5.3 ($UPSTREAM_BASE)"
 
 echo -e "\n${BLUE}Cleaning previous builds...${NC}"
 rm -rf build/ dist/
