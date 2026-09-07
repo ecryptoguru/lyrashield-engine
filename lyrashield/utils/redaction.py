@@ -20,6 +20,28 @@ _PRIVATE_KEY_PLACEHOLDER = "[PRIVATE_KEY]"
 _INTERNAL_PATH_PLACEHOLDER = "[INTERNAL_PATH]"
 _SPILL_PATH_PLACEHOLDER = "[SPILL_PATH]"
 
+# Structured keys are normalized before comparison so model output cannot evade
+# redaction by switching between JSON, shell, or Python naming conventions.
+_SENSITIVE_KEY_NAMES = frozenset(
+    {
+        "apikey",
+        "authorization",
+        "accesstoken",
+        "clientsecret",
+        "credential",
+        "credentials",
+        "idtoken",
+        "password",
+        "passwd",
+        "privatekey",
+        "pwd",
+        "refreshtoken",
+        "secret",
+        "sessiontoken",
+        "token",
+    }
+)
+
 # Ordered from most specific (private keys, JWTs, AWS keys) to broad
 # high-entropy fallbacks, so precise patterns win before generic ones.
 #
@@ -112,7 +134,8 @@ _KEYWORD_GATED_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     (
         "api_key",
         re.compile(
-            r"\b(?:api[_-]?key|apikey)\s*[:=]\s*[^\s\"'<>]+",
+            r"(?<![A-Za-z0-9_-])(?:[\"']?(?:api[_-]?key|apikey)[\"']?)(?![A-Za-z0-9_-])\s*[:=]\s*"
+            r"(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s\"'<>]+)",
             re.IGNORECASE,
         ),
         _SECRET_PLACEHOLDER,
@@ -120,7 +143,8 @@ _KEYWORD_GATED_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     (
         "password",
         re.compile(
-            r"\b(?:password|passwd|pwd)\s*[:=]\s*[^\s\"'<>]+",
+            r"(?<![A-Za-z0-9_-])(?:[\"']?(?:password|passwd|pwd)[\"']?)(?![A-Za-z0-9_-])\s*[:=]\s*"
+            r"(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s\"'<>]+)",
             re.IGNORECASE,
         ),
         _SECRET_PLACEHOLDER,
@@ -128,10 +152,26 @@ _KEYWORD_GATED_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     (
         "secret_or_token",
         re.compile(
-            r"\b(?:secret|token)\s*[:=]\s*[^\s\"'<>]+",
+            r"(?<![A-Za-z0-9_-])(?:[\"']?(?:secret|token|access[_-]?token|refresh[_-]?token|client[_-]?secret)[\"']?)(?![A-Za-z0-9_-])\s*[:=]\s*"
+            r"(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s\"'<>]+)",
             re.IGNORECASE,
         ),
         _SECRET_PLACEHOLDER,
+    ),
+    (
+        "github_token",
+        re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
+        _TOKEN_PLACEHOLDER,
+    ),
+    (
+        "slack_token",
+        re.compile(r"\bxox(?:[abprs]|a-2)-[A-Za-z0-9-]{20,}\b", re.IGNORECASE),
+        _TOKEN_PLACEHOLDER,
+    ),
+    (
+        "stripe_secret_key",
+        re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b", re.IGNORECASE),
+        _TOKEN_PLACEHOLDER,
     ),
 ]
 
@@ -198,8 +238,30 @@ _SECRET_FAST_PATH_MARKERS = (
     "secret",
     "token",
     "bearer",
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "xox",
+    "sk_live_",
+    "sk_test_",
     "@",
 )
+
+
+def is_sensitive_key(value: object) -> bool:
+    """Return whether a structured-data key names a credential value.
+
+    The compact allowlist deliberately preserves hashes, revisions, package
+    names, and other useful scan evidence.
+    """
+    normalized = re.sub(r"[^a-z0-9]", "", str(value).lower())
+    return normalized in _SENSITIVE_KEY_NAMES
 
 
 def redact_secrets(text: str) -> str:

@@ -25,7 +25,7 @@ from lyrashield.artifacts.writer import (
 )
 from lyrashield.runtime.session_manager import CLEANUP_FAILED, CLEANUP_REMOVED
 from lyrashield.telemetry import posthog, scarf
-from lyrashield.utils.redaction import redact_text, redact_url
+from lyrashield.utils.redaction import is_sensitive_key, redact_text, redact_url
 from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for
@@ -241,8 +241,12 @@ def _recursive_sanitize_unknown(value: Any, *, include_internal_paths: bool, dep
     if isinstance(value, dict):
         bounded = list(value.items())[:_MAX_COLLECTION_SIZE]
         return {
-            str(k): _recursive_sanitize_unknown(
-                v, include_internal_paths=include_internal_paths, depth=depth + 1
+            str(k): (
+                "[SECRET]"
+                if is_sensitive_key(k)
+                else _recursive_sanitize_unknown(
+                    v, include_internal_paths=include_internal_paths, depth=depth + 1
+                )
             )
             for k, v in bounded
         }
@@ -283,16 +287,27 @@ def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) ->
             )
         elif key == "dependency_metadata" and isinstance(value, dict):
             snapshot[key] = {
-                str(k): _truncate_text(
-                    redact_text(str(v), include_internal_paths=include_internal_paths)
+                str(k): (
+                    "[SECRET]"
+                    if is_sensitive_key(k)
+                    else _truncate_text(
+                        redact_text(str(v), include_internal_paths=include_internal_paths)
+                    )
+                    if isinstance(v, str)
+                    else _recursive_sanitize_unknown(
+                        v, include_internal_paths=include_internal_paths
+                    )
                 )
-                if isinstance(v, str)
-                else _recursive_sanitize_unknown(v, include_internal_paths=include_internal_paths)
                 for k, v in value.items()
             }
         elif key == "cvss_breakdown" and isinstance(value, dict):
             snapshot[key] = {
-                str(k): redact_text(str(v), include_internal_paths=False) for k, v in value.items()
+                str(k): (
+                    "[SECRET]"
+                    if is_sensitive_key(k)
+                    else redact_text(str(v), include_internal_paths=False)
+                )
+                for k, v in value.items()
             }
         else:
             # Unknown fields: recursively sanitize so model-controlled nested

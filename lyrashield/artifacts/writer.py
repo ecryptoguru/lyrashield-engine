@@ -27,6 +27,22 @@ logger = logging.getLogger(__name__)
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
+_SPREADSHEET_FORMULA_PREFIXES = frozenset("=+-@\uff1d\uff0b\uff0d\uff20")
+_SPREADSHEET_LEADING_CHARS = " \t\r\n\v\f\x00"
+
+
+def _spreadsheet_safe_cell(value: object) -> str:
+    """Keep untrusted CSV fields inert in the supported Excel workflow.
+
+    JSON and SARIF retain canonical values. This presentation-only CSV prefix
+    is deliberately visible to programmatic consumers, which should use JSON
+    or SARIF instead.
+    """
+    text = str(value)
+    first = text.lstrip(_SPREADSHEET_LEADING_CHARS)[:1]
+    return f"\t{text}" if first in _SPREADSHEET_FORMULA_PREFIXES else text
+
+
 _FENCE_RE = re.compile(r"^```([^\n`]*)\r?\n(.*?)\r?\n?```$", re.DOTALL)
 _BACKTICK_RUN = re.compile(r"`+")
 
@@ -203,11 +219,11 @@ def write_vulnerabilities(
     for report in sorted_reports:
         csv_writer.writerow(
             {
-                "id": report["id"],
-                "title": report["title"],
-                "severity": report["severity"].upper(),
-                "timestamp": report["timestamp"],
-                "file": f"vulnerabilities/{report['id']}.md",
+                "id": _spreadsheet_safe_cell(report["id"]),
+                "title": _spreadsheet_safe_cell(report["title"]),
+                "severity": _spreadsheet_safe_cell(report["severity"].upper()),
+                "timestamp": _spreadsheet_safe_cell(report["timestamp"]),
+                "file": _spreadsheet_safe_cell(f"vulnerabilities/{report['id']}.md"),
             },
         )
     _atomic_write_text(csv_path, csv_buf.getvalue())
