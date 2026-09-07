@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "lyrashield-evaluation-corpus/1.0.0",
+  "name": "nextjs-typescript-postgresql-v1",
+  "revision": "v1",
+  "pairs": [
+    { "id": "AUTH-01", "class": "authorization", "vulnerable": "fixtures/vulnerable/auth.ts", "clean": "fixtures/clean/auth.ts", "requiredControl": "authorization.object-scope", "expectedRemediation": "Bind the object to the authenticated user." },
+    { "id": "AUTH-02", "class": "authorization", "vulnerable": "fixtures/vulnerable/auth.ts", "clean": "fixtures/clean/auth.ts", "requiredControl": "authorization.role-check", "expectedRemediation": "Enforce the required role." },
+    { "id": "AUTH-03", "class": "authorization", "vulnerable": "fixtures/vulnerable/auth.ts", "clean": "fixtures/clean/auth.ts", "requiredControl": "authorization.tenant-source", "expectedRemediation": "Derive tenant scope from the authenticated session." },
+    { "id": "AUTH-04", "class": "authorization", "vulnerable": "fixtures/vulnerable/auth.ts", "clean": "fixtures/clean/auth.ts", "requiredControl": "authorization.owner-check", "expectedRemediation": "Verify resource ownership." },
+    { "id": "AUTH-05", "class": "authorization", "vulnerable": "fixtures/vulnerable/auth.ts", "clean": "fixtures/clean/auth.ts", "requiredControl": "authorization.fail-closed", "expectedRemediation": "Remove the unconditional allow path." },
+    { "id": "AUTH-06", "class": "authorization", "vulnerable": "fixtures/vulnerable/auth.ts", "clean": "fixtures/clean/auth.ts", "requiredControl": "authorization.workspace-header", "expectedRemediation": "Use server-owned workspace membership." },
+    { "id": "SECRET-01", "class": "secrets", "vulnerable": "fixtures/vulnerable/secrets.ts", "clean": "fixtures/clean/secrets.ts", "requiredControl": "secrets.hardcoded", "expectedRemediation": "Load the value from secret storage." },
+    { "id": "SECRET-02", "class": "secrets", "vulnerable": "fixtures/vulnerable/secrets.ts", "clean": "fixtures/clean/secrets.ts", "requiredControl": "secrets.quoted-key", "expectedRemediation": "Remove the embedded API key." },
+    { "id": "SECRET-03", "class": "secrets", "vulnerable": "fixtures/vulnerable/secrets.ts", "clean": "fixtures/clean/secrets.ts", "requiredControl": "secrets.authorization", "expectedRemediation": "Construct the header from secret storage." },
+    { "id": "SECRET-04", "class": "secrets", "vulnerable": "fixtures/vulnerable/secrets.ts", "clean": "fixtures/clean/secrets.ts", "requiredControl": "secrets.shell-assignment", "expectedRemediation": "Remove the embedded password assignment." },
+    { "id": "SECRET-05", "class": "secrets", "vulnerable": "fixtures/vulnerable/secrets.ts", "clean": "fixtures/clean/secrets.ts", "requiredControl": "secrets.x-api-key", "expectedRemediation": "Load X-API-Key from secret storage." },
+    { "id": "SECRET-06", "class": "secrets", "vulnerable": "fixtures/vulnerable/secrets.ts", "clean": "fixtures/clean/secrets.ts", "requiredControl": "secrets.database-url", "expectedRemediation": "Load the database URL from secret storage." },
+    { "id": "INJECTION-01", "class": "injection", "vulnerable": "fixtures/vulnerable/injection.ts", "clean": "fixtures/clean/injection.ts", "requiredControl": "injection.sql-template", "expectedRemediation": "Use a parameterized SQL query." },
+    { "id": "INJECTION-02", "class": "injection", "vulnerable": "fixtures/vulnerable/injection.ts", "clean": "fixtures/clean/injection.ts", "requiredControl": "injection.sql-concat", "expectedRemediation": "Use a parameterized SQL query." },
+    { "id": "INJECTION-03", "class": "injection", "vulnerable": "fixtures/vulnerable/injection.ts", "clean": "fixtures/clean/injection.ts", "requiredControl": "injection.command", "expectedRemediation": "Reject arbitrary commands." },
+    { "id": "INJECTION-04", "class": "injection", "vulnerable": "fixtures/vulnerable/injection.ts", "clean": "fixtures/clean/injection.ts", "requiredControl": "injection.shell-template", "expectedRemediation": "Avoid shell interpolation." },
+    { "id": "INJECTION-05", "class": "injection", "vulnerable": "fixtures/vulnerable/injection.ts", "clean": "fixtures/clean/injection.ts", "requiredControl": "injection.identifier", "expectedRemediation": "Allowlist dynamic SQL identifiers." },
+    { "id": "INJECTION-06", "class": "injection", "vulnerable": "fixtures/vulnerable/injection.ts", "clean": "fixtures/clean/injection.ts", "requiredControl": "injection.table-name", "expectedRemediation": "Use a fixed table identifier." },
+    { "id": "DEPENDENCY-01", "class": "dependency", "vulnerable": "fixtures/vulnerable/dependencies.ts", "clean": "fixtures/clean/dependencies.ts", "requiredControl": "dependency.web", "expectedRemediation": "Upgrade to the reviewed fixed release." },
+    { "id": "DEPENDENCY-02", "class": "dependency", "vulnerable": "fixtures/vulnerable/dependencies.ts", "clean": "fixtures/clean/dependencies.ts", "requiredControl": "dependency.parser", "expectedRemediation": "Upgrade to the reviewed fixed release." },
+    { "id": "DEPENDENCY-03", "class": "dependency", "vulnerable": "fixtures/vulnerable/dependencies.ts", "clean": "fixtures/clean/dependencies.ts", "requiredControl": "dependency.auth", "expectedRemediation": "Upgrade to the reviewed fixed release." },
+    { "id": "DEPENDENCY-04", "class": "dependency", "vulnerable": "fixtures/vulnerable/dependencies.ts", "clean": "fixtures/clean/dependencies.ts", "requiredControl": "dependency.database", "expectedRemediation": "Upgrade to the reviewed fixed release." },
+    { "id": "DEPENDENCY-05", "class": "dependency", "vulnerable": "fixtures/vulnerable/dependencies.ts", "clean": "fixtures/clean/dependencies.ts", "requiredControl": "dependency.image", "expectedRemediation": "Upgrade to the reviewed fixed release." },
+    { "id": "DEPENDENCY-06", "class": "dependency", "vulnerable": "fixtures/vulnerable/dependencies.ts", "clean": "fixtures/clean/dependencies.ts", "requiredControl": "dependency.archive", "expectedRemediation": "Upgrade to the reviewed fixed release." }
+  ],
+  "failureScenarios": [
+    { "id": "FAIL-01", "condition": "source checkout unavailable", "expectedState": "INSUFFICIENT_EVIDENCE" },
+    { "id": "FAIL-02", "condition": "required scanner receipt missing", "expectedState": "INSUFFICIENT_EVIDENCE" },
+    { "id": "FAIL-03", "condition": "scanner timed out", "expectedState": "INSUFFICIENT_EVIDENCE" },
+    { "id": "FAIL-04", "condition": "scanner failed", "expectedState": "INSUFFICIENT_EVIDENCE" },
+    { "id": "FAIL-05", "condition": "result manifest unsupported", "expectedState": "INSUFFICIENT_EVIDENCE" },
+    { "id": "FAIL-06", "condition": "assessment identity missing", "expectedState": "INSUFFICIENT_EVIDENCE" },
+    { "id": "FAIL-07", "condition": "retest lineage mismatch", "expectedState": "INCONCLUSIVE" },
+    { "id": "FAIL-08", "condition": "budget stop before required coverage", "expectedState": "INSUFFICIENT_EVIDENCE" }
+  ],
+  "metrics": [
+    "precision_by_class",
+    "recall_by_class",
+    "inconclusive_rate",
+    "duplicate_rate",
+    "location_accuracy",
+    "false_remediation_confirmation",
+    "runtime_ms",
+    "cost_usd"
+  ]
+}

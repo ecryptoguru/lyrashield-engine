@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from lyrashield.artifacts.writer import (
+    _spreadsheet_safe_cell,
     read_run_record,
     render_vulnerability_md,
     write_executive_report,
@@ -158,7 +159,9 @@ def test_write_vulnerabilities_creates_markdown_csv_and_json(tmp_path: Path) -> 
     assert json.loads((tmp_path / "vulnerabilities.json").read_text(encoding="utf-8")) == reports
 
     csv_rows = list(
-        csv.DictReader((tmp_path / "vulnerabilities.csv").read_text(encoding="utf-8").splitlines()),
+        csv.DictReader(
+            (tmp_path / "vulnerabilities.csv").read_text(encoding="utf-8-sig").splitlines()
+        ),
     )
     assert [row["id"] for row in csv_rows] == ["vuln-0002", "vuln-0001"]
     assert csv_rows[0]["severity"] == "CRITICAL"
@@ -182,13 +185,27 @@ def test_write_vulnerabilities_makes_formula_like_cells_spreadsheet_safe(
 
     # CSV is presentation-safe while JSON retains the canonical values.
     assert json.loads((tmp_path / "vulnerabilities.json").read_text(encoding="utf-8")) == reports
-    csv_text = (tmp_path / "vulnerabilities.csv").read_text(encoding="utf-8")
+    csv_path = tmp_path / "vulnerabilities.csv"
+    assert csv_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    csv_text = csv_path.read_text(encoding="utf-8-sig")
     row = next(csv.DictReader(io.StringIO(csv_text)))
-    assert row["id"] == f"\t{formula}"
-    assert row["title"] == f"\t \t{formula}"
-    assert row["severity"] == f"\t{formula.upper()}"
-    assert row["timestamp"] == f"\t\n{formula}"
+    assert row["id"] == f"\u200b{formula}"
+    assert row["title"] == f"\u200b \\t{formula}"
+    assert row["severity"] == f"\u200b{formula.upper()}"
+    assert row["timestamp"] == f"\u200b\\n{formula}"
     assert row["file"] == f"vulnerabilities/{formula}.md"
+
+
+def test_spreadsheet_safe_cell_escapes_the_complete_c0_range() -> None:
+    rendered = _spreadsheet_safe_cell("safe" + "".join(chr(code) for code in range(0x20)))
+
+    assert not any(chr(code) in rendered for code in range(0x20))
+    assert r"\0" in rendered
+    assert r"\x01" in rendered
+    assert r"\x1f" in rendered
+    assert all(
+        _spreadsheet_safe_cell(f"{chr(code)}=1").startswith("\u200b") for code in range(0x20)
+    )
 
 
 def test_write_vulnerabilities_skips_already_saved_ids(tmp_path: Path) -> None:

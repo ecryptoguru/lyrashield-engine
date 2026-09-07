@@ -10,7 +10,11 @@ Strix reported a 96% result (100/104 challenges) on XBEN for Strix v0.4.0. That 
 
 Upstream details remain available in the [usestrix/benchmarks repository](https://github.com/usestrix/benchmarks/tree/main/XBEN). This link is attribution and research context, not validation of the current engine.
 
-## Required LyraShield evaluation corpus
+## LyraShield evaluation corpus
+
+The versioned starter corpus lives in [`corpus/v1`](./corpus/v1/README.md). Its deterministic validator runs in the Python test suite. Model-quality measurements remain separate bounded runs with retained receipts.
+
+## Evaluation requirements
 
 Before changing orchestration for claimed quality gains—or publishing any result claim—build a private, versioned corpus that records:
 
