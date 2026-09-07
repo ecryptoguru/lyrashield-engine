@@ -28,10 +28,18 @@ logger = logging.getLogger(__name__)
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 _SPREADSHEET_FORMULA_PREFIXES = frozenset("=+-@\uff1d\uff0b\uff0d\uff20")
-_SPREADSHEET_LEADING_CHARS = " \t\r\n\v\f\x00"
+_SPREADSHEET_LEADING_CHARS = " " + "".join(chr(code) for code in range(0x20))
 _SPREADSHEET_TEXT_PREFIX = "\u200b"
 _SPREADSHEET_CONTROL_ESCAPES = str.maketrans(
-    {"\x00": r"\0", "\t": r"\t", "\r": r"\r", "\n": r"\n", "\v": r"\v", "\f": r"\f"}
+    {
+        **{chr(code): rf"\x{code:02x}" for code in range(0x20)},
+        "\x00": r"\0",
+        "\t": r"\t",
+        "\r": r"\r",
+        "\n": r"\n",
+        "\v": r"\v",
+        "\f": r"\f",
+    }
 )
 
 

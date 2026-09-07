@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from lyrashield.artifacts.writer import (
+    _spreadsheet_safe_cell,
     read_run_record,
     render_vulnerability_md,
     write_executive_report,
@@ -193,6 +194,18 @@ def test_write_vulnerabilities_makes_formula_like_cells_spreadsheet_safe(
     assert row["severity"] == f"\u200b{formula.upper()}"
     assert row["timestamp"] == f"\u200b\\n{formula}"
     assert row["file"] == f"vulnerabilities/{formula}.md"
+
+
+def test_spreadsheet_safe_cell_escapes_the_complete_c0_range() -> None:
+    rendered = _spreadsheet_safe_cell("safe" + "".join(chr(code) for code in range(0x20)))
+
+    assert not any(chr(code) in rendered for code in range(0x20))
+    assert r"\0" in rendered
+    assert r"\x01" in rendered
+    assert r"\x1f" in rendered
+    assert all(
+        _spreadsheet_safe_cell(f"{chr(code)}=1").startswith("\u200b") for code in range(0x20)
+    )
 
 
 def test_write_vulnerabilities_skips_already_saved_ids(tmp_path: Path) -> None:
