@@ -29,18 +29,26 @@ _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 _SPREADSHEET_FORMULA_PREFIXES = frozenset("=+-@\uff1d\uff0b\uff0d\uff20")
 _SPREADSHEET_LEADING_CHARS = " \t\r\n\v\f\x00"
+_SPREADSHEET_TEXT_PREFIX = "\u200b"
+_SPREADSHEET_CONTROL_ESCAPES = str.maketrans(
+    {"\x00": r"\0", "\t": r"\t", "\r": r"\r", "\n": r"\n", "\v": r"\v", "\f": r"\f"}
+)
 
 
 def _spreadsheet_safe_cell(value: object) -> str:
     """Keep untrusted CSV fields inert in the supported Excel workflow.
 
-    JSON and SARIF retain canonical values. This presentation-only CSV prefix
-    is deliberately visible to programmatic consumers, which should use JSON
-    or SARIF instead.
+    JSON and SARIF retain canonical values. CSV renders control characters as
+    visible escapes so one record remains one spreadsheet row, then prefixes a
+    formula-like value with a zero-width text marker. Programmatic consumers
+    should use JSON or SARIF instead.
     """
     text = str(value)
     first = text.lstrip(_SPREADSHEET_LEADING_CHARS)[:1]
-    return f"\t{text}" if first in _SPREADSHEET_FORMULA_PREFIXES else text
+    rendered = text.translate(_SPREADSHEET_CONTROL_ESCAPES)
+    if first in _SPREADSHEET_FORMULA_PREFIXES:
+        return f"{_SPREADSHEET_TEXT_PREFIX}{rendered}"
+    return rendered
 
 
 _FENCE_RE = re.compile(r"^```([^\n`]*)\r?\n(.*?)\r?\n?```$", re.DOTALL)
@@ -226,7 +234,9 @@ def write_vulnerabilities(
                 "file": _spreadsheet_safe_cell(f"vulnerabilities/{report['id']}.md"),
             },
         )
-    _atomic_write_text(csv_path, csv_buf.getvalue())
+    # Excel for Mac needs the UTF-8 BOM to preserve full-width formula-prefix
+    # characters during direct open/save/reopen. JSON and SARIF stay canonical.
+    _atomic_write_text(csv_path, "\ufeff" + csv_buf.getvalue())
 
     _atomic_write_text(
         run_dir / "vulnerabilities.json",

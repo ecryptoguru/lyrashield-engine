@@ -158,7 +158,9 @@ def test_write_vulnerabilities_creates_markdown_csv_and_json(tmp_path: Path) -> 
     assert json.loads((tmp_path / "vulnerabilities.json").read_text(encoding="utf-8")) == reports
 
     csv_rows = list(
-        csv.DictReader((tmp_path / "vulnerabilities.csv").read_text(encoding="utf-8").splitlines()),
+        csv.DictReader(
+            (tmp_path / "vulnerabilities.csv").read_text(encoding="utf-8-sig").splitlines()
+        ),
     )
     assert [row["id"] for row in csv_rows] == ["vuln-0002", "vuln-0001"]
     assert csv_rows[0]["severity"] == "CRITICAL"
@@ -182,12 +184,14 @@ def test_write_vulnerabilities_makes_formula_like_cells_spreadsheet_safe(
 
     # CSV is presentation-safe while JSON retains the canonical values.
     assert json.loads((tmp_path / "vulnerabilities.json").read_text(encoding="utf-8")) == reports
-    csv_text = (tmp_path / "vulnerabilities.csv").read_text(encoding="utf-8")
+    csv_path = tmp_path / "vulnerabilities.csv"
+    assert csv_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    csv_text = csv_path.read_text(encoding="utf-8-sig")
     row = next(csv.DictReader(io.StringIO(csv_text)))
-    assert row["id"] == f"\t{formula}"
-    assert row["title"] == f"\t \t{formula}"
-    assert row["severity"] == f"\t{formula.upper()}"
-    assert row["timestamp"] == f"\t\n{formula}"
+    assert row["id"] == f"\u200b{formula}"
+    assert row["title"] == f"\u200b \\t{formula}"
+    assert row["severity"] == f"\u200b{formula.upper()}"
+    assert row["timestamp"] == f"\u200b\\n{formula}"
     assert row["file"] == f"vulnerabilities/{formula}.md"
 
 
