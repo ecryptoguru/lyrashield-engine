@@ -25,8 +25,11 @@ signing configuration or crypto format is removed or weakened by this change.
 The owned viewer uses a LyraShield wordmark and local functionality only. Upstream
 Cloud/Pro, PR, integration and member upsells have been removed. The unapproved
 `logo.png` asset is retained pending founder approval, but is not displayed by the
-viewer. Existing `lyrashield.dev` references outside the SARIF product-information
-URL remain pending the domain decision. Legal attribution remains in NOTICE and LICENSE.
+viewer. The `lyrashield.dev` domain is NOT owned by LyraShield: the desktop tree that
+posted to `https://api.lyrashield.dev` was deleted in full (2026-09-10, Deep Review
+v16 ruling 4), and no code reference to the domain remains. The historical SARIF
+product-information URL question is closed with that deletion. Legal attribution
+remains in NOTICE and LICENSE.
 
 Export downloads the already-loaded Markdown report locally. Legacy email delivery,
 feedback and OTP unlock entrypoints are not offered: they depend on an upstream relay.
