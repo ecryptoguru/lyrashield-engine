@@ -113,7 +113,6 @@ exclude = [
 exclude = [
     "/.worktrees",
     "/tests/**",
-    "/desktop/**",
     "/strix/interface/viewer/frontend/**",
     "/lyrashield/interface/viewer/frontend/**",
 ]

@@ -107,9 +107,9 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
    | **Worker-contract** | Pinned consumer SHA, declared contract tests, CLI flags | `scripts/verify-worker-contract.sh` |
    | **Package** | Python package build, native-binary smoke | Separate release workflow |
    | **Deployed** | Cross-repository egress probes from real engine-created sandbox | `lyrashield-ai` app/ops PR |
-   | **Signed-release** | Tauri updater cryptographic verification, signed artifacts | Release workflow |
+   | **Signed-release** | Desktop updater cryptographic verification, signed artifacts | `lyrashield-ai` release workflow (the shipped desktop app lives in the web monorepo) |
 
-   Signed desktop-release evidence is a release workflow concern, not a local gate.
+   Signed desktop-release evidence is a web-repo release-workflow concern, not a local or engine gate. The engine's own unowned `desktop/` tree was deleted 2026-09-10 (Deep Review v16 ruling 4).
 
 7. Require human approval and green Engine CI before merge. Engine CI (`.github/workflows/ci.yml`) enforces the same quality gates on every pull request and push to `main`, checks out the pinned worker-consumer revision from `.lyrashield-worker-pin`, and runs the worker contract tests declared in `scripts/worker-contract-tests.txt` (including `packages/types/src/scan-profile.test.ts`). Test counts are intentionally omitted because the executable gate is authoritative.
 
