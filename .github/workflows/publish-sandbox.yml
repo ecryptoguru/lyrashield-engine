@@ -45,8 +45,6 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=engine-sandbox
-          cache-to: type=gha,mode=max,scope=engine-sandbox
       - name: Smoke the exact candidate digest
         run: |
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
