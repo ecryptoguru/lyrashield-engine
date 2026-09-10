@@ -76,6 +76,14 @@ def test_read_missing_artifacts_return_defaults(tmp_path: Path) -> None:
     assert read_report_markdown(run_dir) == ""
 
 
+def test_serve_rejects_remote_http_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = _make_run(tmp_path, "remote", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+
+    with pytest.raises(ValueError, match="must be loopback"):
+        serve(run_dir, host="0.0.0.0", open_browser=False)
+
+
 def test_build_run_state_from_agents_json(tmp_path: Path) -> None:
     run_dir = _make_run(tmp_path, "graph", status="running", end_time=None)
     state = build_run_state(run_dir)

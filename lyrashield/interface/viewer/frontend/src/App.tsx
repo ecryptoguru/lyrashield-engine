@@ -215,6 +215,7 @@ export default function App() {
     setForgetError(null);
     try {
       await forgetAuth();
+      setAuth(null);
       await refreshAuth();
       await refreshRuns();
     } catch (e) {

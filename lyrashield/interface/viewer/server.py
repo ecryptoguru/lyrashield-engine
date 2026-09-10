@@ -15,6 +15,7 @@ Design notes:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -536,6 +537,16 @@ def serve(
     the live scan process and can forward a message to a running agent. Left
     ``None`` (standalone ``lyrashield view``), steering is reported unavailable.
     """
+    normalized_host = host.strip("[]").lower()
+    try:
+        is_loopback = (
+            normalized_host == "localhost" or ipaddress.ip_address(normalized_host).is_loopback
+        )
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise ValueError("Viewer host must be loopback; remote HTTP bindings are not supported")
+
     assets_dir = bundle_dir()
     state = _ViewerState(run_dir=run_dir, assets_dir=assets_dir, steer_handler=steer_handler)
     handler = _make_handler(state)
