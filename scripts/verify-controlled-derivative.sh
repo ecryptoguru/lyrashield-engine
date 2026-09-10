@@ -110,7 +110,9 @@ if [[ "$footprint_failed" == true ]]; then
   exit 1
 fi
 
-ACTUAL_PATCH_OID=$(git diff --no-ext-diff --binary "$BASE" -- strix/ | git hash-object --stdin)
+# Pin index abbreviation so the reviewed digest does not depend on a developer's
+# global core.abbrev setting.
+ACTUAL_PATCH_OID=$(git -c core.abbrev=7 diff --no-ext-diff --binary "$BASE" -- strix/ | git hash-object --stdin)
 if [[ "$ACTUAL_PATCH_OID" != "$EXPECTED_PATCH_OID" ]]; then
   echo "error: reviewed Strix patch digest changed: expected $EXPECTED_PATCH_OID, got $ACTUAL_PATCH_OID" >&2
   exit 1
