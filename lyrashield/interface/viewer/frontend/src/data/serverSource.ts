@@ -235,7 +235,8 @@ export async function otpVerify(email: string, code: string): Promise<OtpVerifyR
 }
 
 export async function forgetAuth(): Promise<void> {
-  await postJson("/api/auth/forget", {});
+  const { ok, data } = await postJson("/api/auth/forget", {});
+  if (!ok || data.ok !== true) throw new Error(String(data.error ?? "Could not forget this email."));
 }
 
 export async function sendReport(runName?: string | null): Promise<SendReportResult> {

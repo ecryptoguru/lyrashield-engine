@@ -38,9 +38,7 @@ def test_write_read_roundtrip() -> None:
     assert record["token"] == "tok-123"
     assert auth.is_verified() is True
 
-    # The forget() helper was removed with the OTP relay endpoints (v16 4.2);
-    # clearing the local record is direct file removal.
-    auth.AUTH_PATH.unlink()
+    auth.forget()
     assert auth.read_auth() is None
     assert auth.is_verified() is False
 

@@ -50,6 +50,7 @@ export default function App() {
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [run, setRun] = useState<LoadedRun | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [forgetError, setForgetError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<View>("overview");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -211,9 +212,14 @@ export default function App() {
 
 
   const onForget = useCallback(async () => {
-    await forgetAuth();
-    await refreshAuth();
-    await refreshRuns();
+    setForgetError(null);
+    try {
+      await forgetAuth();
+      await refreshAuth();
+      await refreshRuns();
+    } catch (e) {
+      setForgetError(e instanceof Error ? e.message : "Could not forget this email.");
+    }
   }, [refreshAuth, refreshRuns]);
 
   return (
@@ -259,6 +265,12 @@ export default function App() {
         </div>
 
         <div className="max-w-[88rem] mx-auto px-3 sm:px-6 py-8 sm:py-12 space-y-6">
+          {forgetError && (
+            <div role="alert" className="rounded-lg px-4 py-3 flex gap-3 items-start border border-red-500/30 bg-red-500/5">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-400" aria-hidden="true" />
+              <p className="text-sm text-red-300">{forgetError}</p>
+            </div>
+          )}
           {error && !run && view !== "history" && view !== "email" && (
             <div className="rounded-lg px-4 py-3 flex gap-3 items-start border border-red-500/30 bg-red-500/5">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-400" aria-hidden="true" />

@@ -169,6 +169,8 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             try:
                 if path == "/api/event":
                     self._handle_event()
+                elif path == "/api/auth/forget":
+                    self._handle_forget()
                 elif path == "/api/report/send":
                     self._handle_report_send()
                 elif path == "/api/feedback":
@@ -285,6 +287,13 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                     "email": record.get("email") if record else None,
                 },
             )
+
+        def _handle_forget(self) -> None:
+            if not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
+            auth.forget()
+            self._send_json(HTTPStatus.OK, {"ok": True})
 
         def _handle_report_send(self) -> None:
             if not self._has_session():

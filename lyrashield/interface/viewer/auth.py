@@ -126,6 +126,11 @@ def write_auth(email: str, token: str, verified_at: str) -> None:
         AUTH_PATH.chmod(0o600)
 
 
+def forget() -> None:
+    """Remove the local cached email and relay token."""
+    AUTH_PATH.unlink(missing_ok=True)
+
+
 # --- relay client -----------------------------------------------------------
 
 
@@ -217,6 +222,7 @@ __all__ = [
     "AUTH_PATH",
     "RelayError",
     "feedback_submit",
+    "forget",
     "is_verified",
     "read_auth",
     "report_send",
