@@ -7,7 +7,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCOPES = ("lyrashield/interface", "lyrashield/tui", "lyrashield/skills", "lyrashield/lifecycle")
+# Deep Review v16 4.2: the gate now covers ALL of lyrashield/** and docs/,
+# not just the four customer-facing subtrees — policy/ and docs/ previously
+# escaped it entirely.
+SCOPES = ("lyrashield", "docs")
 # Exact non-visible compatibility strings; never exempt a bundle or an entire line.
 STATIC_IDENTIFIERS = (
     '"strix_viewer_sidebar_width"',

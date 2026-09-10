@@ -169,12 +169,6 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             try:
                 if path == "/api/event":
                     self._handle_event()
-                elif path == "/api/auth/otp/start":
-                    self._handle_otp_start()
-                elif path == "/api/auth/otp/verify":
-                    self._handle_otp_verify()
-                elif path == "/api/auth/forget":
-                    self._handle_forget()
                 elif path == "/api/report/send":
                     self._handle_report_send()
                 elif path == "/api/feedback":
@@ -291,54 +285,6 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                     "email": record.get("email") if record else None,
                 },
             )
-
-        def _handle_otp_start(self) -> None:
-            if not self._has_session():
-                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
-                return
-            email = str(self._read_body().get("email") or "").strip()
-            if not email:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_email"})
-                return
-            try:
-                auth.otp_start(email)
-            except auth.RelayError as exc:
-                self._send_relay_error(exc)
-                return
-            self._send_json(HTTPStatus.OK, {"ok": True})
-
-        def _handle_otp_verify(self) -> None:
-            if not self._has_session():
-                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
-                return
-            body = self._read_body()
-            email = str(body.get("email") or "").strip()
-            code = str(body.get("code") or "").strip()
-            if not email or not code:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_code"})
-                return
-            try:
-                result = auth.otp_verify(email, code)
-            except auth.RelayError as exc:
-                self._send_relay_error(exc)
-                return
-            auth.write_auth(
-                email=result.get("email") or email,
-                token=result["token"],
-                verified_at=result.get("expires_at") or "",
-            )
-            verified_email = result.get("email") or email
-            self._send_json(HTTPStatus.OK, {"verified": True, "email": verified_email})
-
-        def _handle_forget(self) -> None:
-            # Clearing the cached verification is a state change, so it requires
-            # this process's session capability: a cookie-less caller on an
-            # exposed --host port must not be able to log the operator out.
-            if not self._has_session():
-                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
-                return
-            auth.forget()
-            self._send_json(HTTPStatus.OK, {"ok": True})
 
         def _handle_report_send(self) -> None:
             if not self._has_session():

@@ -114,6 +114,33 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: Generate checksums and sign them
+        # Deep Review v16 4.2: release archives previously published with no
+        # checksum file and no signature. Every release now ships SHA256SUMS,
+        # an ed25519 signature over the checksum file, and the matching public
+        # key so customers can verify both. Fails closed when the signing
+        # secrets are absent — never silently publishes unsigned.
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_PUBLIC_KEY: ${{ secrets.RELEASE_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_SIGNING_KEY}" ] || [ -z "${RELEASE_SIGNING_PUBLIC_KEY}" ]; then
+            echo "::error::RELEASE_SIGNING_KEY / RELEASE_SIGNING_PUBLIC_KEY secrets are required to publish a release."
+            exit 1
+          fi
+          cd release
+          find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 \
+            | sort -z | xargs -0 sha256sum > SHA256SUMS
+          printf '%s\n' "${RELEASE_SIGNING_KEY}" > signing-key.pem
+          openssl pkeyutl -sign -inkey signing-key.pem -in SHA256SUMS -out SHA256SUMS.sig -rawin
+          printf '%s\n' "${RELEASE_SIGNING_PUBLIC_KEY}" > SHA256SUMS.pub
+          # Fail the release if the signature does not verify against the
+          # published public key — a bad pair must never reach customers.
+          openssl pkeyutl -verify -pubin -inkey SHA256SUMS.pub -sigfile SHA256SUMS.sig -in SHA256SUMS -rawin
+          rm signing-key.pem
+          cat SHA256SUMS
+
       - name: Create Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:

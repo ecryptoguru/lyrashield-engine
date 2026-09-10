@@ -463,17 +463,22 @@ def test_auth_status_reflects_expiry(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_auth_mutations_require_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_dir = _make_run(tmp_path, "authmut", status="running", end_time=None)
     _bundle(tmp_path, monkeypatch)
-    forgotten = {"value": False}
-    monkeypatch.setattr(
-        "lyrashield.interface.viewer.auth.forget", lambda: forgotten.update(value=True)
-    )
 
     httpd, url, _ = serve(run_dir, open_browser=False)
     try:
+        # The OTP relay endpoints (/api/auth/otp/*, /api/auth/forget) were
+        # removed in Deep Review v16 4.2 — they posted the user's email to an
+        # upstream relay the product does not own and the rebuilt viewer
+        # bundle has no OTP UI. They must now 404 for every caller.
         for path in ("/api/auth/forget", "/api/auth/otp/start", "/api/auth/otp/verify"):
             status, _ = _post(url, path, {"email": "a@b.com", "code": "123456"})
-            assert status == 403, path
-        assert forgotten["value"] is False
+            assert status == 404, path
+        # The remaining mutations (report send, feedback, steer) still
+        # require the session capability.
+        status, _ = _post(url, "/api/report/send", {"run": "authmut"})
+        assert status == 403
+        status, _ = _post(url, "/api/feedback", {"message": "hello"})
+        assert status == 403
     finally:
         httpd.shutdown()
         httpd.server_close()
