@@ -76,6 +76,14 @@ def test_read_missing_artifacts_return_defaults(tmp_path: Path) -> None:
     assert read_report_markdown(run_dir) == ""
 
 
+def test_serve_rejects_remote_http_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = _make_run(tmp_path, "remote", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+
+    with pytest.raises(ValueError, match="must be loopback"):
+        serve(run_dir, host="0.0.0.0", open_browser=False)
+
+
 def test_build_run_state_from_agents_json(tmp_path: Path) -> None:
     run_dir = _make_run(tmp_path, "graph", status="running", end_time=None)
     state = build_run_state(run_dir)
@@ -463,17 +471,46 @@ def test_auth_status_reflects_expiry(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_auth_mutations_require_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_dir = _make_run(tmp_path, "authmut", status="running", end_time=None)
     _bundle(tmp_path, monkeypatch)
-    forgotten = {"value": False}
-    monkeypatch.setattr(
-        "lyrashield.interface.viewer.auth.forget", lambda: forgotten.update(value=True)
-    )
 
     httpd, url, _ = serve(run_dir, open_browser=False)
     try:
-        for path in ("/api/auth/forget", "/api/auth/otp/start", "/api/auth/otp/verify"):
+        # Remote OTP relay endpoints stay removed. The local forget operation
+        # remains and must require the per-process session capability.
+        for path in ("/api/auth/otp/start", "/api/auth/otp/verify"):
             status, _ = _post(url, path, {"email": "a@b.com", "code": "123456"})
-            assert status == 403, path
-        assert forgotten["value"] is False
+            assert status == 404, path
+        status, _ = _post(url, "/api/auth/forget", {})
+        assert status == 403
+        # The remaining mutations (report send, feedback, steer) still
+        # require the session capability.
+        status, _ = _post(url, "/api/report/send", {"run": "authmut"})
+        assert status == 403
+        status, _ = _post(url, "/api/feedback", {"message": "hello"})
+        assert status == 403
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_forget_clears_local_auth_with_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _make_run(tmp_path, "forget", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+    forgotten = {"value": False}
+
+    def mark_forgotten() -> None:
+        forgotten["value"] = True
+
+    monkeypatch.setattr("lyrashield.interface.viewer.auth.forget", mark_forgotten)
+
+    httpd, url, token = serve(run_dir, open_browser=False)
+    try:
+        cookie = _session_cookie(url, token)
+        status, body = _post(url, "/api/auth/forget", {}, cookie=cookie)
+        assert status == 200
+        assert json.loads(body) == {"ok": True}
+        assert forgotten["value"] is True
     finally:
         httpd.shutdown()
         httpd.server_close()

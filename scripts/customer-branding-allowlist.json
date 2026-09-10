@@ -3,11 +3,14 @@
     "imports": "Preserve upstream module, class, environment, storage, package and artifact compatibility identifiers.",
     "attribution": "Preserve upstream legal attribution and historical implementation comments.",
     "prompt": "Only the system prompt first line may change; remaining two upstream references are byte-preserved.",
-    "dormantUpdater": "update_check.py is legacy compatibility code, unreachable from the product CLI: --update fails closed in main.py. Do not reactivate it."
+    "dormantUpdater": "update_check.py is legacy compatibility code, unreachable from the product CLI: --update fails closed in main.py. Do not reactivate it.",
+    "internalIdentifiers": "Inherited internal identifiers: strix.* imports, Strix* class names, .strix paths, STRIX_* env vars, strix-agent package, strix/skills substrate references. Byte-preserved for upstream compatibility.",
+    "attributionHeaders": "Line-1 controlled-derivative attribution headers (Apache-2.0 NOTICE obligations).",
+    "internalMechanicsDocs": "Comments/docstrings/docs describing internal upstream mechanics (fork boundary, telemetry stack, sandbox internals) \u2014 never customer-facing branding."
   },
   "source_lines": {
     "lyrashield/lifecycle/agents.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "\"\"\"SDK-native state for Strix's addressable agent graph.\"\"\""
     ],
     "lyrashield/lifecycle/compaction.py": [
@@ -17,20 +20,20 @@
       "        model_provider = StrixProvider()"
     ],
     "lyrashield/lifecycle/execution.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "\"\"\"Execution loop for addressable SDK-backed Strix agents.\"\"\""
     ],
     "lyrashield/lifecycle/hooks.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "\"\"\"SDK run hooks used by Strix orchestration.\"\"\""
     ],
     "lyrashield/lifecycle/inputs.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "\"\"\"Pure input builders for Strix scan runs.\"\"\"",
       "        \"authorization_source\": \"strix_platform_verified_targets\","
     ],
     "lyrashield/lifecycle/runner.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "\"\"\"Top-level Strix scan runner.\"\"\"",
       "from lyrashield.agents.factory import build_strix_agent, make_child_factory",
       "    StrixProvider,",
@@ -44,7 +47,7 @@
       "            fallback_agent = build_strix_agent("
     ],
     "lyrashield/lifecycle/sessions.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "\"\"\"SDK session helpers for Strix agents.\"\"\""
     ],
     "lyrashield/interface/viewer/frontend/package-lock.json": [
@@ -52,10 +55,10 @@
       "      \"name\": \"strix-viewer\","
     ],
     "lyrashield/tui/scan_flow.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],
     "lyrashield/interface/auth_cli.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "Signing in only stores OAuth tokens (``~/.strix/subscription-auth.json``); model",
       "selection stays with ``STRIX_LLM``. A ``chatgpt/<model>`` STRIX_LLM runs on the",
       "from strix.config import load_settings",
@@ -66,34 +69,34 @@
       "    \"Strix\" wordmark."
     ],
     "lyrashield/tui/app.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],
     "lyrashield/tui/byok_config.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "            # The engine resolves ``STRIX_LLM``/``LYRASHIELD_LLM``; an Azure"
     ],
     "lyrashield/tui/doctor.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],
     "lyrashield/tui/__init__.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "``lyrashield_adapter/`` or ``strix/**``. Flows:"
     ],
     "lyrashield/skills/__init__.py": [
       "\"\"\"LyraShield-specific skill overlays that shadow built-in strix/skills/.\"\"\""
     ],
     "lyrashield/tui/results_store.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],
     "lyrashield/interface/tui/history.py": [
       "from strix.core.paths import runtime_state_dir"
     ],
     "lyrashield/interface/provider_contract_cli.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from strix.config import apply_config_override"
     ],
     "lyrashield/interface/main.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "Strix Agent Interface",
       "    StrixProvider,",
       "from strix.config import apply_config_override",
@@ -139,7 +142,7 @@
       "        \"uv\": \"uv tool upgrade strix-agent\",",
       "        \"pip\": \"pip install --upgrade strix-agent\",",
       "        f\"[#eab308]A new version of strix is available:[/] \"",
-      "    console.print(\"[#22c55e]✓ strix updated — restart the scan to use the new version[/]\")",
+      "    console.print(\"[#22c55e]\u2713 strix updated \u2014 restart the scan to use the new version[/]\")",
       "    Returns True if strix was updated (caller should re-exec / exit).",
       "        f\"[#eab308]A new version of strix is available:[/] \"",
       "    choice = Prompt.ask(\"Update strix?\", choices=[\"y\", \"n\", \"s\"], default=\"n\")",
@@ -149,20 +152,20 @@
       "        console.print(\"[bold red]Could not determine the latest strix version.[/]\")",
       "        console.print(f\"[#22c55e]strix {current} is already the latest version.[/]\")",
       "            \"[#60a5fa]curl -sSL https://strix.ai/install | bash[/]\"",
-      "    console.print(f\"[#22c55e]✓ Updated strix to {latest}[/]\")"
+      "    console.print(f\"[#22c55e]\u2713 Updated strix to {latest}[/]\")"
     ],
     "lyrashield/interface/tui/renderers/__init__.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],
     "lyrashield/interface/utils.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from strix.config import load_settings",
       "    from strix.config import codex",
       "        resp = requests.get(check_url, headers={\"User-Agent\": \"git/strix\"}, timeout=10)",
       "    base = Path(tempfile.gettempdir()) / \"strix_repos\""
     ],
     "lyrashield/interface/tui/renderers/web_search_renderer.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],
     "lyrashield/interface/tui/__init__.py": [
       "from lyrashield.interface.tui.app import StrixTUIApp, run_tui",
@@ -172,7 +175,7 @@
       "from strix.core.paths import ("
     ],
     "lyrashield/interface/cli.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from lyrashield.lifecycle.runner import run_strix_scan",
       "from strix.config import load_settings",
       "            \"strix_image is not configured. Set it in ~/.strix/cli-config.json.\",",
@@ -186,7 +189,7 @@
       "// Local stub of the strix-app auth store. The local viewer has no accounts:"
     ],
     "lyrashield/interface/tui/app.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from lyrashield.lifecycle.runner import run_strix_scan",
       "from strix.config import load_settings",
       "        return pkg_version(\"strix-agent\")",
@@ -220,7 +223,7 @@
       "from strix.core.paths import runtime_state_dir"
     ],
     "lyrashield/interface/viewer/transcript.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from strix.core.paths import run_record_path",
       "    # Imported lazily so importing strix.interface.viewer does not eagerly pull the TUI."
     ],
@@ -244,7 +247,7 @@
       " * (`strix_runs/<run>/{run.json,vulnerabilities.json}`) into the app's own"
     ],
     "lyrashield/interface/viewer/frontend/src/components/FeedbackView.tsx": [
-      " * verification — the email is taken as-is) and relays it to Strix via the local"
+      " * verification \u2014 the email is taken as-is) and relays it to Strix via the local"
     ],
     "lyrashield/interface/viewer/frontend/src/components/live/tool-renderers/TerminalRenderer.tsx": [
       "// TUI strips them in strix/interface/tui/renderers/shell_renderer.py). Only a",
@@ -254,7 +257,7 @@
       "    while (filtered.length > 0 && /^\\[STRIX_\\d+\\]\\$\\s*/.test(filtered[filtered.length - 1])) {"
     ],
     "lyrashield/interface/viewer/server.py": [
-      "# Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from strix.core.paths import run_record_path",
       "# port is appended (``strix_viewer_session_<port>``) because browsers scope",
       "SESSION_COOKIE_PREFIX = \"strix_viewer_session\"",
@@ -269,6 +272,417 @@
       " * The OSS strix engine (usestrix/strix) is the source of truth for tool names:",
       " * see `strix/tools/**` for definitions and `strix/interface/tui/renderers/` for",
       "  // scan_start_info / subagent_start_info are strix-app synthetic events; finish_scan is the engine's"
+    ],
+    "lyrashield/README.md": [
+      "  directories before `strix/agents/prompts/`, so",
+      "  inherited `strix/skills/`.",
+      "(`strix/config/loader.py` and `strix/skills/__init__.py`).",
+      "- `strix.agents.factory.register_model_policy` \u2014 registers the product",
+      "- `strix.agents.factory.register_tool_override` \u2014 replaces upstream base tools",
+      "- `strix.agents.prompt.FileSystemLoader` \u2014 searches registered skill",
+      "- `strix.config.loader.register_settings_loader` \u2014 registers",
+      "- `strix.skills.register_skill_dir` \u2014 loads `lyrashield/skills/` alongside",
+      "`strix/**` substrate:",
+      "upstream Strix v1.5.3 except for two generic, reviewed seams",
+      "worker artifact contract. The retained `strix/**` substrate is exact"
+    ],
+    "lyrashield/agents/factory.py": [
+      "        return build_strix_agent(",
+      "    This is a neutral seam: upstream `strix.agents.factory` exposes no product",
+      "    if getattr(tool, \"_strix_bounded\", False):",
+      "    name: str = \"strix\",",
+      "    tool._strix_bounded = True  # type: ignore[attr-defined]",
+      "\"\"\"Build SandboxAgents for root + child Strix runs.\"\"\"",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# ``build_strix_agent`` call and every agent (root + children) gets them.",
+      "# ``strix.runtime.backends.register_backend``: register before the first",
+      "def build_strix_agent(",
+      "from strix.config import load_settings",
+      "from strix.tools.agents_graph.tools import (",
+      "from strix.tools.load_skill.tool import load_skill",
+      "from strix.tools.notes.tools import (",
+      "from strix.tools.thinking.tool import think"
+    ],
+    "lyrashield/agents/overrides.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/agents/prompt.py": [
+      "        prompt_dir = get_strix_resource_path(\"agents\", _PROMPT_DIRNAME)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.skills import get_available_skills, load_skills, skill_search_dirs",
+      "from strix.utils.resource_paths import get_strix_resource_path"
+    ],
+    "lyrashield/artifacts/dedupe.py": [
+      "            model=StrixProvider(settings=settings).get_model(resolved_model),",
+      "    StrixProvider,",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/artifacts/sarif.py": [
+      "            # line because Strix code_locations carry the SINK line,",
+      "        Strix's ``code_locations[].file`` and ``start_line`` which",
+      "    \"\"\"Build a SARIF rule descriptor from a Strix finding.\"\"\"",
+      "    \"\"\"Map Strix severity labels to SARIF result levels.\"\"\"",
+      "    \"\"\"Strix-specific metadata for downstream consumers.",
+      "    CWE values are normalised from Strix output variants (``CWE-306``,",
+      "    Strix findings carry the suggested change inline on each code",
+      "    Strix output variants (``CWE-306``, ``cwe: 306``, ``306``) to the",
+      "    expected property. Strix-specific fields are namespaced under",
+      "    so multiple Strix runs against the same repo reconcile rather than pile",
+      "  * SARIF only has three levels (error / warning / note). Strix's five",
+      "\"\"\"SARIF 2.1.0 output for Strix vulnerability reports.",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# SARIF only has three result levels; Strix's five severities collapse here.",
+      "# strix-triage's DEFAULT_STRIDE_LEGS convention).",
+      "Builds a GitHub code-scanning compatible SARIF document from Strix findings"
+    ],
+    "lyrashield/artifacts/state.py": [
+      "                    tool_version=_strix_version(),",
+      "        return version(\"strix-agent\")",
+      "    persistence. This store keeps only Strix-owned scan artifacts and",
+      "    scan streams, so the OpenRouter streaming handler (see strix.config.models)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "def _strix_version() -> str | None:",
+      "from strix.config import codex",
+      "from strix.config.loader import load_settings",
+      "from strix.core.paths import run_dir_for"
+    ],
+    "lyrashield/artifacts/usage.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/artifacts/writer.py": [
+      "\"\"\"Artifact writers for Strix scan reports.\"\"\"",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.core.paths import run_record_path"
+    ],
+    "lyrashield/policy/codex.py": [
+      "            f\"Set STRIX_LLM to a model that isn't blocked and re-run.\"",
+      "        api_key=\"strix-codex-oauth\",  # placeholder; the hook overwrites Authorization",
+      "    \"\"\"Serialize token refresh within (lock) and across (flock) Strix processes,",
+      "    \"\"\"The model slug behind a ``chatgpt/<model>`` STRIX_LLM, or None.\"\"\"",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "AUTH_PATH = Path.home() / \".strix\" / \"subscription-auth.json\""
+    ],
+    "lyrashield/policy/loader.py": [
+      "    \"\"\"Register this product loader with the upstream Strix config seam.\"\"\"",
+      "    _strix_loader.register_settings_loader(sys.modules[__name__])",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "_DEFAULT_PATH: Path = Path.home() / \".strix\" / \"cli-config.json\"",
+      "_register_with_strix()",
+      "def _register_with_strix() -> None:",
+      "from strix.config import loader as _strix_loader"
+    ],
+    "lyrashield/policy/models.py": [
+      "            or os.environ.get(\"STRIX_PROGRAMMATIC_TOOL_CALLING\", \"\")",
+      "            return _StrixOpenRouterStreamingHandler(",
+      "    \"\"\"Apply Strix config to SDK-native defaults.\"\"\"",
+      "    # Strix uses LiteLLM's success callback to capture provider-reported cost.",
+      "    Strix uses only issues streamed requests, so such a gateway fails every",
+      "    class _StrixOpenRouterStreamingHandler(OpenRouterChatCompletionStreamingHandler):",
+      "    class _StrixOpenrouterConfig(OpenrouterConfig):",
+      "    litellm.OpenrouterConfig = _StrixOpenrouterConfig  # type: ignore[misc]",
+      "    lost and Strix falls back to a cost-map estimate that is missing entirely",
+      "    regardless of the ``STRIX_LLM`` prefix.",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "class StrixProvider(MultiProvider):"
+    ],
+    "lyrashield/policy/provider_contract.py": [
+      "    model = StrixProvider(settings=settings).get_model(model_name)",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from lyrashield.policy.models import StrixProvider, configure_sdk_model_defaults"
+    ],
+    "lyrashield/policy/settings.py": [
+      "                \"STRIX_ALLOW_CHATGPT_SUBSCRIPTION\",",
+      "            \"STRIX_ALLOW_CHATGPT_SUBSCRIPTION\",",
+      "            \"STRIX_WEB_SEARCH_API_KEY\",",
+      "        alias=\"STRIX_APP_URL\",",
+      "        alias=\"STRIX_DEDUPE_MODEL\",",
+      "        alias=\"STRIX_DEDUPE_REASONING_EFFORT\",",
+      "        default=\"strix-sandbox:dev\",",
+      "        validation_alias=_lyra(\"STRIX_APP_URL\"),",
+      "        validation_alias=_lyra(\"STRIX_CONTEXT_AUTO_COMPACT\"),",
+      "        validation_alias=_lyra(\"STRIX_CONTEXT_BUFFER_TOKENS\"),",
+      "        validation_alias=_lyra(\"STRIX_CONTEXT_FALLBACK_TOKENS\"),",
+      "        validation_alias=_lyra(\"STRIX_CONTEXT_KEEP_TOKENS\"),",
+      "        validation_alias=_lyra(\"STRIX_CONTEXT_SUMMARY_TOKENS\"),",
+      "        validation_alias=_lyra(\"STRIX_DEDUPE_MODEL\"),",
+      "        validation_alias=_lyra(\"STRIX_DEDUPE_REASONING_EFFORT\"),",
+      "        validation_alias=_lyra(\"STRIX_DELEGATE_LLM\"),",
+      "        validation_alias=_lyra(\"STRIX_DELEGATE_REASONING_EFFORT\"),",
+      "        validation_alias=_lyra(\"STRIX_FORCE_REQUIRED_TOOL_CHOICE\"),",
+      "        validation_alias=_lyra(\"STRIX_IMAGE\"),",
+      "        validation_alias=_lyra(\"STRIX_MAX_CONTEXT_IMAGES\"),",
+      "        validation_alias=_lyra(\"STRIX_MAX_INPUT_TOKENS\"),",
+      "        validation_alias=_lyra(\"STRIX_MAX_LOCAL_COPY_MB\"),",
+      "        validation_alias=_lyra(\"STRIX_MAX_OUTPUT_TOKENS\"),",
+      "        validation_alias=_lyra(\"STRIX_PROMPT_CACHE\"),",
+      "        validation_alias=_lyra(\"STRIX_REASONING_EFFORT\"),",
+      "        validation_alias=_lyra(\"STRIX_RUNTIME_BACKEND\"),",
+      "        validation_alias=_lyra(\"STRIX_SERVER_CONVERSATION\"),",
+      "        validation_alias=_lyra(\"STRIX_TELEMETRY\"),",
+      "        validation_alias=_lyra(\"STRIX_TOOL_OUTPUT_MAX_BYTES\"),",
+      "        validation_alias=_lyra(\"STRIX_TOOL_OUTPUT_MAX_LINES\"),",
+      "        validation_alias=_lyra(\"STRIX_TOOL_OUTPUT_MAX_TOKENS\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_ADVANCED_COST\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_API_BASE\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_BASIC_COST\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_BUDGET_USD\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_ENABLED\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_MAX_CALLS_PER_SCAN\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_MAX_CHARS_TOTAL\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_MAX_RESULTS\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_MODE\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_PROVIDER\"),",
+      "        validation_alias=_lyra(\"STRIX_WEB_SEARCH_TURBO_COST\"),",
+      "    \"\"\"Product alias pair for a single upstream STRIX_* env var.\"\"\"",
+      "    # Base URL of the Strix relay the local viewer proxies to for email",
+      "    # operator explicitly configures STRIX_APP_URL/LYRASHIELD_APP_URL. The",
+      "    model: str | None = Field(default=None, validation_alias=_lyra(\"STRIX_LLM\"))",
+      "    product = upstream.replace(\"STRIX_\", \"LYRASHIELD_\", 1)",
+      "\"\"\"Strix application settings \u2014 pydantic-settings powered.\"\"\"",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# and the CLI share one definition without ``strix`` importing the adapter.",
+      "# to the bare upstream ``strix`` dev CLI check for it. Lives here so the adapter"
+    ],
+    "lyrashield/runtime/backends.py": [
+      "        StrixDockerSandboxClient,",
+      "    client = StrixDockerSandboxClient(docker.from_env())",
+      "    client.strix_bind_mounts = bind_mounts or []",
+      "from strix.runtime.backends import SandboxBackend",
+      "from strix.runtime.backends import get_backend as get_upstream_backend"
+    ],
+    "lyrashield/runtime/docker_client.py": [
+      "                    \"STRIX_IMAGE_DIGEST is set. Pre-pull the image with the verified digest \"",
+      "                \"(default; set STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1 to enable)\"",
+      "            \"sandbox admission failed: STRIX_DOCKER_SANDBOX_NETWORK is not set. \"",
+      "            cast(\"StrixDockerSandboxSession\", inner).sandbox_network = network",
+      "            env.append(f\"STRIX_DOCKER_SANDBOX_NETWORK={network}\")",
+      "            env[\"STRIX_DOCKER_SANDBOX_NETWORK\"] = network",
+      "            f\"sandbox admission failed: STRIX_DOCKER_SANDBOX_NETWORK={configured!r} \"",
+      "            if os.environ.get(\"STRIX_IMAGE_DIGEST\", \"\").strip():",
+      "            inner.__class__ = StrixDockerSandboxSession",
+      "        \"STRIX_SANDBOX_CPUS\", str(_DEFAULT_SANDBOX_CPUS_NANO // 1_000_000_000)",
+      "        # Strix delta from the SDK body: drop ``entrypoint`` override and",
+      "        # Strix injection: host bind mounts (e.g. large repos passed via --mount)",
+      "        # Strix injections \u2014 append, don't overwrite, so FUSE/SYS_ADMIN survives.",
+      "        bind_mounts = getattr(self, \"strix_bind_mounts\", ())",
+      "        labels[\"strix-run-type\"] = run_type",
+      "    Network capabilities are now opt-in via ``STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES``.",
+      "    Set any ``STRIX_SANDBOX_*`` knob to ``0``/``off``/``none``/``unlimited``",
+      "    The legacy ``STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES`` is still honored when the",
+      "    ``STRIX_DOCKER_SANDBOX_NETWORK``; this check binds admission to the",
+      "    ``max-size * max-file``. Set ``STRIX_SANDBOX_LOG_MAX_SIZE`` to ``0``/``off``",
+      "    labels[\"strix-run-id\"] = run_id",
+      "    max_file = os.environ.get(\"STRIX_SANDBOX_LOG_MAX_FILE\", \"3\").strip() or \"3\"",
+      "    max_size = os.environ.get(\"STRIX_SANDBOX_LOG_MAX_SIZE\", \"50m\").strip()",
+      "    mem_limit = _sandbox_cap_value(\"STRIX_SANDBOX_MEM_LIMIT\", _DEFAULT_SANDBOX_MEM_LIMIT)",
+      "    new = os.environ.get(\"STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES\", \"\").strip().lower()",
+      "    old = os.environ.get(\"STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES\", \"\").strip().lower()",
+      "    pids_limit = _sandbox_cap_value(\"STRIX_SANDBOX_PIDS_LIMIT\", str(_DEFAULT_SANDBOX_PIDS_LIMIT))",
+      "    run_id = os.getenv(\"STRIX_RUN_ID\")",
+      "    run_type = os.getenv(\"STRIX_RUN_TYPE\")",
+      "    shm_size = _sandbox_cap_value(\"STRIX_SANDBOX_SHM_SIZE\", _DEFAULT_SANDBOX_SHM_SIZE)",
+      "    strix_bind_mounts: list[dict[str, Any]]",
+      "   ``STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES`` is still honored if the new",
+      "   ``STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1``. The legacy",
+      "   when ``STRIX_SANDBOX_ALLOW_HOST_GATEWAY`` is explicitly enabled.",
+      "\"\"\"StrixDockerSandboxClient \u2014 preserves the image's ENTRYPOINT and adds",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "_SANDBOX_HOST_GATEWAY_ENV = \"STRIX_SANDBOX_ALLOW_HOST_GATEWAY\"",
+      "_SANDBOX_NETWORK_ENV = \"STRIX_DOCKER_SANDBOX_NETWORK\"",
+      "class StrixDockerSandboxClient(DockerSandboxClient):",
+      "class StrixDockerSandboxSession(DockerSandboxSession):"
+    ],
+    "lyrashield/runtime/local_dir_staging.py": [
+      "_STAGING_PREFIX = \"strix-localdir-\""
+    ],
+    "lyrashield/runtime/session_manager.py": [
+      "        environment[\"STRIX_RUN_ID\"] = scan_id",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.config import load_settings"
+    ],
+    "lyrashield/telemetry/README.md": [
+      "- `STRIX_NO_UPDATE_CHECK=1` \u2014 disables the upstream self-update network check.",
+      "- `STRIX_TELEMETRY=0` \u2014 disables PostHog and Scarf event emission.",
+      "LyraShield Engine is a controlled derivative of upstream Strix. The inherited telemetry stack (PostHog and Scarf clients in `posthog.py` / `scarf.py`) is **forced off** by the `lyrashield` product entry point (`lyrashield_adapter`), which sets `STRIX_TELEMETRY=0` before the upstream CLI runs. No remote analytics are sent in production. The code is retained only so the upstream substrate remains reviewable and so the bare `strix` dev CLI keeps its upstream behavior.",
+      "The bare upstream `strix` dev CLI (not shipped in this distribution) honors `STRIX_TELEMETRY=0` to opt out. The `lyrashield` entry point sets this for you; there is no supported way to re-enable remote telemetry through the product boundary, and re-enabling it would violate the LyraShield production contract."
+    ],
+    "lyrashield/telemetry/_common.py": [
+      "        \"strix_version\": get_version(),",
+      "        logger.debug(\"strix-agent version lookup failed\", exc_info=True)",
+      "        return version(\"strix-agent\")",
+      "    marker = Path.home() / \".strix\" / \".seen\"",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/telemetry/logging.py": [
+      "            ERROR. ``None`` (default) reads ``STRIX_DEBUG`` env: ``1`` /",
+      "        debug = (os.environ.get(\"STRIX_DEBUG\") or \"\").strip().lower() in {",
+      "        run_dir: Per-scan output directory. ``{run_dir}/strix.log`` is",
+      "    \"\"\"Quiet dependency logging/warnings that obscure Strix scan logs.\"\"\"",
+      "    context_filter = _StrixContextFilter()",
+      "    log_path = run_dir / \"strix.log\"",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "# drowned in their internals when STRIX_DEBUG=1.",
+      "_AGENT_ID: ContextVar[str | None] = ContextVar(\"strix_agent_id\", default=None)",
+      "_HANDLER_TAG = \"_strix_scan_handler\"",
+      "_SCAN_ID: ContextVar[str | None] = ContextVar(\"strix_scan_id\", default=None)",
+      "_TRACKED_ROOTS: tuple[str, ...] = (\"strix\", \"openai.agents\")",
+      "class _StrixContextFilter(logging.Filter):"
+    ],
+    "lyrashield/telemetry/posthog.py": [
+      "    return os.environ.get(\"STRIX_POSTHOG_API_KEY\", \"\")",
+      "    return os.environ.get(\"STRIX_POSTHOG_HOST\", \"https://us.i.posthog.com\")",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.config import load_settings"
+    ],
+    "lyrashield/telemetry/scarf.py": [
+      "        version = str(props.pop(\"strix_version\", get_version()) or \"unknown\")",
+      "    return os.environ.get(\"STRIX_SCARF_ENDPOINT\", \"\")",
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.config import load_settings"
+    ],
+    "lyrashield/tools/__init__.py": [
+      "\"\"\"LyraShield product tools that override or extend the upstream Strix toolset.\"\"\""
+    ],
+    "lyrashield/tools/agents_graph/tools.py": [
+      "from strix.skills import validate_requested_skills"
+    ],
+    "lyrashield/tools/output_store.py": [
+      "WORKSPACE_SPILL_DIR = \"/workspace/.strix/tool-output\"",
+      "``/workspace/.strix/tool-output/<id>.txt``; the agent sees a head + tail slice"
+    ],
+    "lyrashield/tools/proxy/caido_api.py": [
+      "        return \"host.docker.internal (set STRIX_SANDBOX_ALLOW_HOST_GATEWAY=1 to allow)\"",
+      "    # STRIX_RUN_ID is set (inside the container). A wrong-run policy is",
+      "    ``STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS`` opt-in is honored). When a policy",
+      "    expected_run_id = os.environ.get(\"STRIX_RUN_ID\", \"\").strip()",
+      "    final_headers.setdefault(\"User-Agent\", \"strix\")",
+      "    return os.environ.get(\"STRIX_CAIDO_URL\", _DEFAULT_CAIDO_URL).rstrip(\"/\")",
+      "    return os.environ.get(\"STRIX_SANDBOX_ALLOW_HOST_GATEWAY\", \"\").strip().lower() in {",
+      "_PRIVATE_EGRESS_OPT_IN_ENV = \"STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS\""
+    ],
+    "lyrashield/tools/reporting/tool.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/triage/service.py": [
+      "            model = cast(\"_Model\", StrixProvider(settings=settings).get_model(model_route))",
+      "from lyrashield.policy.models import StrixProvider, configure_sdk_model_defaults"
+    ],
+    "lyrashield/utils/redaction.py": [
+      "        \"strix_spill_path\",",
+      "        \"strix_tmp_state\",",
+      "        re.compile(r\"/tmp/\\.strix[^\\s\\\"'<>]*\"),  # noqa: S108  # nosec B108",
+      "        re.compile(r\"/workspace/\\.strix/tool-output/[^\\s\\\"'<>]+\"),"
+    ],
+    "docs/advanced/configuration.mdx": [
+      "  Alias of `STRIX_CONTEXT_FALLBACK_TOKENS`.",
+      "  Alias of `STRIX_DELEGATE_REASONING_EFFORT`.",
+      "  Alias of `STRIX_MAX_CONTEXT_IMAGES`.",
+      "  Alias of `STRIX_SERVER_CONVERSATION`.",
+      "  Alias of `STRIX_WEB_SEARCH_ENABLED`.",
+      "  Controls `chatgpt/<model>` subscription-backed scans. Enabled by default; set to `0`/`false`/`no` to disable. When enabled, `lyrashield auth login chatgpt` is available and the scan is recorded with `auth_mode: \"subscription\"` and `llm_usage.cost: 0`. Also accepted: `STRIX_ALLOW_CHATGPT_SUBSCRIPTION`.",
+      "  Docker image to use for the sandbox container. Alias of `STRIX_IMAGE`. In",
+      "  Enable automatic history compaction. Alias of `STRIX_CONTEXT_AUTO_COMPACT`.",
+      "  Enable implicit prompt caching. Defaults to on. Alias of `STRIX_PROMPT_CACHE`.",
+      "  Falls back to `LYRASHIELD_LLM` when unset. Alias of `STRIX_DEDUPE_MODEL`.",
+      "  Maximum results returned per search. Alias of `STRIX_WEB_SEARCH_MAX_RESULTS`.",
+      "  Per-tool-output line cap. Alias of `STRIX_TOOL_OUTPUT_MAX_LINES`.",
+      "  Per-tool-output token cap. Alias of `STRIX_TOOL_OUTPUT_MAX_TOKENS`.",
+      "  Runtime backend for the sandbox environment. Alias of `STRIX_RUNTIME_BACKEND`.",
+      "  Telemetry toggle. The `lyrashield` adapter forces `STRIX_TELEMETRY=0`, so",
+      "  `STRIX_CONTEXT_BUFFER_TOKENS`.",
+      "  `STRIX_CONTEXT_KEEP_TOKENS`.",
+      "  `STRIX_CONTEXT_SUMMARY_TOKENS`.",
+      "  `STRIX_DELEGATE_LLM`.",
+      "  `STRIX_FORCE_REQUIRED_TOOL_CHOICE`.",
+      "  `STRIX_MAX_INPUT_TOKENS`.",
+      "  `STRIX_MAX_LOCAL_COPY_MB`.",
+      "  `STRIX_TELEMETRY`.",
+      "  `STRIX_WEB_SEARCH_API_KEY`.",
+      "  `STRIX_WEB_SEARCH_BUDGET_USD`.",
+      "  `STRIX_WEB_SEARCH_MAX_CALLS_PER_SCAN`.",
+      "  `STRIX_WEB_SEARCH_MODE`.",
+      "  always fits). Alias of `STRIX_TOOL_OUTPUT_MAX_BYTES`.",
+      "  budget reservation. Alias of `STRIX_MAX_OUTPUT_TOKENS`.",
+      "  execution. Alias of `STRIX_REASONING_EFFORT`.",
+      "  local server is the only caller. Alias of `STRIX_APP_URL`.",
+      "  of `STRIX_DEDUPE_REASONING_EFFORT`.",
+      "  of `STRIX_LLM`.",
+      "  path=\"STRIX_DOCKER_SANDBOX_NETWORK\"",
+      "  path=\"STRIX_POSTHOG_HOST\"",
+      "  the sandbox environment as `STRIX_DOCKER_SANDBOX_NETWORK` so in-container",
+      "  verified sandbox release workflow; never use a tag or an upstream Strix image.",
+      "<ParamField path=\"LYRASHIELD_IMAGE\" default=\"strix-sandbox:dev\" type=\"string\">",
+      "<ParamField path=\"STRIX_POSTHOG_API_KEY\" type=\"string\">",
+      "<ParamField path=\"STRIX_SCARF_ENDPOINT\" type=\"string\">",
+      "Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and only allows GPT-5.6 Terra or Luna deployments from LiteLLM/Strix-supported providers that currently carry them (OpenAI, Azure/Azure AI, and Bedrock Mantle).",
+      "Only approved GPT-5.6 Terra or Luna deployments from supported LiteLLM/Strix providers are accepted as the main model. The current allow-list is OpenAI, Azure/Azure AI, and Bedrock Mantle. ChatGPT subscription-backed models are supported by default; run `lyrashield auth login chatgpt` and use `chatgpt/<model>` for `LYRASHIELD_LLM`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported as LLM endpoints until LiteLLM's cost map lists `gpt-5.6` for their provider markers.",
+      "The engine stores configuration in `~/.strix/cli-config.json`. Specify a custom config file with `--config`:",
+      "| `STRIX_IMAGE_DIGEST`                         | unset   | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123\u2026`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |",
+      "| `STRIX_SANDBOX_ALLOW_HOST_GATEWAY`           | unset   | Opt-in `host.docker.internal` access. Do not enable unless an explicitly authorized local workflow requires it.                                                                                                              |",
+      "| `STRIX_SANDBOX_CPUS`                         | `2`     | CPU quota as a float (applied as `nano_cpus`).                                                                                                                                                                                |",
+      "| `STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES` | unset   | Legacy compatibility switch. It is consulted only when the enable variable is unset.                                                                                                                                         |",
+      "| `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES`  | unset   | Set to `1`/`true`/`yes` to add `NET_ADMIN`/`NET_RAW`; otherwise both remain omitted.                                                                                                                                         |",
+      "| `STRIX_SANDBOX_MEM_LIMIT`                    | `2g`    | Container memory cap. Opt-out token restores docker's unbounded default.                                                                                                                                                    |",
+      "| `STRIX_SANDBOX_PIDS_LIMIT`                   | `512`   | Process-count cap (fork-bomb bound).                                                                                                                                                                                          |",
+      "| `STRIX_SANDBOX_SHM_SIZE`                     | `512m`  | `/dev/shm` size (docker's 64m default OOMs Chromium/headless tools).                                                                                                                                                          |"
+    ],
+    "docs/advanced/skills.mdx": [
+      "- Do not modify `strix/skills/**` directly; add or override skills in `lyrashield/skills/` instead.",
+      "Inherited skills live under `strix/skills/` (upstream v1.5.3 substrate). LyraShield additions and overrides live under `lyrashield/skills/` and are registered through the `register_skill_dir` seam in `strix/skills/__init__.py`. Any change must follow the same review boundary as other files:"
+    ],
+    "docs/cloud/overview.mdx": [
+      "Strix Cloud is an upstream service and is not a LyraShield Engine deployment, integration, or availability claim. This page is intentionally absent from LyraShield navigation.",
+      "title: \"Strix Cloud (upstream reference only)\""
+    ],
+    "docs/contributing.mdx": [
+      "2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.",
+      "4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The hard allowlist contains the two product seams plus the twelve typing/import-cycle compatibility fixes recorded in `UPGRADES.md`, and the gate pins the complete Strix patch digest.",
+      "6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate diffs `strix/**` against the pinned v1.5.3 base and fails on an unlisted path, footprint growth beyond the reviewed +151/-57 lines, or any change to the pinned complete-patch digest. It also runs Ruff lint/format, the full `pytest` suite, headless mypy (excluding the upstream TUI), Bandit, package and binary smoke, sandbox smoke, and the public worker contract."
+    ],
+    "docs/index.mdx": [
+      "4. The engine writes `run.json` and `vulnerabilities.json` under `strix_runs/<run-name>/`."
+    ],
+    "docs/integrations/ci-cd.mdx": [
+      "For product CI/CD usage, follow the current LyraShield AI application documentation. Do not copy retained upstream Strix installer examples."
+    ],
+    "docs/integrations/github-actions.mdx": [
+      "The former upstream installer workflow is unsupported. Do not curl an upstream installer, invoke a nonexistent `strix` executable, or place model credentials in customer repositories."
+    ],
+    "docs/llm-providers/anthropic.mdx": [
+      "Do not add Anthropic credentials to the worker or use upstream Strix configuration examples with this derivative."
+    ],
+    "docs/llm-providers/azure.mdx": [
+      "Every `STRIX_*` variable accepted by the engine also answers to a `LYRASHIELD_*` alias. For Azure deployments the important product variables are:",
+      "| Dedupe model | `STRIX_DEDUPE_MODEL` | `LYRASHIELD_DEDUPE_MODEL` |",
+      "| Delegate model | `STRIX_DELEGATE_LLM` | `LYRASHIELD_DELEGATE_LLM` |",
+      "| Delegate reasoning | `STRIX_DELEGATE_REASONING_EFFORT` | `LYRASHIELD_DELEGATE_REASONING_EFFORT` |",
+      "| Main model | `STRIX_LLM` | `LYRASHIELD_LLM` |",
+      "| Programmatic tools | `STRIX_PROGRAMMATIC_TOOL_CALLING` | `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` |",
+      "| Reasoning effort | `STRIX_REASONING_EFFORT` | `LYRASHIELD_REASONING_EFFORT` |",
+      "| Setting | `STRIX_*` | `LYRASHIELD_*` |"
+    ],
+    "docs/quickstart.mdx": [
+      "Results are written under `strix_runs/<run-name>/`. Treat engine artifacts as untrusted input and consume them through the application worker contract.",
+      "There is no supported `strix` executable or `strix.ai` installer in this distribution. Production builds the sibling engine source into the LyraShield worker image."
+    ],
+    "docs/tools/sandbox.mdx": [
+      "The engine does not add `NET_ADMIN` or `NET_RAW` to sandbox containers by default. Set `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1` only for authorized workflows that require advanced raw-socket operations such as SYN scans. The legacy disable variable remains supported for compatibility.",
+      "`STRIX_SANDBOX_ALLOW_HOST_GATEWAY` remains opt-in; do not enable it unless an explicitly authorized local workflow requires `host.docker.internal` access.",
+      "| `LYRASHIELD_IMAGE`                           | `strix-sandbox:dev` | Image reference. Production must use the immutable `ghcr.io/ecryptoguru/lyrashield-sandbox@sha256:\u2026` digest emitted by the verified release workflow, not an upstream image or a tag.                                        |",
+      "| `STRIX_IMAGE_DIGEST`                         | unset               | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123\u2026`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |",
+      "| `STRIX_SANDBOX_CPUS`                         | `2`                 | CPU quota as a float (applied as `nano_cpus`).                                                                                                                                                                                |",
+      "| `STRIX_SANDBOX_DISABLE_NETWORK_CAPABILITIES` | unset               | Legacy compatibility switch. It is consulted only when the enable variable is unset.                                                                                                                                         |",
+      "| `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES`  | unset               | Set to `1`/`true`/`yes` to add `NET_ADMIN`/`NET_RAW`; otherwise both remain omitted.                                                                                                                                         |",
+      "| `STRIX_SANDBOX_MEM_LIMIT`                    | `2g`                | Container memory cap. Opt-out token restores docker's unbounded default.                                                                                                                                                    |",
+      "| `STRIX_SANDBOX_PIDS_LIMIT`                   | `512`               | Process-count cap (fork-bomb bound).                                                                                                                                                                                          |",
+      "| `STRIX_SANDBOX_SHM_SIZE`                     | `512m`              | `/dev/shm` size (docker's 64m default OOMs Chromium/headless tools).                                                                                                                                                          |"
+    ],
+    "docs/usage/cli.mdx": [
+      "  Disabled in LyraShield Engine. Self-update would fetch `usestrix/strix` release artifacts and replace this controlled derivative with the upstream distribution. Upgrade by installing a reviewed LyraShield Engine release instead.",
+      "  Path to a custom config file (JSON) to use instead of `~/.strix/cli-config.json`. Configuration is re-validated after this file is applied because `LYRASHIELD_PRODUCT_BOUNDARY` is set by the adapter.",
+      "  Resume a prior scan by its run name (the dir under `./strix_runs/`). Picks up the root + every non-terminal subagent's full LLM history and agent topology. Skips fresh run-name generation. Cannot be combined with `--run-name` or any of `--target` / `--target-list` / `--mount` (the prior target list is reused).",
+      "  The engine copies local `--target` directories into the sandbox one file at a time, which stalls on very large trees. When a local target exceeds the copy limit (see `STRIX_MAX_LOCAL_COPY_MB` / `LYRASHIELD_MAX_LOCAL_COPY_MB`, default 1024 MB) the run exits early and asks you to re-run with `--mount`.",
+      "The production entry point is `lyrashield`, provided by the `lyrashield_adapter` package. The adapter forces telemetry off, disables the upstream self-update check, supports the authenticated `chatgpt/<model>` subscription route by default, and re-validates configuration after `--config` is applied. The bare upstream `strix` executable is not shipped in this distribution."
     ]
   }
 }
