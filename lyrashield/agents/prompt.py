@@ -47,6 +47,11 @@ def _resolve_skills(
         ordered.append("coordination/root_agent")
         if is_whitebox:
             ordered.append("coordination/source_aware_whitebox")
+        else:
+            # Live targets (web_application / api_spec / IP) get the scoped-relay
+            # rules of engagement: verified scope, method policy, fail-closed
+            # denies, evidence discipline.
+            ordered.append("custom/live_target_testing")
     ordered.append("tooling/agent_browser")
     ordered.append("tooling/python")
 

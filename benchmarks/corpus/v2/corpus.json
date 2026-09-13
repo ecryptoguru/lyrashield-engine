@@ -1,0 +1,477 @@
+{
+  "schemaVersion": "lyrashield-evaluation-corpus/2.0.0",
+  "name": "ai-built-app-v2",
+  "revision": "v2",
+  "extends": "v1",
+  "pairs": [
+    {
+      "id": "AUTH-01",
+      "class": "authorization",
+      "vulnerable": "fixtures/vulnerable/auth.ts",
+      "clean": "fixtures/clean/auth.ts",
+      "requiredControl": "authorization.object-scope",
+      "expectedRemediation": "Bind the object to the authenticated user."
+    },
+    {
+      "id": "AUTH-02",
+      "class": "authorization",
+      "vulnerable": "fixtures/vulnerable/auth.ts",
+      "clean": "fixtures/clean/auth.ts",
+      "requiredControl": "authorization.role-check",
+      "expectedRemediation": "Enforce the required role."
+    },
+    {
+      "id": "AUTH-03",
+      "class": "authorization",
+      "vulnerable": "fixtures/vulnerable/auth.ts",
+      "clean": "fixtures/clean/auth.ts",
+      "requiredControl": "authorization.tenant-source",
+      "expectedRemediation": "Derive tenant scope from the authenticated session."
+    },
+    {
+      "id": "AUTH-04",
+      "class": "authorization",
+      "vulnerable": "fixtures/vulnerable/auth.ts",
+      "clean": "fixtures/clean/auth.ts",
+      "requiredControl": "authorization.owner-check",
+      "expectedRemediation": "Verify resource ownership."
+    },
+    {
+      "id": "AUTH-05",
+      "class": "authorization",
+      "vulnerable": "fixtures/vulnerable/auth.ts",
+      "clean": "fixtures/clean/auth.ts",
+      "requiredControl": "authorization.fail-closed",
+      "expectedRemediation": "Remove the unconditional allow path."
+    },
+    {
+      "id": "AUTH-06",
+      "class": "authorization",
+      "vulnerable": "fixtures/vulnerable/auth.ts",
+      "clean": "fixtures/clean/auth.ts",
+      "requiredControl": "authorization.workspace-header",
+      "expectedRemediation": "Use server-owned workspace membership."
+    },
+    {
+      "id": "SECRET-01",
+      "class": "secrets",
+      "vulnerable": "fixtures/vulnerable/secrets.ts",
+      "clean": "fixtures/clean/secrets.ts",
+      "requiredControl": "secrets.hardcoded",
+      "expectedRemediation": "Load the value from secret storage."
+    },
+    {
+      "id": "SECRET-02",
+      "class": "secrets",
+      "vulnerable": "fixtures/vulnerable/secrets.ts",
+      "clean": "fixtures/clean/secrets.ts",
+      "requiredControl": "secrets.quoted-key",
+      "expectedRemediation": "Remove the embedded API key."
+    },
+    {
+      "id": "SECRET-03",
+      "class": "secrets",
+      "vulnerable": "fixtures/vulnerable/secrets.ts",
+      "clean": "fixtures/clean/secrets.ts",
+      "requiredControl": "secrets.authorization",
+      "expectedRemediation": "Construct the header from secret storage."
+    },
+    {
+      "id": "SECRET-04",
+      "class": "secrets",
+      "vulnerable": "fixtures/vulnerable/secrets.ts",
+      "clean": "fixtures/clean/secrets.ts",
+      "requiredControl": "secrets.shell-assignment",
+      "expectedRemediation": "Remove the embedded password assignment."
+    },
+    {
+      "id": "SECRET-05",
+      "class": "secrets",
+      "vulnerable": "fixtures/vulnerable/secrets.ts",
+      "clean": "fixtures/clean/secrets.ts",
+      "requiredControl": "secrets.x-api-key",
+      "expectedRemediation": "Load X-API-Key from secret storage."
+    },
+    {
+      "id": "SECRET-06",
+      "class": "secrets",
+      "vulnerable": "fixtures/vulnerable/secrets.ts",
+      "clean": "fixtures/clean/secrets.ts",
+      "requiredControl": "secrets.database-url",
+      "expectedRemediation": "Load the database URL from secret storage."
+    },
+    {
+      "id": "INJECTION-01",
+      "class": "injection",
+      "vulnerable": "fixtures/vulnerable/injection.ts",
+      "clean": "fixtures/clean/injection.ts",
+      "requiredControl": "injection.sql-template",
+      "expectedRemediation": "Use a parameterized SQL query."
+    },
+    {
+      "id": "INJECTION-02",
+      "class": "injection",
+      "vulnerable": "fixtures/vulnerable/injection.ts",
+      "clean": "fixtures/clean/injection.ts",
+      "requiredControl": "injection.sql-concat",
+      "expectedRemediation": "Use a parameterized SQL query."
+    },
+    {
+      "id": "INJECTION-03",
+      "class": "injection",
+      "vulnerable": "fixtures/vulnerable/injection.ts",
+      "clean": "fixtures/clean/injection.ts",
+      "requiredControl": "injection.command",
+      "expectedRemediation": "Reject arbitrary commands."
+    },
+    {
+      "id": "INJECTION-04",
+      "class": "injection",
+      "vulnerable": "fixtures/vulnerable/injection.ts",
+      "clean": "fixtures/clean/injection.ts",
+      "requiredControl": "injection.shell-template",
+      "expectedRemediation": "Avoid shell interpolation."
+    },
+    {
+      "id": "INJECTION-05",
+      "class": "injection",
+      "vulnerable": "fixtures/vulnerable/injection.ts",
+      "clean": "fixtures/clean/injection.ts",
+      "requiredControl": "injection.identifier",
+      "expectedRemediation": "Allowlist dynamic SQL identifiers."
+    },
+    {
+      "id": "INJECTION-06",
+      "class": "injection",
+      "vulnerable": "fixtures/vulnerable/injection.ts",
+      "clean": "fixtures/clean/injection.ts",
+      "requiredControl": "injection.table-name",
+      "expectedRemediation": "Use a fixed table identifier."
+    },
+    {
+      "id": "DEPENDENCY-01",
+      "class": "dependency",
+      "vulnerable": "fixtures/vulnerable/dependencies.ts",
+      "clean": "fixtures/clean/dependencies.ts",
+      "requiredControl": "dependency.web",
+      "expectedRemediation": "Upgrade to the reviewed fixed release."
+    },
+    {
+      "id": "DEPENDENCY-02",
+      "class": "dependency",
+      "vulnerable": "fixtures/vulnerable/dependencies.ts",
+      "clean": "fixtures/clean/dependencies.ts",
+      "requiredControl": "dependency.parser",
+      "expectedRemediation": "Upgrade to the reviewed fixed release."
+    },
+    {
+      "id": "DEPENDENCY-03",
+      "class": "dependency",
+      "vulnerable": "fixtures/vulnerable/dependencies.ts",
+      "clean": "fixtures/clean/dependencies.ts",
+      "requiredControl": "dependency.auth",
+      "expectedRemediation": "Upgrade to the reviewed fixed release."
+    },
+    {
+      "id": "DEPENDENCY-04",
+      "class": "dependency",
+      "vulnerable": "fixtures/vulnerable/dependencies.ts",
+      "clean": "fixtures/clean/dependencies.ts",
+      "requiredControl": "dependency.database",
+      "expectedRemediation": "Upgrade to the reviewed fixed release."
+    },
+    {
+      "id": "DEPENDENCY-05",
+      "class": "dependency",
+      "vulnerable": "fixtures/vulnerable/dependencies.ts",
+      "clean": "fixtures/clean/dependencies.ts",
+      "requiredControl": "dependency.image",
+      "expectedRemediation": "Upgrade to the reviewed fixed release."
+    },
+    {
+      "id": "DEPENDENCY-06",
+      "class": "dependency",
+      "vulnerable": "fixtures/vulnerable/dependencies.ts",
+      "clean": "fixtures/clean/dependencies.ts",
+      "requiredControl": "dependency.archive",
+      "expectedRemediation": "Upgrade to the reviewed fixed release."
+    },
+    {
+      "id": "SVCKEY-01",
+      "class": "service_keys",
+      "vulnerable": "fixtures/vulnerable/supabase-client.ts",
+      "clean": "fixtures/clean/supabase-client.ts",
+      "requiredControl": "secrets.service-role-client",
+      "expectedRemediation": "Keep service-role keys server-only.",
+      "markerLine": 5,
+      "rulePrefixes": [
+        "secrets-",
+        "sast-",
+        "engine-"
+      ]
+    },
+    {
+      "id": "SVCKEY-02",
+      "class": "service_keys",
+      "vulnerable": "fixtures/vulnerable/supabase-client.ts",
+      "clean": "fixtures/clean/supabase-client.ts",
+      "requiredControl": "secrets.service-role-const",
+      "expectedRemediation": "Load the privileged key from server secret storage.",
+      "markerLine": 11,
+      "rulePrefixes": [
+        "secrets-",
+        "sast-",
+        "engine-"
+      ]
+    },
+    {
+      "id": "RLS-01",
+      "class": "rls",
+      "vulnerable": "fixtures/vulnerable/schema.sql",
+      "clean": "fixtures/clean/schema.sql",
+      "requiredControl": "rls.policy-scope",
+      "expectedRemediation": "Scope the policy to auth.uid().",
+      "markerLine": 4,
+      "rulePrefixes": [
+        "sast-",
+        "engine-",
+        "ai_app"
+      ]
+    },
+    {
+      "id": "RLS-02",
+      "class": "rls",
+      "vulnerable": "fixtures/vulnerable/schema.sql",
+      "clean": "fixtures/clean/schema.sql",
+      "requiredControl": "rls.enabled",
+      "expectedRemediation": "Enable RLS with owner-scoped policies.",
+      "markerLine": 12,
+      "rulePrefixes": [
+        "sast-",
+        "engine-",
+        "ai_app"
+      ]
+    },
+    {
+      "id": "IAC-01",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/Dockerfile",
+      "clean": "fixtures/clean/Dockerfile",
+      "requiredControl": "iac.pinned-base",
+      "expectedRemediation": "Pin the base image by tag and digest.",
+      "markerLine": 2,
+      "rulePrefixes": [
+        "iac-dockerfile-latest-base",
+        "engine-"
+      ]
+    },
+    {
+      "id": "IAC-02",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/Dockerfile",
+      "clean": "fixtures/clean/Dockerfile",
+      "requiredControl": "iac.no-remote-shell",
+      "expectedRemediation": "Vendor the installer with a checksum.",
+      "markerLine": 3,
+      "rulePrefixes": [
+        "iac-dockerfile-curl-pipe-shell"
+      ]
+    },
+    {
+      "id": "IAC-03",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/Dockerfile",
+      "clean": "fixtures/clean/Dockerfile",
+      "requiredControl": "iac.no-env-secrets",
+      "expectedRemediation": "Inject secrets at runtime.",
+      "markerLine": 4,
+      "rulePrefixes": [
+        "iac-dockerfile-secret-env",
+        "secrets-"
+      ]
+    },
+    {
+      "id": "IAC-04",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/Dockerfile",
+      "clean": "fixtures/clean/Dockerfile",
+      "requiredControl": "iac.non-root-user",
+      "expectedRemediation": "Run as a non-root user.",
+      "matchFile": "Dockerfile",
+      "rulePrefixes": [
+        "iac-dockerfile-user-root"
+      ],
+      "absence": true
+    },
+    {
+      "id": "IAC-05",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/deploy.yaml",
+      "clean": "fixtures/clean/deploy.yaml",
+      "requiredControl": "iac.no-privileged",
+      "expectedRemediation": "Drop privileged mode.",
+      "markerLine": 13,
+      "rulePrefixes": [
+        "iac-compose-privileged",
+        "iac-k8s"
+      ]
+    },
+    {
+      "id": "IAC-06",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/deploy.yaml",
+      "clean": "fixtures/clean/deploy.yaml",
+      "requiredControl": "iac.no-hostpath",
+      "expectedRemediation": "Replace hostPath with a volume claim.",
+      "markerLine": 19,
+      "rulePrefixes": [
+        "iac-k8s-hostpath"
+      ]
+    },
+    {
+      "id": "IAC-07",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/deploy.yaml",
+      "clean": "fixtures/clean/deploy.yaml",
+      "requiredControl": "iac.no-wildcard-rbac",
+      "expectedRemediation": "Scope RBAC to exact resources/verbs.",
+      "matchFile": "deploy.yaml",
+      "rulePrefixes": [
+        "iac-k8s-wildcard-rbac"
+      ]
+    },
+    {
+      "id": "IAC-08",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/main.tf",
+      "clean": "fixtures/clean/main.tf",
+      "requiredControl": "iac.no-open-ingress",
+      "expectedRemediation": "Restrict ingress CIDRs.",
+      "markerLine": 5,
+      "rulePrefixes": [
+        "iac-tf-open-ingress"
+      ]
+    },
+    {
+      "id": "IAC-09",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/main.tf",
+      "clean": "fixtures/clean/main.tf",
+      "requiredControl": "iac.no-public-acl",
+      "expectedRemediation": "Set acl to private.",
+      "markerLine": 13,
+      "rulePrefixes": [
+        "iac-tf-public-acl",
+        "iac-tf-public-bucket-policy"
+      ]
+    },
+    {
+      "id": "IAC-10",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/main.tf",
+      "clean": "fixtures/clean/main.tf",
+      "requiredControl": "iac.encrypted-storage",
+      "expectedRemediation": "Enable encryption with a KMS key.",
+      "markerLine": 18,
+      "rulePrefixes": [
+        "iac-tf-unencrypted-storage"
+      ]
+    },
+    {
+      "id": "IAC-11",
+      "class": "iac",
+      "vulnerable": "fixtures/vulnerable/main.tf",
+      "clean": "fixtures/clean/main.tf",
+      "requiredControl": "iac.no-inline-secrets",
+      "expectedRemediation": "Move the value to a sensitive variable.",
+      "markerLine": 23,
+      "rulePrefixes": [
+        "iac-tf-inline-secret",
+        "iac-tf-variable-secret-default",
+        "secrets-"
+      ]
+    }
+  ],
+  "liveTargets": [
+    {
+      "id": "LIVE-01",
+      "class": "web_app",
+      "fixture": "fixtures/vulnerable-web/Dockerfile",
+      "note": "Verified-host fixture for URL-mode engine runs \u2014 container serves a seeded app on an internal address; engine reaches it only through the scan-scoped relay. Requires founder-authorized run.",
+      "expectedFindings": [
+        {
+          "class": "missing_security_headers",
+          "surface": "http-response"
+        },
+        {
+          "class": "verbose_error",
+          "surface": "http-response"
+        }
+      ]
+    }
+  ],
+  "failureScenarios": [
+    {
+      "id": "FAIL-01",
+      "condition": "source checkout unavailable",
+      "expectedState": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "FAIL-02",
+      "condition": "required scanner receipt missing",
+      "expectedState": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "FAIL-03",
+      "condition": "scanner timed out",
+      "expectedState": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "FAIL-04",
+      "condition": "scanner failed",
+      "expectedState": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "FAIL-05",
+      "condition": "result manifest unsupported",
+      "expectedState": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "FAIL-06",
+      "condition": "assessment identity missing",
+      "expectedState": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "FAIL-07",
+      "condition": "retest lineage mismatch",
+      "expectedState": "INCONCLUSIVE"
+    },
+    {
+      "id": "FAIL-08",
+      "condition": "budget stop before required coverage",
+      "expectedState": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "FAIL-09",
+      "condition": "relay grant scope violation",
+      "expectedState": "BLOCKED"
+    },
+    {
+      "id": "FAIL-10",
+      "condition": "unverified domain on engine-backed URL scan",
+      "expectedState": "BLOCKED"
+    }
+  ],
+  "metrics": [
+    "precision_by_class",
+    "recall_by_class",
+    "inconclusive_rate",
+    "duplicate_rate",
+    "location_accuracy",
+    "false_remediation_confirmation",
+    "run_stability",
+    "runtime_ms",
+    "cost_usd",
+    "relay_scope_violations"
+  ]
+}

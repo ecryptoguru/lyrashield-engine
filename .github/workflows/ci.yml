@@ -171,6 +171,20 @@ jobs:
             case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
           '
 
+      - name: Relay grant isolation (built image)
+        run: |
+          relay_dir=$(mktemp -d)
+          trap 'rm -rf "$relay_dir"' EXIT
+          printf '%s' 'http://lrg1.payload.signature@127.0.0.1:1' > "$relay_dir/upstream"
+          chmod 0400 "$relay_dir/upstream"
+          docker run --rm --mount "type=bind,src=$relay_dir/upstream,dst=/run/lyrashield-relay/upstream,readonly" \
+            lyrashield-sandbox:ci sh -lc '
+              test -z "${LYRASHIELD_TARGET_RELAY_UPSTREAM:-}" &&
+              test ! -r /run/lyrashield-relay/upstream &&
+              ps -eo user=,args= | grep -E "^nobody +.*target_relay_proxy.py" &&
+              test "$(curl -sS --noproxy "" --proxy http://127.0.0.1:48081 -o /dev/null -w "%{http_code}" http://target.example/)" = "502"
+            '
+
       - name: Guarded replay egress probes (built image)
         run: |
           docker run --rm lyrashield-sandbox:ci /app/.venv/bin/python -c "

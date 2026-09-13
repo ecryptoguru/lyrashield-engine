@@ -116,7 +116,7 @@ def test_built_source_archive_excludes_test_and_frontend_source(tmp_path: Path) 
     with tarfile.open(archive, "r:gz") as source_dist:
         names = source_dist.getnames()
 
-    forbidden = ("/tests/", "/interface/viewer/frontend/", "/.env", "/.worktrees/")
+    forbidden = ("/tests/", "/interface/viewer/frontend/", "/.env", "/.worktrees/", "/desktop/")
     assert not [name for name in names if any(marker in name for marker in forbidden)]
 
 

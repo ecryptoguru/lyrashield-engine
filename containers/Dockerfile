@@ -288,6 +288,7 @@ RUN python3 -m venv /app/.venv && \
 # import path documented in the agent prompt (`import caido_api`) must exercise
 # the replay egress guard. One implementation lives in
 # lyrashield/tools/proxy/caido_api.py; this COPY is its only packaging step.
+COPY --chown=root:root lyrashield/runtime/target_relay_proxy.py /opt/lyrashield/target_relay_proxy.py
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 
@@ -300,6 +301,7 @@ RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/p
     echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"' >> /home/pentester/.profile
 
 USER root
+RUN install -d -m 0700 -o root -g root /run/lyrashield-relay
 RUN setcap cap_net_raw,cap_net_bind_service+eip /usr/lib/nmap/nmap
 COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

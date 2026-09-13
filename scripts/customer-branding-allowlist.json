@@ -496,9 +496,17 @@
       "_STAGING_PREFIX = \"strix-localdir-\""
     ],
     "lyrashield/runtime/session_manager.py": [
-      "        environment[\"STRIX_RUN_ID\"] = scan_id",
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
-      "from strix.config import load_settings"
+      "from strix.config import load_settings",
+      "    relay_url = os.environ.get(\"STRIX_TARGET_RELAY_URL\", \"\").strip()",
+      "    grant = os.environ.get(\"STRIX_TARGET_RELAY_GRANT\", \"\").strip()",
+      "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL must be an http(s) origin\") from None",
+      "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL must be an http(s) origin\")",
+      "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL requires HTTPS outside loopback\")",
+      "        environment[\"STRIX_TARGET_RELAY\"] = \"1\"",
+      "        if environment.get(\"STRIX_TARGET_RELAY\"):",
+      "        environment[\"STRIX_RUN_ID\"] = scan_id",
+      "                target_relay=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
     ],
     "lyrashield/telemetry/README.md": [
       "- `STRIX_NO_UPDATE_CHECK=1` \u2014 disables the upstream self-update network check.",
@@ -683,6 +691,9 @@
       "  Resume a prior scan by its run name (the dir under `./strix_runs/`). Picks up the root + every non-terminal subagent's full LLM history and agent topology. Skips fresh run-name generation. Cannot be combined with `--run-name` or any of `--target` / `--target-list` / `--mount` (the prior target list is reused).",
       "  The engine copies local `--target` directories into the sandbox one file at a time, which stalls on very large trees. When a local target exceeds the copy limit (see `STRIX_MAX_LOCAL_COPY_MB` / `LYRASHIELD_MAX_LOCAL_COPY_MB`, default 1024 MB) the run exits early and asks you to re-run with `--mount`.",
       "The production entry point is `lyrashield`, provided by the `lyrashield_adapter` package. The adapter forces telemetry off, disables the upstream self-update check, supports the authenticated `chatgpt/<model>` subscription route by default, and re-validates configuration after `--config` is applied. The bare upstream `strix` executable is not shipped in this distribution."
+    ],
+    "lyrashield/skills/custom/live_target_testing.md": [
+      "(`STRIX_TARGET_RELAY=1` in the environment). The relay enforces the authorized"
     ]
   }
 }
