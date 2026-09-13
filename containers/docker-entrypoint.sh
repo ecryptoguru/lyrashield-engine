@@ -10,34 +10,42 @@ set -e
 CAIDO_PORT=48080
 CAIDO_LOG="/tmp/caido_startup.log"
 
+# Default outbound proxy is the in-container Caido sidecar. When the worker
+# configures a scan-scoped target relay, the container env already carries the
+# relay URL (with the scan grant embedded as userinfo) in http_proxy — honor it
+# so login shells, rc files, and tools like agent-browser route identically.
+PROXY_URL="${http_proxy:-http://127.0.0.1:${CAIDO_PORT}}"
+
 if [ "$(id -u)" = "0" ]; then
   # ---------------- privileged phase (root, one-shot) ----------------
   cat > /etc/profile.d/proxy.sh << EOF
-export http_proxy=http://127.0.0.1:${CAIDO_PORT}
-export https_proxy=http://127.0.0.1:${CAIDO_PORT}
-export HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
-export HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
-export ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
+export http_proxy=${PROXY_URL}
+export https_proxy=${PROXY_URL}
+export HTTP_PROXY=${PROXY_URL}
+export HTTPS_PROXY=${PROXY_URL}
+export ALL_PROXY=${PROXY_URL}
 export NO_PROXY=localhost,127.0.0.1
+export AGENT_BROWSER_PROXY=${PROXY_URL}
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 EOF
   chmod 644 /etc/profile.d/proxy.sh
 
   cat > /etc/environment << EOF
-http_proxy=http://127.0.0.1:${CAIDO_PORT}
-https_proxy=http://127.0.0.1:${CAIDO_PORT}
-HTTP_PROXY=http://127.0.0.1:${CAIDO_PORT}
-HTTPS_PROXY=http://127.0.0.1:${CAIDO_PORT}
-ALL_PROXY=http://127.0.0.1:${CAIDO_PORT}
+http_proxy=${PROXY_URL}
+https_proxy=${PROXY_URL}
+HTTP_PROXY=${PROXY_URL}
+HTTPS_PROXY=${PROXY_URL}
+ALL_PROXY=${PROXY_URL}
 NO_PROXY=localhost,127.0.0.1
+AGENT_BROWSER_PROXY=${PROXY_URL}
 EOF
   chmod 644 /etc/environment
 
   cat > /etc/wgetrc << EOF
 use_proxy=yes
-http_proxy=http://127.0.0.1:${CAIDO_PORT}
-https_proxy=http://127.0.0.1:${CAIDO_PORT}
+http_proxy=${PROXY_URL}
+https_proxy=${PROXY_URL}
 EOF
   chmod 644 /etc/wgetrc
 

@@ -8,6 +8,7 @@ import contextlib
 import ipaddress
 import json
 import logging
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -57,16 +58,50 @@ CLEANUP_FAILED = "failed"
 CLEANUP_NOT_FOUND = "not_found"
 
 
+def _target_relay_proxy_url() -> str | None:
+    """Relay URL with the scan grant embedded as proxy userinfo.
+
+    Standard tooling (curl, requests/httpx, go, node) sends the userinfo as
+    ``Proxy-Authorization: Basic``; the relay accepts the grant in either the
+    username or password position. Returns None when the worker did not pass
+    relay configuration — repo scans keep the Caido sidecar as their proxy.
+    """
+    relay_url = os.environ.get("STRIX_TARGET_RELAY_URL", "").strip()
+    grant = os.environ.get("STRIX_TARGET_RELAY_GRANT", "").strip()
+    if not relay_url or not grant:
+        return None
+    parsed = urlparse(relay_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise RuntimeError(
+            f"STRIX_TARGET_RELAY_URL is not a valid http(s) URL: {relay_url!r}"
+        )
+    netloc = parsed.hostname
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    return f"{parsed.scheme}://{grant}@{netloc}"
+
+
 def build_sandbox_environment(
     container_caido_url: str,
 ) -> dict[str, str | EnvValue | EnvEntry]:
+    # When a target relay is configured the sandbox's outbound HTTP(S) goes to
+    # the scan-scoped relay instead of the Caido sidecar: the relay enforces the
+    # grant (verified hosts/methods/paths/caps) and writes the audit trail.
+    # Caido keeps running for its API but sees no forwarded traffic.
+    relay_proxy = _target_relay_proxy_url()
+    proxy_url = relay_proxy or container_caido_url
     environment: dict[str, str | EnvValue | EnvEntry] = {
         "PYTHONUNBUFFERED": "1",
-        "http_proxy": container_caido_url,
-        "https_proxy": container_caido_url,
-        "ALL_PROXY": container_caido_url,
+        "http_proxy": proxy_url,
+        "https_proxy": proxy_url,
+        "HTTP_PROXY": proxy_url,
+        "HTTPS_PROXY": proxy_url,
+        "ALL_PROXY": proxy_url,
         "NO_PROXY": "localhost,127.0.0.1",
+        "AGENT_BROWSER_PROXY": proxy_url,
     }
+    if relay_proxy:
+        environment["STRIX_TARGET_RELAY"] = "1"
     if host_gateway_enabled():
         environment["HOST_GATEWAY"] = "host.docker.internal"
     return environment
