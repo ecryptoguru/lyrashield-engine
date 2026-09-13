@@ -574,9 +574,9 @@ frozenlist==1.8.0 \
     # via
     #   aiohttp
     #   aiosignal
-glom==22.1.0 \
-    --hash=sha256:1510c6587a8f9c64a246641b70033cbc5ebde99f02ad245693678038e821aeb5 \
-    --hash=sha256:5339da206bf3532e01a83a35aca202960ea885156986d190574b779598e9e772
+glom==25.12.0 \
+    --hash=sha256:1ae7da88be3693df40ad27bdf57a765a55c075c86c971bcddd67927403eb0069 \
+    --hash=sha256:b9f21e77f71a6576a43864e85066b8cc3f0f778d0d50961563f8981377a6dcb1
     # via semgrep
 googleapis-common-protos==1.75.0 \
     --hash=sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd \
