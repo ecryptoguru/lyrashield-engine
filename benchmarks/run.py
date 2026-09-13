@@ -83,11 +83,11 @@ def run_deterministic(corpus_dir: Path, case: dict, out) -> dict:
 
 
 def run_engine(corpus_dir: Path, case: dict, out, run_index: int) -> dict:
-    """Engine run through the product CLI — gated by --engine-approve."""
+    """Engine run through the engine CLI — gated by --engine-approve."""
     repo_dir = materialize_fixture(corpus_dir, case)
     scan_id = f"{case['id']}-engine-{run_index}"
-    # The engine CLI scans a directory target. Output contract: the CLI writes
-    # a findings JSON into scan results; we capture the run record.
+    # Non-interactive runs persist findings to strix_runs/<run-name>/
+    # vulnerabilities.json under the cwd — they are NOT printed to stdout.
     cmd = [
         "lyrashield",
         "--target",
@@ -95,23 +95,41 @@ def run_engine(corpus_dir: Path, case: dict, out, run_index: int) -> dict:
         "--non-interactive",
         "--scan-mode",
         "quick",
+        "--run-name",
+        scan_id,
     ]
     started = time.monotonic()
     proc = subprocess.run(
         cmd, capture_output=True, text=True, timeout=3600, cwd=repo_dir
     )
     runtime_ms = int((time.monotonic() - started) * 1000)
-    # The CLI prints findings to stdout in --non-interactive mode; each JSON
-    # line is a finding record.
+
     emitted = 0
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            rec = json.loads(line)
-            rec["scanId"] = scan_id
-            rec["scanner"] = rec.get("scanner", "engine")
-            out.write(json.dumps(rec) + "\n")
-            emitted += 1
+    vuln_path = repo_dir / "strix_runs" / scan_id / "vulnerabilities.json"
+    if vuln_path.is_file():
+        try:
+            for rec in json.loads(vuln_path.read_text(encoding="utf-8")):
+                if not isinstance(rec, dict):
+                    continue
+                loc = (rec.get("code_locations") or [{}])[0]
+                out.write(
+                    json.dumps(
+                        {
+                            "scanId": scan_id,
+                            "scanner": "engine",
+                            "id": rec.get("id"),
+                            "severity": rec.get("severity"),
+                            "title": rec.get("title"),
+                            "cwe": rec.get("cwe"),
+                            "file": loc.get("file") or rec.get("target"),
+                            "startLine": loc.get("start_line"),
+                        }
+                    )
+                    + "\n"
+                )
+                emitted += 1
+        except json.JSONDecodeError:
+            pass
     shutil.rmtree(repo_dir, ignore_errors=True)
     return {
         "case": case["id"],
