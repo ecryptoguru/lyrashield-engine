@@ -34,11 +34,16 @@ scope at the network layer — it is not a suggestion.
 
 ## Available tooling
 
-- `terminal` / shell commands: `curl`, `python` + `httpx`/`requests`, `node` —
-  all honor the relay via the proxy environment. Prefer these for request-level
-  testing; they print the full response you need as evidence.
-- `agent_browser` for page-level testing, login flows, client-side behavior,
-  and WebSocket work — its traffic is also relay-scoped.
+- HTTP request tools may use the relay through the proxy environment. Node
+  clients do not universally honor proxy environment variables; verify the
+  actual transport before claiming coverage.
+- HTTPS clients use the sandbox's local inspection bridge and existing trusted
+  testing CA. The bridge terminates local CONNECT and sends inspectable HTTPS
+  requests to the remote relay. The remote relay verifies the target's TLS and
+  applies method/path limits to each request. Never disable TLS verification.
+- Browser HTTP/HTTPS navigation and ordinary requests use the same bridge.
+  Confirm successful response receipts before claiming coverage. WebSocket
+  upgrades and streaming request bodies remain unsupported; record the gap.
 - The local Caido instance API is reachable, but traffic it sends does **not**
   traverse the relay and will fail closed. Do not use `send_request`-style
   replays against live targets in this mode; craft requests with the tools
@@ -60,8 +65,7 @@ scope at the network layer — it is not a suggestion.
 
 ## Authentication
 
-- If credentials were provisioned for this scan, they are already applied to
-  your requests by the relay — you will not see them. Test the authenticated
-  surface normally; do not look for, print, or replay credential material.
-- If no authenticated material is provisioned, stay on the unauthenticated
-  surface and note it as a coverage limitation in the summary.
+- Authentication requires explicit, verified provisioning for this scan. A
+  relay grant alone does not establish authentication or hide credentials.
+- Without authenticated request evidence, stay on the unauthenticated surface
+  and record the limitation. Never print credentials or grant contents.

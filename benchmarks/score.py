@@ -5,7 +5,7 @@ Benchmark scorer — findings.jsonl x corpus.json → per-class metrics.
 
 Matching: a finding labels a case when all declared locators agree —
   - file: finding.file ends with the case's fixture filename (or matchFile)
-  - markerLine: |finding.startLine - markerLine| <= 3, when present
+  - markerLine: exact CASE marker unless explicit rule identity allows tolerance
   - rulePrefixes: finding.id starts with any listed prefix, when present
 
 Metrics: per-class recall (detected/expected), precision proxy (clean-fixture
@@ -58,20 +58,67 @@ def case_matches(
 ) -> bool:
     file_name = case.get("matchFile") or Path(case["vulnerable"]).name
     finding_file = finding.get("file") or ""
-    if not finding_file.endswith(file_name):
+    if Path(finding_file).name != Path(file_name).name:
         return False
     prefixes = case.get("rulePrefixes")
     if prefixes and not any((finding.get("id") or "").startswith(prefix) for prefix in prefixes):
         return False
     # Absence cases ("no USER directive") have no offending line — the marker
     # constraint can't apply to them or to findings reported as -absent.
-    line_exempt = case.get("absence") or str(finding.get("id") or "").endswith("-absent")
+    line_exempt = case.get("absence")
     marker = derive_marker_line(case, corpus_dir, marker_cache)
     if marker is not None and not line_exempt:
         start = finding.get("startLine")
-        if not isinstance(start, int) or abs(start - marker) > LINE_TOLERANCE:
+        tolerance = LINE_TOLERANCE if prefixes else 0
+        if not isinstance(start, int) or abs(start - marker) > tolerance:
             return False
-    return True
+    return marker is not None or bool(line_exempt and prefixes)
+
+
+def engine_stability(manifest: dict, detected: dict) -> float | None:
+    # Include every declared engine run, including runs with no detections.
+    engine_runs = [
+        r
+        for r in manifest["runs"]
+        if r["detector"] == "engine" and r.get("variant", "vulnerable") == "vulnerable"
+    ]
+    indices = {r.get("runIndex", 0) for r in engine_runs}
+    stability = None
+    if len(indices) > 1:
+        per_run_hits = {index: set() for index in indices}
+        for case_id, hits in detected.items():
+            for finding in hits:
+                if finding.get("scanner") != "engine":
+                    continue
+                index = finding.get("runIndex")
+                if index is None:
+                    index = int(str(finding["scanId"]).rsplit("-", 1)[-1])
+                if index in per_run_hits:
+                    per_run_hits[index].add(case_id)
+        common = set.intersection(*per_run_hits.values())
+        union = set.union(*per_run_hits.values())
+        stability = round(len(common) / len(union), 4) if union else None
+
+    return stability
+
+
+def run_set_complete(manifest: dict, corpus: dict) -> bool:
+    detectors = (
+        {"engine", "deterministic"} if manifest["detectors"] == "all" else {manifest["detectors"]}
+    )
+    indices = {r.get("runIndex", 0) for r in manifest["runs"] if r["detector"] == "engine"} or {0}
+    expected = {
+        (case["id"], detector, variant, index)
+        for case in corpus["pairs"]
+        for detector in detectors
+        for variant in ("vulnerable", "clean")
+        for index in (indices if detector == "engine" else {0})
+    }
+    actual = {
+        (r.get("case"), r["detector"], r.get("variant"), r.get("runIndex", 0))
+        for r in manifest["runs"]
+    }
+    return actual == expected and len(actual) == len(manifest["runs"])
 
 
 def score(results_dir: Path, corpus_dir: Path) -> dict:
@@ -81,20 +128,35 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
 
     detected: dict[str, list[dict]] = defaultdict(list)
     clean_fps: list[dict] = []
+    unmatched: list[dict] = []
     marker_cache: dict[str, int | None] = {}
     discovery_receipts = [f for f in findings if f.get("scanner") == "__discovery__"]
 
     scan_findings = [
-        f for f in findings if f.get("scanner") not in ("__discovery__", "__coverage__")
+        f
+        for f in findings
+        if isinstance(f.get("scanner"), str)
+        and f.get("scanner") not in ("__discovery__", "__coverage__")
+        and not f.get("error")
     ]
     for finding in scan_findings:
+        if finding.get("variant") == "clean":
+            clean_fps.append(finding)
+            continue
         matched = False
         for case in corpus["pairs"]:
+            # Each projection contains a whole shared file: credit only the
+            # case/run actually executed, never sibling cases or clean controls.
+            case_id = finding.get("caseId")
+            if case_id is not None and case_id != case["id"]:
+                continue
+            if case_id is None and not str(finding.get("scanId", "")).startswith(case["id"] + "-"):
+                continue
             if case_matches(case, finding, corpus_dir, marker_cache):
                 detected[case["id"]].append(finding)
                 matched = True
         if not matched:
-            clean_fps.append(finding)
+            unmatched.append(finding)
 
     per_class: dict[str, dict] = {}
     classes = {c["class"] for c in corpus["pairs"]}
@@ -107,24 +169,36 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
             "recall": round(hits / len(cases), 4),
         }
 
-    # Run stability for engine runs: fraction of detected cases detected in
-    # every run (needs --runs > 1 to be meaningful).
-    engine_runs = [r for r in manifest["runs"] if r["detector"] == "engine"]
-    stability = None
-    if len({r.get("runIndex") for r in engine_runs if r.get("runIndex") is not None}) > 1:
-        per_run_hits: dict[int, set] = defaultdict(set)
-        for f in scan_findings:
-            if f.get("scanner") == "engine" and "engine-" in (f.get("scanId") or ""):
-                run_index = int(str(f["scanId"]).rsplit("-", 1)[-1])
-                for case in corpus["pairs"]:
-                    if case_matches(case, f, corpus_dir, marker_cache):
-                        per_run_hits[run_index].add(case["id"])
-        if per_run_hits:
-            common = set.intersection(*per_run_hits.values()) if len(per_run_hits) > 1 else set()
-            union = set.union(*per_run_hits.values())
-            stability = round(len(common) / len(union), 4) if union else 1.0
+    stability = engine_stability(manifest, detected)
+
+    duplicate_count = 0
+    for hits in detected.values():
+        per_execution: dict[tuple, int] = defaultdict(int)
+        for finding in hits:
+            per_execution[(finding.get("scanId"), finding.get("scanner"))] += 1
+        duplicate_count += sum(max(0, count - 1) for count in per_execution.values())
+    failures = [r for r in manifest["runs"] if r.get("returncode") != 0 or r.get("errors")]
+    coverage_issues = [f for f in findings if f.get("error") or f.get("coverageIssues")]
+    legacy = manifest.get("harnessVersion", 1) < 2
+    status = (
+        "LEGACY_UNVALIDATED"
+        if legacy
+        else "INCOMPLETE"
+        if failures
+        or coverage_issues
+        or not run_set_complete(manifest, corpus)
+        or manifest.get("sourcesChangedDuringRun")
+        or any(source.get("dirty") for source in manifest.get("sources", {}).values())
+        else "COMPLETE"
+    )
+    clean_runs = [r for r in manifest["runs"] if r.get("variant") == "clean"]
 
     summary = {
+        "status": status,
+        "failedRuns": len(failures),
+        "coverageIssueReceipts": len(coverage_issues),
+        "cleanRuns": len(clean_runs),
+        "cleanFindings": len(clean_fps) if clean_runs else None,
         "corpus": corpus["name"],
         "corpusRevision": corpus["revision"],
         "detectors": manifest["detectors"],
@@ -133,9 +207,9 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
         "recall": round(
             sum(1 for c in corpus["pairs"] if detected[c["id"]]) / len(corpus["pairs"]), 4
         ),
-        "unmatchedFindings": len(clean_fps),
+        "unmatchedFindings": len(unmatched),
         "duplicateRate": round(
-            sum(max(0, len(v) - 1) for v in detected.values()) / max(1, len(scan_findings)),
+            duplicate_count / max(1, sum(len(hits) for hits in detected.values())),
             4,
         ),
         "perClass": per_class,
@@ -149,10 +223,13 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
     lines = [
         f"# Benchmark results — {corpus['name']}@{corpus['revision']}",
         "",
+        f"- status: {status}",
         f"- detectors: {manifest['detectors']}",
         f"- engine revision: {manifest.get('engineRevision') or 'n/a'}",
         f"- recall: {summary['recall']} ({summary['detectedCases']}/{summary['totalCases']})",
-        f"- unmatched findings (FP candidates): {summary['unmatchedFindings']}",
+        "- unmatched vulnerable-fixture findings (not false positives): "
+        f"{summary['unmatchedFindings']}",
+        f"- clean-fixture findings: {summary['cleanFindings']}",
         f"- duplicate rate: {summary['duplicateRate']}",
         f"- engine stability: {stability if stability is not None else 'n/a (single/det)'}",
         "",
@@ -172,7 +249,7 @@ def main() -> int:
     args = parser.parse_args()
     summary = score(Path(args.results), BENCH_ROOT / "corpus" / args.corpus)
     print(json.dumps(summary, indent=2))
-    return 0
+    return 0 if summary["status"] == "COMPLETE" else 1
 
 
 if __name__ == "__main__":

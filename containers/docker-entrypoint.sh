@@ -11,21 +11,23 @@ CAIDO_PORT=48080
 CAIDO_LOG="/tmp/caido_startup.log"
 
 # Default outbound proxy is the in-container Caido sidecar. When the worker
-# configures a scan-scoped target relay, the container env already carries the
-# relay URL (with the scan grant embedded as userinfo) in http_proxy — honor it
-# so login shells, rc files, and tools like agent-browser route identically.
+# configures a scan-scoped target relay, http_proxy selects the local TLS
+# inspection bridge. Honor it so shells and browser tools route identically;
+# only the bridge's upstream configuration carries the scan grant.
 PROXY_URL="${http_proxy:-http://127.0.0.1:${CAIDO_PORT}}"
+# Quote shell startup assignments; proxy configuration must remain data.
+printf -v PROXY_SHELL_URL '%q' "$PROXY_URL"
 
 if [ "$(id -u)" = "0" ]; then
   # ---------------- privileged phase (root, one-shot) ----------------
   cat > /etc/profile.d/proxy.sh << EOF
-export http_proxy=${PROXY_URL}
-export https_proxy=${PROXY_URL}
-export HTTP_PROXY=${PROXY_URL}
-export HTTPS_PROXY=${PROXY_URL}
-export ALL_PROXY=${PROXY_URL}
+export http_proxy=${PROXY_SHELL_URL}
+export https_proxy=${PROXY_SHELL_URL}
+export HTTP_PROXY=${PROXY_SHELL_URL}
+export HTTPS_PROXY=${PROXY_SHELL_URL}
+export ALL_PROXY=${PROXY_SHELL_URL}
 export NO_PROXY=localhost,127.0.0.1
-export AGENT_BROWSER_PROXY=${PROXY_URL}
+export AGENT_BROWSER_PROXY=${PROXY_SHELL_URL}
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 EOF
@@ -61,6 +63,29 @@ export HOME=/home/pentester
 if [ ! -f /app/certs/ca.p12 ]; then
   echo "ERROR: CA certificate file /app/certs/ca.p12 not found."
   exit 1
+fi
+
+# HTTPS clients keep certificate validation enabled. The local bridge uses the
+# already-installed testing CA, and the remote relay validates origin TLS.
+if [ -n "${LYRASHIELD_TARGET_RELAY_UPSTREAM:-}" ]; then
+  /app/.venv/bin/python /opt/lyrashield/target_relay_proxy.py &
+  TARGET_RELAY_PID=$!
+  TARGET_RELAY_READY=false
+  for i in {1..30}; do
+    if ! kill -0 "$TARGET_RELAY_PID" 2>/dev/null; then
+      echo "ERROR: target relay inspection bridge failed to start."
+      exit 1
+    fi
+    if (echo > /dev/tcp/127.0.0.1/48081) 2>/dev/null; then
+      TARGET_RELAY_READY=true
+      break
+    fi
+    sleep 1
+  done
+  if [ "$TARGET_RELAY_READY" != true ]; then
+    echo "ERROR: target relay inspection bridge did not become ready."
+    exit 1
+  fi
 fi
 
 # Caido enforces a Host allowlist (DNS-rebinding protection) and rejects requests

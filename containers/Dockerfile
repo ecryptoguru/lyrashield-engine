@@ -288,6 +288,7 @@ RUN python3 -m venv /app/.venv && \
 # import path documented in the agent prompt (`import caido_api`) must exercise
 # the replay egress guard. One implementation lives in
 # lyrashield/tools/proxy/caido_api.py; this COPY is its only packaging step.
+COPY --chown=root:root lyrashield/runtime/target_relay_proxy.py /opt/lyrashield/target_relay_proxy.py
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 

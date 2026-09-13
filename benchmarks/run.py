@@ -8,13 +8,14 @@ free) and the engine CLI (founder-gated, costs model budget).
 
 Deterministic runs invoke the sibling product repo's scanners via tsx and
 cost nothing. Engine runs require --engine-approve and record the exact
-engine revision + model route into results.json. Findings land in
+engine revision into the manifest. Model-route proof remains a separate receipt. Findings land in
 benchmarks/results/<timestamp>/findings.jsonl for score.py.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -35,22 +36,40 @@ PRODUCT_REPO = Path(
 ).resolve()
 
 
+def source_state(repo: Path) -> dict:
+    """Bind results to the checkout revision and its tracked working diff."""
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    diff = subprocess.run(
+        ["git", "diff", "--binary", "HEAD"], cwd=repo, capture_output=True, check=True
+    ).stdout
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, check=True
+    ).stdout
+    return {
+        "revision": revision,
+        "trackedDiffSha256": hashlib.sha256(diff).hexdigest(),
+        "dirty": bool(status),
+    }
+
+
 def load_corpus(corpus_dir: Path) -> dict:
     return json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
 
 
-def materialize_fixture(corpus_dir: Path, case: dict) -> Path:
-    """Copy the case's vulnerable projection into a temp repo dir."""
+def materialize_fixture(corpus_dir: Path, case: dict, variant: str = "vulnerable") -> Path:
+    """Copy the case's selected projection into a temp repo dir."""
     repo_dir = Path(tempfile.mkdtemp(prefix=f"bench-{case['id']}-"))
-    src = corpus_dir / case["vulnerable"]
-    dest = repo_dir / Path(case["vulnerable"]).name
+    src = corpus_dir / case[variant]
+    dest = repo_dir / Path(case[variant]).name
     shutil.copy2(src, dest)
     return repo_dir
 
 
-def run_deterministic(corpus_dir: Path, case: dict, out) -> dict:
-    repo_dir = materialize_fixture(corpus_dir, case)
-    scan_id = f"{case['id']}-det"
+def run_deterministic(corpus_dir: Path, case: dict, out, variant: str = "vulnerable") -> dict:
+    repo_dir = materialize_fixture(corpus_dir, case, variant)
+    scan_id = f"{case['id']}-{variant}-det"
     cmd = [
         "pnpm",
         "-C",
@@ -65,18 +84,36 @@ def run_deterministic(corpus_dir: Path, case: dict, out) -> dict:
     ]
     env = {**os.environ, "LYRASHIELD_AI_DIR": str(PRODUCT_REPO)}
     started = time.monotonic()
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = subprocess.CompletedProcess(cmd, 1, "", type(exc).__name__)
+    finally:
+        shutil.rmtree(repo_dir, ignore_errors=True)
     runtime_ms = int((time.monotonic() - started) * 1000)
     emitted = 0
+    errors = []
     for raw_line in proc.stdout.splitlines():
         line = raw_line.strip()
         if line.startswith("{"):
-            out.write(line + "\n")
+            rec = json.loads(line)
+            # Product loggers also write JSON to stdout. Only the harness wire
+            # records belong in scoring; logs must never become false positives.
+            if rec.get("scanId") != scan_id or not isinstance(rec.get("scanner"), str):
+                continue
+            rec.update(caseId=case["id"], variant=variant, runIndex=0)
+            out.write(json.dumps(rec) + "\n")
+            if rec.get("error") or rec.get("coverageIssues"):
+                errors.append(rec)
             emitted += 1
     shutil.rmtree(repo_dir, ignore_errors=True)
     return {
         "case": case["id"],
         "detector": "deterministic",
+        "variant": variant,
+        "runIndex": 0,
+        "scanId": scan_id,
+        "errors": errors,
         "emitted": emitted,
         "runtimeMs": runtime_ms,
         "returncode": proc.returncode,
@@ -84,10 +121,12 @@ def run_deterministic(corpus_dir: Path, case: dict, out) -> dict:
     }
 
 
-def run_engine(corpus_dir: Path, case: dict, out, run_index: int) -> dict:
+def run_engine(
+    corpus_dir: Path, case: dict, out, run_index: int, variant: str = "vulnerable"
+) -> dict:
     """Engine run through the engine CLI — gated by --engine-approve."""
-    repo_dir = materialize_fixture(corpus_dir, case)
-    scan_id = f"{case['id']}-engine-{run_index}"
+    repo_dir = materialize_fixture(corpus_dir, case, variant)
+    scan_id = f"{case['id']}-{variant}-engine-{run_index}"
     # Non-interactive runs persist findings to strix_runs/<run-name>/
     # vulnerabilities.json under the cwd — they are NOT printed to stdout.
     cmd = [
@@ -101,21 +140,35 @@ def run_engine(corpus_dir: Path, case: dict, out, run_index: int) -> dict:
         scan_id,
     ]
     started = time.monotonic()
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, cwd=repo_dir)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, cwd=repo_dir)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = subprocess.CompletedProcess(cmd, 1, "", type(exc).__name__)
     runtime_ms = int((time.monotonic() - started) * 1000)
 
     emitted = 0
+    errors = []
     vuln_path = repo_dir / "strix_runs" / scan_id / "vulnerabilities.json"
     if vuln_path.is_file():
         try:
-            for rec in json.loads(vuln_path.read_text(encoding="utf-8")):
+            records = json.loads(vuln_path.read_text(encoding="utf-8"))
+            if not isinstance(records, list):
+                errors.append("findings JSON is not an array")
+                records = []
+            for rec in records:
                 if not isinstance(rec, dict):
+                    errors.append("finding is not an object")
                     continue
-                loc = (rec.get("code_locations") or [{}])[0]
+                locations = rec.get("code_locations")
+                loc = locations[0] if isinstance(locations, list) and locations else {}
+                loc = loc if isinstance(loc, dict) else {}
                 out.write(
                     json.dumps(
                         {
                             "scanId": scan_id,
+                            "caseId": case["id"],
+                            "variant": variant,
+                            "runIndex": run_index,
                             "scanner": "engine",
                             "id": rec.get("id"),
                             "severity": rec.get("severity"),
@@ -129,11 +182,16 @@ def run_engine(corpus_dir: Path, case: dict, out, run_index: int) -> dict:
                 )
                 emitted += 1
         except json.JSONDecodeError:
-            pass
+            errors.append("invalid findings JSON")
+    else:
+        errors.append("missing vulnerabilities.json")
     shutil.rmtree(repo_dir, ignore_errors=True)
     return {
         "case": case["id"],
         "detector": "engine",
+        "variant": variant,
+        "scanId": scan_id,
+        "errors": errors,
         "runIndex": run_index,
         "emitted": emitted,
         "runtimeMs": runtime_ms,
@@ -169,6 +227,8 @@ def main() -> int:
         help="required for engine runs; any non-empty phrase records authorization",
     )
     args = parser.parse_args()
+    if args.runs < 1:
+        parser.error("--runs must be positive")
 
     corpus_dir = BENCH_ROOT / "corpus" / args.corpus
     corpus = load_corpus(corpus_dir)
@@ -182,20 +242,29 @@ def main() -> int:
         )
         return 2
 
+    sources = {"engine": source_state(BENCH_ROOT.parent), "product": source_state(PRODUCT_REPO)}
     timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     out_dir = RESULTS_ROOT / timestamp
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=False)
 
     findings_path = out_dir / "findings.jsonl"
     runs_meta = []
     with findings_path.open("w", encoding="utf-8") as out:
         for case in corpus["pairs"]:
-            if args.detectors in ("deterministic", "all"):
-                runs_meta.append(run_deterministic(corpus_dir, case, out))
-            if wants_engine:
-                runs_meta.extend(run_engine(corpus_dir, case, out, i) for i in range(args.runs))
+            for variant in ("vulnerable", "clean"):
+                if args.detectors in ("deterministic", "all"):
+                    runs_meta.append(run_deterministic(corpus_dir, case, out, variant))
+                if wants_engine:
+                    runs_meta.extend(
+                        run_engine(corpus_dir, case, out, i, variant) for i in range(args.runs)
+                    )
 
     manifest = {
+        "harnessVersion": 2,
+        "sources": sources,
+        "sourcesChangedDuringRun": sources
+        != {"engine": source_state(BENCH_ROOT.parent), "product": source_state(PRODUCT_REPO)},
+        "corpusSha256": hashlib.sha256((corpus_dir / "corpus.json").read_bytes()).hexdigest(),
         "corpus": corpus["name"],
         "corpusRevision": corpus["revision"],
         "schemaVersion": corpus["schemaVersion"],
@@ -206,8 +275,8 @@ def main() -> int:
         "startedAt": timestamp,
     }
     (out_dir / "run-manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"Wrote {findings_path} ({sum(r['emitted'] for r in runs_meta)} findings)")
-    return 0
+    print(f"Wrote {findings_path} ({sum(r['emitted'] for r in runs_meta)} records)")
+    return 1 if any(r["returncode"] != 0 or r.get("errors") for r in runs_meta) else 0
 
 
 if __name__ == "__main__":

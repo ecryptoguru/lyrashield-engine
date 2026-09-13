@@ -10,11 +10,8 @@
  * Runs offline: SCA is skipped (no advisory network), the rest run against
  * the materialized fixture directory.
  */
-import { mkdtempSync } from "node:fs"
-import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { cpSync } from "node:fs"
 
 const args = process.argv.slice(2)
 function arg(name: string): string | undefined {
@@ -42,8 +39,8 @@ const { scanAgentConfig } = await import(join(scannersDir, "agent-config-scanner
 const { scanMlSupplyChain } = await import(join(scannersDir, "ml-supply-chain-scanner"))
 
 async function main(): Promise<void> {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "bench-"))
-  cpSync(fixtureDir, workspaceDir, { recursive: true })
+  // The Python runner owns this temporary directory and its cleanup.
+  const workspaceDir = resolve(fixtureDir)
 
   const coverageIssues: unknown[] = []
   const discovery: Record<string, unknown> = {}
