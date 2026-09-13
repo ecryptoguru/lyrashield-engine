@@ -21,6 +21,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socket import socket
+from typing import cast
 from urllib.parse import unquote, urlsplit
 
 from cryptography import x509
@@ -101,6 +102,7 @@ def make_server(
     key = serialization.load_pem_private_key(ca_key.read_bytes(), password=None)
     if not isinstance(key, ec.EllipticCurvePrivateKey):
         raise TypeError("Sandbox testing CA must use an EC key")
+    signing_key = cast("ec.EllipticCurvePrivateKey", key)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -131,7 +133,7 @@ def make_server(
                 if not valid or host is None:
                     self.send_error(403, "Invalid HTTPS authority")
                     return
-                context = certificate_context(host, issuer, key)
+                context = certificate_context(host, issuer, signing_key)
                 self.send_response(200, "Connection Established")
                 self.end_headers()
                 self.wfile.flush()
