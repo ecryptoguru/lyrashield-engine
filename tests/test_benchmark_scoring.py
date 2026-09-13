@@ -1,5 +1,6 @@
 """Offline regressions for benchmark evidence attribution and failure states."""
 
+import hashlib
 import io
 import json
 import subprocess
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from benchmarks import run
-from benchmarks.score import case_matches, engine_stability, score
+from benchmarks.score import case_matches, corpus_matches_receipt, engine_stability, score
 
 
 def test_marker_matching_does_not_credit_neighboring_case(tmp_path: Path) -> None:
@@ -123,3 +124,26 @@ def test_generated_receipts_do_not_invalidate_source_state(tmp_path: Path) -> No
     after = run.source_state(tmp_path)
     assert after["dirty"]
     assert after["trackedDiffSha256"] != before["trackedDiffSha256"]
+
+
+def test_scoring_requires_original_corpus_and_fixture_bytes(tmp_path: Path) -> None:
+    corpus = {
+        "name": "fixture",
+        "revision": "v1",
+        "pairs": [{"vulnerable": "bad.ts", "clean": "safe.ts"}],
+    }
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    (tmp_path / "bad.ts").write_text("bad()")
+    (tmp_path / "safe.ts").write_text("safe()")
+    manifest = {
+        "corpus": "fixture",
+        "corpusRevision": "v1",
+        "corpusSha256": hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest(),
+        "fixtureSha256": {
+            name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+            for name in ("bad.ts", "safe.ts")
+        },
+    }
+    assert corpus_matches_receipt(manifest, corpus, tmp_path)
+    (tmp_path / "bad.ts").write_text("changed()")
+    assert not corpus_matches_receipt(manifest, corpus, tmp_path)

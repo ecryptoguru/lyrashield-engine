@@ -16,6 +16,7 @@ detected in all runs), runtime, and discovery-bounds receipts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections import defaultdict
@@ -121,6 +122,24 @@ def run_set_complete(manifest: dict, corpus: dict) -> bool:
     return actual == expected and len(actual) == len(manifest["runs"])
 
 
+def corpus_matches_receipt(manifest: dict, corpus: dict, corpus_dir: Path) -> bool:
+    if (
+        manifest.get("corpus") != corpus["name"]
+        or manifest.get("corpusRevision") != corpus["revision"]
+    ):
+        return False
+    checksum = hashlib.sha256((corpus_dir / "corpus.json").read_bytes()).hexdigest()
+    if manifest.get("corpusSha256") != checksum:
+        return False
+    expected = {case[variant] for case in corpus["pairs"] for variant in ("vulnerable", "clean")}
+    hashes = manifest.get("fixtureSha256", {})
+    return set(hashes) == expected and all(
+        (corpus_dir / path).is_file()
+        and hashlib.sha256((corpus_dir / path).read_bytes()).hexdigest() == hashes[path]
+        for path in expected
+    )
+
+
 def score(results_dir: Path, corpus_dir: Path) -> dict:
     corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
     findings = load_findings(results_dir / "findings.jsonl")
@@ -187,6 +206,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
         if failures
         or coverage_issues
         or not run_set_complete(manifest, corpus)
+        or not corpus_matches_receipt(manifest, corpus, corpus_dir)
         or manifest.get("sourcesChangedDuringRun")
         or any(source.get("dirty") for source in manifest.get("sources", {}).values())
         else "COMPLETE"

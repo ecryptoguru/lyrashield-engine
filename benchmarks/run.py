@@ -246,6 +246,12 @@ def main() -> int:
         return 2
 
     sources = {"engine": source_state(BENCH_ROOT.parent), "product": source_state(PRODUCT_REPO)}
+    fixture_hashes = {
+        path: hashlib.sha256((corpus_dir / path).read_bytes()).hexdigest()
+        for path in {
+            case[variant] for case in corpus["pairs"] for variant in ("vulnerable", "clean")
+        }
+    }
     timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     out_dir = RESULTS_ROOT / timestamp
     out_dir.mkdir(parents=True, exist_ok=False)
@@ -264,6 +270,7 @@ def main() -> int:
 
     manifest = {
         "harnessVersion": 2,
+        "fixtureSha256": fixture_hashes,
         "sources": sources,
         "sourcesChangedDuringRun": sources
         != {"engine": source_state(BENCH_ROOT.parent), "product": source_state(PRODUCT_REPO)},
