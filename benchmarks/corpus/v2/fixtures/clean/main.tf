@@ -14,7 +14,7 @@ resource "aws_s3_bucket_acl" "fixture" {
 }
 
 resource "aws_db_instance" "fixture" {
-  encrypted = true  # CASE:IAC-10 clean
+  storage_encrypted = true  # CASE:IAC-10 clean
 }
 
 variable "db_password" {

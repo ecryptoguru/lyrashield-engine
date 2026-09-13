@@ -14,6 +14,7 @@ import datetime
 import http.client
 import ipaddress
 import os
+import pwd
 import ssl
 import tempfile
 import threading
@@ -45,12 +46,10 @@ HOP_HEADERS = {
 }
 
 
-def certificate_context(host: str, ca_cert: Path, ca_key: Path) -> ssl.SSLContext:
+def certificate_context(
+    host: str, issuer: x509.Certificate, key: ec.EllipticCurvePrivateKey
+) -> ssl.SSLContext:
     """Issue a short-lived leaf; private key files exist only during loading."""
-    issuer = x509.load_pem_x509_certificate(ca_cert.read_bytes())
-    key = serialization.load_pem_private_key(ca_key.read_bytes(), password=None)
-    if not isinstance(key, ec.EllipticCurvePrivateKey):
-        raise TypeError("Sandbox testing CA must use an EC key")
     leaf_key = ec.generate_private_key(ec.SECP256R1())
     alternative_name: x509.GeneralName
     try:
@@ -94,8 +93,14 @@ def make_server(
     relay = urlsplit(relay_url)
     if relay.scheme not in ("http", "https") or not relay.hostname or not relay.username:
         raise ValueError("Authenticated relay origin required")
+    if relay.scheme == "http" and relay.hostname not in ("127.0.0.1", "::1"):
+        raise ValueError("Authenticated relay requires HTTPS outside loopback")
     relay_host = relay.hostname
     grant = unquote(relay.username)
+    issuer = x509.load_pem_x509_certificate(ca_cert.read_bytes())
+    key = serialization.load_pem_private_key(ca_key.read_bytes(), password=None)
+    if not isinstance(key, ec.EllipticCurvePrivateKey):
+        raise TypeError("Sandbox testing CA must use an EC key")
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -126,7 +131,7 @@ def make_server(
                 if not valid or host is None:
                     self.send_error(403, "Invalid HTTPS authority")
                     return
-                context = certificate_context(host, ca_cert, ca_key)
+                context = certificate_context(host, issuer, key)
                 self.send_response(200, "Connection Established")
                 self.end_headers()
                 self.wfile.flush()
@@ -261,11 +266,17 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=48081)
     args = parser.parse_args()
     server = make_server(
-        os.environ["LYRASHIELD_TARGET_RELAY_UPSTREAM"],
+        Path("/run/lyrashield-relay/upstream").read_text(encoding="ascii"),
         Path("/app/certs/ca.crt"),
         Path("/app/certs/ca.key"),
         args.port,
     )
+    if os.getuid() != 0:
+        raise RuntimeError("Relay bridge must start as root before dropping privileges")
+    identity = pwd.getpwnam("nobody")
+    os.setgroups([])
+    os.setgid(identity.pw_gid)
+    os.setuid(identity.pw_uid)
     with server:
         server.serve_forever()
 

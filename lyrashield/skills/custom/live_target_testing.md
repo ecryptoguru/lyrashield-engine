@@ -47,8 +47,8 @@ scope at the network layer — it is not a suggestion.
 - Caido capture and replay are configured through the same local inspection
   bridge. Native request/replay tools and browser traffic share the relay's
   scope controls. Failed upstream setup prevents the engine session starting.
-- If a request fails with a relay deny or a transport error, treat it as
-  scoped-out — not as a flaky target.
+- Treat an explicit relay policy denial as scoped-out. A transport failure or
+  ambiguous 403 is inconclusive; retain the error and do not claim coverage.
 
 ## Evidence standard
 

@@ -5,7 +5,7 @@ description: WebSocket testing covering cross-site hijacking (CSWSH), per-messag
 
 # WebSocket Security
 
-WebSockets upgrade an HTTP connection into a persistent, bidirectional channel. The handshake carries browser ambient authority (cookies), so every HTTP-auth mistake reappears here — plus a class of bugs unique to long-lived, message-oriented channels. The endpoint proxy does not capture WS frames: test through `agent_browser` (in-page WebSocket objects, CDP network events) and direct clients (`python -m websockets`, `wscat`, or a small `exec_command` script).
+WebSockets upgrade an HTTP connection into a persistent, bidirectional channel. The handshake carries browser ambient authority (cookies), so every HTTP-auth mistake reappears here — plus a class of bugs unique to long-lived, message-oriented channels. For scan-scoped relay sessions, the inspection bridge rejects Upgrade requests. Record WebSocket testing as an unsupported coverage gap; never connect directly or bypass the relay. The client techniques below apply only where the scan policy explicitly permits WebSocket transport.
 
 ## Attack Surface
 

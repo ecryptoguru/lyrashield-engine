@@ -51,6 +51,27 @@ https_proxy=${PROXY_URL}
 EOF
   chmod 644 /etc/wgetrc
 
+  if [ -f /run/lyrashield-relay/upstream ]; then
+    /app/.venv/bin/python /opt/lyrashield/target_relay_proxy.py &
+    TARGET_RELAY_PID=$!
+    TARGET_RELAY_READY=false
+    for i in {1..30}; do
+      if ! kill -0 "$TARGET_RELAY_PID" 2>/dev/null; then
+        echo "ERROR: target relay inspection bridge failed to start."
+        exit 1
+      fi
+      if (echo > /dev/tcp/127.0.0.1/48081) 2>/dev/null; then
+        TARGET_RELAY_READY=true
+        break
+      fi
+      sleep 1
+    done
+    if [ "$TARGET_RELAY_READY" != true ]; then
+      echo "ERROR: target relay inspection bridge did not become ready."
+      exit 1
+    fi
+  fi
+
   # Irreversible privilege drop; the agent phase re-enters this script below.
   exec setpriv --reuid=pentester --regid=pentester --init-groups \
     /usr/local/bin/docker-entrypoint.sh "$@"
@@ -67,27 +88,6 @@ fi
 
 # HTTPS clients keep certificate validation enabled. The local bridge uses the
 # already-installed testing CA, and the remote relay validates origin TLS.
-if [ -n "${LYRASHIELD_TARGET_RELAY_UPSTREAM:-}" ]; then
-  /app/.venv/bin/python /opt/lyrashield/target_relay_proxy.py &
-  TARGET_RELAY_PID=$!
-  TARGET_RELAY_READY=false
-  for i in {1..30}; do
-    if ! kill -0 "$TARGET_RELAY_PID" 2>/dev/null; then
-      echo "ERROR: target relay inspection bridge failed to start."
-      exit 1
-    fi
-    if (echo > /dev/tcp/127.0.0.1/48081) 2>/dev/null; then
-      TARGET_RELAY_READY=true
-      break
-    fi
-    sleep 1
-  done
-  if [ "$TARGET_RELAY_READY" != true ]; then
-    echo "ERROR: target relay inspection bridge did not become ready."
-    exit 1
-  fi
-fi
-
 # Caido enforces a Host allowlist (DNS-rebinding protection) and rejects requests
 # whose Host header is a hostname it doesn't recognize. To reach Caido over a
 # hostname (rather than an IP literal), set STRIX_CAIDO_ALLOWED_DOMAINS to a

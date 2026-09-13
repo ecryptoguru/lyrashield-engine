@@ -4,7 +4,13 @@ kind: Deployment
 metadata:
   name: fixture-app
 spec:
+  selector:
+    matchLabels:
+      app: fixture-app
   template:
+    metadata:
+      labels:
+        app: fixture-app
     spec:
       securityContext:
         runAsNonRoot: true  # CASE:IAC-05/06/07 clean

@@ -26,5 +26,6 @@ sign-off. A claim without a row is not publishable.
 All receipts produced before harnessVersion 2 are unvalidated historical runs,
 not detection-quality evidence. They omitted clean controls and exact case/run
 binding; their published recall and duplicate metrics must not be cited.
-Retain the original files for audit history. Generate fresh paired receipts with
-the corrected harness and require COMPLETE scorer status before review.
+The unvalidated drafts were removed from the PR; Git history retains them for
+audit. Generate fresh paired receipts with the corrected harness and require
+COMPLETE scorer status before review.

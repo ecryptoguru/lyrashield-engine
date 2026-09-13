@@ -18,6 +18,16 @@ from cryptography.x509.oid import NameOID
 from lyrashield.runtime.target_relay_proxy import make_server
 
 
+def test_bridge_rejects_cleartext_remote_origin(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="requires HTTPS"):
+        make_server(
+            "http://lrg1.payload.signature@relay.example",
+            tmp_path / "ca.crt",
+            tmp_path / "ca.key",
+            0,
+        )
+
+
 def write_ca(root: Path) -> tuple[Path, Path]:
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Relay test CA")])

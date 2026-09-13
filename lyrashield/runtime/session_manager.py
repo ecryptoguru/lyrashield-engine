@@ -37,6 +37,7 @@ _CONTAINER_CAIDO_PORT = 48080
 # Read-only mount target for the per-run replay egress policy consumed by the
 # guarded ``caido_api`` module inside the sandbox.
 _EGRESS_POLICY_TARGET = "/run/lyrashield-egress/policy.json"
+_RELAY_UPSTREAM_TARGET = "/run/lyrashield-relay/upstream"
 
 
 _SESSION_CACHE: dict[str, dict[str, Any]] = {}
@@ -93,6 +94,8 @@ def _target_relay_proxy_url() -> str | None:
         or not re.fullmatch(r"[A-Za-z0-9.:-]+", host)
     ):
         raise RuntimeError("STRIX_TARGET_RELAY_URL must be an http(s) origin")
+    if parsed.scheme == "http" and host not in ("127.0.0.1", "::1"):
+        raise RuntimeError("STRIX_TARGET_RELAY_URL requires HTTPS outside loopback")
     netloc = f"[{host}]" if ":" in host else host
     if port:
         netloc = f"{netloc}:{port}"
@@ -119,7 +122,6 @@ def build_sandbox_environment(
     }
     if relay_proxy:
         environment["STRIX_TARGET_RELAY"] = "1"
-        environment["LYRASHIELD_TARGET_RELAY_UPSTREAM"] = relay_proxy
     if host_gateway_enabled():
         environment["HOST_GATEWAY"] = "host.docker.internal"
     return environment
@@ -339,6 +341,15 @@ def write_egress_policy(
     return mount, host_dir
 
 
+def write_relay_upstream(relay_proxy: str) -> tuple[dict[str, Any], str]:
+    """Mount the grant for the bridge's root-only startup, never agent env."""
+    host_dir = tempfile.mkdtemp(prefix="lyrashield-relay-")
+    upstream = Path(host_dir) / "upstream"
+    upstream.write_text(relay_proxy, encoding="ascii")
+    upstream.chmod(0o400)
+    return {"source": str(upstream), "target": _RELAY_UPSTREAM_TARGET, "read_only": True}, host_dir
+
+
 async def create_or_reuse(  # noqa: PLR0915
     scan_id: str,
     *,
@@ -382,6 +393,10 @@ async def create_or_reuse(  # noqa: PLR0915
         # the replay guard's policy file.
         container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
         environment = build_sandbox_environment(container_caido_url)
+        relay_dir: str | None = None
+        if environment.get("STRIX_TARGET_RELAY"):
+            relay_mount, relay_dir = write_relay_upstream(_target_relay_proxy_url() or "")
+            bind_mounts.append(relay_mount)
         environment["LYRASHIELD_EGRESS_POLICY"] = _EGRESS_POLICY_TARGET
         environment["STRIX_RUN_ID"] = scan_id
         manifest = Manifest(
@@ -446,6 +461,8 @@ async def create_or_reuse(  # noqa: PLR0915
                     if docker_client is not None:
                         docker_client.close()
             shutil.rmtree(policy_host_dir, ignore_errors=True)
+            if relay_dir:
+                shutil.rmtree(relay_dir, ignore_errors=True)
             raise
         finally:
             for staged in staged_dirs:
@@ -459,6 +476,7 @@ async def create_or_reuse(  # noqa: PLR0915
             "default_scope_allowlist": default_scope_allowlist,
             "authorized_hosts": sorted(authorized_hosts),
             "egress_policy_dir": policy_host_dir,
+            "relay_upstream_dir": relay_dir,
         }
         async with _CACHE_LOCK:
             _SESSION_CACHE[scan_id] = bundle
@@ -520,6 +538,9 @@ async def cleanup(scan_id: str) -> str:
         policy_dir = bundle.get("egress_policy_dir")
         if policy_dir:
             shutil.rmtree(policy_dir, ignore_errors=True)
+        relay_dir = bundle.get("relay_upstream_dir")
+        if relay_dir:
+            shutil.rmtree(relay_dir, ignore_errors=True)
         _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)
         return CLEANUP_REMOVED
 

@@ -502,7 +502,9 @@
       "    grant = os.environ.get(\"STRIX_TARGET_RELAY_GRANT\", \"\").strip()",
       "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL must be an http(s) origin\") from None",
       "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL must be an http(s) origin\")",
+      "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL requires HTTPS outside loopback\")",
       "        environment[\"STRIX_TARGET_RELAY\"] = \"1\"",
+      "        if environment.get(\"STRIX_TARGET_RELAY\"):",
       "        environment[\"STRIX_RUN_ID\"] = scan_id",
       "                target_relay=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
     ],
