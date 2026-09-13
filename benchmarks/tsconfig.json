@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": false
+  },
+  "files": [
+    "corpus-env.d.ts",
+    "corpus/v2/fixtures/clean/supabase-client.ts",
+    "corpus/v2/fixtures/vulnerable/supabase-client.ts"
+  ]
+}

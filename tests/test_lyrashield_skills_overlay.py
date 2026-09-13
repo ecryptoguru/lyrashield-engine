@@ -41,6 +41,7 @@ def _register_overlay() -> None:
         ("custom/source_aware_sast", "ponytail"),
         ("custom/dependency_cve_scanning", "from locally available lockfiles"),
         ("vulnerabilities/subdomain_takeover", "rely on direct, reproducible provider responses"),
+        ("vulnerabilities/websocket", "reproducible handshake and frame evidence"),
     ],
 )
 def test_lyrashield_skill_overlay_shadows_builtin(skill: str, marker: str) -> None:

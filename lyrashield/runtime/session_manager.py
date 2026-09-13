@@ -8,6 +8,8 @@ import contextlib
 import ipaddress
 import json
 import logging
+import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -35,6 +37,7 @@ _CONTAINER_CAIDO_PORT = 48080
 # Read-only mount target for the per-run replay egress policy consumed by the
 # guarded ``caido_api`` module inside the sandbox.
 _EGRESS_POLICY_TARGET = "/run/lyrashield-egress/policy.json"
+_RELAY_UPSTREAM_TARGET = "/run/lyrashield-relay/upstream"
 
 
 _SESSION_CACHE: dict[str, dict[str, Any]] = {}
@@ -57,16 +60,68 @@ CLEANUP_FAILED = "failed"
 CLEANUP_NOT_FOUND = "not_found"
 
 
+def _target_relay_proxy_url() -> str | None:
+    """Relay URL with the scan grant embedded as proxy userinfo.
+
+    The local TLS inspection bridge extracts the signed grant from userinfo
+    and attaches it to each inspectable request. Returns None when the worker
+    did not pass relay configuration; repo scans keep the Caido proxy.
+    """
+    relay_url = os.environ.get("STRIX_TARGET_RELAY_URL", "").strip()
+    grant = os.environ.get("STRIX_TARGET_RELAY_GRANT", "").strip()
+    if not relay_url and not grant:
+        return None
+    if not relay_url or not grant:
+        raise RuntimeError("Target relay URL and grant must both be configured")
+    # Tokens become proxy userinfo and shell startup configuration. Accept only
+    # the product's signed base64url wire format, never shell/URL metacharacters.
+    if not re.fullmatch(r"lrg1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", grant):
+        raise RuntimeError("Target relay grant has an invalid wire format")
+    try:
+        parsed = urlparse(relay_url)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        raise RuntimeError("STRIX_TARGET_RELAY_URL must be an http(s) origin") from None
+    if (
+        parsed.scheme not in ("http", "https")
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or not re.fullmatch(r"[A-Za-z0-9.:-]+", host)
+    ):
+        raise RuntimeError("STRIX_TARGET_RELAY_URL must be an http(s) origin")
+    if parsed.scheme == "http" and host not in ("127.0.0.1", "::1"):
+        raise RuntimeError("STRIX_TARGET_RELAY_URL requires HTTPS outside loopback")
+    netloc = f"[{host}]" if ":" in host else host
+    if port:
+        netloc = f"{netloc}:{port}"
+    return f"{parsed.scheme}://{grant}@{netloc}"
+
+
 def build_sandbox_environment(
     container_caido_url: str,
 ) -> dict[str, str | EnvValue | EnvEntry]:
+    # Keep capture and replay on Caido. Relay sessions configure Caido's own
+    # upstream to the local TLS bridge before any agent executes; every request
+    # then reaches the scoped relay in inspectable form.
+    relay_proxy = _target_relay_proxy_url()
+    proxy_url = container_caido_url
     environment: dict[str, str | EnvValue | EnvEntry] = {
         "PYTHONUNBUFFERED": "1",
-        "http_proxy": container_caido_url,
-        "https_proxy": container_caido_url,
-        "ALL_PROXY": container_caido_url,
+        "http_proxy": proxy_url,
+        "https_proxy": proxy_url,
+        "HTTP_PROXY": proxy_url,
+        "HTTPS_PROXY": proxy_url,
+        "ALL_PROXY": proxy_url,
         "NO_PROXY": "localhost,127.0.0.1",
+        "AGENT_BROWSER_PROXY": proxy_url,
     }
+    if relay_proxy:
+        environment["STRIX_TARGET_RELAY"] = "1"
     if host_gateway_enabled():
         environment["HOST_GATEWAY"] = "host.docker.internal"
     return environment
@@ -286,6 +341,15 @@ def write_egress_policy(
     return mount, host_dir
 
 
+def write_relay_upstream(relay_proxy: str) -> tuple[dict[str, Any], str]:
+    """Mount the grant for the bridge's root-only startup, never agent env."""
+    host_dir = tempfile.mkdtemp(prefix="lyrashield-relay-")
+    upstream = Path(host_dir) / "upstream"
+    upstream.write_text(relay_proxy, encoding="ascii")
+    upstream.chmod(0o400)
+    return {"source": str(upstream), "target": _RELAY_UPSTREAM_TARGET, "read_only": True}, host_dir
+
+
 async def create_or_reuse(  # noqa: PLR0915
     scan_id: str,
     *,
@@ -329,6 +393,10 @@ async def create_or_reuse(  # noqa: PLR0915
         # the replay guard's policy file.
         container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
         environment = build_sandbox_environment(container_caido_url)
+        relay_dir: str | None = None
+        if environment.get("STRIX_TARGET_RELAY"):
+            relay_mount, relay_dir = write_relay_upstream(_target_relay_proxy_url() or "")
+            bind_mounts.append(relay_mount)
         environment["LYRASHIELD_EGRESS_POLICY"] = _EGRESS_POLICY_TARGET
         environment["STRIX_RUN_ID"] = scan_id
         manifest = Manifest(
@@ -372,6 +440,7 @@ async def create_or_reuse(  # noqa: PLR0915
                 scan_id=scan_id,
                 host_url=host_caido_url,
                 container_url=container_caido_url,
+                target_relay=bool(environment.get("STRIX_TARGET_RELAY")),
             )
 
             default_scope_id, default_scope_allowlist = await _create_default_scope(
@@ -392,6 +461,8 @@ async def create_or_reuse(  # noqa: PLR0915
                     if docker_client is not None:
                         docker_client.close()
             shutil.rmtree(policy_host_dir, ignore_errors=True)
+            if relay_dir:
+                shutil.rmtree(relay_dir, ignore_errors=True)
             raise
         finally:
             for staged in staged_dirs:
@@ -405,6 +476,7 @@ async def create_or_reuse(  # noqa: PLR0915
             "default_scope_allowlist": default_scope_allowlist,
             "authorized_hosts": sorted(authorized_hosts),
             "egress_policy_dir": policy_host_dir,
+            "relay_upstream_dir": relay_dir,
         }
         async with _CACHE_LOCK:
             _SESSION_CACHE[scan_id] = bundle
@@ -466,6 +538,9 @@ async def cleanup(scan_id: str) -> str:
         policy_dir = bundle.get("egress_policy_dir")
         if policy_dir:
             shutil.rmtree(policy_dir, ignore_errors=True)
+        relay_dir = bundle.get("relay_upstream_dir")
+        if relay_dir:
+            shutil.rmtree(relay_dir, ignore_errors=True)
         _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)
         return CLEANUP_REMOVED
 
