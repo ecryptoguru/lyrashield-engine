@@ -301,6 +301,7 @@ RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/p
     echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"' >> /home/pentester/.profile
 
 USER root
+RUN install -d -m 0700 -o root -g root /run/lyrashield-relay
 RUN setcap cap_net_raw,cap_net_bind_service+eip /usr/lib/nmap/nmap
 COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
