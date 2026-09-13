@@ -63,8 +63,8 @@ def case_matches(
     prefixes = case.get("rulePrefixes")
     if prefixes and not any((finding.get("id") or "").startswith(prefix) for prefix in prefixes):
         return False
-    # Absence cases ("no USER directive") have no offending line — the marker
-    # constraint can't apply to them or to findings reported as -absent.
+    # Only corpus-declared absence controls may skip line matching; a
+    # detector's identifier alone cannot widen the expected case scope.
     line_exempt = case.get("absence")
     marker = derive_marker_line(case, corpus_dir, marker_cache)
     if marker is not None and not line_exempt:
