@@ -1,5 +1,5 @@
 """
-Benchmark scorer — findings.jsonl × corpus.json → per-class metrics.
+Benchmark scorer — findings.jsonl x corpus.json → per-class metrics.
 
   uv run python benchmarks/score.py --corpus v2 --results benchmarks/results/<ts>
 
@@ -12,6 +12,7 @@ Metrics: per-class recall (detected/expected), precision proxy (clean-fixture
 findings = false positives), duplicate rate, run stability (engine: same case
 detected in all runs), runtime, and discovery-bounds receipts.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,6 +20,7 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
+
 
 BENCH_ROOT = Path(__file__).resolve().parent
 LINE_TOLERANCE = 3
@@ -59,9 +61,7 @@ def case_matches(
     if not finding_file.endswith(file_name):
         return False
     prefixes = case.get("rulePrefixes")
-    if prefixes and not any(
-        (finding.get("id") or "").startswith(prefix) for prefix in prefixes
-    ):
+    if prefixes and not any((finding.get("id") or "").startswith(prefix) for prefix in prefixes):
         return False
     # Absence cases ("no USER directive") have no offending line — the marker
     # constraint can't apply to them or to findings reported as -absent.
@@ -84,7 +84,9 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
     marker_cache: dict[str, int | None] = {}
     discovery_receipts = [f for f in findings if f.get("scanner") == "__discovery__"]
 
-    scan_findings = [f for f in findings if f.get("scanner") not in ("__discovery__", "__coverage__")]
+    scan_findings = [
+        f for f in findings if f.get("scanner") not in ("__discovery__", "__coverage__")
+    ]
     for finding in scan_findings:
         matched = False
         for case in corpus["pairs"]:
@@ -133,8 +135,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
         ),
         "unmatchedFindings": len(clean_fps),
         "duplicateRate": round(
-            sum(max(0, len(v) - 1) for v in detected.values())
-            / max(1, len(scan_findings)),
+            sum(max(0, len(v) - 1) for v in detected.values()) / max(1, len(scan_findings)),
             4,
         ),
         "perClass": per_class,
@@ -153,7 +154,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
         f"- recall: {summary['recall']} ({summary['detectedCases']}/{summary['totalCases']})",
         f"- unmatched findings (FP candidates): {summary['unmatchedFindings']}",
         f"- duplicate rate: {summary['duplicateRate']}",
-        f"- engine stability: {stability if stability is not None else 'n/a (single run or deterministic only)'}",
+        f"- engine stability: {stability if stability is not None else 'n/a (single/det)'}",
         "",
         "| class | detected | cases | recall |",
         "|---|---|---|---|",

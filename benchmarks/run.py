@@ -11,6 +11,7 @@ cost nothing. Engine runs require --engine-approve and record the exact
 engine revision + model route into results.json. Findings land in
 benchmarks/results/<timestamp>/findings.jsonl for score.py.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +23,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
 
 BENCH_ROOT = Path(__file__).resolve().parent
 RESULTS_ROOT = BENCH_ROOT / "results"
@@ -66,8 +68,8 @@ def run_deterministic(corpus_dir: Path, case: dict, out) -> dict:
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
     runtime_ms = int((time.monotonic() - started) * 1000)
     emitted = 0
-    for line in proc.stdout.splitlines():
-        line = line.strip()
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.strip()
         if line.startswith("{"):
             out.write(line + "\n")
             emitted += 1
@@ -99,9 +101,7 @@ def run_engine(corpus_dir: Path, case: dict, out, run_index: int) -> dict:
         scan_id,
     ]
     started = time.monotonic()
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=3600, cwd=repo_dir
-    )
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, cwd=repo_dir)
     runtime_ms = int((time.monotonic() - started) * 1000)
 
     emitted = 0
@@ -177,7 +177,7 @@ def main() -> int:
     if wants_engine and not args.engine_approve:
         print(
             "Engine runs spend model budget. Re-run with "
-            "--engine-approve \"I authorize spend\" to proceed.",
+            '--engine-approve "I authorize spend" to proceed.',
             file=sys.stderr,
         )
         return 2
@@ -193,8 +193,7 @@ def main() -> int:
             if args.detectors in ("deterministic", "all"):
                 runs_meta.append(run_deterministic(corpus_dir, case, out))
             if wants_engine:
-                for i in range(args.runs):
-                    runs_meta.append(run_engine(corpus_dir, case, out, i))
+                runs_meta.extend(run_engine(corpus_dir, case, out, i) for i in range(args.runs))
 
     manifest = {
         "corpus": corpus["name"],

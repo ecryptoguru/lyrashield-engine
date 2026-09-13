@@ -268,6 +268,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Benchmark scripts: fixed-argv subprocess calls and intentional stdout output.
+"benchmarks/*.py" = ["S603", "S607", "T201", "BLE001", "PLW1510"]
 # Test doubles use fixture tokens/passwords and match a callee signature whose
 # args they intentionally ignore.
 "tests/test_viewer_auth.py" = ["S105", "S106", "ARG001"]

@@ -5,7 +5,7 @@
 - recall: 0.2821 (11/39)
 - unmatched findings (FP candidates): 312
 - duplicate rate: 0.1086
-- engine stability: n/a (single run or deterministic only)
+- engine stability: n/a (single/det)
 
 | class | detected | cases | recall |
 |---|---|---|---|
