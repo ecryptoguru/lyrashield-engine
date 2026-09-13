@@ -96,3 +96,6 @@ schema.graphql
 .devin/
 
 .worktrees/
+
+# Retired desktop source may leave local build caches; never redistribute them.
+/desktop/

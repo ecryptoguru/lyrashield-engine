@@ -80,12 +80,54 @@ async def _login_as_guest(
     raise RuntimeError(f"loginAsGuest failed after {attempts} attempts: {last_err}")
 
 
+async def configure_target_relay(client: Client) -> None:
+    """Route native proxy/replay traffic through the inspectable local bridge."""
+    fields = "id enabled connection { host port isTLS } allowlist denylist"
+    created = await client.graphql.mutation(
+        "mutation($input: CreateUpstreamProxyHttpInput!) { "
+        "createUpstreamProxyHttp(input: $input) { proxy { id } } }",
+        {
+            "input": {
+                "enabled": True,
+                "connection": {"host": "127.0.0.1", "port": 48081, "isTLS": False},
+                "allowlist": ["*"],
+                "denylist": [],
+            }
+        },
+    )
+    proxy = (created.get("createUpstreamProxyHttp") or {}).get("proxy") or {}
+    if not proxy.get("id"):
+        raise RuntimeError("Caido target relay upstream creation failed")
+    state = await client.graphql.query(
+        "{ upstreamProxiesHttp { " + fields + " } "
+        "upstreamProxiesSocks { enabled } upstreamPlugins { enabled } }"
+    )
+    if not all(
+        isinstance(state.get(key), list)
+        for key in ("upstreamProxiesHttp", "upstreamProxiesSocks", "upstreamPlugins")
+    ):
+        raise RuntimeError("Caido target relay upstream verification failed")
+    enabled = [item for item in state["upstreamProxiesHttp"] if item.get("enabled")]
+    expected = {
+        "id": proxy["id"],
+        "enabled": True,
+        "connection": {"host": "127.0.0.1", "port": 48081, "isTLS": False},
+        "allowlist": ["*"],
+        "denylist": [],
+    }
+    if enabled != [expected] or any(
+        item.get("enabled") for item in [*state["upstreamProxiesSocks"], *state["upstreamPlugins"]]
+    ):
+        raise RuntimeError("Caido target relay upstream verification failed")
+
+
 async def bootstrap_caido(
     session: BaseSandboxSession,
     *,
     scan_id: str,
     host_url: str,
     container_url: str,
+    target_relay: bool = False,
 ) -> Client:
     """Connect to the in-container Caido sidecar and select a fresh project."""
     logger.info(
@@ -106,6 +148,8 @@ async def bootstrap_caido(
             CreateProjectOptions(name=project_name, temporary=True),
         )
         await client.project.select(project.id)
+        if target_relay:
+            await configure_target_relay(client)
     except BaseException:
         # The connected client never reaches the session bundle if project
         # setup fails, so close it here to avoid leaking the transport.

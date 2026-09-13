@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 from agents.sandbox.entries import LocalDir
@@ -14,11 +16,8 @@ from lyrashield.runtime.session_manager import (
     build_session_entries,
     get_sandbox_container_ip,
     resolve_sandbox_endpoint,
+    write_relay_upstream,
 )
-
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _source(subdir: str, path: str, *, mount: bool = False) -> dict[str, Any]:
@@ -194,3 +193,69 @@ async def test_create_or_reuse_passes_path_grants_to_the_manifest(
     assert [grant.path for grant in captured["manifest"].extra_path_grants] == [
         str(tmp_path.resolve())
     ]
+
+
+@pytest.mark.parametrize("missing", ["STRIX_TARGET_RELAY_URL", "STRIX_TARGET_RELAY_GRANT"])
+def test_partial_target_relay_fails_closed(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
+    monkeypatch.setenv("STRIX_TARGET_RELAY_URL", "http://relay.example:8080")
+    monkeypatch.setenv("STRIX_TARGET_RELAY_GRANT", "lrg1.payload.signature")
+    monkeypatch.delenv(missing)
+    with pytest.raises(RuntimeError, match="both be configured"):
+        build_sandbox_environment("http://127.0.0.1:48080")
+
+
+@pytest.mark.parametrize(
+    "url", ["http://user:secret@relay", "http://relay/path", "http://relay:bad", "http://$(id)"]
+)
+def test_invalid_relay_origin_does_not_echo_configuration(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    monkeypatch.setenv("STRIX_TARGET_RELAY_URL", url)
+    monkeypatch.setenv("STRIX_TARGET_RELAY_GRANT", "lrg1.payload.signature")
+    with pytest.raises(RuntimeError, match="must be an http") as exc:
+        build_sandbox_environment("http://127.0.0.1:48080")
+    assert url not in str(exc.value)
+
+
+def test_relay_ipv6_and_all_proxy_consumers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STRIX_TARGET_RELAY_URL", "http://[::1]:8080")
+    monkeypatch.setenv("STRIX_TARGET_RELAY_GRANT", "lrg1.payload.signature")
+    environment = build_sandbox_environment("http://127.0.0.1:48080")
+    for key in (
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "AGENT_BROWSER_PROXY",
+    ):
+        assert environment[key] == "http://127.0.0.1:48080"
+    assert environment["STRIX_TARGET_RELAY"] == "1"
+    assert "LYRASHIELD_TARGET_RELAY_UPSTREAM" not in environment
+
+
+def test_relay_grant_is_mounted_only_for_bridge() -> None:
+    grant = "http://lrg1.payload.signature@127.0.0.1:8080"
+    mount, host_dir = write_relay_upstream(grant)
+    try:
+        upstream = Path(mount["source"])
+        assert mount["read_only"] is True
+        assert upstream.read_text() == grant
+        assert upstream.stat().st_mode & 0o077 == 0
+        assert Path(host_dir).stat().st_mode & 0o077 == 0
+    finally:
+        shutil.rmtree(host_dir)
+
+
+def test_relay_rejects_grant_metacharacters(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STRIX_TARGET_RELAY_URL", "http://relay.example")
+    monkeypatch.setenv("STRIX_TARGET_RELAY_GRANT", "lrg1.$(id).signature")
+    with pytest.raises(RuntimeError, match="invalid wire format"):
+        build_sandbox_environment("http://127.0.0.1:48080")
+
+
+def test_relay_rejects_cleartext_remote_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STRIX_TARGET_RELAY_URL", "http://relay.example")
+    monkeypatch.setenv("STRIX_TARGET_RELAY_GRANT", "lrg1.payload.signature")
+    with pytest.raises(RuntimeError, match="requires HTTPS"):
+        build_sandbox_environment("http://127.0.0.1:48080")
