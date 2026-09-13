@@ -49,7 +49,7 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
         if query:
             url = f"{url}?{query}"
         requests.post(url, timeout=10)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("scarf send failed for event %s", event, exc_info=True)
         return False
     else:
