@@ -300,7 +300,8 @@
       "matchFile": "Dockerfile",
       "rulePrefixes": [
         "iac-dockerfile-user-root"
-      ]
+      ],
+      "absence": true
     },
     {
       "id": "IAC-05",

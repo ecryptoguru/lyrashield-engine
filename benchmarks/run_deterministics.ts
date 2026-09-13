@@ -22,7 +22,7 @@ function arg(name: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined
 }
 
-const fixtureDir = arg("repo-root")
+const fixtureDir = arg("repo-root") ?? ""
 const scanId = arg("scan-id") ?? "benchmark"
 if (!fixtureDir) {
   console.error("usage: --repo-root <dir>")
