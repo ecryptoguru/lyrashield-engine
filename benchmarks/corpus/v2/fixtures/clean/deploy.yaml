@@ -1,0 +1,16 @@
+# Synthetic AI-built-app fixture — Kubernetes clean projection.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fixture-app
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true  # CASE:IAC-05/06/07 clean
+      containers:
+        - name: app
+          image: fixture/app:1.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
