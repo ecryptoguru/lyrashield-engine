@@ -102,12 +102,11 @@ def _target_relay_proxy_url() -> str | None:
 def build_sandbox_environment(
     container_caido_url: str,
 ) -> dict[str, str | EnvValue | EnvEntry]:
-    # When a target relay is configured the sandbox's outbound HTTP(S) goes to
-    # a local TLS inspection bridge instead of the Caido sidecar. The bridge
-    # forwards inspectable requests to the relay, which enforces every grant.
-    # Caido keeps running for its API but sees no forwarded traffic.
+    # Keep capture and replay on Caido. Relay sessions configure Caido's own
+    # upstream to the local TLS bridge before any agent executes; every request
+    # then reaches the scoped relay in inspectable form.
     relay_proxy = _target_relay_proxy_url()
-    proxy_url = "http://127.0.0.1:48081" if relay_proxy else container_caido_url
+    proxy_url = container_caido_url
     environment: dict[str, str | EnvValue | EnvEntry] = {
         "PYTHONUNBUFFERED": "1",
         "http_proxy": proxy_url,
@@ -426,6 +425,7 @@ async def create_or_reuse(  # noqa: PLR0915
                 scan_id=scan_id,
                 host_url=host_caido_url,
                 container_url=container_caido_url,
+                target_relay=bool(environment.get("STRIX_TARGET_RELAY")),
             )
 
             default_scope_id, default_scope_allowlist = await _create_default_scope(

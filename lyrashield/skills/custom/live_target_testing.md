@@ -44,10 +44,9 @@ scope at the network layer — it is not a suggestion.
 - Browser HTTP/HTTPS navigation and ordinary requests use the same bridge.
   Confirm successful response receipts before claiming coverage. WebSocket
   upgrades and streaming request bodies remain unsupported; record the gap.
-- The local Caido instance API is reachable, but traffic it sends does **not**
-  traverse the relay and will fail closed. Do not use `send_request`-style
-  replays against live targets in this mode; craft requests with the tools
-  above instead.
+- Caido capture and replay are configured through the same local inspection
+  bridge. Native request/replay tools and browser traffic share the relay's
+  scope controls. Failed upstream setup prevents the engine session starting.
 - If a request fails with a relay deny or a transport error, treat it as
   scoped-out — not as a flaky target.
 

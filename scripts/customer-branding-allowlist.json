@@ -503,7 +503,8 @@
       "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL must be an http(s) origin\") from None",
       "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL must be an http(s) origin\")",
       "        environment[\"STRIX_TARGET_RELAY\"] = \"1\"",
-      "        environment[\"STRIX_RUN_ID\"] = scan_id"
+      "        environment[\"STRIX_RUN_ID\"] = scan_id",
+      "                target_relay=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
     ],
     "lyrashield/telemetry/README.md": [
       "- `STRIX_NO_UPDATE_CHECK=1` \u2014 disables the upstream self-update network check.",

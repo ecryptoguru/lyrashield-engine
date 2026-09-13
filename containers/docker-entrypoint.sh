@@ -11,8 +11,8 @@ CAIDO_PORT=48080
 CAIDO_LOG="/tmp/caido_startup.log"
 
 # Default outbound proxy is the in-container Caido sidecar. When the worker
-# configures a scan-scoped target relay, http_proxy selects the local TLS
-# inspection bridge. Honor it so shells and browser tools route identically;
+# configures a scan-scoped target relay, the host bootstraps Caido's upstream
+# through the local TLS bridge. Keep shell/browser proxy routing consistent;
 # only the bridge's upstream configuration carries the scan grant.
 PROXY_URL="${http_proxy:-http://127.0.0.1:${CAIDO_PORT}}"
 # Quote shell startup assignments; proxy configuration must remain data.

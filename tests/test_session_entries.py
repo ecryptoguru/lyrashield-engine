@@ -230,7 +230,7 @@ def test_relay_ipv6_and_all_proxy_consumers(monkeypatch: pytest.MonkeyPatch) -> 
         "ALL_PROXY",
         "AGENT_BROWSER_PROXY",
     ):
-        assert environment[key] == "http://127.0.0.1:48081"
+        assert environment[key] == "http://127.0.0.1:48080"
     assert (
         environment["LYRASHIELD_TARGET_RELAY_UPSTREAM"]
         == "http://lrg1.payload.signature@[::1]:8080"
