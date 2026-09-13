@@ -2,6 +2,7 @@
 
 import io
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -91,3 +92,34 @@ def test_deterministic_runner_records_clean_polarity_and_failure(
     assert json.loads(output.getvalue())["variant"] == "clean"
     assert json.loads(output.getvalue())["caseId"] == "A"
     assert not seen[0].exists()
+
+
+def test_generated_receipts_do_not_invalidate_source_state(tmp_path: Path) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)  # noqa: S603,S607 - local fixture repository
+
+    git("init")
+    source = tmp_path / "scanner.py"
+    source.write_text("pass\n")
+    git("add", "scanner.py")
+    git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+        "-m",
+        "fixture",
+    )
+    before = run.source_state(tmp_path)
+    assert not before["dirty"]
+    output = tmp_path / "benchmarks" / "results" / "run"
+    output.mkdir(parents=True)
+    (output / "findings.jsonl").write_text("{}\n")
+    assert run.source_state(tmp_path) == before
+    source.write_text("changed = True\n")
+    after = run.source_state(tmp_path)
+    assert after["dirty"]
+    assert after["trackedDiffSha256"] != before["trackedDiffSha256"]

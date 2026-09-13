@@ -41,11 +41,14 @@ def source_state(repo: Path) -> dict:
     revision = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
     ).stdout.strip()
+    # Generated receipts are outputs, not executable inputs. Otherwise the
+    # default in-repository output directory makes every run invalidate itself.
+    paths = ["--", ".", ":(exclude)benchmarks/results"]
     diff = subprocess.run(
-        ["git", "diff", "--binary", "HEAD"], cwd=repo, capture_output=True, check=True
+        ["git", "diff", "--binary", "HEAD", *paths], cwd=repo, capture_output=True, check=True
     ).stdout
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, check=True
+        ["git", "status", "--porcelain", *paths], cwd=repo, capture_output=True, check=True
     ).stdout
     return {
         "revision": revision,
