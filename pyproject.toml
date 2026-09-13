@@ -83,8 +83,10 @@ dev = [
   "bandit>=1.8.3",
   "pre-commit>=4.2.0",
   "pyinstaller>=6.17.0; python_version >= '3.12' and python_version < '3.15'",
+  "pypdf>=5.0",
   "pytest>=8.3",
   "pytest-asyncio>=0.24",
+  "reportlab>=4.0",
 ]
 
 [tool.pytest.ini_options]
@@ -113,7 +115,6 @@ exclude = [
 exclude = [
     "/.worktrees",
     "/tests/**",
-    "/desktop/**",
     "/strix/interface/viewer/frontend/**",
     "/lyrashield/interface/viewer/frontend/**",
 ]

@@ -95,11 +95,4 @@ schema.graphql
 .opencode/
 .devin/
 
-# Tauri desktop build artifacts
-desktop/src-tauri/target/
-desktop/logic/target/
-desktop/logic/Cargo.lock
-desktop/ui/node_modules/
-desktop/ui/dist/
-desktop/tests/target/
 .worktrees/

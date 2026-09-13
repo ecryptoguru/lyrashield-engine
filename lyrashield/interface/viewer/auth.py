@@ -63,9 +63,9 @@ def parse_expiry(raw: object) -> datetime | None:
 
     Accepts both ISO 8601 strings and epoch seconds (as a number or numeric
     string) so a valid relay expiry is not misread as missing. Returns None only
-    when it is genuinely absent or unparseable; both the local gate (see
-    ``is_verified``) and OTP verification (see ``otp_verify``) fail closed on such
-    values, matching the relay, which rejects a token with no valid expiry.
+    when it is genuinely absent or unparseable; the local gate (see
+    ``is_verified``) fails closed on such values, matching the relay, which
+    rejects a token with no valid expiry.
     """
     if isinstance(raw, bool):
         return None
@@ -127,9 +127,8 @@ def write_auth(email: str, token: str, verified_at: str) -> None:
 
 
 def forget() -> None:
-    """Delete the stored auth record. No-op if it is absent."""
-    with contextlib.suppress(OSError):
-        AUTH_PATH.unlink()
+    """Remove the local cached email and relay token."""
+    AUTH_PATH.unlink(missing_ok=True)
 
 
 # --- relay client -----------------------------------------------------------
@@ -166,41 +165,6 @@ def _parse_body(raw: bytes) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def otp_start(email: str) -> None:
-    """Ask the relay to email a verification code. Raises RelayError on failure."""
-    status, data = _post_json("/api/oss/otp/start", {"email": email}, timeout=_OTP_TIMEOUT)
-    if status == 200:
-        return
-    if status == 429:
-        raise RelayError("rate_limited")
-    if status == 400:
-        # The relay uses 400 both for a malformed address and, separately, to
-        # reject a free/personal email domain (it wants a work email).
-        if data.get("error") == "work_email_required":
-            raise RelayError("work_email_required")
-        raise RelayError("invalid_email")
-    raise RelayError("unavailable")
-
-
-def otp_verify(email: str, code: str) -> dict[str, Any]:
-    """Verify a code. Returns ``{token, email, expires_at}`` or raises RelayError."""
-    status, data = _post_json(
-        "/api/oss/otp/verify",
-        {"email": email, "code": code},
-        timeout=_OTP_TIMEOUT,
-    )
-    if status == 200 and isinstance(data.get("token"), str):
-        # A token with no usable expiry cannot unlock history locally (the gate
-        # fails closed), so treat such a response as a failed verification rather
-        # than reporting success and then leaving the user stuck unverified.
-        if parse_expiry(data.get("expires_at")) is None:
-            raise RelayError("unavailable")
-        return data
-    if status == 403:
-        raise RelayError("invalid_code")
-    raise RelayError("unavailable")
 
 
 def feedback_submit(email: str, message: str) -> None:
@@ -260,8 +224,6 @@ __all__ = [
     "feedback_submit",
     "forget",
     "is_verified",
-    "otp_start",
-    "otp_verify",
     "read_auth",
     "report_send",
     "write_auth",

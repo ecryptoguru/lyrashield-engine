@@ -15,6 +15,7 @@ Design notes:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -169,10 +170,6 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             try:
                 if path == "/api/event":
                     self._handle_event()
-                elif path == "/api/auth/otp/start":
-                    self._handle_otp_start()
-                elif path == "/api/auth/otp/verify":
-                    self._handle_otp_verify()
                 elif path == "/api/auth/forget":
                     self._handle_forget()
                 elif path == "/api/report/send":
@@ -292,48 +289,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 },
             )
 
-        def _handle_otp_start(self) -> None:
-            if not self._has_session():
-                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
-                return
-            email = str(self._read_body().get("email") or "").strip()
-            if not email:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_email"})
-                return
-            try:
-                auth.otp_start(email)
-            except auth.RelayError as exc:
-                self._send_relay_error(exc)
-                return
-            self._send_json(HTTPStatus.OK, {"ok": True})
-
-        def _handle_otp_verify(self) -> None:
-            if not self._has_session():
-                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
-                return
-            body = self._read_body()
-            email = str(body.get("email") or "").strip()
-            code = str(body.get("code") or "").strip()
-            if not email or not code:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_code"})
-                return
-            try:
-                result = auth.otp_verify(email, code)
-            except auth.RelayError as exc:
-                self._send_relay_error(exc)
-                return
-            auth.write_auth(
-                email=result.get("email") or email,
-                token=result["token"],
-                verified_at=result.get("expires_at") or "",
-            )
-            verified_email = result.get("email") or email
-            self._send_json(HTTPStatus.OK, {"verified": True, "email": verified_email})
-
         def _handle_forget(self) -> None:
-            # Clearing the cached verification is a state change, so it requires
-            # this process's session capability: a cookie-less caller on an
-            # exposed --host port must not be able to log the operator out.
             if not self._has_session():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
                 return
@@ -581,6 +537,16 @@ def serve(
     the live scan process and can forward a message to a running agent. Left
     ``None`` (standalone ``lyrashield view``), steering is reported unavailable.
     """
+    normalized_host = host.strip("[]").lower()
+    try:
+        is_loopback = (
+            normalized_host == "localhost" or ipaddress.ip_address(normalized_host).is_loopback
+        )
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise ValueError("Viewer host must be loopback; remote HTTP bindings are not supported")
+
     assets_dir = bundle_dir()
     state = _ViewerState(run_dir=run_dir, assets_dir=assets_dir, steer_handler=steer_handler)
     handler = _make_handler(state)

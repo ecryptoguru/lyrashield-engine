@@ -308,11 +308,14 @@ class TelemetrySettings(BaseSettings):
 class ViewerSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
-    # Base URL of the Strix relay the local viewer proxies to for email
-    # verification and encrypted report delivery. The browser never talks to
-    # the relay directly; the local server is the only caller.
+    # Deep Review v16 4.2: the default relay host pointed at an upstream
+    # domain we do not own. No LyraShield-owned relay exists, so the default
+    # is now EMPTY — every relay-backed viewer feature (encrypted report
+    # email, feedback) fails closed with RelayError("unavailable") unless an
+    # operator explicitly configures STRIX_APP_URL/LYRASHIELD_APP_URL. The
+    # OTP relay endpoints were removed outright in this same change.
     app_url: str = Field(
-        default="https://app.strix.ai",
+        default="",
         alias="STRIX_APP_URL",
         validation_alias=_lyra("STRIX_APP_URL"),
     )
