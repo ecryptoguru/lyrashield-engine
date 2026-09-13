@@ -66,3 +66,43 @@ async def test_bootstrap_caido_uses_per_scan_project_name(monkeypatch: pytest.Mo
     assert client.project.created[0]["name"].startswith("sandbox-scan-123")
     assert client.project.created[0]["name"] == "sandbox-scan-123"
     assert client.project.created[0]["temporary"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drift", [None, "disabled", "different_port", "narrow_scope", "socks", "plugin"]
+)
+async def test_target_relay_upstream_requires_exact_readback(drift: str | None) -> None:
+    class Graphql:
+        configured: dict[str, Any]
+
+        async def mutation(self, _query: str, variables: dict[str, Any]) -> dict[str, Any]:
+            self.configured = {"id": "proxy-id", **variables["input"]}
+            return {"createUpstreamProxyHttp": {"proxy": {"id": "proxy-id"}}}
+
+        async def query(self, _query: str) -> dict[str, Any]:
+            if drift == "disabled":
+                self.configured["enabled"] = False
+            elif drift == "different_port":
+                self.configured["connection"]["port"] = 1234
+            elif drift == "narrow_scope":
+                self.configured["allowlist"] = ["one.example"]
+            return {
+                "upstreamProxiesHttp": [self.configured],
+                "upstreamProxiesSocks": [{"enabled": drift == "socks"}],
+                "upstreamPlugins": [{"enabled": drift == "plugin"}],
+            }
+
+    class Client:
+        graphql = Graphql()
+
+    if drift:
+        with pytest.raises(RuntimeError, match="verification failed"):
+            await caido_bootstrap.configure_target_relay(Client())  # type: ignore[arg-type]
+    else:
+        await caido_bootstrap.configure_target_relay(Client())  # type: ignore[arg-type]
+        assert Client.graphql.configured["connection"] == {
+            "host": "127.0.0.1",
+            "port": 48081,
+            "isTLS": False,
+        }

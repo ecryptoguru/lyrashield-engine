@@ -5,10 +5,15 @@ from shutil import copytree
 import pytest
 
 from benchmarks.corpus.v1.validate import ROOT, validate
+from benchmarks.corpus.v2.validate import validate as validate_v2
 
 
 def test_versioned_evaluation_corpus() -> None:
     validate()
+
+
+def test_v2_evaluation_corpus() -> None:
+    validate_v2()
 
 
 @pytest.mark.parametrize("mode", ["duplicate", "swapped"])

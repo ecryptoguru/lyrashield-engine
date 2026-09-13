@@ -9,3 +9,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      opentelemetry:
+        patterns:
+          - "opentelemetry-*"
+    ignore:
+      - dependency-name: charset-normalizer
+        update-types:
+          - version-update:semver-major
