@@ -117,6 +117,8 @@ async def run_cli(args: Any) -> None:
         "local_sources": getattr(args, "local_sources", None) or [],
         "scope_mode": getattr(args, "scope_mode", "auto"),
         "diff_base": getattr(args, "diff_base", None),
+        "diff_head": getattr(args, "diff_head", None),
+        "repository_revision": getattr(args, "repository_revision", None),
         "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
     }
 
