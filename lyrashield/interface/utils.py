@@ -1309,7 +1309,7 @@ def resolve_diff_scope_context(
             raise
 
     if not repo_scopes:
-        if scope_mode == "auto":
+        if scope_mode == "auto" and diff_head is None:
             metadata: dict[str, Any] = {"active": False, "mode": scope_mode}
             if skipped_non_git:
                 metadata["skipped_non_git_sources"] = skipped_non_git
