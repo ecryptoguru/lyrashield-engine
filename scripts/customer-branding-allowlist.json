@@ -352,7 +352,8 @@
       "from strix.config.loader import load_settings",
       "from strix.core.paths import run_dir_for, runtime_state_dir",
       "                tool_version=_strix_version(),",
-      "        from strix.report.coverage import read_agent_graph"
+      "    from strix.report.coverage import read_agent_graph",
+      "    from strix.tools.coverage.tools import get_coverage_entries"
     ],
     "lyrashield/artifacts/usage.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
@@ -516,7 +517,8 @@
       "        environment[\"STRIX_TARGET_RELAY\"] = \"1\"",
       "            if environment.get(\"STRIX_TARGET_RELAY\"):",
       "            environment[\"STRIX_RUN_ID\"] = scan_id",
-      "                target_relay=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
+      "                target_relay=bool(environment.get(\"STRIX_TARGET_RELAY\")),",
+      "                relay_configured=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
     ],
     "lyrashield/telemetry/README.md": [
       "- `STRIX_NO_UPDATE_CHECK=1` \u2014 disables the upstream self-update network check.",
@@ -569,14 +571,14 @@
       "``/workspace/.strix/tool-output/<id>.txt``; the agent sees a head + tail slice"
     ],
     "lyrashield/tools/proxy/caido_api.py": [
-      "        return \"host.docker.internal (set STRIX_SANDBOX_ALLOW_HOST_GATEWAY=1 to allow)\"",
       "    # STRIX_RUN_ID is set (inside the container). A wrong-run policy is",
       "    ``STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS`` opt-in is honored). When a policy",
       "    expected_run_id = os.environ.get(\"STRIX_RUN_ID\", \"\").strip()",
       "    final_headers.setdefault(\"User-Agent\", \"strix\")",
       "    return os.environ.get(\"STRIX_CAIDO_URL\", _DEFAULT_CAIDO_URL).rstrip(\"/\")",
       "    return os.environ.get(\"STRIX_SANDBOX_ALLOW_HOST_GATEWAY\", \"\").strip().lower() in {",
-      "_PRIVATE_EGRESS_OPT_IN_ENV = \"STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS\""
+      "_PRIVATE_EGRESS_OPT_IN_ENV = \"STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS\"",
+      "            \"host.docker.internal (set STRIX_SANDBOX_ALLOW_HOST_GATEWAY=1 to allow)\","
     ],
     "lyrashield/tools/reporting/tool.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
@@ -754,6 +756,9 @@
       "from strix.core.paths import runtime_state_dir",
       "    from strix.report.coverage import build_coverage_document as _build_substrate",
       "    from strix.tools.coverage.tools import get_coverage_entries"
+    ],
+    "lyrashield/artifacts/quality.py": [
+      "from strix.report.coverage import agents_from_graph"
     ]
   }
 }

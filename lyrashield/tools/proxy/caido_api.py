@@ -6,9 +6,11 @@ import asyncio
 import dataclasses
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -30,6 +32,8 @@ if TYPE_CHECKING:
 
     from caido_sdk_client import Client as CaidoClient
 
+
+logger = logging.getLogger(__name__)
 
 RequestPart = Literal["request", "response"]
 SortBy = Literal[
@@ -218,6 +222,155 @@ def _private_range_block_reason(hostname: str) -> str | None:
     return None
 
 
+def _host_resolves_private(hostname: str) -> bool:
+    """True when the host is a private-range IP or resolves into one."""
+    for raw in _resolve_hostname_ips(hostname):
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if any(ip in net for net in _PRIVATE_NETWORKS):
+            return True
+    return False
+
+
+def _host_in_authorized_scope(hostname: str, authorized_hosts: frozenset[str]) -> bool:
+    """Match a replay destination against the recorded authorized host set.
+
+    Mirrors the default Caido scope allowlist: a bare host admits itself and
+    its subdomains (``*.host``); an IP literal admits only itself — IP scope
+    never widens to a name.
+    """
+    hostname = hostname.lower().rstrip(".")
+    for allowed in authorized_hosts:
+        if hostname == allowed:
+            return True
+        try:
+            ipaddress.ip_address(allowed)
+            continue
+        except ValueError:
+            pass
+        if hostname.endswith(f".{allowed}"):
+            return True
+    return False
+
+
+def _authorized_scope_block_reason(hostname: str) -> str | None:
+    """Deny replay destinations outside the recorded authorized host set.
+
+    Only applies when a trusted (or fail-closed) egress policy exists —
+    without a recorded scope there is nothing to violate and the legacy
+    blocklists still apply. ``allow_private_egress`` widens scope to
+    private-range destinations, never to arbitrary public hosts.
+    """
+    policy = load_egress_policy()
+    if policy is None:
+        return None
+    if _host_in_authorized_scope(hostname, policy.authorized_hosts):
+        return None
+    if policy.allow_private_egress and _host_resolves_private(hostname):
+        return None
+    return (
+        f"host {hostname!r} is outside the recorded authorized scope "
+        "(the run's egress policy authorizes only its own target hosts)"
+    )
+
+
+# --- Per-request scope decision ledger ---------------------------------------
+#
+# Every replay admission decision (admitted/denied) is recorded in-process.
+# Denials are scope-violation evidence: a bounded entry list plus a dropped
+# counter (the ledger must never grow without bound). Admissions are counted
+# per host only — the request itself already lives in the proxy project.
+# ``ReportState`` drains this ledger into run.json (schema 1.1); inside the
+# sandbox the denial log line is the durable trace.
+_SCOPE_VIOLATION_LIMIT = 200
+_SCOPE_HOST_LEDGER_LIMIT = 1_000
+
+_scope_ledger_lock = threading.Lock()
+_scope_ledger: dict[str, Any] = {
+    "violations": [],
+    "dropped": 0,
+    "admitted_hosts": {},
+}
+
+
+def _evidence_url(url: str) -> str:
+    """URL shape for evidence: scheme/host/path only — never credentials or query."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    netloc = f"[{host}]" if ":" in host else host
+    if port:
+        netloc = f"{netloc}:{port}"
+    return f"{parsed.scheme}://{netloc}{parsed.path or '/'}"[:512]
+
+
+def _record_scope_decision(
+    url: str,
+    *,
+    method: str,
+    admitted: bool,
+    rule: str,
+    reason: str | None = None,
+) -> None:
+    """Record one replay admission decision (bounded, process-local)."""
+    try:
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        host = ""
+    with _scope_ledger_lock:
+        violations: list[dict[str, Any]] = _scope_ledger["violations"]
+        admitted_hosts: dict[str, int] = _scope_ledger["admitted_hosts"]
+        if admitted:
+            if host and (len(admitted_hosts) < _SCOPE_HOST_LEDGER_LIMIT or host in admitted_hosts):
+                admitted_hosts[host] = admitted_hosts.get(host, 0) + 1
+            return
+        if len(violations) < _SCOPE_VIOLATION_LIMIT:
+            violations.append(
+                {
+                    "at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                    "method": method.upper()[:16],
+                    "host": host,
+                    "url": _evidence_url(url),
+                    "rule": rule,
+                    "reason": (reason or "")[:500],
+                }
+            )
+        else:
+            _scope_ledger["dropped"] += 1
+    logger.warning(
+        "scope-violation: replay %s %s denied (%s: %s)",
+        method.upper(),
+        host or "<unparseable>",
+        rule,
+        reason,
+    )
+
+
+def get_scope_decisions() -> dict[str, Any]:
+    """Snapshot the scope-decision ledger without mutating it."""
+    with _scope_ledger_lock:
+        return {
+            "violations": [dict(v) for v in _scope_ledger["violations"]],
+            "dropped": _scope_ledger["dropped"],
+            "admitted_hosts": dict(_scope_ledger["admitted_hosts"]),
+        }
+
+
+def clear_scope_decisions() -> None:
+    """Reset the ledger — called once per fresh sandbox session."""
+    with _scope_ledger_lock:
+        _scope_ledger["violations"].clear()
+        _scope_ledger["dropped"] = 0
+        _scope_ledger["admitted_hosts"].clear()
+
+
 _BLOCKED_METADATA_HOSTS = frozenset(
     {"metadata.google.internal", "metadata.google.internal.", "metadata.google", "metadata.google."}
 )
@@ -246,34 +399,49 @@ def _host_gateway_allowed() -> bool:
     }
 
 
-def _check_replay_url_host(url: str) -> str | None:
-    """Return a human-readable block reason, or None if the host is allowed."""
+def _replay_denial(url: str) -> tuple[str, str] | None:
+    """Return ``(reason, rule)`` for a denied replay request, else ``None``."""
     parsed = urlparse(url)
     if parsed.scheme.lower() not in {"http", "https"}:
-        return f"non-HTTP scheme {parsed.scheme!r}"
+        return (f"non-HTTP scheme {parsed.scheme!r}", "non_http_scheme")
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         return None
     if hostname in _BLOCKED_METADATA_HOSTS:
-        return f"cloud metadata host {hostname!r}"
+        return (f"cloud metadata host {hostname!r}", "cloud_metadata")
     if not _host_gateway_allowed() and hostname in {
         "host.docker.internal",
         "host.docker.internal.",
     }:
-        return "host.docker.internal (set STRIX_SANDBOX_ALLOW_HOST_GATEWAY=1 to allow)"
+        return (
+            "host.docker.internal (set STRIX_SANDBOX_ALLOW_HOST_GATEWAY=1 to allow)",
+            "host_gateway",
+        )
     try:
         ip = ipaddress.ip_address(hostname)
     except ValueError:
         ip = None
     if ip is not None:
         if ip in _BLOCKED_METADATA_IPS:
-            return f"cloud metadata IP {ip}"
+            return (f"cloud metadata IP {ip}", "cloud_metadata")
         for net in _LINK_LOCAL_NETWORKS:
             if ip in net:
-                return f"link-local address {ip}"
+                return (f"link-local address {ip}", "link_local")
     # Private-range guard also resolves DNS names, so a hostname that points
     # into RFC1918/loopback space is caught the same way as a literal IP.
-    return _private_range_block_reason(hostname)
+    private_reason = _private_range_block_reason(hostname)
+    if private_reason is not None:
+        return (private_reason, "private_range")
+    scope_reason = _authorized_scope_block_reason(hostname)
+    if scope_reason is not None:
+        return (scope_reason, "outside_authorized_scope")
+    return None
+
+
+def _check_replay_url_host(url: str) -> str | None:
+    """Return a human-readable block reason, or None if the host is allowed."""
+    denial = _replay_denial(url)
+    return denial[0] if denial is not None else None
 
 
 def caido_url() -> str:
@@ -456,9 +624,12 @@ def build_raw_request(
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         raise ValueError(f"Invalid URL: {url}")
-    block_reason = _check_replay_url_host(url)
-    if block_reason:
+    denial = _replay_denial(url)
+    if denial is not None:
+        block_reason, rule = denial
+        _record_scope_decision(url, method=method, admitted=False, rule=rule, reason=block_reason)
         raise ValueError(f"URL is blocked ({block_reason}): {url}")
+    _record_scope_decision(url, method=method, admitted=True, rule="admitted")
     is_tls = parsed.scheme.lower() == "https"
     host = parsed.hostname or ""
     port = parsed.port or (443 if is_tls else 80)
@@ -1026,8 +1197,10 @@ __all__ = [
     "SitemapDepth",
     "SortBy",
     "SortOrder",
+    "clear_scope_decisions",
     "close_client",
     "get_client",
+    "get_scope_decisions",
     "list_requests",
     "list_sitemap",
     "repeat_request",

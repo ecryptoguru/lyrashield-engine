@@ -382,6 +382,11 @@ async def run_strix_scan(
                 "name": "authorized-targets",
                 "allowlist": bundle.get("default_scope_allowlist") or [],
             }
+    capabilities = bundle.get("sandbox_capabilities")
+    if capabilities is not None:
+        report_state = get_global_report_state()
+        if report_state is not None:
+            report_state.set_sandbox_capabilities(capabilities)
 
     sandbox_session = bundle["session"]
 
