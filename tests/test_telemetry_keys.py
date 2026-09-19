@@ -82,11 +82,18 @@ def test_scarf_reads_endpoint_lazily(monkeypatch: pytest.MonkeyPatch) -> None:
     assert scarf._scarf_endpoint() == ""
 
 
-def test_skills_telemetry_gated_by_telemetry_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_track_skill_loaded should not spawn a thread when telemetry is disabled."""
-    monkeypatch.setenv("STRIX_TELEMETRY", "0")
+def test_skills_track_only_records_names_no_beacon(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Upstream v1.6.2 dropped the per-load beacon: _track_skill_loaded only
+    records names for the end-of-run report, so it must never spawn a thread or
+    hit the network regardless of the telemetry toggle."""
+    monkeypatch.setenv("STRIX_TELEMETRY", "1")
     loader._cached = None
 
-    with patch.object(skills_mod.threading, "Thread") as mock_thread:
+    with (
+        patch("strix.telemetry.posthog._send") as posthog_send,
+        patch("strix.telemetry.scarf._send") as scarf_send,
+    ):
         skills_mod._track_skill_loaded("test-skill", Path("/fake/skills/test.md"))
-        mock_thread.assert_not_called()
+        assert "custom" in skills_mod.get_loaded_skill_names()
+        posthog_send.assert_not_called()
+        scarf_send.assert_not_called()

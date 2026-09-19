@@ -20,11 +20,12 @@ def _base_dependencies() -> list[str]:
     return cast("list[str]", data["project"]["dependencies"])
 
 
-def test_viewer_extra_pins_reportlab_and_pypdf() -> None:
+def test_viewer_extra_pins_reportlab_pypdf_and_markdown_it() -> None:
     extras = _optional_dependencies()
     assert "viewer" in extras
     assert any(req == "reportlab>=4.0" for req in extras["viewer"])
     assert any(req == "pypdf>=5.0" for req in extras["viewer"])
+    assert any(req == "markdown-it-py>=3.0.0" for req in extras["viewer"])
 
 
 def test_reportlab_and_pypdf_are_not_base_dependencies() -> None:

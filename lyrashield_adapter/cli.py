@@ -173,6 +173,16 @@ def _register_lyrashield_skills() -> None:
 
     register_skill_dir(Path(__file__).resolve().parents[1] / "lyrashield" / "skills")
 
+    # The coverage ledger matches skills to rows by phrasing; a skill the
+    # substrate doesn't ship must declare its phrasings or a finding it owns
+    # would be reported as an uncovered risk class.
+    from strix.report.coverage import _SKILL_PHRASINGS  # noqa: PLC0415
+
+    _SKILL_PHRASINGS.setdefault(
+        "websocket",
+        ("websocket", "ws", "socket", "channel", "message"),
+    )
+
 
 # Product tool overrides, mapped as override name -> (module, attribute). The
 # modules are imported only when an override is actually resolved (the scan

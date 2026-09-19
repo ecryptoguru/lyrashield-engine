@@ -88,6 +88,43 @@ upstream tree. Preserve this reviewed boundary while syncing releases.
 > The larger v1.4.1-era measurements below remain only as an audit trail and are
 > not the current contribution policy.
 
+## Upgrade to v1.6.2 product-outside-strix (2026-09-19)
+
+The `strix/**` substrate is advanced to upstream release v1.6.2
+(`ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2`), imported with the mandated
+no-common-ancestor workflow (`git diff v1.5.3..v1.6.2 | git apply --3way`).
+All 86 non-merge commits were individually dispositioned; the ledger lives at
+`docs/superpowers/plans/2026-09-19-strix-162-disposition.md`.
+
+Substrate imports now include the MCP tool layer, the cloud/platform CLI modules
+(unwired at the product boundary — `lyrashield` is the only supported entry
+point and `--update` still fails closed), the coverage/evidence pipeline, the
+dedupe provider-binding fix, the resumable-agent lifecycle model, and curated
+skills. `strix/skills/tooling/{hurl,hypothesis}.md` are excluded as reviewed
+deletions (the sandbox image ships neither tool) and the `semantic_confusion`
+skill's references to them were rewritten. `strix/skills/__init__.py` now matches
+upstream exactly — the telemetry gate moved out of the substrate.
+
+Coherent fixes were ported into owned code rather than letting the substrate
+drift: config merge-persist with linked LLM-connection invalidation and
+active-alias writes (`lyrashield/policy/loader.py`), provider-bound dedupe
+credentials via `resolve_dedupe_model` (`lyrashield/artifacts/dedupe.py`,
+`lyrashield/policy/models.py`, warm-up in `lyrashield/interface/main.py`),
+`reasoning=max` in top-level `extra_body` and the LiteLLM-only prompt-cache
+gate (`lyrashield/lifecycle/inputs.py`), the resumable/unreachable agent model
+with `claim_parent_notice` and terminal-send refusal
+(`lyrashield/lifecycle/{agents,execution}.py`, `lyrashield/tools/agents_graph/tools.py`),
+`clean_optional` nullish-filter handling (`lyrashield/tools/proxy/tools.py`,
+`lyrashield/tools/reporting/tool.py`), session capability required for all
+viewer run data including the launched run (`lyrashield/interface/viewer/server.py`),
+the markdown-it-py PDF renderer with text normalization and severity/duration
+guards (`lyrashield/interface/viewer/report_pdf.py`, new `markdown-it-py` viewer
+dependency), and calibration-metadata rendering in `lyrashield/artifacts/writer.py`.
+
+The verification gate's allowlist, footprint ceiling, and patch digest were
+recomputed against the v1.6.2 base; `strix/skills/tooling/{hurl,hypothesis}.md`
+are recorded as reviewed deletions.
+
 ## Artifact persistence optimization (2026-08-24)
 
 Merged revision `944a84f` avoids rewriting unchanged report projections during
