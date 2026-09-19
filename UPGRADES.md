@@ -24,6 +24,29 @@ CI audits the frozen Python dependency graph (all extras and groups) and the
 Desktop Cargo lockfile. Dependabot uses the uv ecosystem without blanket major
 version ignores. Known vulnerabilities fail the audit rather than being ignored.
 
+### AnyIO 4.14.2 security patch (2026-09-19)
+
+The frozen audit flagged anyio 4.14.1 for three advisories — CVE-2026-63374
+([GHSA-82r6-8w77-94w6](https://github.com/agronholm/anyio/security/advisories/GHSA-82r6-8w77-94w6),
+TLS server-hostname handling), CVE-2026-64847
+([GHSA-5p39-cfhj-2xmp](https://github.com/agronholm/anyio/security/advisories/GHSA-5p39-cfhj-2xmp),
+process pool) and CVE-2026-63349
+([GHSA-3w57-8xmc-8v26](https://github.com/agronholm/anyio/security/advisories/GHSA-3w57-8xmc-8v26),
+subprocess supplementary groups) — all fixed in 4.14.2.
+
+`uv lock --upgrade-package anyio==4.14.2` produced a minimal lock diff: the
+anyio version plus its sdist/wheel hashes, nothing else. `pyproject.toml` was
+not changed; anyio is a transitive dependency and the existing resolver
+constraints already express the patch floor. The frozen export re-audits clean.
+
+Two upstream fixes are covered by `tests/test_anyio_security_patch.py`:
+`open_process`/`run_process` now forward `extra_groups` to the backend instead
+of silently substituting `group` (Linux-only tests, mocked backend — no real
+privilege-changing subprocess), and `TLSStream.wrap` now IDNA-2008-encodes
+international `server_hostname` values before `ssl` certificate hostname
+checking instead of leaving the obsolete IDNA 2003 mapping to `ssl`.
+Certificate validation is not disabled in the tests.
+
 The reviewed lock advances aiohttp to 3.14.3, pypdf to 6.16.1 and cryptography to
 50.0.0; cryptography matches the existing sandbox requirements. Version 49 removed
 Intel macOS wheels, so the existing Intel release target now builds cryptography
