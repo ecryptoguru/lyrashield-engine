@@ -202,6 +202,7 @@ async def run_strix_scan(
     scan_id: str | None = None,
     image: str,
     local_sources: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
     coordinator: AgentCoordinator | None = None,
     interactive: bool = False,
     max_turns: int = DEFAULT_MAX_TURNS,
@@ -347,8 +348,21 @@ async def run_strix_scan(
         image=image,
         local_sources=local_sources or [],
         targets=list(scan_config.get("targets") or []),
+        # Untrusted supporting-file evidence; validated/staged upstream of
+        # this call. It contributes nothing to scope or the egress policy.
+        attachments=(
+            attachments if attachments is not None else list(scan_config.get("attachments") or [])
+        ),
     )
     logger.info("Sandbox ready for scan %s", scan_id)
+
+    attachment_manifest = bundle.get("attachment_manifest")
+    if attachment_manifest:
+        report_state = get_global_report_state()
+        if report_state is not None:
+            # Provenance: the manifest of staged originals (name, sha256,
+            # size, declared content type) actually mounted into the sandbox.
+            report_state.run_record["attachments"] = attachment_manifest
 
     if bundle.get("default_scope_id"):
         report_state = get_global_report_state()

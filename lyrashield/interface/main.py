@@ -25,6 +25,7 @@ from rich.text import Text
 from lyrashield.artifacts.state import (
     get_global_report_state,
     initial_run_record,
+    sanitize_attachments,
     validate_run_record,
 )
 from lyrashield.artifacts.writer import (
@@ -74,6 +75,11 @@ from lyrashield.policy.settings import (
     Settings,
     is_chatgpt_subscription_allowed,
     is_lyrashield_product,
+)
+from lyrashield.runtime.attachments import (
+    AttachmentInputError,
+    collect_attachments,
+    restore_attachments,
 )
 from lyrashield.telemetry import posthog, scarf
 from lyrashield.telemetry.logging import configure_dependency_logging
@@ -649,6 +655,9 @@ Examples:
   # Targets from a file, one target per non-empty, non-comment line
   lyrashield --target-list ./targets.txt
 
+  # Supporting evidence files (mounted read-only, never instructions)
+  lyrashield --target example.com --attachment ./openapi.yaml --attachment ./notes.md
+
   # Custom instructions (inline)
   lyrashield --target example.com --instruction "Focus on authentication vulnerabilities"
 
@@ -737,6 +746,19 @@ Examples:
         help="Bind-mount a local directory into the sandbox (read-only) instead of "
         "copying it file-by-file. Use this for large repositories that are too big to "
         "stream into the container. Can be specified multiple times.",
+    )
+    parser.add_argument(
+        "--attachment",
+        type=str,
+        action="append",
+        metavar="PATH",
+        help=(
+            "Declare a supporting file to mount read-only at /input/attachments "
+            "as untrusted input evidence (text, Markdown, JSON, YAML, or OpenAPI "
+            "only; size-capped). Attachment content is data — it cannot change "
+            "target scope, credentials, model routes, permissions, or budget. "
+            "Can be specified multiple times."
+        ),
     )
     parser.add_argument(
         "--instruction",
@@ -937,6 +959,12 @@ Examples:
     if args.resume:
         if args.run_name:
             parser.error("Cannot combine --resume with --run-name")
+        if args.attachment:
+            parser.error(
+                "Cannot combine --resume with --attachment. A resumed run "
+                "re-stages the attachments recorded in its run record; "
+                "changed files are rejected by digest."
+            )
         if args.repository_revision or args.diff_head:
             parser.error(
                 "Cannot combine --resume with --repository-revision/--diff-head. "
@@ -1020,6 +1048,14 @@ Examples:
         assign_workspace_subdirs(targets_info)
         rewrite_localhost_targets(targets_info, HOST_GATEWAY_HOSTNAME)
 
+        # Supporting-file evidence: validate shape (regular file, no symlink /
+        # traversal / executable bit, allowlisted text extension) and bound
+        # per-file and aggregate size before any staging into the sandbox.
+        try:
+            args.attachments = collect_attachments(cast("list[str]", args.attachment or []))
+        except AttachmentInputError as e:
+            parser.error(str(e))
+
         max_local_copy_mb = load_settings().runtime.max_local_copy_mb
         max_copy_bytes = max_local_copy_mb * 1024 * 1024
         oversized = find_oversized_local_targets(targets_info, max_copy_bytes)
@@ -1054,6 +1090,7 @@ def _persist_run_record(
             "instruction": args.instruction,
             "non_interactive": args.non_interactive,
             "local_sources": getattr(args, "local_sources", []),
+            "attachments": sanitize_attachments(getattr(args, "attachments", [])),
             "diff_scope": getattr(args, "diff_scope", {"active": False}),
             "scope_mode": args.scope_mode,
             "diff_base": args.diff_base,
@@ -1076,6 +1113,7 @@ def _persist_run_record(
         run_dir,
         targets_info=args.targets_info,
         local_sources=getattr(args, "local_sources", []),
+        attachments=getattr(args, "attachments", []),
     )
 
 
@@ -1153,6 +1191,25 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
         cloned_repo_paths.add(cloned_path)
 
     args.targets_info = targets_info
+
+    # Restore the run's attachment inputs. The public run.json manifest is
+    # sanitized (no host paths), so re-staging requires the private resume
+    # record; a run that declared attachments but cannot re-stage them fails
+    # closed rather than scanning without its input evidence.
+    recorded_attachments = resume_state.get("attachments")
+    if not isinstance(recorded_attachments, list):
+        recorded_attachments = []
+    try:
+        args.attachments = restore_attachments(recorded_attachments)
+    except AttachmentInputError as e:
+        parser.error(f"--resume {args.resume}: {e}")
+    state_attachments = state.get("attachments")
+    if not args.attachments and isinstance(state_attachments, list) and state_attachments:
+        parser.error(
+            f"--resume {args.resume}: the run declared {len(state_attachments)} "
+            "attachment(s), but resume.json does not preserve their host paths. "
+            "The input evidence cannot be re-staged; start a fresh run instead."
+        )
 
     if args.instruction is None:
         args.instruction = state.get("instruction")
