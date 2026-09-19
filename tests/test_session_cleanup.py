@@ -308,6 +308,7 @@ async def test_next_create_reaps_stranded_sandbox(
     mocks.client.delete.side_effect = RuntimeError("daemon gone")
     with pytest.raises(RuntimeError, match="caido down"):
         await session_manager.create_or_reuse("retry-scan", image="img", local_sources=[])
+    session_manager._SESSION_CACHE["retry-scan"]["attachments_dir"] = "/mock/attachments"
 
     # While the daemon is still gone, a retry fails closed — no second sandbox.
     with pytest.raises(RuntimeError, match="still stranded"):
@@ -322,6 +323,7 @@ async def test_next_create_reaps_stranded_sandbox(
     assert "startup_error" not in bundle
     assert mocks.backend.await_count == 2
     assert session_manager._CLEANUP_RECEIPTS["retry-scan"]["status"] == "removed"
+    mocks.rmtree.assert_any_call("/mock/attachments", ignore_errors=True)
 
 
 @pytest.mark.asyncio

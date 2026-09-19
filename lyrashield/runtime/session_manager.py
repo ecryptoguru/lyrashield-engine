@@ -135,7 +135,7 @@ async def _reap_stranded_bundle(scan_id: str, bundle: dict[str, Any]) -> bool:
     if docker_client is not None:
         with contextlib.suppress(Exception):
             docker_client.close()
-    for key in ("egress_policy_dir", "relay_upstream_dir"):
+    for key in ("egress_policy_dir", "relay_upstream_dir", "attachments_dir"):
         path = bundle.get(key)
         if path:
             shutil.rmtree(path, ignore_errors=True)

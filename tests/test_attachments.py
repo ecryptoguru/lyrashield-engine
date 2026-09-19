@@ -33,6 +33,7 @@ from lyrashield.runtime.attachments import (
     ATTACHMENTS_CONTAINER_DIR,
     ATTACHMENTS_SCRATCH_DIR,
     AttachmentInputError,
+    _stage_one_attachment,
     collect_attachments,
     create_scratch_copy,
     public_manifest,
@@ -239,6 +240,21 @@ def test_stage_attachments_fails_closed_on_checksum_drift(tmp_path: Path) -> Non
 
     with pytest.raises(AttachmentInputError, match="checksum_mismatch"):
         stage_attachments("scan-x", entries)
+
+
+def test_replaced_attachment_does_not_follow_symlink(tmp_path: Path) -> None:
+    source = _write(tmp_path / "note.txt", "same bytes")
+    outside = _write(tmp_path / "private.txt", "same bytes")
+    outside.chmod(0o600)
+    entry = validate_attachment(str(source))
+    source.unlink()
+    source.symlink_to(outside)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(AttachmentInputError):
+        _stage_one_attachment(entry, str(staging))
+    assert outside.stat().st_mode & 0o777 == 0o600
 
 
 def test_stage_attachments_rejects_unvalidated_entries() -> None:
