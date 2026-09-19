@@ -1,5 +1,24 @@
 # LyraShield ownership and upstream-import ledger
 
+## Viewer ownership documentation correction (2026-09-19)
+
+Docs-only correction; no code or gate behavior changed.
+
+`lyrashield/interface/viewer/**` is owned product code: it carries the
+LyraShield wordmark, the loopback-only local server (`127.0.0.1` default bind
+with a per-process session capability), and the product's authorization model.
+Earlier contributor guidance treated the viewer as upstream-import-only
+substrate; that was wrong — the viewer lives in `lyrashield/**`, outside the
+`strix/**` allowlist and patch digest, and follows the normal owned-code
+review path plus the rebuild-from-source flow documented below. The retained
+upstream substrate remains `strix/**` only.
+
+The viewer's OTP relay endpoints were removed outright, and relay-backed
+email/feedback features fail closed unless an operator explicitly sets
+`LYRASHIELD_APP_URL` (empty default; no LyraShield-owned relay exists). The
+configuration reference no longer promises email verification or encrypted
+email delivery.
+
 ## Security dependency audit and Intel macOS packaging
 
 CI audits the frozen Python dependency graph (all extras and groups) and the

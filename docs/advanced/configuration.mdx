@@ -371,9 +371,13 @@ The `publish-sandbox` workflow pushes one multi-architecture candidate, runs the
   default=""
   type="string"
 >
-  Base URL of the relay the local viewer proxies to for email verification and
-  encrypted report delivery. The browser never talks to the relay directly; the
-  local server is the only caller. Alias of `STRIX_APP_URL`.
+  Optional base URL of an operator-controlled relay for the viewer's legacy
+  report-delivery and feedback endpoints. The default is empty — no
+  LyraShield-owned relay exists — and every relay-backed feature fails closed
+  with `RelayError("unavailable")`. The viewer offers no email verification or
+  OTP unlock flow; the OTP relay endpoints were removed outright. The browser
+  never talks to a relay directly; the local server is the only caller. Alias
+  of `STRIX_APP_URL`.
 </ParamField>
 
 ## Config file
