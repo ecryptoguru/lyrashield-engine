@@ -178,12 +178,15 @@ def write_resume_record(
     *,
     targets_info: list[dict[str, Any]] | None = None,
     local_sources: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write the private resume record preserving unsanitized execution fields.
 
     ``targets_info`` and ``local_sources`` are stored exactly as supplied so
     resume can recover ``cloned_repo_path`` and ``source_path`` values that
-    the public run.json intentionally redacts.
+    the public run.json intentionally redacts. ``attachments`` keeps each
+    entry's host ``source_path`` and recorded ``sha256`` so a resumed run can
+    re-stage the same input evidence — and reject it if the digest changed.
     """
     path = resume_record_path(run_dir)
     payload: dict[str, Any] = {"schema_version": 1}
@@ -191,6 +194,8 @@ def write_resume_record(
         payload["targets_info"] = targets_info
     if local_sources is not None:
         payload["local_sources"] = local_sources
+    if attachments is not None:
+        payload["attachments"] = attachments
     _atomic_write_text(
         path,
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
