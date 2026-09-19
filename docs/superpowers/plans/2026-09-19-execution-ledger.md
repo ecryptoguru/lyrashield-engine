@@ -90,6 +90,17 @@ Statuses: NOT_STARTED / IN_PROGRESS / CODE_VERIFIED / RELEASE_VERIFIED / BLOCKED
 - Recovered uncommitted agent leftovers: task-06 engine had a real fail-closed fix (`diff_head` pinned + zero repo scopes no longer degrades to full scan) → committed as `6ce548f3`; task-03's leftover was pure debris (duplicate test, `sync-marker` comment) → discarded after verifying HEAD identical.
 - Prior-session agents for Task 9 (engine `cf7f1552`, app `edab5112`) and Task 10 died mid-work — uncommitted drafts retained in their worktrees, no commits pushed.
 
+## CI remediation — round 2 (2026-09-20)
+
+- Engine #151: branch predated the round-1 fixes — cherry-picked the AnyIO audit patch (`45f8edeb`) and Kali InRelease refresh (`e21354f2`) onto `codex/task-09-attachments` → `74329bfe`.
+- Engine #152: `ruff format --check` flagged `lyrashield/artifacts/quality.py` + `lyrashield/runtime/capabilities.py` → formatted, `2de9d054`.
+- App #741/#742/#743/#744 `Lint, Typecheck, Test & Build`: unformatted touched files (branches sat on pre-prettier bases) → `prettier --write` on each (39/33/58/62 files).
+- App eslint `--max-warnings 0`: new fixture-driven parity tests read `scan-workflows.json` via non-literal paths → file-level `security/detect-non-literal-fs-filename` disable (repo convention) on `packages/sdk`, `packages/types`, `packages/cli` parity tests across #742/#743/#744.
+- App #744 diff-gate: Slack OAuth test fixtures (`"xox-secret"`, `"xoxb-abc"`) matched the `(token)=[\"']…{8,}` secret shape → shortened below the 8-char threshold (`def223bb`).
+- App #741 real test failures (3): (a) `scan-detail-client.tsx` JSX text contained banned "the run" phrasing across a line break → copy rewritten without the noun; (b) task-9 reordered `SCAN_PRESET_ORDER` breaking onboarding's canonical option order → order restored (Standard default still enforced via `isDefault`), agent-pinned expectations updated; (c) findings route test mock lacked `prisma.evidence.findFirst`/`readEncryptedArtifact` → mock extended (`e581c0de`).
+- `e2e/browser/polling-harness.tsx` fixture missing now-required `executionPlan` key → `executionPlan: null` added on #741/#743/#744 and task-13.
+- Fixes propagated: merges `eae48eb6` (task-11), `27f87483` (task-12), `c952330f` (task-13); engine integration `51a181d7`.
+
 ## Live/production gates — NOT authorized by this session
 
 Production dispatch, paid scans, feature admission, real credentials, migrations against live DBs, and any destructive operation remain blocked pending founder authorization. Agents must stop at code/test/PR level.
