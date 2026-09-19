@@ -550,9 +550,7 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
             # raise inside the ownership scope and the staging dir is
             # removed by the except block below.
             if attachments:
-                attachment_mount, attachments_dir = stage_attachments(
-                    scan_id, attachments
-                )
+                attachment_mount, attachments_dir = stage_attachments(scan_id, attachments)
                 bind_mounts.append(attachment_mount)
 
             # Caido runs as an in-container sidecar; HTTP(S) traffic from any
