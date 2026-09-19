@@ -896,6 +896,8 @@ class ReportState:
                 "local_sources": sanitize_local_sources(config.get("local_sources", [])),
                 "scope_mode": config.get("scope_mode", "auto"),
                 "diff_base": config.get("diff_base"),
+                "diff_head": config.get("diff_head"),
+                "repository_revision": config.get("repository_revision"),
             }
         )
         self._set_phase("running")
