@@ -22,6 +22,10 @@ from agents.sandbox.workspace_paths import SandboxPathGrant
 
 from lyrashield.runtime.backends import get_backend
 from lyrashield.runtime.caido_bootstrap import bootstrap_caido
+from lyrashield.runtime.capabilities import (
+    SandboxPreflightError,
+    probe_session_capabilities,
+)
 from lyrashield.runtime.docker_client import host_gateway_enabled
 from lyrashield.runtime.local_dir_staging import stage_symlink_safe_dir
 from lyrashield.tools.proxy import caido_api
@@ -350,6 +354,26 @@ def write_relay_upstream(relay_proxy: str) -> tuple[dict[str, Any], str]:
     return {"source": str(upstream), "target": _RELAY_UPSTREAM_TARGET, "read_only": True}, host_dir
 
 
+def _enforce_sandbox_preflight(scan_id: str, capabilities: dict[str, Any]) -> None:
+    """Log named degradations; raise when a required control is unmet."""
+    for degradation in capabilities["preflight"]["degradations"]:
+        logger.warning(
+            "sandbox preflight degradation for scan %s: %s=%s (%s)",
+            scan_id,
+            degradation.get("capability"),
+            degradation.get("status"),
+            degradation.get("detail"),
+        )
+    failures = capabilities["preflight"]["failures"]
+    if failures:
+        raise SandboxPreflightError(
+            f"sandbox preflight failed for scan {scan_id}: "
+            + "; ".join(
+                f"{f['control']} (capability {f['capability']}={f['status']})" for f in failures
+            )
+        )
+
+
 async def create_or_reuse(  # noqa: PLR0915
     scan_id: str,
     *,
@@ -417,6 +441,10 @@ async def create_or_reuse(  # noqa: PLR0915
         client: Any | None = None
         session: Any | None = None
         caido_client: Any | None = None
+        # A fresh session starts a fresh per-request scope-decision ledger:
+        # denials/admissions recorded by the replay guard belong to exactly
+        # one run's evidence.
+        caido_api.clear_scope_decisions()
         try:
             client, session = await backend(
                 image=image,
@@ -448,6 +476,22 @@ async def create_or_reuse(  # noqa: PLR0915
                 scan_id=scan_id,
                 authorized_hosts=authorized_hosts,
             )
+
+            # Capability probe: record what the backend actually delivered —
+            # never claim a control that was assumed but not probed. A
+            # required control resting on a probed-absent capability fails
+            # preflight; an unprobed one becomes a named degradation.
+            capabilities = probe_session_capabilities(
+                backend_name=backend_name,
+                client=client,
+                session=session,
+                caido_client=caido_client,
+                caido_endpoint=caido_endpoint,
+                bind_mounts=bind_mounts,
+                authorized_hosts=sorted(authorized_hosts),
+                relay_configured=bool(environment.get("STRIX_TARGET_RELAY")),
+            )
+            _enforce_sandbox_preflight(scan_id, capabilities)
         except Exception:
             if caido_client is not None:
                 with contextlib.suppress(Exception):
@@ -477,6 +521,7 @@ async def create_or_reuse(  # noqa: PLR0915
             "authorized_hosts": sorted(authorized_hosts),
             "egress_policy_dir": policy_host_dir,
             "relay_upstream_dir": relay_dir,
+            "sandbox_capabilities": capabilities,
         }
         async with _CACHE_LOCK:
             _SESSION_CACHE[scan_id] = bundle

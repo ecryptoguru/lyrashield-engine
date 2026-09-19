@@ -126,6 +126,58 @@ def test_generated_receipts_do_not_invalidate_source_state(tmp_path: Path) -> No
     assert after["trackedDiffSha256"] != before["trackedDiffSha256"]
 
 
+def test_engine_run_receipt_surfaces_run_record_fields(tmp_path: Path) -> None:
+    run_dir = tmp_path / "strix_runs" / "scan-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.1",
+                "sandbox_capabilities": {
+                    "backend": "docker",
+                    "capabilities": {
+                        "exec": {"status": "supported"},
+                        "mounts": {"status": "unprobed"},
+                    },
+                    "preflight": {
+                        "degradations": [{"control": "egress_policy_delivery"}],
+                        "failures": [{"control": "agent_exec"}],
+                    },
+                },
+                "scan_quality": {
+                    "observed": {"findings_filed": 2},
+                    "declared": {"coverage_entries": 1},
+                    "surfaces": [{"surface": "a"}, {"surface": "b"}],
+                    "unassessed": ["c"],
+                },
+                "scope_violations": {"total": 4},
+                "evidence_export": {"status": "exported"},
+            }
+        )
+    )
+    receipt = run.engine_run_receipt(tmp_path, "scan-1")
+    assert receipt["schemaVersion"] == "1.1"
+    caps = receipt["sandboxCapabilities"]
+    assert caps["backend"] == "docker"
+    assert caps["statuses"] == {"exec": "supported", "mounts": "unprobed"}
+    assert caps["preflightDegradations"] == ["egress_policy_delivery"]
+    assert caps["preflightFailures"] == ["agent_exec"]
+    assert receipt["scanQuality"]["observed"]["findings_filed"] == 2
+    assert receipt["scanQuality"]["surfaces"] == 2
+    assert receipt["scanQuality"]["unassessed"] == 1
+    assert receipt["scopeViolations"] == 4
+    assert receipt["evidenceExport"] == "exported"
+
+
+def test_engine_run_receipt_missing_and_unreadable(tmp_path: Path) -> None:
+    assert run.engine_run_receipt(tmp_path, "no-scan") is None
+    bad = tmp_path / "strix_runs" / "bad-scan"
+    bad.mkdir(parents=True)
+    (bad / "run.json").write_text("{not json")
+    receipt = run.engine_run_receipt(tmp_path, "bad-scan")
+    assert "error" in receipt
+
+
 def test_scoring_requires_original_corpus_and_fixture_bytes(tmp_path: Path) -> None:
     corpus = {
         "name": "fixture",

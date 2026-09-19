@@ -16,6 +16,7 @@ from uuid import uuid4
 from agents.usage import Usage
 
 from lyrashield.artifacts import evidence as _evidence
+from lyrashield.artifacts import quality as _quality
 from lyrashield.artifacts.sarif import write_sarif
 from lyrashield.artifacts.usage import LLMUsageLedger, _int_or_zero, _round_cost
 from lyrashield.artifacts.writer import (
@@ -71,9 +72,12 @@ RUN_RECORD_SCHEMA_VERSION = _evidence.RUN_RECORD_SCHEMA_VERSION_1_0
 # structured advisory_cvss, severity_change_conditions, engine-attested
 # fix_verification, bounded http_exchange_ids, append-only revision history)
 # plus coverage.json, threat_model.json, http_exchanges.json and an inline
-# result manifest. The whole surface is gated on ``LYRASHIELD_RUN_RECORD_V1_1``
-# (default off) so readers deploy before writers; a run keeps the version it
-# was created with.
+# result manifest. Task-12 additions: ``scope_violations`` (bounded replay-guard
+# denial evidence) and ``scan_quality`` (per-surface observed-vs-declared
+# accounting). ``sandbox_capabilities`` — the probed backend capability record —
+# is unconditional run provenance, not part of the gated evidence surface. The
+# whole surface is gated on ``LYRASHIELD_RUN_RECORD_V1_1`` (default off) so
+# readers deploy before writers; a run keeps the version it was created with.
 
 # Fields every run.json write must carry from its first observable appearance
 # (the worker parses this contract at any point in the run, not just at the
@@ -268,6 +272,9 @@ _MAX_TEXT_LENGTH = 10_000
 _MAX_COLLECTION_SIZE = 1_000
 _MAX_METADATA_DEPTH = 10
 _MAX_FINDING_SERIALIZED_SIZE = 1_000_000
+# Persisted scope-violation entries bound (ledger bound is lower; this caps
+# the durable list merged across saves).
+_MAX_SCOPE_VIOLATION_ENTRIES = 500
 
 
 def _truncate_text(value: str, max_length: int = _MAX_TEXT_LENGTH) -> str:
@@ -573,6 +580,9 @@ class ReportState:
         self.posthog_scan_ended_sent: bool = False
         self.scarf_scan_ended_sent: bool = False
         self.scan_ended_exit_reason: str | None = None
+        # How many scope-violation ledger entries have already been merged
+        # into run_record["scope_violations"]["entries"].
+        self._scope_violations_seen = 0
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
@@ -1045,6 +1055,54 @@ class ReportState:
                 self.vulnerability_updated_callback(sanitized)
             return revised
 
+    def set_sandbox_capabilities(self, capabilities: dict[str, Any]) -> None:
+        """Record the probed sandbox capability set as run provenance.
+
+        The record comes from the post-start capability probe — only
+        capabilities the backend verifiably delivered are marked
+        ``supported``; ``unprobed`` entries carry named preflight
+        degradations so a missing guarantee is never silent.
+        """
+        if isinstance(capabilities, dict):
+            self.run_record["sandbox_capabilities"] = capabilities
+
+    def _sync_scope_decisions(self) -> dict[str, int]:
+        """Merge new replay-guard denials into the run record (bounded).
+
+        Violations arrive from the process-local ledger in
+        ``lyrashield.tools.proxy.caido_api`` — every denied request the
+        replay guard saw. The persisted list is capped; overflow is counted
+        in ``dropped`` so the record stays honest about truncation. Returns
+        the per-host admitted-request counts for quality accounting.
+        """
+        from lyrashield.tools.proxy import caido_api
+
+        snapshot = caido_api.get_scope_decisions()
+        violations = snapshot["violations"]
+        new_entries = violations[self._scope_violations_seen :]
+        self._scope_violations_seen = len(violations)
+
+        persisted = self.run_record.get("scope_violations")
+        existing: list[dict[str, Any]] = []
+        dropped = snapshot["dropped"]
+        if isinstance(persisted, dict):
+            raw_entries = persisted.get("entries")
+            if isinstance(raw_entries, list):
+                existing = [e for e in raw_entries if isinstance(e, dict)]
+            dropped += int(persisted.get("dropped") or 0)
+
+        keep = _MAX_SCOPE_VIOLATION_ENTRIES - len(existing)
+        if len(new_entries) > keep:
+            dropped += len(new_entries) - max(0, keep)
+            new_entries = new_entries[: max(0, keep)]
+        existing.extend(new_entries)
+        self.run_record["scope_violations"] = {
+            "entries": existing,
+            "dropped": dropped,
+            "total": len(existing) + dropped,
+        }
+        return cast("dict[str, int]", snapshot["admitted_hosts"])
+
     def set_evidence_export_outcome(self, outcome: dict[str, Any]) -> None:
         """Record the HTTP exchange evidence export result on the run record.
 
@@ -1431,13 +1489,11 @@ class ReportState:
         ``False`` so the persisted revision stays honest, but they never block
         the required receipt.
         """
-        from strix.report.coverage import read_agent_graph
-
         persisted = True
         try:
             coverage = _evidence.build_coverage_document(
                 run_record=self.run_record,
-                agent_graph=read_agent_graph(runtime_state_dir(run_dir)),
+                agent_graph=_read_agent_graph(runtime_state_dir(run_dir)),
                 vulnerability_reports=self.vulnerability_reports,
                 exit_reason=self.scan_ended_exit_reason,
             )
@@ -1506,6 +1562,31 @@ class ReportState:
             # touching findings), so they refresh on every save.
             if not self._write_evidence_artifacts(run_dir):
                 report_artifacts_persisted = False
+            # Replay-guard denials and the honest quality ledger are derived
+            # from observed activity only — unexercised surfaces stay
+            # unassessed, never smoothed into a coverage number.
+            admitted_hosts: dict[str, int] = {}
+            try:
+                admitted_hosts = self._sync_scope_decisions()
+            except Exception:
+                logger.exception("scope_violations sync failed (non-fatal)")
+            try:
+                recorded = self.run_record.get("scope_violations")
+                recorded = recorded if isinstance(recorded, dict) else {}
+                self.run_record["scan_quality"] = _quality.build_scan_quality(
+                    run_record=self.run_record,
+                    agent_graph=_read_agent_graph(runtime_state_dir(run_dir)),
+                    coverage_entries=_coverage_ledger_entries(),
+                    vulnerability_reports=self.vulnerability_reports,
+                    scope_decisions={
+                        "violations": recorded.get("entries") or [],
+                        "dropped": recorded.get("dropped") or 0,
+                        "admitted_hosts": admitted_hosts,
+                    },
+                )
+            except Exception:
+                report_artifacts_persisted = False
+                logger.exception("scan_quality build failed (non-fatal)")
             # The result manifest binds every emitted artifact to this record
             # by checksum — the immutable link the worker verifies against.
             try:
@@ -1640,6 +1721,20 @@ class ReportState:
     def _hydrate_llm_usage(self, raw_usage: Any) -> None:
         self._llm_usage.hydrate(raw_usage)
         self._sync_llm_usage_record()
+
+
+def _read_agent_graph(state_dir: Path) -> dict[str, Any]:
+    """Lazy wrapper so the substrate coverage module loads only on demand."""
+    from strix.report.coverage import read_agent_graph
+
+    return read_agent_graph(state_dir)
+
+
+def _coverage_ledger_entries() -> list[dict[str, Any]]:
+    """Lazy wrapper for the model-declared coverage ledger store."""
+    from strix.tools.coverage.tools import get_coverage_entries
+
+    return cast("list[dict[str, Any]]", get_coverage_entries())
 
 
 def _as_dict(obj: Any) -> dict[str, Any] | None:

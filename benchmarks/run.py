@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 
 BENCH_ROOT = Path(__file__).resolve().parent
@@ -124,6 +125,73 @@ def run_deterministic(corpus_dir: Path, case: dict, out, variant: str = "vulnera
     }
 
 
+def engine_run_receipt(repo_dir: Path, scan_id: str) -> dict[str, Any] | None:
+    """Compact receipt of the engine run's provenance/quality record.
+
+    Reads the emitted ``run.json`` (schema 1.1 fields when present) so eval
+    manifests carry comparable, evidence-backed capability and quality
+    receipts across runs — probed capability statuses, named preflight
+    degradations, scope-violation counts, and observed activity totals.
+    ``None`` when the run wrote no record; ``{"error": ...}`` when it is
+    unreadable rather than silently absent.
+    """
+    path = repo_dir / "strix_runs" / scan_id / "run.json"
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"error": f"run.json unreadable: {exc}"}
+    if not isinstance(record, dict):
+        return {"error": "run.json is not an object"}
+
+    receipt: dict[str, Any] = {"schemaVersion": record.get("schema_version")}
+    caps = record.get("sandbox_capabilities")
+    if isinstance(caps, dict):
+        probed = caps.get("capabilities")
+        preflight = caps.get("preflight")
+
+        def _controls(key: str) -> list[str]:
+            if not isinstance(preflight, dict):
+                return []
+            return sorted(
+                str(item.get("control"))
+                for item in preflight.get(key) or []
+                if isinstance(item, dict) and item.get("control")
+            )
+
+        receipt["sandboxCapabilities"] = {
+            "backend": caps.get("backend"),
+            "statuses": {
+                str(name): str(entry.get("status"))
+                for name, entry in probed.items()
+                if isinstance(entry, dict)
+            }
+            if isinstance(probed, dict)
+            else {},
+            "preflightDegradations": _controls("degradations"),
+            "preflightFailures": _controls("failures"),
+        }
+    quality = record.get("scan_quality")
+    if isinstance(quality, dict):
+        observed = quality.get("observed")
+        receipt["scanQuality"] = {
+            "observed": observed if isinstance(observed, dict) else None,
+            "declared": quality.get("declared")
+            if isinstance(quality.get("declared"), dict)
+            else None,
+            "surfaces": len(quality.get("surfaces") or []),
+            "unassessed": len(quality.get("unassessed") or []),
+        }
+    violations = record.get("scope_violations")
+    if isinstance(violations, dict):
+        receipt["scopeViolations"] = violations.get("total")
+    export = record.get("evidence_export")
+    if isinstance(export, dict):
+        receipt["evidenceExport"] = export.get("status")
+    return receipt
+
+
 def run_engine(
     corpus_dir: Path, case: dict, out, run_index: int, variant: str = "vulnerable"
 ) -> dict:
@@ -188,6 +256,7 @@ def run_engine(
             errors.append("invalid findings JSON")
     else:
         errors.append("missing vulnerabilities.json")
+    receipt = engine_run_receipt(repo_dir, scan_id)
     shutil.rmtree(repo_dir, ignore_errors=True)
     return {
         "case": case["id"],
@@ -200,6 +269,7 @@ def run_engine(
         "runtimeMs": runtime_ms,
         "returncode": proc.returncode,
         "stderrTail": proc.stderr[-2000:] if proc.returncode != 0 else None,
+        "runReceipt": receipt,
     }
 
 
