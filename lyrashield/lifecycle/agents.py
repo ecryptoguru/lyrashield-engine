@@ -55,6 +55,10 @@ class AgentRuntime:
     task: asyncio.Task[Any] | None = None
     stream: Any | None = None
     interrupt_on_message: bool = False
+    # Whether this agent's loop parks for wake-ups after finishing. An
+    # interactive (resumable) agent can be re-driven by a later user message;
+    # a finished non-interactive agent's loop is gone for good.
+    resumable: bool = True
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     mailbox: list[dict[str, Any]] = field(default_factory=list)
     user_wake_required: bool = False
@@ -75,6 +79,7 @@ class AgentCoordinator:
         self.idle_resume_counts: dict[str, int] = {}
         self.wait_kinds: dict[str, WaitKind] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
+        self._parent_notified: set[str] = set()
         self._lock = asyncio.Lock()
         self._snapshot_lock = asyncio.Lock()
         self._snapshot_path: Path | None = None
@@ -232,6 +237,7 @@ class AgentCoordinator:
         session: Session | None = None,
         task: asyncio.Task[Any] | None = None,
         interrupt_on_message: bool | None = None,
+        resumable: bool | None = None,
     ) -> None:
         async with self._lock:
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
@@ -241,6 +247,8 @@ class AgentCoordinator:
                 runtime.task = task
             if interrupt_on_message is not None:
                 runtime.interrupt_on_message = interrupt_on_message
+            if resumable is not None:
+                runtime.resumable = resumable
 
     async def mark_running(self, agent_id: str) -> None:
         async with self._lock:
@@ -249,6 +257,7 @@ class AgentCoordinator:
                 self.errors.pop(agent_id, None)
                 self.wait_kinds.pop(agent_id, None)
                 self.runtimes.setdefault(agent_id, AgentRuntime()).user_wake_required = False
+                self._parent_notified.discard(agent_id)
         await self._maybe_snapshot()
 
     async def park_waiting(self, agent_id: str, *, wait_kind: WaitKind) -> None:
@@ -308,22 +317,68 @@ class AgentCoordinator:
                 self.errors[agent_id] = error
             elif status == "running":
                 self.errors.pop(agent_id, None)
+            if status == "running":
+                # Running again means a fresh stint that owes its parent its own notice.
+                self._parent_notified.discard(agent_id)
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.user_wake_required = status in {"failed", "crashed"}
             runtime.wake.set()
         logger.info("agent.status %s=%s", agent_id, status)
         await self._maybe_snapshot()
 
+    async def claim_parent_notice(self, agent_id: str) -> bool:
+        """Reserve the one notice a child owes its parent when it stops running.
+
+        A completion report and a terminal notice carry the same information, so
+        whichever comes first claims the slot and the other is skipped.
+        """
+        async with self._lock:
+            if agent_id in self._parent_notified:
+                return False
+            self._parent_notified.add(agent_id)
+            return True
+
+    def _unreachable_locked(self, agent_id: str) -> bool:
+        """Return True when no loop will ever consume a queued message.
+
+        A terminal agent whose loop is gone cannot be woken — sends to it sit
+        in a mailbox nobody drains while the sender blocks on a reply. Must be
+        called under ``self._lock``.
+        """
+        if self.statuses.get(agent_id) not in {"completed", "stopped", "crashed", "failed"}:
+            return False
+        runtime = self.runtimes.get(agent_id)
+        return runtime is not None and not runtime.resumable
+
+    async def reachability(self, agent_id: str) -> tuple[bool, Status | None]:
+        """Return whether a queued message to ``agent_id`` would be consumed."""
+        async with self._lock:
+            status = self.statuses.get(agent_id)
+            if status is None:
+                return False, None
+            return not self._unreachable_locked(agent_id), status
+
     async def send(
         self, target_agent_id: str, message: dict[str, Any], *, interrupt: bool = True
     ) -> bool:
-        """Queue a user/peer message in the target's mailbox and wake it."""
+        """Queue a user/peer message in the target's mailbox and wake it.
+
+        Returns False when nothing will ever read the message: the target is
+        unknown, or it is terminal and its loop does not park for wake-ups.
+        """
         from_user = message.get("from") == "user"
         if from_user and self._budget_paused:
             await self.resume_from_budget_pause(exclude=target_agent_id)
         async with self._lock:
             if target_agent_id not in self.statuses:
                 logger.debug("agent.send dropped unknown target=%s", target_agent_id)
+                return False
+            if self._unreachable_locked(target_agent_id):
+                logger.info(
+                    "agent.send dropped: target=%s is %s and cannot be woken",
+                    target_agent_id,
+                    self.statuses[target_agent_id],
+                )
                 return False
             runtime = self.runtimes.setdefault(target_agent_id, AgentRuntime())
             # Follow-up work is valid after a child has reported completion.
@@ -337,6 +392,16 @@ class AgentCoordinator:
             self.pending_counts[target_agent_id] = self.pending_counts.get(target_agent_id, 0) + 1
             if from_user:
                 runtime.user_wake_required = False
+                # A real user message starts a fresh resume attempt: the prior
+                # failure, stall counters, and the "parent already told" flag
+                # belong to the abandoned attempt, not the new one.
+                self.errors.pop(target_agent_id, None)
+                self.wait_kinds.pop(target_agent_id, None)
+                self.recovery_counts.pop(target_agent_id, None)
+                self.idle_resume_counts.pop(target_agent_id, None)
+                self._parent_notified.discard(target_agent_id)
+                if self.statuses[target_agent_id] not in {"running"}:
+                    self.statuses[target_agent_id] = "waiting"
             runtime.wake.set()
             stream = runtime.stream
             interrupt_on_message = runtime.interrupt_on_message
