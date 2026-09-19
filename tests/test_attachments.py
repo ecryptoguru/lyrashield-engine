@@ -276,8 +276,8 @@ async def _create_session(
         captured.update(kwargs)
         return SimpleNamespace(), Session()
 
-    async def no_caido(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    async def no_caido(*_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace()
 
     monkeypatch.setattr(
         session_manager,
@@ -286,6 +286,13 @@ async def _create_session(
     )
     monkeypatch.setattr(session_manager, "get_backend", lambda _name: backend)
     monkeypatch.setattr(session_manager, "bootstrap_caido", no_caido)
+    # These tests exercise mount semantics, not the capability probe — the
+    # stub session has no real container attrs to probe.
+    monkeypatch.setattr(
+        session_manager,
+        "probe_session_capabilities",
+        lambda **_kwargs: {"preflight": {"degradations": [], "failures": []}},
+    )
     session_manager._SESSION_CACHE.pop(scan_id, None)
 
     await session_manager.create_or_reuse(
