@@ -44,7 +44,9 @@
       "    from strix.tools.notes.tools import hydrate_notes_from_disk",
       "            model_provider=StrixProvider(settings=settings),",
       "        root_agent = build_strix_agent(",
-      "            fallback_agent = build_strix_agent("
+      "            fallback_agent = build_strix_agent(",
+      "    from strix.tools.coverage.tools import hydrate_coverage_from_disk",
+      "    from strix.tools.threat_model.tools import hydrate_threat_models_from_disk"
     ],
     "lyrashield/lifecycle/sessions.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
@@ -301,7 +303,9 @@
       "from strix.tools.agents_graph.tools import (",
       "from strix.tools.load_skill.tool import load_skill",
       "from strix.tools.notes.tools import (",
-      "from strix.tools.thinking.tool import think"
+      "from strix.tools.thinking.tool import think",
+      "from strix.tools.coverage.tools import list_coverage, record_coverage, update_coverage",
+      "from strix.tools.threat_model.tools import ("
     ],
     "lyrashield/agents/overrides.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
@@ -346,7 +350,9 @@
       "def _strix_version() -> str | None:",
       "from strix.config import codex",
       "from strix.config.loader import load_settings",
-      "from strix.core.paths import run_dir_for"
+      "from strix.core.paths import run_dir_for, runtime_state_dir",
+      "                tool_version=_strix_version(),",
+      "        from strix.report.coverage import read_agent_graph"
     ],
     "lyrashield/artifacts/usage.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
@@ -742,6 +748,12 @@
       "| Deleted `strix/skills/tooling/{hurl,hypothesis}.md` | Reviewed deletions \u2014 recorded in the gate's `REVIEWED_DELETED` allowlist |",
       "| `lyrashield/policy/models.py` | `StrixProvider` `api_key`/`base_url` endpoint binding + `_CredentialedLitellmProvider` + `_create_fallback_provider` (needed by `resolve_dedupe_model`); `routes_through_litellm`; ZAI/GLM frontier family (b438632e parity) |",
       "| `skills/**` (top-level) | Not shipped by this fork (pre-existing); content markets the rejected strix cloud CLI |"
+    ],
+    "lyrashield/artifacts/evidence.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.core.paths import runtime_state_dir",
+      "    from strix.report.coverage import build_coverage_document as _build_substrate",
+      "    from strix.tools.coverage.tools import get_coverage_entries"
     ]
   }
 }
