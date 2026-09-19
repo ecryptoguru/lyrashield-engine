@@ -60,11 +60,7 @@ def _authorized_scope_hosts(run_record: dict[str, Any]) -> list[str]:
         allowlist = scope.get("allowlist")
         if isinstance(allowlist, list):
             return sorted(
-                {
-                    str(p).lstrip("*.")
-                    for p in allowlist
-                    if isinstance(p, str) and p.strip("*.")
-                }
+                {str(p).lstrip("*.") for p in allowlist if isinstance(p, str) and p.strip("*.")}
             )
     return []
 
@@ -75,11 +71,15 @@ def _sandbox_summary(run_record: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(caps, dict):
         return None
     probed = caps.get("capabilities")
-    statuses = {
-        str(name): str(entry.get("status"))
-        for name, entry in probed.items()
-        if isinstance(entry, dict)
-    } if isinstance(probed, dict) else {}
+    statuses = (
+        {
+            str(name): str(entry.get("status"))
+            for name, entry in probed.items()
+            if isinstance(entry, dict)
+        }
+        if isinstance(probed, dict)
+        else {}
+    )
     preflight = caps.get("preflight")
     degradations: list[str] = []
     failures: list[str] = []
@@ -226,9 +226,7 @@ def build_scan_quality(
             "agents_finished": len(agents) - agents_incomplete,
             "agents_incomplete": agents_incomplete,
             "findings_filed": len(vulnerability_reports),
-            "web_search_calls": len(web_search_usage)
-            if isinstance(web_search_usage, list)
-            else 0,
+            "web_search_calls": len(web_search_usage) if isinstance(web_search_usage, list) else 0,
             "proxy_requests_admitted": sum(admitted_hosts.values()),
             "proxy_requests_denied": len(violations) + dropped_violations,
             "evidence_export": export.get("status") if isinstance(export, dict) else None,

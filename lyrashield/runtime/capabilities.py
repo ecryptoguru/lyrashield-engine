@@ -118,8 +118,7 @@ def _probe_network_policy(
     mode = str(host_config.get("NetworkMode", "") or "")
     networks = cast(
         "dict[str, Any]",
-        cast("dict[str, Any]", attrs.get("NetworkSettings", {}) or {}).get("Networks", {})
-        or {},
+        cast("dict[str, Any]", attrs.get("NetworkSettings", {}) or {}).get("Networks", {}) or {},
     )
     evidence: dict[str, Any] = {
         "configured": configured,
