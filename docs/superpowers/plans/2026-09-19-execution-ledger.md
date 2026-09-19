@@ -101,6 +101,15 @@ Statuses: NOT_STARTED / IN_PROGRESS / CODE_VERIFIED / RELEASE_VERIFIED / BLOCKED
 - `e2e/browser/polling-harness.tsx` fixture missing now-required `executionPlan` key → `executionPlan: null` added on #741/#743/#744 and task-13.
 - Fixes propagated: merges `eae48eb6` (task-11), `27f87483` (task-12), `c952330f` (task-13); engine integration `51a181d7`.
 
+## CI remediation — round 3 (2026-09-20)
+
+- #741 `e2e/browser/desktop.spec.ts`-adjacent fixes verified locally (57 focused tests); residual unformatted edit → prettier, `52420180`. One `Setup pnpm` infra flake rerun → green.
+- #742 `desktop.spec.ts` "listener registration finishes before replay" was timing-racy: asserted `get_scan_events` absent from call log (depended on mock delay vs poll). Replaced with an ordering invariant — each invoke records `resolvedListeners`; test now polls for the replay call then asserts `resolvedListeners >= 1` (`44c25485`, `b6bdfc46`).
+- All fixes merged into task-11/task-12/task-13 (`0e78aa7b`, `6767f64b`, `fe2afc2f`, `de6993e9`, `f215e644`, `89cded96`).
+- Integrated app branch re-verified post-merge: 374 tests across the 10 cross-cutting suites pass.
+
+**Final CI state 2026-09-20**: all 18 PRs green — engine #144–152 (audit + image build + verify), app #736–744 (lint/typecheck/test/build, diff-gate, SCA, pinned-engine contract, Desktop cargo/Vite, GitHub Action). No PR is merged; all remain review candidates.
+
 ## Live/production gates — NOT authorized by this session
 
 Production dispatch, paid scans, feature admission, real credentials, migrations against live DBs, and any destructive operation remain blocked pending founder authorization. Agents must stop at code/test/PR level.
