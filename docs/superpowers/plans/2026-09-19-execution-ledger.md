@@ -110,6 +110,24 @@ Statuses: NOT_STARTED / IN_PROGRESS / CODE_VERIFIED / RELEASE_VERIFIED / BLOCKED
 
 **Final CI state 2026-09-20**: all 18 PRs green — engine #144–152 (audit + image build + verify), app #736–744 (lint/typecheck/test/build, diff-gate, SCA, pinned-engine contract, Desktop cargo/Vite, GitHub Action). No PR is merged; all remain review candidates.
 
+## Merge execution — 2026-09-20 (founder-authorized)
+
+All 18 implementation PRs squash-merged to `main` (merge commits prohibited by branch rules; auto-merge unavailable). Serial update→CI→merge cycles because each squash advanced main and re-staled stacked branches.
+
+**Engine `main` receipts** (oldest→newest): `d98cd4fe` #144 AnyIO · `dbfbfe58` #146 offline inference · `52e91091` #145 docs · `55103fcd` #147 cleanup · `55224af8` #149 Strix v1.6.2 · `7f2ce701` #150 run.json 1.1 · `1e8edfc8` #151 attachments · `41db7ace` #148 review-changes · #152 connectors/quality (final tip).
+
+**App `main` receipts**: `e0c0f50c` #737 · `12ea08ba` #736 · `bd2197a9` #738 · `e5bb1d81` #739 · `05fa111d` #740 · `021bdd59` #742 · `e0c41238` #743 · `8a905cb2` #741 · `99202975` #744.
+
+**CodeRabbit findings fixed during merge (all threads resolved):**
+- #147: blocking docker `containers.get().kill()` inside bounded cleanup moved to `asyncio.to_thread` (`6599ec4e`).
+- #151: pinned `checkout --detach` given bounded `_GIT_CHECKOUT_TIMEOUT_SECONDS=120` (was 5s default); attachment staging hardened to O_NOFOLLOW/fd-based copy rejecting symlink swaps; attachment basenames with line terminators rejected + prompt metadata sanitized (`0fc13d4b`).
+- #148: `total_changed` double-counted renamed/copied paths already inside `modified_files` → `analyzable + deleted` (`0266935c`); raw `targets_info`/`local_sources` host paths (cloned_repo_path, source_path) sanitized via `sanitize_targets_info`/`sanitize_local_sources` before `initial_run_record` (CWE-200).
+- #152: `scope_violations.dropped` re-accumulated process-cumulative overflow on every save → delta-tracked via `_scope_dropped_seen` (`9a89d42f`); same-process resume reset both ledger offsets → `hydrate_from_run_dir` now seeds `_scope_violations_seen`/`_scope_dropped_seen` from the live snapshot (`d327140b`).
+
+**Merge-conflict resolutions preserving feature work:** task-09 attachment staging moved inside task-03's ownership scope (leak on cancel) + `attachments_dir` transferred to stranded bundle on delete failure; task-12 capability probe kept with task-03's `except BaseException` ownership block + stranded-bundle `sandbox_capabilities`; lifecycle fakes stub `probe_session_capabilities` (correctly fail `exec=absent` fakes otherwise); app unions kept task-10/11/12 additions alongside merged ancestors; `relay-grant.ts` brace splice repaired.
+
+**Post-merge verification**: task-12 worktree 137 focused tests pass (session cleanup 19, attachments 51, review-changes 59, scan-quality 8); `ruff format/check` clean; `customer-branding-allowlist.json` valid JSON matching merged source; `#744` merge verified on `packages/security` — 335 tests, tsc clean.
+
 ## Live/production gates — NOT authorized by this session
 
 Production dispatch, paid scans, feature admission, real credentials, migrations against live DBs, and any destructive operation remain blocked pending founder authorization. Agents must stop at code/test/PR level.
