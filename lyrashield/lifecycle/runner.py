@@ -22,6 +22,7 @@ from openai import RateLimitError
 
 from lyrashield.agents.factory import build_strix_agent, make_child_factory
 from lyrashield.agents.prompt import render_system_prompt
+from lyrashield.artifacts import evidence as _evidence
 from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.execution import (
@@ -44,6 +45,7 @@ from lyrashield.lifecycle.inputs import (
     _sanitize_prompt_value,
     build_root_initial_input,
     build_root_task,
+    build_scan_targets,
     build_scope_context,
     make_model_settings,
     prompt_cache_options_for_model,
@@ -277,7 +279,15 @@ async def run_strix_scan(
     coordinator.set_snapshot_path(agents_path)
 
     from lyrashield.tools.todo.tools import hydrate_todos_from_disk
+    from strix.tools.coverage.tools import hydrate_coverage_from_disk
     from strix.tools.notes.tools import hydrate_notes_from_disk
+    from strix.tools.threat_model.tools import hydrate_threat_models_from_disk
+
+    # The coverage ledger and threat-model store are module-global; hydrating
+    # every run (not only resumes) binds them to this run's state dir and
+    # clears any store a prior scan in this process left behind.
+    hydrate_coverage_from_disk(state_dir)
+    hydrate_threat_models_from_disk(state_dir)
 
     root_id: str | None = None
     if is_resume:
@@ -584,6 +594,7 @@ async def run_strix_scan(
             "parent_id": None,
             "interactive": interactive,
             "spawn_child_agent": spawn_child_agent,
+            "scan_targets": build_scan_targets(scan_config),
             "max_context_images": settings.runtime.max_context_images,
             "server_conversation": server_conversation,
         }
@@ -877,6 +888,27 @@ async def run_strix_scan(
                     close()
         with contextlib.suppress(Exception):
             await coordinator.maybe_snapshot()
+        state = artifact_state or get_global_report_state()
+        if state is not None and _evidence.record_supports_evidence_v1_1(state.run_record):
+            # Durable HTTP evidence must leave the proxy before teardown: the
+            # Caido project dies with the sandbox. A failed export records an
+            # explicit incomplete-evidence marker — never a receipt.
+            try:
+                outcome = await _evidence.export_http_exchange_evidence(
+                    bundle.get("caido_client"),
+                    state.get_run_dir(),
+                    run_record=state.run_record,
+                    findings=state.vulnerability_reports,
+                )
+            except Exception:
+                logger.exception("HTTP exchange evidence export failed")
+                outcome = {
+                    "status": "failed",
+                    "reason": "export raised before sandbox teardown",
+                }
+            state.set_evidence_export_outcome(outcome)
+            with contextlib.suppress(Exception):
+                state.save_run_data()
         if cleanup_on_exit:
             logger.info("Tearing down sandbox session for scan %s", scan_id)
             cleanup_outcome = await session_manager.cleanup(scan_id)
