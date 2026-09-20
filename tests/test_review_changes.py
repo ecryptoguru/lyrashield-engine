@@ -25,15 +25,12 @@ import json
 import subprocess  # nosec B404
 import sys
 from importlib import import_module
+from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 import lyrashield.interface.utils as interface_utils
 from lyrashield.interface.utils import (
@@ -396,6 +393,28 @@ def test_clone_revision_treats_branch_as_fetch_hint_only(tmp_path: Path) -> None
     assert "--single-branch" not in clone_argv
 
 
+def test_real_moving_branch_still_checks_out_recorded_snapshot(tmp_path: Path) -> None:
+    """A saved snapshot keeps commit A after its advertised branch moves to B."""
+    remote = _init_repo(tmp_path)
+    (remote / "app.py").write_text("version = 'A'\n", encoding="utf-8")
+    recorded_revision = _commit_all(remote, "recorded plan")
+    (remote / "app.py").write_text("version = 'B'\n", encoding="utf-8")
+    _commit_all(remote, "moved branch")
+
+    with patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)):
+        acquired = Path(
+            clone_repository(
+                str(remote),
+                "moving-branch",
+                branch="main",
+                revision=recorded_revision,
+            )
+        )
+
+    assert _git(acquired, "rev-parse", "HEAD").stdout.strip() == recorded_revision
+    assert (acquired / "app.py").read_text(encoding="utf-8") == "version = 'A'\n"
+
+
 def test_clone_missing_revision_fetches_then_detaches(tmp_path: Path) -> None:
     """An unadvertised head (e.g. force-pushed) triggers one bounded fetch."""
     state = {"fetched": False}
@@ -726,9 +745,7 @@ def test_dirty_worktree_gets_snapshot_digest(tmp_path: Path) -> None:
     (repo / "a.py").write_text("x = 3  # dirty\n", encoding="utf-8")
     (repo / "untracked.py").write_text("scratch\n", encoding="utf-8")
 
-    result = resolve_diff_scope_context(
-        _sources(repo), "diff", base, non_interactive=True, env={}, diff_head=head
-    )
+    result = resolve_diff_scope_context(_sources(repo), "diff", base, non_interactive=True, env={})
 
     scope = result.metadata["repos"][0]
     assert scope["head_revision"] == head
@@ -737,6 +754,33 @@ def test_dirty_worktree_gets_snapshot_digest(tmp_path: Path) -> None:
     # Honest provenance: the instruction block tells the agent the analyzed
     # content is the working tree, not the recorded commit.
     assert "uncommitted changes" in result.instruction_block
+
+    # Untracked bytes, not just their names, distinguish dirty preflight states.
+    first_digest = scope["snapshot_digest"]
+    (repo / "untracked.py").write_text("different scratch\n", encoding="utf-8")
+    changed = resolve_diff_scope_context(_sources(repo), "diff", base, non_interactive=True, env={})
+    assert changed.metadata["repos"][0]["snapshot_digest"] != first_digest
+
+    with pytest.raises(SourcePreflightError) as exc_info:
+        resolve_diff_scope_context(
+            _sources(repo), "diff", base, non_interactive=True, env={}, diff_head=head
+        )
+    assert exc_info.value.reason == "dirty_asserted_head"
+
+
+def test_full_scope_records_dirty_local_source_before_upload(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "app.py").write_text("base\n", encoding="utf-8")
+    head = _commit_all(repo, "base")
+    (repo / "app.py").write_text("dirty\n", encoding="utf-8")
+
+    result = resolve_diff_scope_context(_sources(repo), "full", None, non_interactive=True)
+
+    assert result.active is False
+    source = result.metadata["repos"][0]
+    assert source["head_revision"] == head
+    assert source["worktree_dirty"] is True
+    assert source["snapshot_digest_stage"] == "preflight"
 
 
 def test_unsafe_base_ref_cannot_inject_options(diff_repo: dict[str, Any]) -> None:

@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess  # nosec B404
 import sys
 import tempfile
@@ -598,6 +599,7 @@ class RepoDiffScope:
             "head_revision": self.head_revision,
             "worktree_dirty": self.worktree_dirty,
             "snapshot_digest": self.snapshot_digest,
+            "snapshot_digest_stage": "preflight" if self.snapshot_digest else None,
             "added_files": self.added_files,
             "modified_files": self.modified_files,
             "renamed_files": self.renamed_files,
@@ -962,8 +964,8 @@ def build_diff_scope_instruction(scopes: list[RepoDiffScope]) -> str:
         if scope.worktree_dirty:
             lines.append(
                 "Note: the worktree contains uncommitted changes "
-                f"(snapshot {scope.snapshot_digest}); the analyzed content is the "
-                "working tree, not exactly the recorded head commit."
+                "and is not exactly the recorded head commit. The scan's "
+                "frozen uploaded source digest is recorded in run.json."
             )
 
         focus_files, focus_truncated = _truncate_file_list(scope.analyzable_files)
@@ -1064,8 +1066,8 @@ def _worktree_snapshot_state(repo_path: Path) -> tuple[bool | None, str | None]:
 
     A dirty worktree means the analyzed content is not exactly the recorded
     head commit. The digest covers the porcelain status (which names untracked
-    paths) plus the full ``HEAD`` diff of tracked content, so two snapshots are
-    comparable without pretending uncommitted content is the commit.
+    paths), their bytes, and the full ``HEAD`` diff of tracked content. The
+    later staged-source digest is authoritative for bytes uploaded to the scan.
     """
     try:
         status = _run_git_command_raw(repo_path, ["status", "--porcelain=v1", "-z"], check=False)
@@ -1077,13 +1079,44 @@ def _worktree_snapshot_state(repo_path: Path) -> tuple[bool | None, str | None]:
         return False, None
     try:
         diff = _run_git_command_raw(repo_path, ["diff", "--binary", "HEAD", "--"], check=False)
+        untracked = _run_git_command_raw(
+            repo_path, ["ls-files", "--others", "--exclude-standard", "-z"], check=False
+        )
     except (OSError, subprocess.SubprocessError):
-        diff = subprocess.CompletedProcess(args=[], returncode=1, stdout=b"")
+        return True, None
+    if diff.returncode != 0 or untracked.returncode != 0:
+        return True, None
     digest = hashlib.sha256()
     digest.update(status.stdout)
     digest.update(b"\x00diff\x00")
-    if diff.returncode == 0:
-        digest.update(diff.stdout)
+    digest.update(diff.stdout)
+    for raw_path in sorted(path for path in untracked.stdout.split(b"\x00") if path):
+        relative = Path(os.fsdecode(raw_path))
+        if relative.is_absolute() or ".." in relative.parts:
+            return True, None
+        path = repo_path / relative
+        digest.update(b"\x00untracked\x00")
+        digest.update(len(raw_path).to_bytes(8, "big"))
+        digest.update(raw_path)
+        try:
+            if path.is_symlink():
+                target = os.fsencode(path.readlink())
+                digest.update(len(target).to_bytes(8, "big"))
+                digest.update(target)
+                continue
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                file_stat = os.fstat(fd)
+                if not stat.S_ISREG(file_stat.st_mode):
+                    return True, None
+                digest.update(file_stat.st_size.to_bytes(8, "big"))
+                with os.fdopen(fd, "rb", closefd=False) as source:
+                    while chunk := source.read(1024 * 1024):
+                        digest.update(chunk)
+            finally:
+                os.close(fd)
+        except OSError:
+            return True, None
     return True, f"sha256:{digest.hexdigest()}"
 
 
@@ -1219,6 +1252,13 @@ def _resolve_repo_diff_scope(
     classified = _classify_diff_entries(entries)
 
     worktree_dirty, snapshot_digest = _worktree_snapshot_state(repo_path)
+    if diff_head and worktree_dirty:
+        raise SourcePreflightError(
+            "dirty_asserted_head",
+            "The asserted diff head is immutable, but the local checkout has "
+            "uncommitted content. Commit or discard those changes before scanning "
+            "this recorded comparison.",
+        )
 
     context_files: list[str] = []
     context_seen: set[str] = set()
@@ -1268,10 +1308,36 @@ def resolve_diff_scope_context(
     env_map = dict(os.environ if env is None else env)
 
     if scope_mode == "full":
+        repos: list[dict[str, Any]] = []
+        for source in local_sources:
+            source_path = source.get("source_path")
+            if not source_path:
+                continue
+            repo_path = Path(source_path)
+            dirty: bool | None = None
+            digest: str | None = None
+            head: str | None = None
+            if _is_git_repo(repo_path):
+                dirty, digest = _worktree_snapshot_state(repo_path)
+                try:
+                    result = _run_git_command(repo_path, ["rev-parse", "HEAD"], check=False)
+                    if result.returncode == 0:
+                        head = result.stdout.strip() or None
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            repos.append(
+                {
+                    "workspace_subdir": source.get("workspace_subdir"),
+                    "head_revision": head,
+                    "worktree_dirty": dirty,
+                    "snapshot_digest": digest,
+                    "snapshot_digest_stage": "preflight" if digest else None,
+                }
+            )
         return DiffScopeResult(
             active=False,
             mode=scope_mode,
-            metadata={"active": False, "mode": scope_mode},
+            metadata={"active": False, "mode": scope_mode, "repos": repos},
         )
 
     if scope_mode == "auto":
