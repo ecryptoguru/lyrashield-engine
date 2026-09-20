@@ -60,6 +60,84 @@ CLEANUP_REMOVED = "removed"
 CLEANUP_FAILED = "failed"
 CLEANUP_NOT_FOUND = "not_found"
 
+# Accepted wire format for the signed relay grant (proxy userinfo); anything
+# else is rejected before it can reach a mount, log line, or shell.
+_RELAY_GRANT_RE = re.compile(r"lrg1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+
+# Per-step bound (seconds) for shielded startup-cleanup awaits: a hung
+# backend delete/close must not strand a failed or cancelled startup.
+_CLEANUP_STEP_TIMEOUT = 30.0
+
+
+def _sanitize_startup_error(exc: BaseException) -> str:
+    """Bounded, secret-free description of a startup/cleanup failure."""
+    message = f"{type(exc).__name__}: {exc}"
+    return _RELAY_GRANT_RE.sub("lrg1.<redacted>", message)[:500]
+
+
+async def _bounded_cleanup_step(awaitable: Any, *, scan_id: str, step: str) -> None:
+    """Await one startup-cleanup step shielded and time-bounded.
+
+    The step runs on a task whose handle is retained until it reaches a
+    terminal state: cancellation delivered to the caller while a delete or
+    close is in flight can never orphan that work, and a timed-out step is
+    cancelled and drained instead of becoming untracked background cleanup.
+    """
+    task = asyncio.ensure_future(awaitable)
+    try:
+        await asyncio.wait_for(asyncio.shield(task), _CLEANUP_STEP_TIMEOUT)
+    except asyncio.CancelledError:
+        # The wait — not the shielded step — was cancelled. Keep the handle
+        # and drain within the same bound so the step still completes
+        # before the cancellation propagates.
+        if not task.done():
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(asyncio.shield(task), _CLEANUP_STEP_TIMEOUT)
+            if not task.done():
+                logger.debug(
+                    "Startup cleanup(%s): %s still pending after re-cancellation drain",
+                    scan_id,
+                    step,
+                )
+        raise
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        if task.done() and not task.cancelled():
+            # Retrieve the outcome so a failed step is never reported as an
+            # unretrieved task exception.
+            task.exception()
+
+
+async def _reap_stranded_bundle(scan_id: str, bundle: dict[str, Any]) -> bool:
+    """Retry deletion of a sandbox stranded by a failed startup.
+
+    Returns True when the delete is confirmed and the bundle's host dirs
+    are removed; False when deletion fails again — the bundle stays cached
+    and the failed receipt is refreshed so the reaper keeps observing (and
+    can keep retrying) the stranded sandbox. Cancellation propagates.
+    """
+    client = bundle["client"]
+    try:
+        await _bounded_cleanup_step(
+            client.delete(bundle["session"]), scan_id=scan_id, step="sandbox delete"
+        )
+    except Exception as exc:
+        _record_cleanup_receipt(scan_id, CLEANUP_FAILED, last_error=_sanitize_startup_error(exc))
+        return False
+    docker_client = getattr(client, "docker_client", None)
+    if docker_client is not None:
+        with contextlib.suppress(Exception):
+            docker_client.close()
+    for key in ("egress_policy_dir", "relay_upstream_dir", "attachments_dir"):
+        path = bundle.get(key)
+        if path:
+            shutil.rmtree(path, ignore_errors=True)
+    _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)
+    return True
+
 
 def _target_relay_proxy_url() -> str | None:
     """Relay URL with the scan grant embedded as proxy userinfo.
@@ -76,7 +154,7 @@ def _target_relay_proxy_url() -> str | None:
         raise RuntimeError("Target relay URL and grant must both be configured")
     # Tokens become proxy userinfo and shell startup configuration. Accept only
     # the product's signed base64url wire format, never shell/URL metacharacters.
-    if not re.fullmatch(r"lrg1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", grant):
+    if not _RELAY_GRANT_RE.fullmatch(grant):
         raise RuntimeError("Target relay grant has an invalid wire format")
     try:
         parsed = urlparse(relay_url)
@@ -191,27 +269,34 @@ def build_session_entries(
     bind_mounts: list[dict[str, Any]] = []
     staged_dirs: list[Path] = []
     grants: set[str] = set()
-    for src in local_sources:
-        ws_subdir = src.get("workspace_subdir") or ""
-        host_path = src.get("source_path") or ""
-        if not ws_subdir or not host_path:
-            continue
-        resolved = Path(host_path).expanduser().resolve()
-        if src.get("mount"):
-            bind_mounts.append(
-                {
-                    "source": str(resolved),
-                    "target": f"{_WORKSPACE_ROOT}/{ws_subdir}",
-                    "read_only": True,
-                }
-            )
-            grants.add(str(resolved))
-        else:
-            upload_path, staged = stage_symlink_safe_dir(resolved)
-            if staged is not None:
-                staged_dirs.append(staged)
-            entries[ws_subdir] = LocalDir(src=upload_path)
-            grants.add(str(upload_path))
+    try:
+        for src in local_sources:
+            ws_subdir = src.get("workspace_subdir") or ""
+            host_path = src.get("source_path") or ""
+            if not ws_subdir or not host_path:
+                continue
+            resolved = Path(host_path).expanduser().resolve()
+            if src.get("mount"):
+                bind_mounts.append(
+                    {
+                        "source": str(resolved),
+                        "target": f"{_WORKSPACE_ROOT}/{ws_subdir}",
+                        "read_only": True,
+                    }
+                )
+                grants.add(str(resolved))
+            else:
+                upload_path, staged = stage_symlink_safe_dir(resolved)
+                if staged is not None:
+                    staged_dirs.append(staged)
+                entries[ws_subdir] = LocalDir(src=upload_path)
+                grants.add(str(upload_path))
+    except Exception:
+        # A failure partway through the list must not leak already-staged
+        # symlink-safe copies; the caller never receives them.
+        for staged in staged_dirs:
+            shutil.rmtree(staged, ignore_errors=True)
+        raise
     extra_path_grants = tuple(SandboxPathGrant(path=p) for p in sorted(grants))
     return entries, bind_mounts, staged_dirs, extra_path_grants
 
@@ -351,7 +436,7 @@ def write_relay_upstream(relay_proxy: str) -> tuple[dict[str, Any], str]:
     return {"source": str(upstream), "target": _RELAY_UPSTREAM_TARGET, "read_only": True}, host_dir
 
 
-async def create_or_reuse(  # noqa: PLR0915
+async def create_or_reuse(  # noqa: PLR0912, PLR0915
     scan_id: str,
     *,
     image: str,
@@ -379,68 +464,103 @@ async def create_or_reuse(  # noqa: PLR0915
     explicitly authorized internal targets. The whole check-create-insert
     sequence runs under one lock, so concurrent calls for the same scan ID
     share exactly one tracked session.
+
+    Startup owns every resource it allocates: any failure or cancellation
+    after the sandbox is created deletes it under a bounded, shielded wait
+    and removes the host-side staging/policy/relay dirs before the original
+    exception propagates. When a delete cannot be confirmed the handles
+    stay cached under a ``startup_error`` marker with a failed cleanup
+    receipt, so :func:`cleanup` (or a later create) can retry the reaping —
+    deletion is never claimed without confirmation.
     """
     async with _CREATION_LOCK:
         async with _CACHE_LOCK:
             cached = _SESSION_CACHE.get(scan_id)
         if cached is not None:
-            logger.info("Reusing existing sandbox session for scan %s", scan_id)
-            return cached
+            if not cached.get("startup_error"):
+                logger.info("Reusing existing sandbox session for scan %s", scan_id)
+                return cached
+            # A previous startup created a sandbox whose deletion could not
+            # be confirmed. Retry that delete under this same lock (the
+            # serialization cleanup() uses) before allowing a fresh create;
+            # if it still fails, fail closed and leave the stranded record
+            # for the reaper rather than silently starting a second sandbox.
+            if not await _reap_stranded_bundle(scan_id, cached):
+                raise RuntimeError(
+                    f"Sandbox for scan {scan_id} is still stranded; "
+                    "startup cannot proceed until its deletion succeeds"
+                )
+            async with _CACHE_LOCK:
+                _SESSION_CACHE.pop(scan_id, None)
 
-        entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(local_sources)
+        # Validate relay configuration before any host allocation so a
+        # malformed grant or URL cannot leak staged, policy, or grant dirs.
+        relay_proxy = _target_relay_proxy_url()
 
-        authorized_hosts = derive_authorized_target_hosts(targets)
-        policy_mount, policy_host_dir = write_egress_policy(scan_id, authorized_hosts)
-        bind_mounts.append(policy_mount)
-
-        # Attachments stage into a dedicated read-only mount; staging failures
-        # (e.g. a checksum drift between validation and copy) raise before the
-        # sandbox is created and the staging dir is removed below.
+        # Resource handles owned by this create, initialized before the
+        # allocation block so the single lifecycle scope below can clean up
+        # every partial state — including cancellation at any await.
+        staged_dirs: list[Path] = []
+        authorized_hosts: set[str] = set()
+        policy_host_dir: str | None = None
         attachments_dir: str | None = None
-        if attachments:
-            attachment_mount, attachments_dir = stage_attachments(scan_id, attachments)
-            bind_mounts.append(attachment_mount)
-
-        # Caido runs as an in-container sidecar; HTTP(S) traffic from any
-        # process started via ``session.exec`` (the SDK's Shell tool, etc.)
-        # picks up these env vars automatically. ``NO_PROXY`` keeps the
-        # agent-browser CDP daemon's localhost traffic from looping back
-        # through Caido. These variables steer clients toward the proxy; the
-        # enforced egress controls are the network policy admission check and
-        # the replay guard's policy file.
-        container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
-        environment = build_sandbox_environment(container_caido_url)
         relay_dir: str | None = None
-        if environment.get("STRIX_TARGET_RELAY"):
-            relay_mount, relay_dir = write_relay_upstream(_target_relay_proxy_url() or "")
-            bind_mounts.append(relay_mount)
-        environment["LYRASHIELD_EGRESS_POLICY"] = _EGRESS_POLICY_TARGET
-        environment["STRIX_RUN_ID"] = scan_id
-        manifest = Manifest(
-            entries=entries,
-            environment=Environment(value=environment),
-            extra_path_grants=extra_path_grants,
-        )
-
-        backend_name = load_settings().runtime.backend
-        backend = get_backend(backend_name)
-
-        logger.info(
-            "Creating sandbox session for scan %s (backend=%s, image=%s)",
-            scan_id,
-            backend_name,
-            image,
-        )
         client: Any | None = None
         session: Any | None = None
         caido_client: Any | None = None
         try:
+            entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(
+                local_sources
+            )
+
+            authorized_hosts = derive_authorized_target_hosts(targets)
+            policy_mount, policy_host_dir = write_egress_policy(scan_id, authorized_hosts)
+            bind_mounts.append(policy_mount)
+
+            # Attachments stage into a dedicated read-only mount; staging
+            # failures (e.g. a checksum drift between validation and copy)
+            # raise inside this scope so attachments_dir is cleaned up below.
+            if attachments:
+                attachment_mount, attachments_dir = stage_attachments(scan_id, attachments)
+                bind_mounts.append(attachment_mount)
+
+            # Caido runs as an in-container sidecar; HTTP(S) traffic from any
+            # process started via ``session.exec`` (the SDK's Shell tool, etc.)
+            # picks up these env vars automatically. ``NO_PROXY`` keeps the
+            # agent-browser CDP daemon's localhost traffic from looping back
+            # through Caido. These variables steer clients toward the proxy;
+            # the enforced egress controls are the network policy admission
+            # check and the replay guard's policy file.
+            container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
+            environment = build_sandbox_environment(container_caido_url)
+            if environment.get("STRIX_TARGET_RELAY"):
+                relay_mount, relay_dir = write_relay_upstream(relay_proxy or "")
+                bind_mounts.append(relay_mount)
+            environment["LYRASHIELD_EGRESS_POLICY"] = _EGRESS_POLICY_TARGET
+            environment["STRIX_RUN_ID"] = scan_id
+            manifest = Manifest(
+                entries=entries,
+                environment=Environment(value=environment),
+                extra_path_grants=extra_path_grants,
+            )
+
+            backend_name = load_settings().runtime.backend
+            backend = get_backend(backend_name)
+
+            logger.info(
+                "Creating sandbox session for scan %s (backend=%s, image=%s)",
+                scan_id,
+                backend_name,
+                image,
+            )
             client, session = await backend(
                 image=image,
                 manifest=manifest,
                 exposed_ports=(_CONTAINER_CAIDO_PORT,),
                 bind_mounts=bind_mounts,
             )
+            # ``session`` is now a live sandbox handle; every later startup
+            # await is covered by the owned delete in the except block.
 
             caido_endpoint = await session.resolve_exposed_port(_CONTAINER_CAIDO_PORT)
             scheme = "https" if caido_endpoint.tls else "http"
@@ -465,23 +585,86 @@ async def create_or_reuse(  # noqa: PLR0915
                 scan_id=scan_id,
                 authorized_hosts=authorized_hosts,
             )
-        except Exception:
-            if caido_client is not None:
-                with contextlib.suppress(Exception):
-                    await caido_client.aclose()
+        except BaseException as startup_error:
+            # One ownership scope: everything allocated above is released
+            # here — the created sandbox first (the resource the reaper
+            # cannot recover without handles), then the Caido transport and
+            # Docker client, then host-side policy/relay dirs. Every await
+            # is bounded and shielded so a hung backend or a second
+            # cancellation cannot strand cleanup; the original exception —
+            # including KeyboardInterrupt/SystemExit/CancelledError — is
+            # never swallowed and always re-raised. An interrupt arriving
+            # *during* cleanup is deferred and re-raised chained, so it can
+            # never be swallowed either.
+            deferred: BaseException | None = None
             if client is not None and session is not None:
-                with contextlib.suppress(Exception):
-                    await client.delete(session)
+                try:
+                    await _bounded_cleanup_step(
+                        client.delete(session), scan_id=scan_id, step="sandbox delete"
+                    )
+                except BaseException as exc:
+                    delete_error = _sanitize_startup_error(exc)
+                    if not isinstance(exc, Exception):
+                        deferred = deferred or exc
+                    logger.warning(
+                        "Startup cleanup for scan %s could not delete the sandbox; "
+                        "handles retained for reaper retry: %s",
+                        scan_id,
+                        delete_error,
+                    )
+                    # Keep the ownership metadata the existing reaper needs:
+                    # the record stays cached under a startup_error marker
+                    # and a failed receipt — deletion is never claimed.
+                    _record_cleanup_receipt(scan_id, CLEANUP_FAILED, last_error=delete_error)
+                    async with _CACHE_LOCK:
+                        _SESSION_CACHE[scan_id] = {
+                            "client": client,
+                            "session": session,
+                            "caido_client": None,
+                            "default_scope_id": None,
+                            "default_scope_allowlist": None,
+                            "authorized_hosts": sorted(authorized_hosts),
+                            "egress_policy_dir": policy_host_dir,
+                            "relay_upstream_dir": relay_dir,
+                            "attachments_dir": attachments_dir,
+                            "startup_error": _sanitize_startup_error(startup_error),
+                        }
+                    # The dirs stay owned by the stranded bundle; cleanup()
+                    # removes them once a retried delete succeeds.
+                    policy_host_dir = None
+                    relay_dir = None
+                    attachments_dir = None
+                    startup_error.add_note(f"sandbox cleanup also failed: {delete_error}")
+            if caido_client is not None:
+                try:
+                    await _bounded_cleanup_step(
+                        caido_client.aclose(), scan_id=scan_id, step="caido close"
+                    )
+                except BaseException as exc:
+                    if not isinstance(exc, Exception):
+                        deferred = deferred or exc
+                    logger.debug(
+                        "Startup cleanup for scan %s: caido close failed",
+                        scan_id,
+                        exc_info=True,
+                    )
             if client is not None:
-                with contextlib.suppress(Exception):
-                    docker_client = getattr(client, "docker_client", None)
-                    if docker_client is not None:
+                docker_client = getattr(client, "docker_client", None)
+                if docker_client is not None:
+                    with contextlib.suppress(Exception):
                         docker_client.close()
-            shutil.rmtree(policy_host_dir, ignore_errors=True)
-            if relay_dir:
+            if policy_host_dir is not None:
+                shutil.rmtree(policy_host_dir, ignore_errors=True)
+            if relay_dir is not None:
                 shutil.rmtree(relay_dir, ignore_errors=True)
             if attachments_dir:
                 shutil.rmtree(attachments_dir, ignore_errors=True)
+            if deferred is not None and not isinstance(
+                startup_error, (KeyboardInterrupt, SystemExit)
+            ):
+                # An interrupt arrived while cleaning up a lesser failure —
+                # propagate it with the startup error chained underneath.
+                raise deferred from startup_error
             raise
         finally:
             for staged in staged_dirs:
