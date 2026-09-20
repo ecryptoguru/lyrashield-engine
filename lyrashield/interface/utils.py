@@ -1252,12 +1252,12 @@ def _resolve_repo_diff_scope(
     classified = _classify_diff_entries(entries)
 
     worktree_dirty, snapshot_digest = _worktree_snapshot_state(repo_path)
-    if diff_head and worktree_dirty:
+    if diff_head and worktree_dirty is not False:
         raise SourcePreflightError(
             "dirty_asserted_head",
-            "The asserted diff head is immutable, but the local checkout has "
-            "uncommitted content. Commit or discard those changes before scanning "
-            "this recorded comparison.",
+            "The asserted diff head is immutable, but the local checkout is "
+            "dirty or could not be confirmed clean. Confirm a clean checkout "
+            "before scanning this recorded comparison.",
         )
 
     context_files: list[str] = []

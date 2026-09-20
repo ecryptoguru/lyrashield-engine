@@ -768,6 +768,29 @@ def test_dirty_worktree_gets_snapshot_digest(tmp_path: Path) -> None:
     assert exc_info.value.reason == "dirty_asserted_head"
 
 
+def test_asserted_diff_rejects_unverified_worktree_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "app.py").write_text("base\n", encoding="utf-8")
+    base = _commit_all(repo, "base")
+    (repo / "app.py").write_text("changed\n", encoding="utf-8")
+    head = _commit_all(repo, "head")
+    original = interface_utils._run_git_command_raw
+
+    def failed_status(path: Path, args: list[str], **kwargs: Any) -> Any:
+        if args[:2] == ["status", "--porcelain=v1"]:
+            return subprocess.CompletedProcess(args, 1, b"", b"status unavailable")
+        return original(path, args, **kwargs)
+
+    monkeypatch.setattr(interface_utils, "_run_git_command_raw", failed_status)
+    with pytest.raises(SourcePreflightError) as exc_info:
+        resolve_diff_scope_context(
+            _sources(repo), "diff", base, non_interactive=True, env={}, diff_head=head
+        )
+    assert exc_info.value.reason == "dirty_asserted_head"
+
+
 def test_full_scope_records_dirty_local_source_before_upload(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "app.py").write_text("base\n", encoding="utf-8")
