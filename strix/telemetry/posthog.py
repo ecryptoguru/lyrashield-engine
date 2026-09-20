@@ -1,15 +1,18 @@
 import logging
-from datetime import datetime
 from typing import Any
 
 import requests
 
 from strix.config import load_settings
+from strix.skills import get_loaded_skill_names
 from strix.telemetry._common import (
     SEND_TIMEOUT,
     SESSION_ID,
     TelemetryReportState,
     base_props,
+    exception_props,
+    get_scan_phase,
+    get_version,
     is_first_run,
 )
 
@@ -33,7 +36,12 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
             "api_key": _POSTHOG_PUBLIC_API_KEY,
             "event": event,
             "distinct_id": SESSION_ID,
-            "properties": properties,
+            "properties": {
+                **properties,
+                "$lib": "strix-cli",
+                "$lib_version": get_version(),
+                "$process_person_profile": False,
+            },
         }
         with requests.post(f"{_POSTHOG_HOST}/capture/", json=payload, timeout=SEND_TIMEOUT):
             pass
@@ -80,16 +88,6 @@ def finding(severity: str, cwe: str | None = None, is_cve: bool = False) -> None
     )
 
 
-def skill_loaded(skill_name: str) -> None:
-    _send(
-        "skill_loaded",
-        {
-            **base_props(),
-            "skill": skill_name,
-        },
-    )
-
-
 def end(report_state: TelemetryReportState, exit_reason: str = "completed") -> None:
     if report_state.posthog_scan_ended_sent:
         return
@@ -102,17 +100,11 @@ def end(report_state: TelemetryReportState, exit_reason: str = "completed") -> N
         if sev in vulnerabilities_counts:
             vulnerabilities_counts[sev] += 1
 
-    duration = 0.0
-    try:
-        start = datetime.fromisoformat(report_state.start_time.replace("Z", "+00:00"))
-        end_iso = report_state.end_time or datetime.now(start.tzinfo).isoformat()
-        duration = (datetime.fromisoformat(end_iso.replace("Z", "+00:00")) - start).total_seconds()
-    except (ValueError, TypeError, AttributeError):
-        pass
+    duration = report_state.get_process_duration_seconds()
 
     llm_props: dict[str, int | float] = {}
     try:
-        usage = report_state.get_total_llm_usage()
+        usage = report_state.get_process_llm_usage()
         if isinstance(usage, dict):
             llm_props = {
                 "llm_requests": int(usage.get("requests") or 0),
@@ -134,6 +126,7 @@ def end(report_state: TelemetryReportState, exit_reason: str = "completed") -> N
             "vulnerabilities_total": len(report_state.vulnerability_reports),
             **{f"vulnerabilities_{k}": v for k, v in vulnerabilities_counts.items()},
             **llm_props,
+            "skills": get_loaded_skill_names(),
         },
     )
 
@@ -184,6 +177,12 @@ def viewer_agent_steered() -> None:
     _send("viewer_agent_steered", {**base_props()})
 
 
-def error(error_type: str) -> None:
-    props = {**base_props(), "error_type": error_type}
+def error(error_type: str, exc: BaseException | None = None) -> None:
+    props: dict[str, Any] = {
+        **base_props(),
+        "error_type": error_type,
+        "phase": get_scan_phase(),
+    }
+    if exc is not None:
+        props.update(exception_props(exc))
     _send("error", props)

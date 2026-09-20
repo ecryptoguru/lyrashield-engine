@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from lyrashield.tools.proxy import caido_api, tools
+from strix.runtime.caido_handle import CaidoBootstrapHandle
+from strix.tools.proxy import tools as strix_tools
 
 
 if TYPE_CHECKING:
@@ -199,9 +201,9 @@ class _Ctx:
         self.context = context
 
 
-def test_ctx_client_returns_client_when_present() -> None:
+async def test_ctx_client_returns_client_when_present() -> None:
     client = _FakeClient("host")
-    got = tools._ctx_client(cast("Any", _Ctx({"caido_client": client})))
+    got = await strix_tools._ctx_client(cast("Any", _Ctx({"caido_client": client})))
     assert got is client
 
 
@@ -433,3 +435,27 @@ def test_validate_caido_url_host_allows_resolved_loopback(
 
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
     caido_api._validate_caido_url_host("http://caido.example.com:48080")
+
+
+async def test_ctx_client_returns_none_without_client_strix() -> None:
+    assert await strix_tools._ctx_client(cast("Any", _Ctx({}))) is None
+    assert await strix_tools._ctx_client(cast("Any", _Ctx(None))) is None
+
+
+async def test_ctx_client_resolves_bootstrap_handle() -> None:
+    client = _FakeClient("host")
+
+    async def _bootstrap() -> Any:
+        return client
+
+    handle = CaidoBootstrapHandle(asyncio.ensure_future(_bootstrap()))
+    got = await strix_tools._ctx_client(cast("Any", _Ctx({"caido_client": handle})))
+    assert got is client
+
+
+async def test_ctx_client_degrades_when_bootstrap_failed() -> None:
+    async def _bootstrap() -> Any:
+        raise RuntimeError("caido never came up")
+
+    handle = CaidoBootstrapHandle(asyncio.ensure_future(_bootstrap()))
+    assert await strix_tools._ctx_client(cast("Any", _Ctx({"caido_client": handle}))) is None

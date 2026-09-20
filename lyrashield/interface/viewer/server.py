@@ -246,18 +246,18 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._handle_auth_status()
                 return
 
+            # All remaining GET endpoints expose run metadata or scan output.
+            # Require the capability even for the run used to launch the viewer;
+            # reachability of an exposed --host port must not grant data access.
+            if not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
+
             run_values = query.get("run")
             run_param = run_values[0] if run_values else None
             run_dir = resolve_run_dir(state.base_dir, run_param, state.run_dir)
             if run_dir is None:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown run"})
-                return
-
-            # The launched run is always viewable. Any *other* run's data is part
-            # of the gated history: it needs this process's session capability,
-            # so merely reaching an exposed --host port is not enough.
-            if run_dir.resolve() != state.run_dir.resolve() and not self._has_session():
-                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
                 return
 
             if path == "/api/run":
