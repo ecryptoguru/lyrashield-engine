@@ -25,6 +25,8 @@ from lyrashield.artifacts.state import (
     get_global_report_state,
     initial_run_record,
     sanitize_attachments,
+    sanitize_local_sources,
+    sanitize_targets_info,
     validate_run_record,
 )
 from lyrashield.artifacts.writer import (
@@ -1080,12 +1082,12 @@ def _persist_run_record(
     run_record = initial_run_record(
         args.run_name,
         auth_mode=codex.auth_mode(load_settings().llm.model),
-        targets_info=args.targets_info,
+        targets_info=sanitize_targets_info(args.targets_info),
         extra={
             "scan_mode": args.scan_mode,
             "instruction": args.instruction,
             "non_interactive": args.non_interactive,
-            "local_sources": getattr(args, "local_sources", []),
+            "local_sources": sanitize_local_sources(getattr(args, "local_sources", [])),
             "attachments": sanitize_attachments(getattr(args, "attachments", [])),
             "diff_scope": getattr(args, "diff_scope", {"active": False}),
             "scope_mode": args.scope_mode,
