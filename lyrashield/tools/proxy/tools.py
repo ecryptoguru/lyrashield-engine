@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from agents import RunContextWrapper, function_tool
 
 from lyrashield.tools.proxy import caido_api
+from strix.tools.nullish import clean_optional
 
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,10 @@ async def list_requests(
     client = _ctx_client(ctx)
     if client is None:
         return _no_client()
+
+    httpql_filter = clean_optional(httpql_filter)
+    after = clean_optional(after)
+    scope_id = clean_optional(scope_id)
 
     try:
         connection = await _call(
@@ -485,6 +490,8 @@ async def list_sitemap(
     client = _ctx_client(ctx)
     if client is None:
         return _no_client()
+    scope_id = clean_optional(scope_id)
+    parent_id = clean_optional(parent_id)
     try:
         payload = await _call(
             client,

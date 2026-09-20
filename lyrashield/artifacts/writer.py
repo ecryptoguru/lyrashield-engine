@@ -307,6 +307,13 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
     cvss = report.get("cvss")
     if cvss is not None:
         metadata.append(("CVSS", cvss))
+    advisory_cvss = dep_meta.get("advisory_cvss")
+    if advisory_cvss is not None and advisory_cvss != cvss:
+        metadata.append(("Advisory CVSS", advisory_cvss))
+    if dep_meta.get("contextual_cvss_vector"):
+        metadata.append(("Contextual CVSS Vector", dep_meta["contextual_cvss_vector"]))
+    if report.get("confidence"):
+        metadata.append(("Confidence", str(report["confidence"]).title()))
     if report.get("fix_effort"):
         metadata.append(("Fix Effort", str(report["fix_effort"]).title()))
     for label, value in metadata:
@@ -326,6 +333,21 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
     if report.get("impact"):
         lines.append("## Impact\n")
         lines.append(str(report["impact"]))
+        lines.append("")
+
+    if report.get("counterevidence"):
+        lines.append("## Counterevidence\n")
+        lines.append(str(report["counterevidence"]))
+        lines.append("")
+
+    if report.get("confidence_rationale"):
+        lines.append("## Confidence Rationale\n")
+        lines.append(str(report["confidence_rationale"]))
+        lines.append("")
+
+    if report.get("severity_change_conditions"):
+        lines.append("## What Would Change This Severity\n")
+        lines.append(str(report["severity_change_conditions"]))
         lines.append("")
 
     if report.get("technical_analysis"):
@@ -379,6 +401,11 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
     if report.get("remediation_steps"):
         lines.append("## Remediation\n")
         lines.append(str(report["remediation_steps"]))
+        lines.append("")
+
+    if report.get("fix_verification"):
+        lines.append("## Fix Verification\n")
+        lines.append(str(report["fix_verification"]))
         lines.append("")
 
     if report.get("assumptions"):

@@ -94,17 +94,6 @@ def finding(severity: str, cwe: str | None = None, is_cve: bool = False) -> None
     )
 
 
-def skill_loaded(skill_name: str) -> None:
-    _send(
-        "skill_loaded",
-        {
-            **base_props(),
-            "session": SESSION_ID,
-            "skill": skill_name,
-        },
-    )
-
-
 def end(report_state: ReportState, exit_reason: str = "completed") -> None:
     if report_state.scarf_scan_ended_sent:
         return

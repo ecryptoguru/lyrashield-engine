@@ -12,7 +12,9 @@ from typing import Any, Literal, get_args
 
 from agents import RunContextWrapper, function_tool
 
+from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.agents import Status, coordinator_from_context
+from lyrashield.lifecycle.execution import _notify_parent_on_terminal
 from strix.skills import validate_requested_skills
 
 
@@ -26,6 +28,40 @@ def _ctx(ctx: RunContextWrapper) -> dict[str, Any]:
     return ctx.context if isinstance(ctx.context, dict) else {}
 
 
+def _filed_reports_by(agent_id: str) -> list[dict[str, Any]]:
+    """Vulnerability reports the agent actually filed, from report state.
+
+    The narrative ``findings`` an agent hands to ``agent_finish`` is prose; a
+    parent that wants to act on a child's work needs the report ids. Read them
+    from the report state rather than trusting the child's description.
+    """
+    state = get_global_report_state()
+    if state is None:
+        return []
+    filed: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for report in state.get_existing_vulnerabilities():
+        if report.get("agent_id") != agent_id:
+            continue
+        report_id = str(report.get("id") or "")
+        if not report_id or report_id in seen:
+            continue
+        seen.add(report_id)
+        filed.append(report)
+    return filed
+
+
+def _render_filed_report(report: dict[str, Any]) -> str:
+    line = f"- {report.get('id')}"
+    severity = report.get("severity")
+    if severity:
+        line += f" [{str(severity).upper()}]"
+    title = report.get("title")
+    if title:
+        line += f" {title}"
+    return line
+
+
 def _render_completion_report(
     *,
     agent_name: str,
@@ -35,6 +71,7 @@ def _render_completion_report(
     result_summary: str,
     findings: list[str],
     recommendations: list[str],
+    filed_reports: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render a child's completion report as plain structured text.
 
@@ -63,6 +100,12 @@ def _render_completion_report(
         lines.append("")
         lines.append("Recommendations:")
         lines.extend(f"- {r}" for r in recommendations)
+    lines.append("")
+    lines.append("Vulnerability reports filed by this agent (authoritative; use these ids):")
+    if filed_reports:
+        lines.extend(_render_filed_report(r) for r in filed_reports)
+    else:
+        lines.append("- (none)")
     return "\n".join(lines)
 
 
@@ -142,9 +185,11 @@ async def send_message_to_agent(
     **Don't** use for routine "hello/status" pings, for context the
     target already has (children inherit parent history), or when
     parent/child completion via ``agent_finish`` already covers the
-    flow. Messages to any registered agent wake it, regardless of
-    status. Follow-up work restarts completed or stopped agents; failed and
-    crashed agents remain parked until a user explicitly resumes them.
+    flow. In interactive runs a message wakes the target regardless of
+    status, so a follow-up can restart a completed/stopped/failed agent.
+    In non-interactive runs a finished agent is gone for good: the call
+    fails with the target's status, and you should read its filed
+    reports (``list_reports``) or spawn a new agent instead of waiting.
 
     Args:
         target_agent_id: Recipient's 8-char id.
@@ -189,10 +234,23 @@ async def send_message_to_agent(
         },
     )
     if not delivered:
+        _, status = await coordinator.reachability(target_agent_id)
+        if status is None:
+            error = f"Target agent '{target_agent_id}' not found"
+        else:
+            error = (
+                f"Target agent '{target_agent_id}' is '{status}' and cannot be woken in "
+                "this run; it will never read this message. Its filed reports are in "
+                "list_reports / get_report. Do not wait_for_agents on it - spawn a new "
+                "agent if more work is needed."
+            )
         return json.dumps(
             {
                 "success": False,
-                "error": f"Target agent '{target_agent_id}' not found or message delivery failed",
+                "error": error,
+                "target_agent_id": target_agent_id,
+                "target_status": status,
+                "delivery_status": "not_delivered",
             },
             ensure_ascii=False,
             default=str,
@@ -329,6 +387,31 @@ async def wait_for_agents(
                 "wait_outcome": "waiting",
                 "reason": reason,
                 "note": "Agent parked; execution will resume when a message arrives.",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    # Non-interactive agents cannot be woken once terminal, so with nobody
+    # running or waiting there is no message left to wait for.
+    if not await coordinator.active_agents_except(me):
+        _, statuses, names, _ = await coordinator.graph_snapshot()
+        return json.dumps(
+            {
+                "success": True,
+                "wait_outcome": "no_active_agents",
+                "reason": reason,
+                "agents": [
+                    {"agent_id": aid, "name": names.get(aid, aid), "status": status}
+                    for aid, status in statuses.items()
+                    if aid != me
+                ],
+                "note": (
+                    "No other agent is running or waiting, so no message can arrive. "
+                    "Finished agents' results are in list_reports / get_report and their "
+                    "completion reports are already in your history. Continue your own "
+                    "work, spawn a new agent, or finish."
+                ),
             },
             ensure_ascii=False,
             default=str,
@@ -570,8 +653,11 @@ async def agent_finish(
             default=str,
         )
 
+    filed_reports = _filed_reports_by(me)
+    filed_report_ids = [str(r.get("id")) for r in filed_reports]
+
     parent_notified = False
-    if report_to_parent:
+    if report_to_parent and await coordinator.claim_parent_notice(me):
         async with coordinator._lock:
             agent_name = coordinator.names.get(me, me)
         report = _render_completion_report(
@@ -582,6 +668,7 @@ async def agent_finish(
             result_summary=result_summary,
             findings=list(findings or []),
             recommendations=list(final_recommendations or []),
+            filed_reports=filed_reports,
         )
         await coordinator.send(
             parent_id,
@@ -591,18 +678,24 @@ async def agent_finish(
                 "content": report,
                 "type": "completion",
                 "priority": "high",
+                "filed_report_ids": filed_report_ids,
             },
         )
         parent_notified = True
 
+    await coordinator.set_status(me, "completed")
+    if not parent_notified:
+        # Silence here would leave a parent waiting on a report that is never coming.
+        await _notify_parent_on_terminal(coordinator, me, "completed")
+
     logger.info(
-        "agent_finish: %s success=%s findings=%d parent_notified=%s",
+        "agent_finish: %s success=%s findings=%d filed_reports=%d parent_notified=%s",
         me,
         success,
         len(findings or []),
+        len(filed_report_ids),
         parent_notified,
     )
-    await coordinator.set_status(me, "completed")
 
     return json.dumps(
         {
@@ -611,6 +704,7 @@ async def agent_finish(
             "parent_notified": parent_notified,
             "agent_id": me,
             "summary": result_summary,
+            "filed_report_ids": filed_report_ids,
             "findings_count": len(findings or []),
             "has_recommendations": bool(final_recommendations),
         },

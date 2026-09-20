@@ -1,6 +1,6 @@
 # LyraShield Engine
 
-LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.5.3, pinned at `7cc9fa9faa0179fc7e35111102fe3d20a9028393` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only through an exact, review-gated 14-file compatibility patch described in [UPGRADES.md](UPGRADES.md).
+LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.6.2, pinned at `ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only through an exact, review-gated compatibility patch described in [UPGRADES.md](UPGRADES.md).
 
 See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
 
@@ -128,7 +128,7 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-controlled-derivative.sh
 ```
 
-The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), mypy, Bandit, and the public worker contract. It also enforces the exact reviewed `strix/**` compatibility patch: a 14-file allowlist, a +151/-57 footprint ceiling, and patch-object digest `fafe7c8e0a7f58c4c10e5619a6579880cf1457c4`. Any path or byte-level change outside that reviewed patch fails the gate.
+The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), mypy, Bandit, and the public worker contract. It also enforces the exact reviewed `strix/**` compatibility patch: a 14-file allowlist (plus two reviewed skill deletions), a +149/-258 footprint ceiling, and patch-object digest `30b8c59dc521d1fc9fceaf0d7b972c11d03a6808`. Any path or byte-level change outside that reviewed patch fails the gate.
 
 Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`, in addition to CLI/native build, sandbox smoke, and cross-repository worker contract checks. Repository-wide Pyright is an additional compatibility check; merged revision `944a84f` reports 0 errors and 0 warnings. The same revision's full pytest receipt is 1,302 passed and 1 skipped. These counts are a revision-bound snapshot; the executable gates remain the current source of truth.
 
