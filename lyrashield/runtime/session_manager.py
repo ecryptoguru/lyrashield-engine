@@ -20,6 +20,7 @@ from agents.sandbox.entries import BaseEntry, LocalDir
 from agents.sandbox.manifest import EnvEntry, Environment, EnvValue, Manifest
 from agents.sandbox.workspace_paths import SandboxPathGrant
 
+from lyrashield.runtime.attachments import public_manifest, stage_attachments
 from lyrashield.runtime.backends import get_backend
 from lyrashield.runtime.caido_bootstrap import bootstrap_caido
 from lyrashield.runtime.capabilities import (
@@ -134,7 +135,7 @@ async def _reap_stranded_bundle(scan_id: str, bundle: dict[str, Any]) -> bool:
     if docker_client is not None:
         with contextlib.suppress(Exception):
             docker_client.close()
-    for key in ("egress_policy_dir", "relay_upstream_dir"):
+    for key in ("egress_policy_dir", "relay_upstream_dir", "attachments_dir"):
         path = bundle.get(key)
         if path:
             shutil.rmtree(path, ignore_errors=True)
@@ -465,12 +466,20 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
     image: str,
     local_sources: list[dict[str, Any]],
     targets: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return the existing session bundle for ``scan_id`` or create a new one.
 
     Each ``local_sources`` entry exposes its host ``source_path`` at
     ``/workspace/<workspace_subdir>`` inside the container — copied in, or
     bind-mounted read-only when the entry is flagged ``mount``.
+
+    ``attachments`` are validated supporting-file entries (see
+    :mod:`lyrashield.runtime.attachments`); their staged originals are
+    bind-mounted read-only under ``/input/attachments``, separate from
+    ``/workspace`` source. They are untrusted input evidence: they never
+    contribute to ``authorized_hosts``, the egress policy, scope, or any
+    other authorization input — those derive only from ``targets``.
 
     When ``targets`` carries the scan's authorized network targets, the hosts
     are written to a per-run read-only egress policy mounted into the
@@ -518,6 +527,7 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
         staged_dirs: list[Path] = []
         authorized_hosts: set[str] = set()
         policy_host_dir: str | None = None
+        attachments_dir: str | None = None
         relay_dir: str | None = None
         client: Any | None = None
         session: Any | None = None
@@ -534,6 +544,13 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
             authorized_hosts = derive_authorized_target_hosts(targets)
             policy_mount, policy_host_dir = write_egress_policy(scan_id, authorized_hosts)
             bind_mounts.append(policy_mount)
+
+            # Attachments stage into a dedicated read-only mount; staging
+            # failures (e.g. a checksum drift between validation and copy)
+            # raise inside this scope so attachments_dir is cleaned up below.
+            if attachments:
+                attachment_mount, attachments_dir = stage_attachments(scan_id, attachments)
+                bind_mounts.append(attachment_mount)
 
             # Caido runs as an in-container sidecar; HTTP(S) traffic from any
             # process started via ``session.exec`` (the SDK's Shell tool, etc.)
@@ -653,12 +670,14 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
                             "authorized_hosts": sorted(authorized_hosts),
                             "egress_policy_dir": policy_host_dir,
                             "relay_upstream_dir": relay_dir,
+                            "attachments_dir": attachments_dir,
                             "startup_error": _sanitize_startup_error(startup_error),
                         }
                     # The dirs stay owned by the stranded bundle; cleanup()
                     # removes them once a retried delete succeeds.
                     policy_host_dir = None
                     relay_dir = None
+                    attachments_dir = None
                     startup_error.add_note(f"sandbox cleanup also failed: {delete_error}")
             if caido_client is not None:
                 try:
@@ -682,6 +701,8 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
                 shutil.rmtree(policy_host_dir, ignore_errors=True)
             if relay_dir is not None:
                 shutil.rmtree(relay_dir, ignore_errors=True)
+            if attachments_dir:
+                shutil.rmtree(attachments_dir, ignore_errors=True)
             if deferred is not None and not isinstance(
                 startup_error, (KeyboardInterrupt, SystemExit)
             ):
@@ -702,6 +723,9 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
             "authorized_hosts": sorted(authorized_hosts),
             "egress_policy_dir": policy_host_dir,
             "relay_upstream_dir": relay_dir,
+            "attachments_dir": attachments_dir,
+            # Provenance shape of what was actually staged (host paths removed).
+            "attachment_manifest": public_manifest(list(attachments or [])),
             "sandbox_capabilities": capabilities,
         }
         async with _CACHE_LOCK:
@@ -767,6 +791,9 @@ async def cleanup(scan_id: str) -> str:
         relay_dir = bundle.get("relay_upstream_dir")
         if relay_dir:
             shutil.rmtree(relay_dir, ignore_errors=True)
+        attachments_dir = bundle.get("attachments_dir")
+        if attachments_dir:
+            shutil.rmtree(attachments_dir, ignore_errors=True)
         _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)
         return CLEANUP_REMOVED
 

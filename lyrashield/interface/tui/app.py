@@ -847,8 +847,11 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "scan_mode": getattr(args, "scan_mode", "deep"),
             "non_interactive": bool(getattr(args, "non_interactive", False)),
             "local_sources": getattr(args, "local_sources", None) or [],
+            "attachments": getattr(args, "attachments", None) or [],
             "scope_mode": getattr(args, "scope_mode", "auto"),
             "diff_base": getattr(args, "diff_base", None),
+            "diff_head": getattr(args, "diff_head", None),
+            "repository_revision": getattr(args, "repository_revision", None),
             "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
         }
 
@@ -1522,6 +1525,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                                 scan_id=self.scan_config["run_name"],
                                 image=str(image),
                                 local_sources=getattr(self.args, "local_sources", None) or [],
+                                attachments=getattr(self.args, "attachments", None) or [],
                                 coordinator=self.coordinator,
                                 interactive=True,
                                 max_budget_usd=getattr(self.args, "max_budget_usd", None),

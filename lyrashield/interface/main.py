@@ -11,6 +11,7 @@ import re
 import shutil
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from rich.text import Text
 from lyrashield.artifacts.state import (
     get_global_report_state,
     initial_run_record,
+    sanitize_attachments,
     validate_run_record,
 )
 from lyrashield.artifacts.writer import (
@@ -35,6 +37,8 @@ from lyrashield.interface.cli import run_cli
 from lyrashield.interface.tui import run_tui
 from lyrashield.interface.utils import (
     TARGET_TYPE_CHOICES,
+    _is_full_git_commit_sha,
+    _is_git_object_id,
     assign_workspace_subdirs,
     build_final_stats_text,
     build_mount_targets_info,
@@ -52,6 +56,7 @@ from lyrashield.interface.utils import (
     resolve_target_type,
     rewrite_localhost_targets,
     validate_config_file,
+    validate_git_object_id,
     validate_run_name,
 )
 from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS, make_model_settings
@@ -69,6 +74,11 @@ from lyrashield.policy.settings import (
     Settings,
     is_chatgpt_subscription_allowed,
     is_lyrashield_product,
+)
+from lyrashield.runtime.attachments import (
+    AttachmentInputError,
+    collect_attachments,
+    restore_attachments,
 )
 from lyrashield.telemetry import posthog, scarf
 from lyrashield.telemetry.logging import configure_dependency_logging
@@ -641,6 +651,9 @@ Examples:
   # Targets from a file, one target per non-empty, non-comment line
   lyrashield --target-list ./targets.txt
 
+  # Supporting evidence files (mounted read-only, never instructions)
+  lyrashield --target example.com --attachment ./openapi.yaml --attachment ./notes.md
+
   # Custom instructions (inline)
   lyrashield --target example.com --instruction "Focus on authentication vulnerabilities"
 
@@ -688,7 +701,19 @@ Examples:
         metavar="BRANCH",
         help=(
             "Git branch to clone for repository targets. "
-            "Intended for orchestrators that pin a target branch."
+            "Intended for orchestrators that pin a target branch. "
+            "When --repository-revision is set this is only a fetch hint."
+        ),
+    )
+    parser.add_argument(
+        "--repository-revision",
+        type=validate_git_object_id,
+        metavar="SHA",
+        help=(
+            "Exact immutable commit to check out for repository targets "
+            "(full 40- or 64-character lowercase hex Git object ID). The clone "
+            "detaches at this revision and HEAD is asserted to match; a missing "
+            "revision is a named preflight failure, never a silent fallback."
         ),
     )
     parser.add_argument(
@@ -717,6 +742,19 @@ Examples:
         help="Bind-mount a local directory into the sandbox (read-only) instead of "
         "copying it file-by-file. Use this for large repositories that are too big to "
         "stream into the container. Can be specified multiple times.",
+    )
+    parser.add_argument(
+        "--attachment",
+        type=str,
+        action="append",
+        metavar="PATH",
+        help=(
+            "Declare a supporting file to mount read-only at /input/attachments "
+            "as untrusted input evidence (text, Markdown, JSON, YAML, or OpenAPI "
+            "only; size-capped). Attachment content is data — it cannot change "
+            "target scope, credentials, model routes, permissions, or budget. "
+            "Can be specified multiple times."
+        ),
     )
     parser.add_argument(
         "--instruction",
@@ -780,7 +818,19 @@ Examples:
         type=str,
         help=(
             "Target branch or commit to compare against (e.g., origin/main). "
-            "Defaults to the repository's default branch."
+            "Defaults to the repository's default branch. With --diff-head "
+            "this must be a full 40- or 64-character lowercase hex object ID."
+        ),
+    )
+    parser.add_argument(
+        "--diff-head",
+        type=validate_git_object_id,
+        metavar="SHA",
+        help=(
+            "Asserted comparison head for diff-scope (full 40- or 64-character "
+            "lowercase hex Git object ID). Requires --diff-base, and "
+            "--scope-mode diff requires both. The checkout's HEAD must equal "
+            "this revision or the run fails closed."
         ),
     )
 
@@ -862,9 +912,60 @@ Examples:
 
     args.user_explicit_instruction = args.instruction if args.resume else None
 
+    # Immutable-revision flags (Review Changes): --diff-head asserts the
+    # comparison head, --repository-revision pins the remote checkout. Both
+    # accept only full object IDs (validated above), and when both are given
+    # they must name the same commit — the asserted head must equal the
+    # checked-out revision.
+    if args.diff_head and not args.diff_base:
+        parser.error("--diff-head requires --diff-base for the comparison base.")
+
+    if args.diff_head and args.diff_base and not _is_git_object_id(args.diff_base.strip()):
+        parser.error(
+            "--diff-base must be a full 40- or 64-character lowercase hex Git "
+            "object ID when --diff-head is set (a moving branch name cannot be "
+            "the recorded comparison base)."
+        )
+
+    if args.scope_mode == "diff" and not (args.diff_base and args.diff_head):
+        parser.error(
+            "--scope-mode diff requires both --diff-base and --diff-head "
+            "(the immutable comparison revisions)."
+        )
+
+    if args.repository_revision and args.diff_head and args.repository_revision != args.diff_head:
+        parser.error(
+            "--repository-revision and --diff-head must name the same commit: "
+            "the asserted comparison head must equal the checked-out revision."
+        )
+
+    if args.repository_branch and _is_full_git_commit_sha(args.repository_branch):
+        branch_sha = args.repository_branch.lower()
+        if args.repository_revision and args.repository_revision != branch_sha:
+            parser.error(
+                f"--repository-branch {args.repository_branch} conflicts with "
+                f"--repository-revision {args.repository_revision}."
+            )
+        if args.diff_head and args.diff_head != branch_sha:
+            parser.error(
+                f"--repository-branch {args.repository_branch} conflicts with "
+                f"--diff-head {args.diff_head}."
+            )
+
     if args.resume:
         if args.run_name:
             parser.error("Cannot combine --resume with --run-name")
+        if args.attachment:
+            parser.error(
+                "Cannot combine --resume with --attachment. A resumed run "
+                "re-stages the attachments recorded in its run record; "
+                "changed files are rejected by digest."
+            )
+        if args.repository_revision or args.diff_head:
+            parser.error(
+                "Cannot combine --resume with --repository-revision/--diff-head. "
+                "A resumed run reuses the source revisions recorded in its run record."
+            )
         if args.target_type:
             parser.error(
                 "Cannot combine --resume with --target-type. A resumed run reuses the "
@@ -931,8 +1032,25 @@ Examples:
         targets_info = dedupe_local_targets(targets_info)
         args.targets_info = targets_info
 
+        if args.repository_revision and not any(
+            t.get("type") == "repository" for t in targets_info
+        ):
+            parser.error(
+                "--repository-revision requires at least one repository target "
+                "(a remote Git URL). For a checked-out local repository, use "
+                "--diff-base/--diff-head to assert its revisions instead."
+            )
+
         assign_workspace_subdirs(targets_info)
         rewrite_localhost_targets(targets_info, HOST_GATEWAY_HOSTNAME)
+
+        # Supporting-file evidence: validate shape (regular file, no symlink /
+        # traversal / executable bit, allowlisted text extension) and bound
+        # per-file and aggregate size before any staging into the sandbox.
+        try:
+            args.attachments = collect_attachments(cast("list[str]", args.attachment or []))
+        except AttachmentInputError as e:
+            parser.error(str(e))
 
         max_local_copy_mb = load_settings().runtime.max_local_copy_mb
         max_copy_bytes = max_local_copy_mb * 1024 * 1024
@@ -951,7 +1069,9 @@ Examples:
     return args
 
 
-def _persist_run_record(args: argparse.Namespace) -> None:
+def _persist_run_record(
+    args: argparse.Namespace, *, terminal: dict[str, Any] | None = None
+) -> None:
     run_dir = run_dir_for(args.run_name)
     run_dir.mkdir(parents=True, exist_ok=True)
     # The first observable run.json must already be a complete versioned
@@ -966,11 +1086,19 @@ def _persist_run_record(args: argparse.Namespace) -> None:
             "instruction": args.instruction,
             "non_interactive": args.non_interactive,
             "local_sources": getattr(args, "local_sources", []),
+            "attachments": sanitize_attachments(getattr(args, "attachments", [])),
             "diff_scope": getattr(args, "diff_scope", {"active": False}),
             "scope_mode": args.scope_mode,
             "diff_base": args.diff_base,
+            "diff_head": getattr(args, "diff_head", None),
+            "repository_revision": getattr(args, "repository_revision", None),
         },
     )
+    if terminal:
+        # Terminal overrides (e.g. the no-change receipt) are applied after the
+        # canonical constructor — this is the deliberate end-state written by
+        # the engine itself, not caller-supplied forgery of required fields.
+        run_record.update(terminal)
     # Validate the pre-scan contract before writing, so an incomplete record
     # never reaches the run directory (I10/C3).
     validate_run_record(run_record)
@@ -981,6 +1109,7 @@ def _persist_run_record(args: argparse.Namespace) -> None:
         run_dir,
         targets_info=args.targets_info,
         local_sources=getattr(args, "local_sources", []),
+        attachments=getattr(args, "attachments", []),
     )
 
 
@@ -1059,6 +1188,25 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
 
     args.targets_info = targets_info
 
+    # Restore the run's attachment inputs. The public run.json manifest is
+    # sanitized (no host paths), so re-staging requires the private resume
+    # record; a run that declared attachments but cannot re-stage them fails
+    # closed rather than scanning without its input evidence.
+    recorded_attachments = resume_state.get("attachments")
+    if not isinstance(recorded_attachments, list):
+        recorded_attachments = []
+    try:
+        args.attachments = restore_attachments(recorded_attachments)
+    except AttachmentInputError as e:
+        parser.error(f"--resume {args.resume}: {e}")
+    state_attachments = state.get("attachments")
+    if not args.attachments and isinstance(state_attachments, list) and state_attachments:
+        parser.error(
+            f"--resume {args.resume}: the run declared {len(state_attachments)} "
+            "attachment(s), but resume.json does not preserve their host paths. "
+            "The input evidence cannot be re-staged; start a fresh run instead."
+        )
+
     if args.instruction is None:
         args.instruction = state.get("instruction")
     if local_sources_source:
@@ -1077,6 +1225,11 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
                 source["mount"] = True
     if state.get("diff_scope"):
         args.diff_scope = state.get("diff_scope")
+    # Restore recorded source provenance so a resumed run's run.json keeps the
+    # revisions it was launched with rather than overwriting them with None.
+    for key in ("scope_mode", "diff_base", "diff_head", "repository_revision"):
+        if state.get(key):
+            setattr(args, key, state.get(key))
     persisted_scan_mode = state.get("scan_mode")
     if persisted_scan_mode and args.scan_mode == "deep":
         args.scan_mode = persisted_scan_mode
@@ -1328,12 +1481,20 @@ def main() -> None:
     # persist provider credentials under the container home directory.
     warm_up_usages: list[tuple[str, Any]] = []
     args.warm_up_usages = warm_up_usages
-    if not args.non_interactive:
-        asyncio.run(warm_up_llm(show_model_warning=False, usages=warm_up_usages))
 
     args.run_name = args.resume or args.run_name or generate_run_name(args.targets_info)
 
     if not args.resume:
+        # --repository-revision pins the remote checkout; --diff-head asserts
+        # the comparison head. When both are absent a full-SHA
+        # --repository-branch is the legacy pin form. The validated diff-head
+        # doubles as the checkout revision when no explicit revision is given —
+        # Review Changes compares the recorded head, not a moving branch tip.
+        checkout_revision = args.repository_revision or args.diff_head
+        required_commits: tuple[str, ...] = ()
+        if args.diff_base and _is_full_git_commit_sha(args.diff_base):
+            required_commits = (args.diff_base.lower(),)
+
         for target_info in args.targets_info:
             if target_info["type"] == "repository":
                 repo_url = target_info["details"]["target_repo"]
@@ -1343,6 +1504,8 @@ def main() -> None:
                     args.run_name,
                     dest_name,
                     args.repository_branch,
+                    revision=checkout_revision,
+                    required_commits=required_commits,
                 )
                 target_info["details"]["cloned_repo_path"] = cloned_path
 
@@ -1360,6 +1523,7 @@ def main() -> None:
                 scope_mode=args.scope_mode,
                 diff_base=args.diff_base,
                 non_interactive=args.non_interactive,
+                diff_head=args.diff_head,
             )
         except ValueError as e:
             console = Console()
@@ -1381,6 +1545,44 @@ def main() -> None:
             sys.exit(1)
 
         args.diff_scope = diff_scope.metadata
+
+        if diff_scope.active and diff_scope.metadata.get("no_change"):
+            # Empty analyzable diff: record a durable no-change receipt and
+            # stop. No sandbox, warm-up, or provider call is ever reached —
+            # the run record below is the entire output of this run.
+            _persist_run_record(
+                args,
+                terminal={
+                    "status": "completed",
+                    "phase": "completed",
+                    "terminal_reason": "no_change",
+                    "end_time": datetime.now(UTC).isoformat(),
+                    "instruction": None,
+                    "instruction_chars": len(args.instruction or ""),
+                },
+            )
+            console = Console()
+            note_text = Text()
+            note_text.append("NO ANALYZABLE CHANGES", style="bold #22c55e")
+            note_text.append("\n\n", style="white")
+            note_text.append(
+                "Diff-scope resolved zero analyzable files "
+                f"({diff_scope.metadata.get('no_change_reason', 'empty_diff')}). "
+                "The run was recorded as a no-change receipt; no scan was launched.\n",
+                style="white",
+            )
+            panel = Panel(
+                note_text,
+                title="[bold white]LYRASHIELD",
+                title_align="left",
+                border_style="#22c55e",
+                padding=(1, 2),
+            )
+            console.print("\n")
+            console.print(panel)
+            console.print()
+            sys.exit(0)
+
         if diff_scope.instruction_block:
             if args.instruction:
                 args.instruction = f"{diff_scope.instruction_block}\n\n{args.instruction}"
@@ -1388,6 +1590,9 @@ def main() -> None:
                 args.instruction = diff_scope.instruction_block
 
         _persist_run_record(args)
+
+    if not args.non_interactive:
+        asyncio.run(warm_up_llm(show_model_warning=False, usages=warm_up_usages))
 
     _telemetry_model = load_settings().llm.model
     _telemetry_scan_mode = args.scan_mode
@@ -1451,6 +1656,8 @@ def _non_interactive_exit_code(report_state: Any | None) -> int:
     if report_state.run_record.get("status") == "completed":
         return 2 if report_state.vulnerability_reports else 0
     match report_state.run_record.get("terminal_reason"):
+        case "no_change":
+            return 0
         case "budget_exceeded":
             return 3
         case "rate_limited":

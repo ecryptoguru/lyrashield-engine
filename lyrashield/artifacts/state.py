@@ -26,6 +26,7 @@ from lyrashield.artifacts.writer import (
     write_run_record,
     write_vulnerabilities,
 )
+from lyrashield.runtime.attachments import public_manifest
 from lyrashield.runtime.session_manager import CLEANUP_FAILED, CLEANUP_REMOVED
 from lyrashield.telemetry import posthog, scarf
 from lyrashield.utils.redaction import is_sensitive_key, redact_text, redact_url
@@ -509,6 +510,16 @@ def sanitize_local_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]
                 entry[key] = source[key]
         sanitized.append(entry)
     return sanitized
+
+
+def sanitize_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attachment manifest entries without host filesystem paths.
+
+    The durable run record carries each staged original's ``name``,
+    ``sha256``, ``size``, declared ``content_type``, and in-sandbox
+    ``container_path`` — never the host ``source_path``.
+    """
+    return public_manifest([a for a in attachments if isinstance(a, dict)])
 
 
 def set_global_report_state(report_state: Optional["ReportState"]) -> None:
@@ -1327,8 +1338,11 @@ class ReportState:
                 "diff_scope": config.get("diff_scope", {"active": False}),
                 "non_interactive": bool(config.get("non_interactive", False)),
                 "local_sources": sanitize_local_sources(config.get("local_sources", [])),
+                "attachments": sanitize_attachments(config.get("attachments", [])),
                 "scope_mode": config.get("scope_mode", "auto"),
                 "diff_base": config.get("diff_base"),
+                "diff_head": config.get("diff_head"),
+                "repository_revision": config.get("repository_revision"),
             }
         )
         self._set_phase("running")
