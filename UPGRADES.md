@@ -1,5 +1,23 @@
 # LyraShield ownership and upstream-import ledger
 
+## Offline target classification and `--target-type`
+
+Target-kind inference no longer probes `GET <url>/info/refs?service=git-upload-pack`
+from the host: that request fired before target authorization and could reach
+private or internal addresses during classification alone. Inference is now
+offline-only — no DNS resolution, no HTTP — recognizing local paths, `git@` and
+`git://` remotes, credential-bearing URLs, and `.git` suffixes as repositories.
+
+Compatibility change: an HTTP(S) Git remote that does not end in `.git` (for
+example `https://github.com/org/repo`) now classifies as `web_application`
+instead of being probed. Pass the new `--target-type repository` flag for those
+targets. The flag validates the input's shape and errors actionably on a
+kind/input mismatch; it never authorizes fetching private or internal addresses,
+and repository acquisition still uses the existing guarded clone path. The
+upstream-retained `strix.interface` copy is unreachable from the shipped
+`lyrashield`/`lyrashield-local` entry points and remains pinned by the
+controlled-derivative gate.
+
 ## Security dependency audit and Intel macOS packaging
 
 CI audits the frozen Python dependency graph (all extras and groups) and the
