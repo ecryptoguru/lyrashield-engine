@@ -49,7 +49,7 @@ ALLOWED_MODIFIED=(
   "strix/interface/viewer/report_pdf.py"
   "strix/interface/viewer/server.py"
   "strix/interface/viewer/transcript.py"
-  "strix/skills/__init__.py"
+  "strix/skills/vulnerabilities/semantic_confusion.md"
   "strix/telemetry/_common.py"
   "strix/telemetry/posthog.py"
   "strix/telemetry/scarf.py"
@@ -57,14 +57,24 @@ ALLOWED_MODIFIED=(
   "strix/tools/proxy/caido_api.py"
   "strix/tools/proxy/tools.py"
 )
+# Upstream files deliberately not carried: the sandbox image ships neither tool,
+# so the skills could never execute. Reviewed per the v1.6.2 disposition ledger.
+REVIEWED_DELETED=(
+  "strix/skills/tooling/hurl.md"
+  "strix/skills/tooling/hypothesis.md"
+)
 unexpected=()
 
 # Compare the actual working tree, including staged and unstaged changes.
 while IFS=$'\t' read -r status path dest; do
   [[ -z "$status" ]] && continue
-  if [[ "$status" != "M" ]] || [[ ! " ${ALLOWED_MODIFIED[*]} " =~ " ${path} " ]]; then
-    unexpected+=("$path (status $status${dest:+, destination $dest})")
+  if [[ "$status" == "M" && " ${ALLOWED_MODIFIED[*]} " =~ " ${path} " ]]; then
+    continue
   fi
+  if [[ "$status" == "D" && " ${REVIEWED_DELETED[*]} " =~ " ${path} " ]]; then
+    continue
+  fi
+  unexpected+=("$path (status $status${dest:+, destination $dest})")
 done < <(git diff --name-status "$BASE" -- strix/)
 
 if [[ ${#unexpected[@]} -gt 0 ]]; then
@@ -76,12 +86,13 @@ if [[ ${#unexpected[@]} -gt 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Hard footprint and exact-patch invariants for the v1.5.3 micro-fork.
+# Hard footprint and exact-patch invariants for the v1.6.2 micro-fork.
+# The deletion count includes the two reviewed skill removals above.
 # ---------------------------------------------------------------------------
-MAX_FILES=14
-MAX_INSERTIONS=151
-MAX_DELETIONS=57
-EXPECTED_PATCH_OID="fafe7c8e0a7f58c4c10e5619a6579880cf1457c4"
+MAX_FILES=16
+MAX_INSERTIONS=149
+MAX_DELETIONS=258
+EXPECTED_PATCH_OID="30b8c59dc521d1fc9fceaf0d7b972c11d03a6808"
 
 # git diff --shortstat prints a single line like:
 #   " 4 files changed, 76 insertions(+), 720 deletions(-)"

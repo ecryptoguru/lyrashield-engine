@@ -14,7 +14,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 
-from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from docker.errors import DockerException, ImageNotFound
 from rich.console import Console
@@ -484,14 +483,14 @@ async def warm_up_llm(
         logger.info("LLM warm-up succeeded for model %s", (llm.model or "").strip())
 
         if settings.dedupe.model:
-            from lyrashield.artifacts.dedupe import dedupe_extra_args
+            from lyrashield.artifacts.dedupe import resolve_dedupe_model
 
             dedupe_model = settings.dedupe.model.strip()
             raw_model = dedupe_model
-            deduper = StrixProvider(settings=settings).get_model(dedupe_model)
-            # Match the runtime path: send the dedupe key/endpoint per call so a
-            # separate-provider dedupe model authenticates during warm-up too.
-            deduper_extra = dedupe_extra_args(settings.dedupe)
+            # Credentials ride on the dedupe model's own provider, matching the
+            # runtime path — a separate-provider dedupe model authenticates
+            # during warm-up too without clobbering the main model's globals.
+            deduper = resolve_dedupe_model(settings.dedupe, dedupe_model, settings=settings)
             # A dedicated dedupe model may route to another provider, which must
             # never receive the main endpoint's headers; it has its own
             # DEDUPE_LLM_EXTRA_HEADERS.
@@ -502,9 +501,6 @@ async def warm_up_llm(
                 prompt_cache=False,
                 extra_headers=settings.dedupe.extra_headers,
             )
-            if deduper_extra:
-                merged = {**(deduper_settings.extra_args or {}), **deduper_extra}
-                deduper_settings = deduper_settings.resolve(ModelSettings(extra_args=merged))
             response = await asyncio.wait_for(
                 deduper.get_response(
                     system_instructions="You are a helpful assistant.",

@@ -168,6 +168,20 @@ class LlmSettings(BaseSettings):
         gt=0,
         validation_alias=_lyra("STRIX_MAX_INPUT_TOKENS"),
     )
+    stream_idle_timeout: int = Field(
+        default=300,
+        ge=0,
+        validation_alias=AliasChoices(
+            "LLM_STREAM_IDLE_TIMEOUT", "LYRASHIELD_LLM_STREAM_IDLE_TIMEOUT"
+        ),
+    )
+    max_tool_calls_per_turn: int = Field(
+        default=32,
+        ge=0,
+        validation_alias=AliasChoices(
+            "LLM_MAX_TOOL_CALLS_PER_TURN", "LYRASHIELD_LLM_MAX_TOOL_CALLS_PER_TURN"
+        ),
+    )
 
     @field_validator("api_base", "api_key", "api_version", mode="before")
     @classmethod

@@ -286,6 +286,7 @@ async def run_agent_loop(
         agent_id,
         session=session,
         interrupt_on_message=interactive,
+        resumable=interactive,
     )
     result: RunResultBase | None = None
 
@@ -323,44 +324,9 @@ async def run_agent_loop(
             )
 
     if not interactive:
-        # Root completion ends an autonomous scan. Completed/stopped children,
-        # however, may receive follow-up validation from their coordinator.
-        # Keep their runner attached so a queued message has an execution loop
-        # to consume it; scan teardown cancels the parked task.
-        if context.get("parent_id") is None:
-            return result
-        while await coordinator.get_status(agent_id) in {"completed", "stopped"}:
-            try:
-                await coordinator.wait_for_message(agent_id)
-            except asyncio.CancelledError:
-                return result
-            if coordinator.budget_stopped:
-                await coordinator.set_status(agent_id, "stopped")
-                raise BudgetExceededError("scan budget reached")
-            if coordinator.reserve_stopped:
-                await coordinator.set_status(agent_id, "stopped")
-                raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
-            current_status = await coordinator.get_status(agent_id)
-            if current_status in {"completed", "stopped"}:
-                # A message can race with agent_finish: send() observes the child
-                # as running, then the child completes before this loop wakes.
-                await coordinator.mark_running(agent_id)
-            elif current_status not in {"running", "waiting"}:
-                return result
-            await coordinator.consume_pending(agent_id)
-            result = await _run_until_lifecycle(
-                agent,
-                coordinator,
-                agent_id,
-                initial_input=[],
-                run_config=run_config,
-                context=context,
-                max_turns=max_turns,
-                session=session,
-                interactive=False,
-                event_sink=event_sink,
-                hooks=hooks,
-            )
+        # A finished non-interactive agent's loop is gone for good; matching
+        # AgentRuntime.resumable, sends to it are refused instead of queued
+        # where nothing would read them.
         return result
 
     while True:
@@ -1102,6 +1068,8 @@ async def _notify_parent_on_terminal(
         return
     parent, name = await coordinator.get_parent_and_name(agent_id)
     if parent is None:
+        return
+    if not await coordinator.claim_parent_notice(agent_id):
         return
     await coordinator.send(
         parent,
