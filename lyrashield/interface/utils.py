@@ -17,7 +17,6 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import docker
-import requests
 from docker.errors import DockerException, ImageNotFound
 from rich.console import Console
 from rich.panel import Panel
@@ -1113,17 +1112,6 @@ def resolve_diff_scope_context(
     )
 
 
-def _is_http_git_repo(url: str) -> bool:
-    check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
-    try:
-        resp = requests.get(check_url, headers={"User-Agent": "git/strix"}, timeout=10)
-    except (requests.RequestException, ValueError):
-        return False
-    if resp.status_code >= 400:
-        return resp.status_code == 401
-    return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
-
-
 def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
     if not target:
         raise ValueError("Target must be a non-empty string")
@@ -1138,14 +1126,14 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
 
     parsed = urlparse(target)
     if parsed.scheme in ("http", "https"):
+        # Inference is offline-only: the engine never resolves DNS or sends HTTP
+        # requests to the target while classifying it. Credential-bearing URLs
+        # and ``.git`` remotes are still recognized as repositories, but an
+        # ambiguous non-suffixed HTTP(S) URL defaults to a web target — use
+        # ``--target-type repository`` for a bare HTTP(S) Git remote.
         if parsed.username or parsed.password:
             return "repository", {"target_repo": target}
         if parsed.path.rstrip("/").endswith(".git"):
-            return "repository", {"target_repo": target}
-        if parsed.query or parsed.fragment:
-            return "web_application", {"target_url": target}
-        path_segments = [s for s in parsed.path.split("/") if s]
-        if len(path_segments) >= 2 and _is_http_git_repo(target):
             return "repository", {"target_repo": target}
         return "web_application", {"target_url": target}
 
@@ -1171,10 +1159,9 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
     if "/" in target:
         host_part, _, path_part = target.partition("/")
         if "." in host_part and not host_part.startswith(".") and path_part:
-            full_url = f"https://{target}"
-            if _is_http_git_repo(full_url):
-                return "repository", {"target_repo": full_url}
-            return "web_application", {"target_url": full_url}
+            # Bare host/path (e.g. github.com/org/repo) is ambiguous; offline
+            # inference treats it as a web target rather than probing it.
+            return "web_application", {"target_url": f"https://{target}"}
 
     if "." in target and "/" not in target and not target.startswith("."):
         parts = target.split(".")
@@ -1190,6 +1177,186 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:
         "- A domain name (e.g., example.com)\n"
         "- An IP address (e.g., 192.168.1.10)"
     )
+
+
+TARGET_TYPE_CHOICES: tuple[str, ...] = (
+    "repository",
+    "web_application",
+    "local_code",
+    "ip_address",
+)
+
+
+def _explicit_repository_ref(target: str) -> str:
+    """Return the normalized Git remote for a ``--target-type repository`` input."""
+    if target.startswith(("git@", "git://")):
+        return target
+    parsed = urlparse(target)
+    if parsed.scheme in ("http", "https"):
+        if not parsed.netloc:
+            raise ValueError(
+                f"--target-type repository requires a usable Git remote; '{target}' has no host."
+            )
+        return target
+    if parsed.scheme:
+        raise ValueError(
+            f"--target-type repository does not accept '{parsed.scheme}:' remotes. "
+            "Use an https://, git@host:path, or git:// remote."
+        )
+    path = Path(target).expanduser()
+    try:
+        exists = path.exists()
+    except (OSError, RuntimeError) as e:
+        raise ValueError(f"Invalid target '{target}': {e!s}") from e
+    if exists:
+        raise ValueError(
+            f"--target-type repository requires a remote Git URL; '{target}' is a local "
+            "path. Use --target-type local_code or omit --target-type."
+        )
+    if "/" in target:
+        host_part, _, path_part = target.partition("/")
+        if "." in host_part and not host_part.startswith(".") and path_part:
+            return f"https://{target}"
+    raise ValueError(
+        "--target-type repository requires a Git remote "
+        "(https://host/org/repo[.git], git@host:org/repo, or git://host/org/repo); "
+        f"'{target}' is not one. Omit --target-type to classify the input automatically."
+    )
+
+
+def _explicit_web_url(target: str) -> str:
+    """Return the normalized URL for a ``--target-type web_application`` input."""
+    if target.startswith(("git@", "git://")):
+        raise ValueError(
+            f"--target-type web_application given a Git remote '{target}'. "
+            "Use --target-type repository or omit --target-type."
+        )
+    parsed = urlparse(target)
+    if parsed.scheme in ("http", "https"):
+        if not parsed.netloc:
+            raise ValueError(
+                f"--target-type web_application requires a usable URL; '{target}' has no host."
+            )
+        if parsed.username or parsed.password:
+            raise ValueError(
+                "--target-type web_application does not accept credentials embedded in "
+                f"'{target}'. Remove the credentials from the URL, or use "
+                "--target-type repository for a credential-bearing Git remote."
+            )
+        if parsed.path.rstrip("/").endswith(".git"):
+            raise ValueError(
+                f"--target-type web_application given '{target}', which ends with '.git' — "
+                "a Git remote. Use --target-type repository or omit --target-type."
+            )
+        return target
+    if parsed.scheme:
+        raise ValueError(
+            "--target-type web_application accepts http(s) URLs or domain names only; "
+            f"'{parsed.scheme}:' is not supported."
+        )
+    try:
+        ipaddress.ip_address(target)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(
+            f"--target-type web_application given IP address '{target}'. "
+            "Use --target-type ip_address or prefix it with http(s)://."
+        )
+    path = Path(target).expanduser()
+    try:
+        exists = path.exists()
+    except (OSError, RuntimeError) as e:
+        raise ValueError(f"Invalid target '{target}': {e!s}") from e
+    if exists:
+        raise ValueError(
+            f"--target-type web_application given local path '{target}'. "
+            "Use --target-type local_code or omit --target-type."
+        )
+    if target.endswith(".git"):
+        raise ValueError(
+            f"--target-type web_application given '{target}', which ends with '.git' — "
+            "a Git remote. Use --target-type repository or omit --target-type."
+        )
+    if "/" in target:
+        host_part, _, path_part = target.partition("/")
+        if "." in host_part and not host_part.startswith(".") and path_part:
+            return f"https://{target}"
+    if "." in target and not target.startswith("."):
+        parts = target.split(".")
+        if len(parts) >= 2 and all(p and p.strip() for p in parts):
+            return f"https://{target}"
+    raise ValueError(
+        f"--target-type web_application requires an http(s) URL or a domain name; "
+        f"'{target}' is not one."
+    )
+
+
+def _explicit_local_path(target: str) -> str:
+    """Return the resolved directory for a ``--target-type local_code`` input."""
+    parsed = urlparse(target)
+    if parsed.scheme in ("http", "https") or target.startswith(("git@", "git://")):
+        raise ValueError(
+            f"--target-type local_code requires a local directory; '{target}' is a remote "
+            "target. Use --target-type repository or --target-type web_application, or "
+            "omit --target-type."
+        )
+    path = Path(target).expanduser()
+    try:
+        if path.exists():
+            if path.is_dir():
+                return str(path.resolve())
+            raise ValueError(f"Path exists but is not a directory: {target}")
+    except (OSError, RuntimeError) as e:
+        raise ValueError(f"Invalid path: {target} - {e!s}") from e
+    raise ValueError(
+        f"--target-type local_code requires an existing local directory; '{target}' does "
+        "not exist. For a remote Git repository use --target-type repository."
+    )
+
+
+def _explicit_ip(target: str) -> str:
+    """Return the normalized address for a ``--target-type ip_address`` input."""
+    try:
+        ip_obj = ipaddress.ip_address(target)
+    except ValueError:
+        raise ValueError(
+            f"--target-type ip_address requires an IPv4 or IPv6 address; '{target}' is "
+            "not one. For a host URL use --target-type web_application."
+        ) from None
+    return str(ip_obj)
+
+
+def resolve_target_type(
+    target: str, explicit_kind: str | None = None
+) -> tuple[str, dict[str, str]]:
+    """Classify *target*, honoring an operator-supplied *explicit_kind* when given.
+
+    Both modes are offline-only: classification never resolves DNS and never
+    sends HTTP requests to the target. An explicit kind validates the input's
+    shape instead of probing it — catching a wrong-kind flag early — but it is
+    not authorization: URL credential, source-path, and target-authorization
+    checks still apply downstream.
+    """
+    if explicit_kind is None:
+        return infer_target_type(target)
+    if explicit_kind not in TARGET_TYPE_CHOICES:
+        raise ValueError(
+            f"Unknown --target-type '{explicit_kind}'. "
+            f"Valid kinds: {', '.join(TARGET_TYPE_CHOICES)}."
+        )
+    if not target:
+        raise ValueError("Target must be a non-empty string")
+    target = target.strip()
+    if not target:
+        raise ValueError("Target must be a non-empty string")
+    if explicit_kind == "repository":
+        return "repository", {"target_repo": _explicit_repository_ref(target)}
+    if explicit_kind == "web_application":
+        return "web_application", {"target_url": _explicit_web_url(target)}
+    if explicit_kind == "local_code":
+        return "local_code", {"target_path": _explicit_local_path(target)}
+    return "ip_address", {"target_ip": _explicit_ip(target)}
 
 
 def read_target_list_file(path_str: str) -> list[str]:

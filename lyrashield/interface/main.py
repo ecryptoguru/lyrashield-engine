@@ -35,6 +35,7 @@ from lyrashield.artifacts.writer import (
 from lyrashield.interface.cli import run_cli
 from lyrashield.interface.tui import run_tui
 from lyrashield.interface.utils import (
+    TARGET_TYPE_CHOICES,
     assign_workspace_subdirs,
     build_final_stats_text,
     build_mount_targets_info,
@@ -45,11 +46,11 @@ from lyrashield.interface.utils import (
     find_oversized_local_targets,
     generate_run_name,
     image_exists,
-    infer_target_type,
     is_whitebox_scan,
     process_pull_line,
     read_target_list_file,
     resolve_diff_scope_context,
+    resolve_target_type,
     rewrite_localhost_targets,
     validate_config_file,
     validate_run_name,
@@ -621,8 +622,9 @@ Examples:
   lyrashield --target https://example.com
 
   # GitHub repository analysis
-  lyrashield --target https://github.com/user/repo
+  lyrashield --target https://github.com/user/repo.git
   lyrashield --target git@github.com:user/repo.git
+  lyrashield --target https://git.internal.example/user/repo --target-type repository
 
   # Local code analysis
   lyrashield --target ./my-project
@@ -691,6 +693,24 @@ Examples:
         help=(
             "Git branch to clone for repository targets. "
             "Intended for orchestrators that pin a target branch."
+        ),
+    )
+    parser.add_argument(
+        "--target-type",
+        type=str,
+        choices=list(TARGET_TYPE_CHOICES),
+        default=None,
+        metavar="KIND",
+        help=(
+            "Explicit kind for every --target/--target-list entry: "
+            f"{', '.join(TARGET_TYPE_CHOICES)}. When omitted, the kind is "
+            "inferred locally — the engine never resolves DNS or sends HTTP "
+            "requests to the target while deciding. Local directories, git@/"
+            "git:// remotes, and URLs ending in .git classify as repositories; "
+            "other HTTP(S) URLs and bare domains classify as web applications. "
+            "Use '--target-type repository' for an HTTP(S) Git remote that does "
+            "not end in .git. The flag only classifies input; it is not "
+            "authorization to fetch private or internal addresses."
         ),
     )
     parser.add_argument(
@@ -849,6 +869,11 @@ Examples:
     if args.resume:
         if args.run_name:
             parser.error("Cannot combine --resume with --run-name")
+        if args.target_type:
+            parser.error(
+                "Cannot combine --resume with --target-type. A resumed run reuses the "
+                "target kinds recorded in its run record."
+            )
         if args.target or args.target_list or args.mount:
             parser.error(
                 "Cannot combine --resume with --target/--target-list/--mount. "
@@ -881,9 +906,15 @@ Examples:
             except ValueError as e:
                 parser.error(str(e))
 
+        if args.target_type and not targets:
+            parser.error(
+                "--target-type applies to --target/--target-list inputs; "
+                "--mount directories are always classified local_code."
+            )
+
         for target in targets:
             try:
-                target_type, target_dict = infer_target_type(target)
+                target_type, target_dict = resolve_target_type(target, args.target_type)
 
                 if target_type == "local_code":
                     display_target = target_dict.get("target_path", target)
@@ -893,8 +924,8 @@ Examples:
                 targets_info.append(
                     {"type": target_type, "details": target_dict, "original": display_target}
                 )
-            except ValueError:
-                parser.error(f"Invalid target '{target}'")
+            except ValueError as e:
+                parser.error(str(e))
 
         try:
             targets_info.extend(build_mount_targets_info(mount_paths))
