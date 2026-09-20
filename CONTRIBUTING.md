@@ -70,7 +70,7 @@ LyraShield Engine is a controlled derivative of [Strix](https://github.com/usest
 
 Preserve the reviewed boundary between LyraShield-owned product behavior and the retained upstream substrate.
 
-**LyraShield owns:** GPT-5.6 Terra/Luna acceptance and reasoning policy; context compaction, output/agent limits, and concurrent pre-request spend reservations; non-interactive lifecycle, cancellation, cleanup, telemetry-off defaults, and target-safe errors; deterministic finding identity, structured control/evidence metadata, and bounded artifacts; the worker-facing `run.json` and `vulnerabilities.json` contract.
+**LyraShield owns:** GPT-5.6 Terra/Luna acceptance and reasoning policy; context compaction, output/agent limits, and concurrent pre-request spend reservations; non-interactive lifecycle, cancellation, cleanup, telemetry-off defaults, and target-safe errors; deterministic finding identity, structured control/evidence metadata, and bounded artifacts; the worker-facing `run.json` and `vulnerabilities.json` contract; the local viewer under `lyrashield/interface/viewer/**`, including its frontend source and committed static assets.
 
 **Retained upstream substrate:** generic sandbox/session mechanics, security tools, agent-SDK integration, and the vulnerability skill library.
 
@@ -138,9 +138,15 @@ When changing skills:
 
 ## Local viewer SPA
 
-`lyrashield view` (inherited from upstream `strix view`) serves a prebuilt web UI whose source lives in `lyrashield/interface/viewer/frontend/` and whose built output is committed under `lyrashield/interface/viewer/static/`. Treat both as upstream substrate: viewer changes may enter only through an approved upstream-base update documented in `UPGRADES.md`. Do not edit or commit inherited viewer source or generated output directly.
+`lyrashield view` serves an owned local web UI. Both the source under `lyrashield/interface/viewer/frontend/` and the committed build output under `lyrashield/interface/viewer/static/` are LyraShield product code. They are not part of the retained `strix/**` upstream substrate, and the upstream-patch allowlist and digest do not cover them.
 
-When an approved upstream-base update changes the viewer, retain the upstream source and generated output exactly as imported and let the controlled-derivative gate verify the resulting tree.
+Viewer changes follow the normal owned-code review path — edit the frontend source, add tests, and rebuild the tracked static assets with the documented `npm ci` / `npm run build` flow in `UPGRADES.md`. Never patch a minified bundle by hand.
+
+Preserve the reviewed viewer behavior:
+
+- The server binds to `127.0.0.1` by default and gates history reads behind a per-process session capability delivered only to the launching browser. Do not weaken the loopback-only default, the capability checks, or the `--host` exposure guards.
+- Keep LyraShield branding and the `scripts/verify-customer-branding.py` gate green; do not add upstream branding or wire in telemetry, SaaS login, wallet, billing, or self-update surfaces.
+- Do not reintroduce the deleted email-delivery, feedback-relay, or OTP unlock flows. No LyraShield-owned relay exists; the OTP endpoints were removed and relay-backed features fail closed unless an operator explicitly sets `LYRASHIELD_APP_URL` (see `docs/advanced/configuration.mdx`).
 
 ## Reporting issues
 
