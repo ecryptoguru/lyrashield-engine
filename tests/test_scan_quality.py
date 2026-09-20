@@ -213,7 +213,8 @@ def test_scope_violations_persist_across_saves_and_resume(
     entries = _read_record(state)["scope_violations"]["entries"]
     assert {e["host"] for e in entries} == {"one.example.net", "two.example.net"}
 
-    # Resume: a fresh ReportState over the same run dir keeps prior entries.
+    # Resume: a fresh ReportState over the same run dir keeps prior entries —
+    # and same-process ledger offsets must not re-append them.
     resumed = ReportState(run_name="quality-scan")
     resumed.hydrate_from_run_dir()
     with pytest.raises(ValueError):
@@ -221,8 +222,11 @@ def test_scope_violations_persist_across_saves_and_resume(
             method="GET", url="https://three.example.net/", headers={}, body=""
         )
     assert resumed.save_run_data()
-    entries = _read_record(resumed)["scope_violations"]["entries"]
-    assert {e["host"] for e in entries} == {
+    violations = _read_record(resumed)["scope_violations"]
+    assert len(violations["entries"]) == 3
+    assert violations["total"] == 3
+    assert violations["dropped"] == 0
+    assert {e["host"] for e in violations["entries"]} == {
         "one.example.net",
         "two.example.net",
         "three.example.net",
