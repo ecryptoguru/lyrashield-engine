@@ -28,7 +28,11 @@ from lyrashield.runtime.capabilities import (
     probe_session_capabilities,
 )
 from lyrashield.runtime.docker_client import host_gateway_enabled
-from lyrashield.runtime.local_dir_staging import stage_symlink_safe_dir
+from lyrashield.runtime.local_dir_staging import (
+    stage_frozen_dir,
+    stage_symlink_safe_dir,
+    staged_tree_digest,
+)
 from lyrashield.tools.proxy import caido_api
 from strix.config import load_settings
 
@@ -251,6 +255,8 @@ def get_sandbox_container_ip(client: Any, session: Any) -> str | None:
 
 def build_session_entries(
     local_sources: list[dict[str, Any]],
+    *,
+    source_snapshots: list[dict[str, str]] | None = None,
 ) -> tuple[
     dict[str | Path, BaseEntry], list[dict[str, Any]], list[Path], tuple[SandboxPathGrant, ...]
 ]:
@@ -290,8 +296,20 @@ def build_session_entries(
                 )
                 grants.add(str(resolved))
             else:
-                upload_path, staged = stage_symlink_safe_dir(resolved)
-                if staged is not None:
+                staged: Path | None
+                if source_snapshots is not None:
+                    upload_path = stage_frozen_dir(resolved)
+                    staged = upload_path
+                    staged_dirs.append(staged)
+                    source_snapshots.append(
+                        {
+                            "workspace_subdir": ws_subdir,
+                            "snapshot_digest": staged_tree_digest(upload_path),
+                        }
+                    )
+                else:
+                    upload_path, staged = stage_symlink_safe_dir(resolved)
+                if staged is not None and source_snapshots is None:
                     staged_dirs.append(staged)
                 entries[ws_subdir] = LocalDir(src=upload_path)
                 grants.add(str(upload_path))
@@ -525,6 +543,7 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
         # allocation block so the single lifecycle scope below can clean up
         # every partial state — including cancellation at any await.
         staged_dirs: list[Path] = []
+        source_snapshots: list[dict[str, str]] = []
         authorized_hosts: set[str] = set()
         policy_host_dir: str | None = None
         attachments_dir: str | None = None
@@ -538,7 +557,7 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
         caido_api.clear_scope_decisions()
         try:
             entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(
-                local_sources
+                local_sources, source_snapshots=source_snapshots
             )
 
             authorized_hosts = derive_authorized_target_hosts(targets)
@@ -547,7 +566,8 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
 
             # Attachments stage into a dedicated read-only mount; staging
             # failures (e.g. a checksum drift between validation and copy)
-            # raise inside this scope so attachments_dir is cleaned up below.
+            # raise inside the ownership scope and the staging dir is
+            # removed by the except block below.
             if attachments:
                 attachment_mount, attachments_dir = stage_attachments(scan_id, attachments)
                 bind_mounts.append(attachment_mount)
@@ -613,7 +633,6 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
                 scan_id=scan_id,
                 authorized_hosts=authorized_hosts,
             )
-
             # Capability probe: record what the backend actually delivered —
             # never claim a control that was assumed but not probed. A
             # required control resting on a probed-absent capability fails
@@ -701,7 +720,7 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
                 shutil.rmtree(policy_host_dir, ignore_errors=True)
             if relay_dir is not None:
                 shutil.rmtree(relay_dir, ignore_errors=True)
-            if attachments_dir:
+            if attachments_dir is not None:
                 shutil.rmtree(attachments_dir, ignore_errors=True)
             if deferred is not None and not isinstance(
                 startup_error, (KeyboardInterrupt, SystemExit)
@@ -726,6 +745,7 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
             "attachments_dir": attachments_dir,
             # Provenance shape of what was actually staged (host paths removed).
             "attachment_manifest": public_manifest(list(attachments or [])),
+            "source_snapshots": source_snapshots,
             "sandbox_capabilities": capabilities,
         }
         async with _CACHE_LOCK:

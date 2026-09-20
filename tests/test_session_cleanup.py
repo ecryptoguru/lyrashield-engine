@@ -69,8 +69,9 @@ def _stub_startup(
         "get_sandbox_container_ip": Mock(return_value=None),
         "resolve_sandbox_endpoint": Mock(return_value=("127.0.0.1", 8080)),
         "bootstrap_caido": bootstrap,
-        # These fakes exercise lifecycle cleanup, not capability probing — a
-        # real probe would (correctly) fail the stub session on exec=absent.
+        # This suite exercises lifecycle ownership, not capability probing;
+        # the fake backend/session would otherwise report exec=absent and
+        # fail preflight before the behavior under test is reached.
         "probe_session_capabilities": Mock(
             return_value={"preflight": {"degradations": [], "failures": []}}
         ),
@@ -307,6 +308,7 @@ async def test_next_create_reaps_stranded_sandbox(
     mocks.client.delete.side_effect = RuntimeError("daemon gone")
     with pytest.raises(RuntimeError, match="caido down"):
         await session_manager.create_or_reuse("retry-scan", image="img", local_sources=[])
+    session_manager._SESSION_CACHE["retry-scan"]["attachments_dir"] = "/mock/attachments"
 
     # While the daemon is still gone, a retry fails closed — no second sandbox.
     with pytest.raises(RuntimeError, match="still stranded"):
@@ -321,6 +323,7 @@ async def test_next_create_reaps_stranded_sandbox(
     assert "startup_error" not in bundle
     assert mocks.backend.await_count == 2
     assert session_manager._CLEANUP_RECEIPTS["retry-scan"]["status"] == "removed"
+    mocks.rmtree.assert_any_call("/mock/attachments", ignore_errors=True)
 
 
 @pytest.mark.asyncio

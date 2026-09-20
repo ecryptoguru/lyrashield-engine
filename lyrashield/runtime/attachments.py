@@ -321,45 +321,93 @@ def restore_attachments(recorded: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return entries
 
 
+def _copy_attachment_bytes(source_fd: int, staged_fd: int) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    while chunk := os.read(source_fd, 64 * 1024):
+        size += len(chunk)
+        if size > MAX_ATTACHMENT_FILE_BYTES:
+            raise AttachmentInputError(
+                "file_too_large", "Attachment source grew past the file limit."
+            )
+        digest.update(chunk)
+        offset = 0
+        while offset < len(chunk):
+            written = os.write(staged_fd, chunk[offset:])
+            if written <= 0:
+                raise OSError("Attachment staging write made no progress.")
+            offset += written
+    return size, digest.hexdigest()
+
+
 def _stage_one_attachment(entry: dict[str, Any], host_dir: str) -> None:
     """Copy one validated attachment into ``host_dir`` and verify its digest."""
     source_value = entry.get("source_path")
     staged_name = str(entry.get("staged_name") or "")
-    if not isinstance(source_value, str) or not source_value or not staged_name:
+    digest_expected = entry.get("sha256")
+    name = entry.get("name")
+    size_expected = entry.get("size")
+    if (
+        not isinstance(source_value, str)
+        or not source_value
+        or not isinstance(name, str)
+        or not isinstance(digest_expected, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", digest_expected)
+        or staged_name
+        != f"{digest_expected[:_STAGED_DIGEST_PREFIX_LEN]}-{_sanitize_basename(name)}"
+        or not isinstance(size_expected, int)
+        or isinstance(size_expected, bool)
+        or not 0 <= size_expected <= MAX_ATTACHMENT_FILE_BYTES
+    ):
         raise AttachmentInputError(
             "invalid_record",
-            "Attachment entry lacks source_path/staged_name; entries must "
+            "Attachment entry lacks valid source/identity fields; entries must "
             "come from collect_attachments.",
         )
     staged = Path(host_dir) / staged_name
-    # O_NOFOLLOW on the source rejects a post-validation symlink swap before
-    # any chmod/read touches it; the staged file is a fresh regular file in a
-    # directory we created, so copyfileobj keeps it plain.
+    source_fd = -1
+    staged_fd = -1
+    complete = False
     try:
-        src_fd = os.open(source_value, os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError as exc:
-        raise AttachmentInputError(
-            "unavailable",
-            f"Attachment '{source_value}' could not be opened for staging "
-            f"(symlink or unreadable): {exc!s}",
-        ) from exc
-    try:
-        with os.fdopen(src_fd, "rb") as src_file, staged.open("wb") as dst_file:
-            shutil.copyfileobj(src_file, dst_file)
-    except OSError as exc:
-        raise AttachmentInputError(
-            "unavailable",
-            f"Attachment '{source_value}' failed to stage: {exc!s}",
-        ) from exc
-    staged.chmod(0o444)
-    digest = hashlib.sha256(staged.read_bytes()).hexdigest()
-    if digest != entry.get("sha256"):
-        raise AttachmentInputError(
-            "checksum_mismatch",
-            f"Attachment '{entry.get('name') or staged_name}' changed between "
-            "validation and staging; refusing to mount content under a "
-            "stale digest.",
+        # O_NOFOLLOW binds the check to the opened inode, not a path that can
+        # change between validation, copying, and chmod.
+        source_fd = os.open(source_value, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise AttachmentInputError(
+                "not_regular_file", "Attachment source is not a regular file."
+            )
+        if source_stat.st_mode & 0o111:
+            raise AttachmentInputError("executable_file", "Attachment source became executable.")
+        if source_stat.st_size > MAX_ATTACHMENT_FILE_BYTES:
+            raise AttachmentInputError(
+                "file_too_large", "Attachment source grew past the file limit."
+            )
+        staged_fd = os.open(
+            staged,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
         )
+        size, digest = _copy_attachment_bytes(source_fd, staged_fd)
+        if size != size_expected or digest != digest_expected:
+            raise AttachmentInputError(
+                "checksum_mismatch",
+                f"Attachment '{name}' changed between validation and staging; "
+                "refusing to mount content under a stale digest.",
+            )
+        os.fchmod(staged_fd, 0o444)
+        complete = True
+    except OSError as exc:
+        raise AttachmentInputError(
+            "staging_failed", f"Attachment '{name}' could not be staged."
+        ) from exc
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if staged_fd >= 0:
+            os.close(staged_fd)
+        if not complete and staged_fd >= 0:
+            staged.unlink(missing_ok=True)
 
 
 def stage_attachments(

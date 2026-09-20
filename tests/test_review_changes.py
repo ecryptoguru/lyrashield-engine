@@ -25,15 +25,12 @@ import json
 import subprocess  # nosec B404
 import sys
 from importlib import import_module
+from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 import lyrashield.interface.utils as interface_utils
 from lyrashield.interface.utils import (
@@ -396,6 +393,28 @@ def test_clone_revision_treats_branch_as_fetch_hint_only(tmp_path: Path) -> None
     assert "--single-branch" not in clone_argv
 
 
+def test_real_moving_branch_still_checks_out_recorded_snapshot(tmp_path: Path) -> None:
+    """A saved snapshot keeps commit A after its advertised branch moves to B."""
+    remote = _init_repo(tmp_path)
+    (remote / "app.py").write_text("version = 'A'\n", encoding="utf-8")
+    recorded_revision = _commit_all(remote, "recorded plan")
+    (remote / "app.py").write_text("version = 'B'\n", encoding="utf-8")
+    _commit_all(remote, "moved branch")
+
+    with patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)):
+        acquired = Path(
+            clone_repository(
+                str(remote),
+                "moving-branch",
+                branch="main",
+                revision=recorded_revision,
+            )
+        )
+
+    assert _git(acquired, "rev-parse", "HEAD").stdout.strip() == recorded_revision
+    assert (acquired / "app.py").read_text(encoding="utf-8") == "version = 'A'\n"
+
+
 def test_clone_missing_revision_fetches_then_detaches(tmp_path: Path) -> None:
     """An unadvertised head (e.g. force-pushed) triggers one bounded fetch."""
     state = {"fetched": False}
@@ -726,9 +745,7 @@ def test_dirty_worktree_gets_snapshot_digest(tmp_path: Path) -> None:
     (repo / "a.py").write_text("x = 3  # dirty\n", encoding="utf-8")
     (repo / "untracked.py").write_text("scratch\n", encoding="utf-8")
 
-    result = resolve_diff_scope_context(
-        _sources(repo), "diff", base, non_interactive=True, env={}, diff_head=head
-    )
+    result = resolve_diff_scope_context(_sources(repo), "diff", base, non_interactive=True, env={})
 
     scope = result.metadata["repos"][0]
     assert scope["head_revision"] == head
@@ -737,6 +754,56 @@ def test_dirty_worktree_gets_snapshot_digest(tmp_path: Path) -> None:
     # Honest provenance: the instruction block tells the agent the analyzed
     # content is the working tree, not the recorded commit.
     assert "uncommitted changes" in result.instruction_block
+
+    # Untracked bytes, not just their names, distinguish dirty preflight states.
+    first_digest = scope["snapshot_digest"]
+    (repo / "untracked.py").write_text("different scratch\n", encoding="utf-8")
+    changed = resolve_diff_scope_context(_sources(repo), "diff", base, non_interactive=True, env={})
+    assert changed.metadata["repos"][0]["snapshot_digest"] != first_digest
+
+    with pytest.raises(SourcePreflightError) as exc_info:
+        resolve_diff_scope_context(
+            _sources(repo), "diff", base, non_interactive=True, env={}, diff_head=head
+        )
+    assert exc_info.value.reason == "dirty_asserted_head"
+
+
+def test_asserted_diff_rejects_unverified_worktree_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "app.py").write_text("base\n", encoding="utf-8")
+    base = _commit_all(repo, "base")
+    (repo / "app.py").write_text("changed\n", encoding="utf-8")
+    head = _commit_all(repo, "head")
+    original = interface_utils._run_git_command_raw
+
+    def failed_status(path: Path, args: list[str], **kwargs: Any) -> Any:
+        if args[:2] == ["status", "--porcelain=v1"]:
+            return subprocess.CompletedProcess(args, 1, b"", b"status unavailable")
+        return original(path, args, **kwargs)
+
+    monkeypatch.setattr(interface_utils, "_run_git_command_raw", failed_status)
+    with pytest.raises(SourcePreflightError) as exc_info:
+        resolve_diff_scope_context(
+            _sources(repo), "diff", base, non_interactive=True, env={}, diff_head=head
+        )
+    assert exc_info.value.reason == "dirty_asserted_head"
+
+
+def test_full_scope_records_dirty_local_source_before_upload(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "app.py").write_text("base\n", encoding="utf-8")
+    head = _commit_all(repo, "base")
+    (repo / "app.py").write_text("dirty\n", encoding="utf-8")
+
+    result = resolve_diff_scope_context(_sources(repo), "full", None, non_interactive=True)
+
+    assert result.active is False
+    source = result.metadata["repos"][0]
+    assert source["head_revision"] == head
+    assert source["worktree_dirty"] is True
+    assert source["snapshot_digest_stage"] == "preflight"
 
 
 def test_unsafe_base_ref_cannot_inject_options(diff_repo: dict[str, Any]) -> None:
@@ -914,6 +981,66 @@ def test_empty_diff_exits_with_no_change_receipt_and_no_provider_calls(
     assert record["scope_mode"] == "diff"
     assert record["diff_scope"]["no_change"] is True
     assert record["llm_usage"]["requests"] == 0
+
+
+def test_snapshot_cli_uses_saved_revision_after_branch_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's saved SNAPSHOT argv reaches the real pinned checkout."""
+    remote = _init_repo(tmp_path)
+    (remote / "app.py").write_text("version = 'A'\n", encoding="utf-8")
+    recorded_revision = _commit_all(remote, "recorded plan")
+    (remote / "app.py").write_text("version = 'B'\n", encoding="utf-8")
+    _commit_all(remote, "moved branch")
+
+    observed: dict[str, str] = {}
+
+    async def inspect_cli(args: argparse.Namespace) -> None:
+        source = Path(args.local_sources[0]["source_path"])
+        observed["head"] = _git(source, "rev-parse", "HEAD").stdout.strip()
+        observed["input"] = (source / "app.py").read_text(encoding="utf-8")
+
+    _stub_main_env(monkeypatch, inspect_cli)
+    monkeypatch.setattr(cli_main, "_non_interactive_exit_code", lambda _s: 0)
+    real_clone = cli_main.clone_repository
+
+    def clone_local(_url: str, *args: Any, **kwargs: Any) -> str:
+        return real_clone(str(remote), *args, **kwargs)
+
+    monkeypatch.setattr(cli_main, "clone_repository", clone_local)
+    monkeypatch.setattr(interface_utils.tempfile, "gettempdir", lambda: str(tmp_path))
+    runs_root = tmp_path / "runsroot"
+    runs_root.mkdir()
+    monkeypatch.chdir(runs_root)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "lyrashield",
+            "-t",
+            "https://github.com/org/repo.git",
+            "--target-type",
+            "repository",
+            "--repository-branch",
+            "main",
+            "--repository-revision",
+            recorded_revision,
+            "--scope-mode",
+            "full",
+            "--run-name",
+            "snapshot1",
+            "-n",
+        ],
+    )
+
+    cli_main.main()
+
+    assert observed == {"head": recorded_revision, "input": "version = 'A'\n"}
+    record = json.loads(
+        (runs_root / "strix_runs" / "snapshot1" / "run.json").read_text(encoding="utf-8")
+    )
+    assert record["scope_mode"] == "full"
+    assert record["repository_revision"] == recorded_revision
 
 
 def test_repository_revision_and_diff_flags_reach_guarded_clone(

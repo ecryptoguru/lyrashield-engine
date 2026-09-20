@@ -366,6 +366,23 @@ async def run_strix_scan(
     )
     logger.info("Sandbox ready for scan %s", scan_id)
 
+    source_snapshots = bundle.get("source_snapshots")
+    if source_snapshots:
+        report_state = get_global_report_state()
+        if report_state is not None:
+            # These are digests of the independent files actually uploaded,
+            # not of an earlier live worktree that might have changed.
+            report_state.run_record["source_snapshots"] = source_snapshots
+            diff_scope = report_state.run_record.get("diff_scope")
+            if isinstance(diff_scope, dict):
+                for repo in diff_scope.get("repos", []):
+                    if not isinstance(repo, dict):
+                        continue
+                    for snapshot in source_snapshots:
+                        if repo.get("workspace_subdir") == snapshot.get("workspace_subdir"):
+                            repo["snapshot_digest"] = snapshot["snapshot_digest"]
+                            repo["snapshot_digest_stage"] = "uploaded_source"
+
     attachment_manifest = bundle.get("attachment_manifest")
     if attachment_manifest:
         report_state = get_global_report_state()

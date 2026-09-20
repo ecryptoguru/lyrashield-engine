@@ -33,6 +33,7 @@ from lyrashield.runtime.attachments import (
     ATTACHMENTS_CONTAINER_DIR,
     ATTACHMENTS_SCRATCH_DIR,
     AttachmentInputError,
+    _stage_one_attachment,
     collect_attachments,
     create_scratch_copy,
     public_manifest,
@@ -241,6 +242,21 @@ def test_stage_attachments_fails_closed_on_checksum_drift(tmp_path: Path) -> Non
         stage_attachments("scan-x", entries)
 
 
+def test_replaced_attachment_does_not_follow_symlink(tmp_path: Path) -> None:
+    source = _write(tmp_path / "note.txt", "same bytes")
+    outside = _write(tmp_path / "private.txt", "same bytes")
+    outside.chmod(0o600)
+    entry = validate_attachment(str(source))
+    source.unlink()
+    source.symlink_to(outside)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(AttachmentInputError):
+        _stage_one_attachment(entry, str(staging))
+    assert outside.stat().st_mode & 0o777 == 0o600
+
+
 def test_stage_attachments_rejects_unvalidated_entries() -> None:
     with pytest.raises(AttachmentInputError, match="invalid_record"):
         stage_attachments("scan-x", [{"name": "x.yaml", "sha256": "0" * 64}])
@@ -250,19 +266,6 @@ def test_validate_rejects_line_terminator_in_name(tmp_path: Path) -> None:
     source = _write(tmp_path / "report\n.md", "x")
     with pytest.raises(AttachmentInputError, match="invalid_name"):
         validate_attachment(str(source))
-
-
-def test_stage_attachments_rejects_symlink_swap(tmp_path: Path) -> None:
-    source = _spec(tmp_path, "spec.yaml")
-    target = _write(tmp_path / "secret.txt", "sensitive")
-    entries = collect_attachments([str(source)])
-    # Attacker swaps the validated regular file for a symlink before staging;
-    # O_NOFOLLOW must reject the open rather than staging a link the follow-up
-    # chmod/read would traverse to an attacker-selected path.
-    source.unlink()
-    source.symlink_to(target)
-    with pytest.raises(AttachmentInputError, match="unavailable"):
-        stage_attachments("scan-swap", entries)
 
 
 def test_attachment_metadata_stays_single_line_in_prompts(tmp_path: Path) -> None:
@@ -314,8 +317,8 @@ async def _create_session(
         captured.update(kwargs)
         return SimpleNamespace(), Session()
 
-    async def no_caido(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    async def no_caido(*_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace()
 
     monkeypatch.setattr(
         session_manager,
@@ -324,8 +327,8 @@ async def _create_session(
     )
     monkeypatch.setattr(session_manager, "get_backend", lambda _name: backend)
     monkeypatch.setattr(session_manager, "bootstrap_caido", no_caido)
-    # These fakes exercise mount/lifecycle wiring, not capability probing — a
-    # real probe would (correctly) fail the stub session on exec=absent.
+    # These tests exercise mount semantics, not the capability probe — the
+    # stub session has no real container attrs to probe.
     monkeypatch.setattr(
         session_manager,
         "probe_session_capabilities",
