@@ -9,7 +9,7 @@
 FROM kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec7544537bcec1493277096 AS gobuilder
 
 ARG KALI_APT_SUITE=kali-last-snapshot
-ARG KALI_APT_INRELEASE_SHA256=6e298f996675e302bd5465a826ebd246f15b6ebcf71c2839287840be1b4277ee
+ARG KALI_APT_INRELEASE_SHA256=1aa2f15aa81eac3fda05654c5602f86324c0785d8a698268a4246a2a07cea34b
 # The pinned InRelease hash and its APT signature authenticate this immutable
 # archive snapshot; the base image predates the archive's current TLS chain.
 RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
@@ -46,7 +46,7 @@ FROM kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec75
 LABEL description="AI Agent Penetration Testing Environment with Comprehensive Automated Tools"
 
 ARG KALI_APT_SUITE=kali-last-snapshot
-ARG KALI_APT_INRELEASE_SHA256=6e298f996675e302bd5465a826ebd246f15b6ebcf71c2839287840be1b4277ee
+ARG KALI_APT_INRELEASE_SHA256=1aa2f15aa81eac3fda05654c5602f86324c0785d8a698268a4246a2a07cea34b
 RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
     printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
