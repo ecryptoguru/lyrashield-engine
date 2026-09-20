@@ -697,6 +697,24 @@ class ReportState:
             self._report_artifacts_revision = restored_revision
             self._persisted_report_artifacts_revision = restored_revision
 
+        # Same-process resume: the caido ledger may still hold entries already
+        # merged into the persisted record. Seed both offsets from the live
+        # snapshot so _sync_scope_decisions() only processes new denials —
+        # never re-appends entries or re-adds previously counted overflow.
+        try:
+            from lyrashield.tools.proxy import caido_api
+
+            snapshot = caido_api.get_scope_decisions()
+        except ImportError:
+            snapshot = None
+        if isinstance(snapshot, dict):
+            violations = snapshot.get("violations")
+            if isinstance(violations, list):
+                self._scope_violations_seen = max(self._scope_violations_seen, len(violations))
+            dropped = snapshot.get("dropped")
+            if isinstance(dropped, int) and not isinstance(dropped, bool):
+                self._scope_dropped_seen = max(self._scope_dropped_seen, dropped)
+
     def add_vulnerability_report(
         self,
         title: str,
