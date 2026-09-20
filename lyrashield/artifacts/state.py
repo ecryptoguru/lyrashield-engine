@@ -593,8 +593,11 @@ class ReportState:
         self.scarf_scan_ended_sent: bool = False
         self.scan_ended_exit_reason: str | None = None
         # How many scope-violation ledger entries have already been merged
-        # into run_record["scope_violations"]["entries"].
+        # into run_record["scope_violations"]["entries"], and how much of the
+        # process-cumulative ledger overflow has already been accounted into
+        # the persisted ``dropped`` count.
         self._scope_violations_seen = 0
+        self._scope_dropped_seen = 0
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
@@ -1096,7 +1099,11 @@ class ReportState:
 
         persisted = self.run_record.get("scope_violations")
         existing: list[dict[str, Any]] = []
-        dropped = snapshot["dropped"]
+        # snapshot["dropped"] is process-cumulative; add only the new overflow
+        # so repeated saves cannot inflate the persisted count.
+        ledger_dropped = int(snapshot["dropped"])
+        dropped = ledger_dropped - self._scope_dropped_seen
+        self._scope_dropped_seen = ledger_dropped
         if isinstance(persisted, dict):
             raw_entries = persisted.get("entries")
             if isinstance(raw_entries, list):
