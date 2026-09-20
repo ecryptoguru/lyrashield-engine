@@ -191,6 +191,11 @@ def validate_attachment(
         )
 
     name = path.name
+    if any(c in name for c in "\r\n\x85\u2028\u2029"):
+        raise AttachmentInputError(
+            "invalid_name",
+            f"Attachment '{raw}' has a line terminator in its filename; names must be single-line.",
+        )
     if not _allowed_suffix(name):
         allowed = ", ".join(s.lstrip(".") for s in ALLOWED_SUFFIXES)
         raise AttachmentInputError(
@@ -327,9 +332,25 @@ def _stage_one_attachment(entry: dict[str, Any], host_dir: str) -> None:
             "come from collect_attachments.",
         )
     staged = Path(host_dir) / staged_name
-    # follow_symlinks=False refuses to copy through a link if the
-    # source was swapped for one between validation and staging.
-    shutil.copyfile(Path(source_value), staged, follow_symlinks=False)
+    # O_NOFOLLOW on the source rejects a post-validation symlink swap before
+    # any chmod/read touches it; the staged file is a fresh regular file in a
+    # directory we created, so copyfileobj keeps it plain.
+    try:
+        src_fd = os.open(source_value, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise AttachmentInputError(
+            "unavailable",
+            f"Attachment '{source_value}' could not be opened for staging "
+            f"(symlink or unreadable): {exc!s}",
+        ) from exc
+    try:
+        with os.fdopen(src_fd, "rb") as src_file, staged.open("wb") as dst_file:
+            shutil.copyfileobj(src_file, dst_file)
+    except OSError as exc:
+        raise AttachmentInputError(
+            "unavailable",
+            f"Attachment '{source_value}' failed to stage: {exc!s}",
+        ) from exc
     staged.chmod(0o444)
     digest = hashlib.sha256(staged.read_bytes()).hexdigest()
     if digest != entry.get("sha256"):
