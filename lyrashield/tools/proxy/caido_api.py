@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import importlib.metadata
 import ipaddress
 import json
 import logging
@@ -614,6 +615,20 @@ _FRAMING_HEADERS = frozenset({"content-length", "transfer-encoding"})
 _INVALID_HEADER_RE = re.compile(r"[\r\n\x00]")
 
 
+def _default_replay_user_agent() -> str:
+    """Default replay User-Agent identifying the LyraShield product.
+
+    The ``lyrashield-engine`` dist may not be installed where this module runs
+    standalone inside the sandbox, so an absent package falls back to
+    ``unknown`` rather than failing the replay.
+    """
+    try:
+        engine_version = importlib.metadata.version("lyrashield-engine")
+    except importlib.metadata.PackageNotFoundError:
+        engine_version = "unknown"
+    return f"LyraShield/{engine_version} (+https://lyrashieldai.com)"
+
+
 def build_raw_request(
     *,
     method: str,
@@ -639,7 +654,10 @@ def build_raw_request(
 
     final_headers = {**headers}
     final_headers.setdefault("Host", parsed.netloc)
-    final_headers.setdefault("User-Agent", "strix")
+    # Header names are case-insensitive: a caller-supplied User-Agent in any
+    # case wins; only an absent one gets the LyraShield default.
+    if not any(name.lower() == "user-agent" for name in final_headers):
+        final_headers["User-Agent"] = _default_replay_user_agent()
     for k, v in final_headers.items():
         if _INVALID_HEADER_RE.search(k) or _INVALID_HEADER_RE.search(v):
             raise ValueError(f"Header contains forbidden characters: {k!r}: {v!r}")

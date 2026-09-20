@@ -59,3 +59,16 @@ def test_lifecycle_output_is_checked(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text('logger.info("Strix scan done")')
     assert GATE.violations(tmp_path, {})
+
+
+def test_upstream_brand_default_header_fails_gate(tmp_path: Path) -> None:
+    """An upstream brand in an outbound default header is customer-visible.
+
+    The shipped allowlist must not exempt the old default replay User-Agent,
+    so a regression to it fails the gate.
+    """
+    allowed = json.loads((ROOT / "scripts/customer-branding-allowlist.json").read_text())
+    path = tmp_path / "lyrashield/tools/proxy/caido_api.py"
+    path.parent.mkdir(parents=True)
+    path.write_text('    final_headers.setdefault("User-Agent", "strix")\n')
+    assert GATE.violations(tmp_path, allowed["source_lines"])

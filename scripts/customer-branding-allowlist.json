@@ -575,7 +575,6 @@
       "    # STRIX_RUN_ID is set (inside the container). A wrong-run policy is",
       "    ``STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS`` opt-in is honored). When a policy",
       "    expected_run_id = os.environ.get(\"STRIX_RUN_ID\", \"\").strip()",
-      "    final_headers.setdefault(\"User-Agent\", \"strix\")",
       "    return os.environ.get(\"STRIX_CAIDO_URL\", _DEFAULT_CAIDO_URL).rstrip(\"/\")",
       "    return os.environ.get(\"STRIX_SANDBOX_ALLOW_HOST_GATEWAY\", \"\").strip().lower() in {",
       "_PRIVATE_EGRESS_OPT_IN_ENV = \"STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS\"",
