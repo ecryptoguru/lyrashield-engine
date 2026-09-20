@@ -41,6 +41,7 @@ from lyrashield.interface.utils import (
     TARGET_TYPE_CHOICES,
     _is_full_git_commit_sha,
     _is_git_object_id,
+    _read_only_head_revision,
     assign_workspace_subdirs,
     build_final_stats_text,
     build_mount_targets_info,
@@ -1162,6 +1163,16 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
     if not targets_info:
         parser.error(f"--resume {args.resume}: run.json has no targets_info")
 
+    # A recorded immutable revision binds every restored repository clone:
+    # acquisition pins each checkout to --repository-revision or the recorded
+    # diff head, so resume must find that exact HEAD. The comparison is
+    # read-only — never a checkout, fetch or repair — so a tampered cache is
+    # left untouched for inspection rather than silently reset.
+    expected_revision_raw = state.get("repository_revision") or state.get("diff_head")
+    expected_revision = (
+        str(expected_revision_raw).strip().lower() if expected_revision_raw else None
+    )
+
     cloned_repo_paths: set[Path] = set()
     for target in targets_info:
         details_raw: Any = target.get("details")
@@ -1186,6 +1197,16 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
                 f"It was deleted between runs. Pick a fresh --run-name to "
                 f"re-clone, or restore the directory before resuming."
             )
+        if expected_revision:
+            actual_head = _read_only_head_revision(cloned_path)
+            if actual_head != expected_revision:
+                parser.error(
+                    f"--resume {args.resume}: cloned repo at {cloned} has HEAD "
+                    f"{actual_head or 'unresolved'} but the run recorded "
+                    f"revision {expected_revision}. The cached clone changed "
+                    "between runs; refusing to resume from altered source. "
+                    "Pick a fresh --run-name to re-clone."
+                )
         cloned_repo_paths.add(cloned_path)
 
     args.targets_info = targets_info
