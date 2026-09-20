@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -197,6 +198,46 @@ def test_threat_model_artifact_redacts_model_controlled_text(state_1_1: ReportSt
     assert isinstance(document["models"], list)
     assert sentinel not in json.dumps(document)
     assert sentinel not in path.read_text(encoding="utf-8")
+
+
+def test_threat_model_writer_matches_cross_repo_golden(state_1_1: ReportState) -> None:
+    run_dir = state_1_1.get_run_dir()
+    state_dir = run_dir / ".state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "threat_models.json").write_text(
+        json.dumps(
+            {
+                "https://app.example.test": {
+                    "target": "https://app.example.test/?password=sample-secret-123",
+                    "written_at": "2026-09-20T00:00:00+00:00",
+                    "written_by": "recon",
+                    "content": (
+                        "Assets: customer records. Trust boundary: public API to data store. "
+                        "password=sample-secret-123"
+                    ),
+                    "amendments": [
+                        {
+                            "at": "2026-09-20T00:01:00+00:00",
+                            "by": "reviewer",
+                            "content": "Unverified admin path; check authorization.",
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    document = _evidence.build_threat_model_document(
+        run_dir, {"run_id": "fixture-run-1-1", "run_name": "scan-fixture-1-1"}
+    )
+    assert document is not None
+    written = _read_json(_evidence.write_threat_model_artifact(run_dir, document))
+    golden = _read_json(Path(__file__).parent / "fixtures/threat_model_writer_1_1.json")
+    # Time is the only runtime-generated member; everything else is the exact
+    # owned-writer shape copied into the worker's manifest-bound fixture.
+    written.pop("generated_at")
+    golden.pop("generated_at")
+    assert written == golden
 
 
 def test_flag_off_keeps_schema_1_0_and_no_new_artifacts(monkeypatch, tmp_path) -> None:
