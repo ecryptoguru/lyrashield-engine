@@ -164,6 +164,41 @@ def test_run_record_emits_schema_1_1_and_artifacts(state_1_1: ReportState) -> No
     assert model["written_by"] == "recon"
 
 
+def test_threat_model_artifact_redacts_model_controlled_text(state_1_1: ReportState) -> None:
+    run_dir = state_1_1.get_run_dir()
+    state_dir = run_dir / ".state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    sentinel = "sample-secret-123"
+    (state_dir / "threat_models.json").write_text(
+        json.dumps(
+            {
+                "password=sample-secret-123": {
+                    "target": "https://example.test/?password=sample-secret-123",
+                    "written_by": "password=sample-secret-123",
+                    "content": "password=sample-secret-123",
+                    "amendments": [
+                        {
+                            "by": "password=sample-secret-123",
+                            "at": "password=sample-secret-123",
+                            "content": "password=sample-secret-123",
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    document = _evidence.build_threat_model_document(run_dir, {"run_id": "run-1"})
+    assert document is not None
+    path = _evidence.write_threat_model_artifact(run_dir, document)
+
+    assert path.name == "threat_model.json"
+    assert isinstance(document["models"], list)
+    assert sentinel not in json.dumps(document)
+    assert sentinel not in path.read_text(encoding="utf-8")
+
+
 def test_flag_off_keeps_schema_1_0_and_no_new_artifacts(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("LYRASHIELD_RUN_RECORD_V1_1", raising=False)
     monkeypatch.setenv("STRIX_SANDBOX_MODE", "local")

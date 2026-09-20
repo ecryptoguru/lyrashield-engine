@@ -479,7 +479,7 @@ def build_threat_model_document(
             break
         if not isinstance(model, dict):
             continue
-        content = str(model.get("content") or "")
+        content = redact_text(str(model.get("content") or ""))
         amendments = model.get("amendments")
         bounded_amendments: list[dict[str, Any]] = []
         if isinstance(amendments, list):
@@ -488,9 +488,11 @@ def build_threat_model_document(
                     continue
                 bounded_amendments.append(
                     {
-                        "by": str(amendment.get("by") or ""),
-                        "at": str(amendment.get("at") or ""),
-                        "content": str(amendment.get("content") or "")[:_MAX_AMENDMENT_CHARS],
+                        "by": redact_text(str(amendment.get("by") or "")),
+                        "at": redact_text(str(amendment.get("at") or "")),
+                        "content": redact_text(str(amendment.get("content") or ""))[
+                            :_MAX_AMENDMENT_CHARS
+                        ],
                     }
                 )
         model_truncated = len(content) > _MAX_MODEL_CONTENT_CHARS or (
@@ -499,9 +501,9 @@ def build_threat_model_document(
         truncated = truncated or model_truncated
         models.append(
             {
-                "target": str(model.get("target") or identity),
-                "written_at": model.get("written_at"),
-                "written_by": model.get("written_by"),
+                "target": redact_url(redact_text(str(model.get("target") or identity))),
+                "written_at": redact_text(str(model.get("written_at") or "")),
+                "written_by": redact_text(str(model.get("written_by") or "")),
                 "content": content[:_MAX_MODEL_CONTENT_CHARS],
                 "amendments": bounded_amendments,
             }
