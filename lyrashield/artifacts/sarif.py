@@ -553,6 +553,35 @@ def _result_properties(
             poc["script_available"] = True
         product["poc"] = poc
 
+    # Schema-1.1 evidence fields, carried as bounded metadata (text is already
+    # redacted/truncated at the persistence boundary). Proxy exchange ids stay
+    # out of SARIF — they are opaque until correlated with http_exchanges.json,
+    # so the external projection carries only the count.
+    if report.get("confidence"):
+        product["confidence"] = report["confidence"]
+    for key in ("counterevidence", "severity_change_conditions"):
+        value = _string_value(report.get(key))
+        if value:
+            product[key] = value
+    fv = report.get("fix_verification")
+    if isinstance(fv, dict):
+        product["fix_verification"] = {
+            "kind": fv.get("kind"),
+            "statement": _string_value(fv.get("statement")),
+            "method": _string_value(fv.get("method")),
+        }
+    elif _string_value(fv):
+        product["fix_verification"] = _string_value(fv)
+    advisory = report.get("advisory_cvss")
+    if isinstance(advisory, dict):
+        product["advisory_cvss"] = {k: v for k, v in advisory.items() if v not in (None, "")}
+    exchange_ids = report.get("http_exchange_ids")
+    if isinstance(exchange_ids, list) and exchange_ids:
+        product["http_exchange_count"] = len(exchange_ids)
+    history = report.get("update_history")
+    if isinstance(history, list) and history:
+        product["revision_count"] = len(history)
+
     if product:
         properties["lyrashield"] = product
 
