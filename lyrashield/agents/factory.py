@@ -27,6 +27,7 @@ from pydantic import ValidationError
 
 from lyrashield.agents import overrides as _product_overrides
 from lyrashield.agents.prompt import render_system_prompt
+from lyrashield.artifacts.evidence import evidence_v1_1_enabled
 from lyrashield.tools.finish.tool import finish_scan
 from lyrashield.tools.output_store import bound_and_store, bound_text
 from lyrashield.tools.proxy.tools import (
@@ -42,6 +43,7 @@ from lyrashield.tools.reporting.tool import (
     create_vulnerability_report,
     get_report,
     list_reports,
+    update_vulnerability_report,
 )
 from lyrashield.tools.respond.tool import respond_to_user
 from lyrashield.tools.todo.tools import (
@@ -63,6 +65,7 @@ from strix.tools.agents_graph.tools import (
     view_agent_graph,
     wait_for_agents,
 )
+from strix.tools.coverage.tools import list_coverage, record_coverage, update_coverage
 from strix.tools.load_skill.tool import load_skill
 from strix.tools.notes.tools import (
     create_note,
@@ -72,6 +75,11 @@ from strix.tools.notes.tools import (
     update_note,
 )
 from strix.tools.thinking.tool import think
+from strix.tools.threat_model.tools import (
+    amend_threat_model,
+    get_threat_model,
+    save_threat_model,
+)
 
 
 if TYPE_CHECKING:
@@ -519,6 +527,25 @@ _BASE_TOOLS: tuple[Tool, ...] = (
 # contradicts the system-prompt contract.
 _REPORT_REVIEW_TOOLS: tuple[Tool, ...] = (list_reports, get_report)
 
+# Schema-1.1 evidence tools — registered only when the 1.1 writer is enabled
+# (``LYRASHIELD_RUN_RECORD_V1_1``). A finding revision, coverage ledger entry
+# or threat model the agents record would otherwise land in a 1.0 record whose
+# artifacts cannot carry them; gating the tools keeps the surface honest.
+_EVIDENCE_V1_1_TOOLS: tuple[Tool, ...] = (
+    update_vulnerability_report,
+    record_coverage,
+    update_coverage,
+    list_coverage,
+    save_threat_model,
+    get_threat_model,
+    amend_threat_model,
+)
+
+
+def _evidence_tools() -> tuple[Tool, ...]:
+    """Schema-1.1 tools when the writer flag is on, else nothing."""
+    return _EVIDENCE_V1_1_TOOLS if evidence_v1_1_enabled() else ()
+
 
 _ROOT_ORCHESTRATION_TOOLS: tuple[Tool, ...] = (
     view_agent_graph,
@@ -710,16 +737,18 @@ def build_strix_agent(
     if interactive:
         # Yielding to the user is only meaningful when one is attached.
         agent_tools.append(respond_to_user)
+    evidence_tools = _evidence_tools()
     if is_root:
         tools: list[Tool] = [
             *_BASE_TOOLS,
+            *evidence_tools,
             *_REPORT_REVIEW_TOOLS,
             *_ROOT_ORCHESTRATION_TOOLS,
             *agent_tools,
             finish_scan,
         ]
     else:
-        tools = [*_BASE_TOOLS, *agent_tools, agent_finish]
+        tools = [*_BASE_TOOLS, *evidence_tools, *agent_tools, agent_finish]
 
     tools = _apply_tool_overrides(tools)
     # Materialize per-agent copies before any policy or wrapper mutates them,
