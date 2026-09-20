@@ -442,6 +442,7 @@ _MAX_MODELS = 20
 _MAX_MODEL_CONTENT_CHARS = 64_000
 _MAX_AMENDMENTS_PER_MODEL = 40
 _MAX_AMENDMENT_CHARS = 8_000
+_MAX_MODEL_META_CHARS = 1_024
 
 
 def build_threat_model_document(
@@ -480,30 +481,47 @@ def build_threat_model_document(
         if not isinstance(model, dict):
             continue
         content = redact_text(str(model.get("content") or ""))
+        target = redact_url(redact_text(str(model.get("target") or identity)))
+        written_at = redact_text(str(model.get("written_at") or ""))
+        written_by = redact_text(str(model.get("written_by") or ""))
         amendments = model.get("amendments")
         bounded_amendments: list[dict[str, Any]] = []
         if isinstance(amendments, list):
             for amendment in amendments[:_MAX_AMENDMENTS_PER_MODEL]:
                 if not isinstance(amendment, dict):
                     continue
+                by = redact_text(str(amendment.get("by") or ""))
+                at = redact_text(str(amendment.get("at") or ""))
+                amendment_content = redact_text(str(amendment.get("content") or ""))
+                truncated = truncated or any(
+                    (
+                        len(by) > _MAX_MODEL_META_CHARS,
+                        len(at) > _MAX_MODEL_META_CHARS,
+                        len(amendment_content) > _MAX_AMENDMENT_CHARS,
+                    )
+                )
                 bounded_amendments.append(
                     {
-                        "by": redact_text(str(amendment.get("by") or "")),
-                        "at": redact_text(str(amendment.get("at") or "")),
-                        "content": redact_text(str(amendment.get("content") or ""))[
-                            :_MAX_AMENDMENT_CHARS
-                        ],
+                        "by": by[:_MAX_MODEL_META_CHARS],
+                        "at": at[:_MAX_MODEL_META_CHARS],
+                        "content": amendment_content[:_MAX_AMENDMENT_CHARS],
                     }
                 )
-        model_truncated = len(content) > _MAX_MODEL_CONTENT_CHARS or (
-            isinstance(amendments, list) and len(amendments) > _MAX_AMENDMENTS_PER_MODEL
+        model_truncated = any(
+            (
+                len(content) > _MAX_MODEL_CONTENT_CHARS,
+                len(target) > _MAX_MODEL_META_CHARS,
+                len(written_at) > _MAX_MODEL_META_CHARS,
+                len(written_by) > _MAX_MODEL_META_CHARS,
+                isinstance(amendments, list) and len(amendments) > _MAX_AMENDMENTS_PER_MODEL,
+            )
         )
         truncated = truncated or model_truncated
         models.append(
             {
-                "target": redact_url(redact_text(str(model.get("target") or identity))),
-                "written_at": redact_text(str(model.get("written_at") or "")),
-                "written_by": redact_text(str(model.get("written_by") or "")),
+                "target": target[:_MAX_MODEL_META_CHARS],
+                "written_at": written_at[:_MAX_MODEL_META_CHARS],
+                "written_by": written_by[:_MAX_MODEL_META_CHARS],
                 "content": content[:_MAX_MODEL_CONTENT_CHARS],
                 "amendments": bounded_amendments,
             }
