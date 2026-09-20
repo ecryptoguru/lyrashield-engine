@@ -1310,7 +1310,7 @@ def resolve_diff_scope_context(
             raise
 
     if not repo_scopes:
-        if scope_mode == "auto":
+        if scope_mode == "auto" and diff_head is None:
             metadata: dict[str, Any] = {"active": False, "mode": scope_mode}
             if skipped_non_git:
                 metadata["skipped_non_git_sources"] = skipped_non_git
@@ -1326,13 +1326,10 @@ def resolve_diff_scope_context(
     instruction_block = build_diff_scope_instruction(repo_scopes)
     total_analyzable = sum(len(scope.analyzable_files) for scope in repo_scopes)
     total_deleted = sum(len(scope.deleted_files) for scope in repo_scopes)
+    # Each changed path counts once: modified already carries copied paths and
+    # low-similarity renames, so adding renamed+copied again double-counts.
     total_changed = sum(
-        len(scope.added_files)
-        + len(scope.modified_files)
-        + len(scope.renamed_files)
-        + len(scope.copied_files)
-        + len(scope.deleted_files)
-        for scope in repo_scopes
+        len(scope.analyzable_files) + len(scope.deleted_files) for scope in repo_scopes
     )
     metadata = {
         "active": True,
