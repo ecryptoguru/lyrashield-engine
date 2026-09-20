@@ -79,7 +79,6 @@ RUN_RECORD_SCHEMA_VERSION = _evidence.RUN_RECORD_SCHEMA_VERSION_1_0
 # is unconditional run provenance, not part of the gated evidence surface. The
 # whole surface is gated on ``LYRASHIELD_RUN_RECORD_V1_1`` (default off) so
 # readers deploy before writers; a run keeps the version it was created with.
-||||||| 55224af8
 RUN_RECORD_SCHEMA_VERSION = "1.0"
 
 # Fields every run.json write must carry from its first observable appearance

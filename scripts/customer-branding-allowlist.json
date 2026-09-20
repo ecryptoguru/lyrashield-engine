@@ -353,8 +353,7 @@
       "from strix.core.paths import run_dir_for, runtime_state_dir",
       "                tool_version=_strix_version(),",
       "    from strix.report.coverage import read_agent_graph",
-      "    from strix.tools.coverage.tools import get_coverage_entries"
-||||||| 55224af8
+      "    from strix.tools.coverage.tools import get_coverage_entries",
       "from strix.core.paths import run_dir_for"
     ],
     "lyrashield/artifacts/usage.py": [
