@@ -69,6 +69,11 @@ def _stub_startup(
         "get_sandbox_container_ip": Mock(return_value=None),
         "resolve_sandbox_endpoint": Mock(return_value=("127.0.0.1", 8080)),
         "bootstrap_caido": bootstrap,
+        # These fakes exercise lifecycle cleanup, not capability probing — a
+        # real probe would (correctly) fail the stub session on exec=absent.
+        "probe_session_capabilities": Mock(
+            return_value={"preflight": {"degradations": [], "failures": []}}
+        ),
     }
     if environment is not None:
         replacements["build_sandbox_environment"] = Mock(return_value=environment)

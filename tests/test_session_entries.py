@@ -161,6 +161,9 @@ async def test_create_or_reuse_passes_path_grants_to_the_manifest(
     captured: dict[str, Any] = {}
 
     class Session:
+        async def exec(self, *_args: Any, **_kwargs: Any) -> Any:
+            return SimpleNamespace(ok=lambda: True, stdout=b"", stderr=b"", exit_code=0)
+
         async def resolve_exposed_port(self, _port: int) -> Any:
             return SimpleNamespace(tls=False, host="127.0.0.1", port=48080)
 
@@ -168,10 +171,16 @@ async def test_create_or_reuse_passes_path_grants_to_the_manifest(
         captured.update(kwargs)
         return SimpleNamespace(), Session()
 
-    async def no_caido(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    async def no_caido(*_args: Any, **_kwargs: Any) -> Any:
+        # A real bootstrap returns a client or raises; preflight treats a
+        # missing capture client as a required-control failure.
+        return SimpleNamespace()
 
     scan_id = "manifest-grants"
+    # The fake backend bypasses docker admission, so give the capability
+    # probe a configured network — unverifiable isolation degrades rather
+    # than fails for a stub session without container attrs.
+    monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", "strix-sandbox")
     monkeypatch.setattr(
         session_manager,
         "load_settings",

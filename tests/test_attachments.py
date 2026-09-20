@@ -324,6 +324,13 @@ async def _create_session(
     )
     monkeypatch.setattr(session_manager, "get_backend", lambda _name: backend)
     monkeypatch.setattr(session_manager, "bootstrap_caido", no_caido)
+    # These fakes exercise mount/lifecycle wiring, not capability probing — a
+    # real probe would (correctly) fail the stub session on exec=absent.
+    monkeypatch.setattr(
+        session_manager,
+        "probe_session_capabilities",
+        lambda **_kwargs: {"preflight": {"degradations": [], "failures": []}},
+    )
     session_manager._SESSION_CACHE.pop(scan_id, None)
 
     await session_manager.create_or_reuse(
