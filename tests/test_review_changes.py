@@ -960,6 +960,66 @@ def test_empty_diff_exits_with_no_change_receipt_and_no_provider_calls(
     assert record["llm_usage"]["requests"] == 0
 
 
+def test_snapshot_cli_uses_saved_revision_after_branch_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's saved SNAPSHOT argv reaches the real pinned checkout."""
+    remote = _init_repo(tmp_path)
+    (remote / "app.py").write_text("version = 'A'\n", encoding="utf-8")
+    recorded_revision = _commit_all(remote, "recorded plan")
+    (remote / "app.py").write_text("version = 'B'\n", encoding="utf-8")
+    _commit_all(remote, "moved branch")
+
+    observed: dict[str, str] = {}
+
+    async def inspect_cli(args: argparse.Namespace) -> None:
+        source = Path(args.local_sources[0]["source_path"])
+        observed["head"] = _git(source, "rev-parse", "HEAD").stdout.strip()
+        observed["input"] = (source / "app.py").read_text(encoding="utf-8")
+
+    _stub_main_env(monkeypatch, inspect_cli)
+    monkeypatch.setattr(cli_main, "_non_interactive_exit_code", lambda _s: 0)
+    real_clone = cli_main.clone_repository
+
+    def clone_local(_url: str, *args: Any, **kwargs: Any) -> str:
+        return real_clone(str(remote), *args, **kwargs)
+
+    monkeypatch.setattr(cli_main, "clone_repository", clone_local)
+    monkeypatch.setattr(interface_utils.tempfile, "gettempdir", lambda: str(tmp_path))
+    runs_root = tmp_path / "runsroot"
+    runs_root.mkdir()
+    monkeypatch.chdir(runs_root)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "lyrashield",
+            "-t",
+            "https://github.com/org/repo.git",
+            "--target-type",
+            "repository",
+            "--repository-branch",
+            "main",
+            "--repository-revision",
+            recorded_revision,
+            "--scope-mode",
+            "full",
+            "--run-name",
+            "snapshot1",
+            "-n",
+        ],
+    )
+
+    cli_main.main()
+
+    assert observed == {"head": recorded_revision, "input": "version = 'A'\n"}
+    record = json.loads(
+        (runs_root / "strix_runs" / "snapshot1" / "run.json").read_text(encoding="utf-8")
+    )
+    assert record["scope_mode"] == "full"
+    assert record["repository_revision"] == recorded_revision
+
+
 def test_repository_revision_and_diff_flags_reach_guarded_clone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, diff_repo: dict[str, Any]
 ) -> None:
