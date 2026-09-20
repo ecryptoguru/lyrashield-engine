@@ -8,6 +8,7 @@ denied and logged as scope-violation evidence in the decision ledger.
 from __future__ import annotations
 
 import contextlib
+from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -130,6 +131,44 @@ def test_fail_closed_policy_denies_everything(tmp_path: Path, monkeypatch: Any) 
     decisions = caido_api.get_scope_decisions()
     assert decisions["violations"]
     assert decisions["violations"][0]["rule"] == "outside_authorized_scope"
+
+
+def _header_values(raw: bytes, name: str) -> list[str]:
+    prefix = f"{name.lower()}:"
+    return [
+        line.split(":", 1)[1].strip()
+        for line in raw.decode("iso-8859-1").split("\r\n")
+        if line.lower().startswith(prefix)
+    ]
+
+
+def test_replay_default_user_agent_identifies_lyrashield() -> None:
+    """Replayed requests default to the LyraShield product User-Agent."""
+    _conn, raw = _send("https://example.com/")
+    expected = f"LyraShield/{version('lyrashield-engine')} (+https://lyrashieldai.com)"
+    assert _header_values(raw, "user-agent") == [expected]
+
+
+def test_replay_caller_user_agent_wins() -> None:
+    """A caller-supplied User-Agent is preserved; no default header is added."""
+    _conn, raw = caido_api.build_raw_request(
+        method="GET",
+        url="https://example.com/",
+        headers={"User-Agent": "custom-agent/9"},
+        body="",
+    )
+    assert _header_values(raw, "user-agent") == ["custom-agent/9"]
+
+
+def test_replay_caller_user_agent_wins_case_insensitively() -> None:
+    """Header names are case-insensitive: a lowercase caller UA still wins."""
+    _conn, raw = caido_api.build_raw_request(
+        method="GET",
+        url="https://example.com/",
+        headers={"user-agent": "custom-agent/9"},
+        body="",
+    )
+    assert _header_values(raw, "user-agent") == ["custom-agent/9"]
 
 
 def test_violation_ledger_is_bounded(monkeypatch: Any) -> None:

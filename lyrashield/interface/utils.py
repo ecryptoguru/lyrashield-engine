@@ -2022,6 +2022,23 @@ def _ensure_commit_available(repo_path: Path, sha: str, reason: str) -> None:
         )
 
 
+def _read_only_head_revision(repo_path: Path) -> str | None:
+    """Return HEAD's commit object ID or ``None`` when it cannot be resolved.
+
+    Unlike :func:`_assert_checkout_revision` this is purely observational:
+    ``rev-parse HEAD`` never checks out, fetches or otherwise modifies the
+    clone, so a possibly-altered resume cache is left exactly as found.
+    """
+    try:
+        result = _run_git_command(repo_path, ["rev-parse", "HEAD"], check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
 def _assert_checkout_revision(repo_path: Path, revision: str) -> None:
     """Detach the checkout at *revision* and assert HEAD's object ID matches.
 
