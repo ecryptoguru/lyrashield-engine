@@ -33,6 +33,17 @@ if TYPE_CHECKING:
 
 _JINJA_TAG_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}", re.DOTALL)
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_LINE_TERMINATOR_RE = re.compile(r"[\r\n\x85\u2028\u2029]+")
+
+
+def _sanitize_prompt_line(value: str, *, max_len: int = 4096) -> str:
+    """Single-line variant of :func:`_sanitize_prompt_value` for metadata.
+
+    Attachment names/paths are derived from user-controlled filenames; the
+    shared sanitizer deliberately preserves line terminators for multi-line
+    fields, so values rendered inside a bullet line must be flattened first.
+    """
+    return _sanitize_prompt_value(_LINE_TERMINATOR_RE.sub(" ", value), max_len=max_len)
 
 
 def _sanitize_prompt_value(value: str, *, max_len: int = 4096) -> str:
@@ -184,9 +195,9 @@ def _build_root_task_parts(scan_config: dict[str, Any]) -> tuple[list[str], str]
         for attachment in attachments:
             # Values are engine-derived but still run through the prompt
             # sanitizer — a hostile basename could carry control characters.
-            path = _sanitize_prompt_value(str(attachment.get("container_path") or ""), max_len=255)
-            name = _sanitize_prompt_value(str(attachment.get("name") or ""), max_len=255)
-            sha256 = _sanitize_prompt_value(str(attachment.get("sha256") or ""), max_len=64)
+            path = _sanitize_prompt_line(str(attachment.get("container_path") or ""), max_len=255)
+            name = _sanitize_prompt_line(str(attachment.get("name") or ""), max_len=255)
+            sha256 = _sanitize_prompt_line(str(attachment.get("sha256") or ""), max_len=64)
             parts.append(f"- {path} (name: {name}, sha256: {sha256})")
 
     return parts, user_instructions
@@ -261,11 +272,9 @@ def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
     # can never expand scope, credentials, model routes, permissions, or budget.
     untrusted_input_files: list[dict[str, str]] = [
         {
-            "name": _sanitize_prompt_value(str(attachment.get("name") or ""), max_len=255),
-            "path": _sanitize_prompt_value(
-                str(attachment.get("container_path") or ""), max_len=255
-            ),
-            "sha256": _sanitize_prompt_value(str(attachment.get("sha256") or ""), max_len=64),
+            "name": _sanitize_prompt_line(str(attachment.get("name") or ""), max_len=255),
+            "path": _sanitize_prompt_line(str(attachment.get("container_path") or ""), max_len=255),
+            "sha256": _sanitize_prompt_line(str(attachment.get("sha256") or ""), max_len=64),
         }
         for attachment in _as_str_list_of_dicts(scan_config.get("attachments", []))
     ]

@@ -213,7 +213,8 @@ def test_scope_violations_persist_across_saves_and_resume(
     entries = _read_record(state)["scope_violations"]["entries"]
     assert {e["host"] for e in entries} == {"one.example.net", "two.example.net"}
 
-    # Resume: a fresh ReportState over the same run dir keeps prior entries.
+    # Resume: a fresh ReportState over the same run dir keeps prior entries —
+    # and same-process ledger offsets must not re-append them.
     resumed = ReportState(run_name="quality-scan")
     resumed.hydrate_from_run_dir()
     with pytest.raises(ValueError):
@@ -221,12 +222,43 @@ def test_scope_violations_persist_across_saves_and_resume(
             method="GET", url="https://three.example.net/", headers={}, body=""
         )
     assert resumed.save_run_data()
-    entries = _read_record(resumed)["scope_violations"]["entries"]
-    assert {e["host"] for e in entries} == {
+    violations = _read_record(resumed)["scope_violations"]
+    assert len(violations["entries"]) == 3
+    assert violations["total"] == 3
+    assert violations["dropped"] == 0
+    assert {e["host"] for e in violations["entries"]} == {
         "one.example.net",
         "two.example.net",
         "three.example.net",
     }
+
+
+def test_scope_violation_dropped_does_not_reaccumulate(
+    state_1_1: ReportState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ledger ``dropped`` is process-cumulative: repeated saves must merge
+    only the delta, never re-add the whole overflow (I-merge)."""
+    state = state_1_1
+    _mount, host_dir = write_egress_policy("scan-q3", {"app.example.com"})
+    monkeypatch.setenv("STRIX_RUN_ID", "scan-q3")
+    monkeypatch.setenv("LYRASHIELD_EGRESS_POLICY", str(Path(host_dir) / "policy.json"))
+    monkeypatch.setattr(caido_api, "_SCOPE_VIOLATION_LIMIT", 2)
+
+    for host in ("a.example.net", "b.example.net", "c.example.net", "d.example.net"):
+        with pytest.raises(ValueError):
+            caido_api.build_raw_request(method="GET", url=f"https://{host}/", headers={}, body="")
+
+    assert state.save_run_data()
+    first = _read_record(state)["scope_violations"]
+    assert first["dropped"] == 2
+    assert first["total"] == 4
+
+    # Repeated saves with no new denials keep the overflow stable.
+    assert state.save_run_data()
+    assert state.save_run_data()
+    again = _read_record(state)["scope_violations"]
+    assert again["dropped"] == 2
+    assert again["total"] == 4
 
 
 def test_quality_surfaces_are_bounded(state_1_1: ReportState) -> None:

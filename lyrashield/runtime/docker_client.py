@@ -27,6 +27,7 @@ upstream for an injection hook.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
 import logging
@@ -517,7 +518,12 @@ class StrixDockerSandboxClient(DockerSandboxClient):
             with contextlib.suppress(
                 docker_errors.NotFound, docker_errors.APIError, RequestException
             ):
-                cast("Any", self.docker_client.containers.get(container_id)).kill()
+                # Offloaded: docker-py is synchronous; a blocked daemon call
+                # here would starve the loop and defeat _bounded_cleanup_step's
+                # timeout timer.
+                await asyncio.to_thread(
+                    lambda: cast("Any", self.docker_client.containers.get(container_id)).kill()
+                )
         try:
             return await super().delete(session)
         except (docker_errors.APIError, RequestException, OSError) as exc:

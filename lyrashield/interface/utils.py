@@ -515,6 +515,7 @@ _MAX_FILES_PER_SECTION = 120
 # worker run on a stalled or hostile remote.
 _GIT_CLONE_TIMEOUT_SECONDS = 900
 _GIT_FETCH_TIMEOUT_SECONDS = 300
+_GIT_CHECKOUT_TIMEOUT_SECONDS = 120
 
 
 class SourcePreflightError(ValueError):
@@ -1391,13 +1392,9 @@ def resolve_diff_scope_context(
     instruction_block = build_diff_scope_instruction(repo_scopes)
     total_analyzable = sum(len(scope.analyzable_files) for scope in repo_scopes)
     total_deleted = sum(len(scope.deleted_files) for scope in repo_scopes)
+    # Modified already includes copies and low-similarity renames.
     total_changed = sum(
-        len(scope.added_files)
-        + len(scope.modified_files)
-        + len(scope.renamed_files)
-        + len(scope.copied_files)
-        + len(scope.deleted_files)
-        for scope in repo_scopes
+        len(scope.analyzable_files) + len(scope.deleted_files) for scope in repo_scopes
     )
     metadata = {
         "active": True,
@@ -2033,11 +2030,21 @@ def _assert_checkout_revision(repo_path: Path, revision: str) -> None:
     force-pushed or non-branch head), one bounded direct fetch is attempted
     before failing closed.
     """
-    checkout = _run_git_command(repo_path, ["checkout", "--detach", revision], check=False)
+    checkout = _run_git_command(
+        repo_path,
+        ["checkout", "--detach", revision],
+        check=False,
+        timeout=_GIT_CHECKOUT_TIMEOUT_SECONDS,
+    )
     if checkout.returncode != 0:
         _ensure_commit_available(repo_path, revision, "missing_revision")
         try:
-            _run_git_command(repo_path, ["checkout", "--detach", revision], check=True)
+            _run_git_command(
+                repo_path,
+                ["checkout", "--detach", revision],
+                check=True,
+                timeout=_GIT_CHECKOUT_TIMEOUT_SECONDS,
+            )
         except subprocess.CalledProcessError as e:
             detail = e.stderr.strip() if isinstance(e.stderr, str) else str(e)
             raise SourcePreflightError(

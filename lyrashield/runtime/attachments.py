@@ -191,6 +191,11 @@ def validate_attachment(
         )
 
     name = path.name
+    if any(c in name for c in "\r\n\x85\u2028\u2029"):
+        raise AttachmentInputError(
+            "invalid_name",
+            f"Attachment '{raw}' has a line terminator in its filename; names must be single-line.",
+        )
     if not _allowed_suffix(name):
         allowed = ", ".join(s.lstrip(".") for s in ALLOWED_SUFFIXES)
         raise AttachmentInputError(

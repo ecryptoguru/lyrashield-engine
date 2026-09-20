@@ -592,8 +592,11 @@ class ReportState:
         self.scarf_scan_ended_sent: bool = False
         self.scan_ended_exit_reason: str | None = None
         # How many scope-violation ledger entries have already been merged
-        # into run_record["scope_violations"]["entries"].
+        # into run_record["scope_violations"]["entries"], and how much of the
+        # process-cumulative ledger overflow has already been accounted into
+        # the persisted ``dropped`` count.
         self._scope_violations_seen = 0
+        self._scope_dropped_seen = 0
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
@@ -692,6 +695,24 @@ class ReportState:
             restored_revision = persisted_report_revision or 0
             self._report_artifacts_revision = restored_revision
             self._persisted_report_artifacts_revision = restored_revision
+
+        # Same-process resume: the caido ledger may still hold entries already
+        # merged into the persisted record. Seed both offsets from the live
+        # snapshot so _sync_scope_decisions() only processes new denials —
+        # never re-appends entries or re-adds previously counted overflow.
+        try:
+            from lyrashield.tools.proxy import caido_api
+
+            snapshot = caido_api.get_scope_decisions()
+        except ImportError:
+            snapshot = None
+        if isinstance(snapshot, dict):
+            violations = snapshot.get("violations")
+            if isinstance(violations, list):
+                self._scope_violations_seen = max(self._scope_violations_seen, len(violations))
+            dropped = snapshot.get("dropped")
+            if isinstance(dropped, int) and not isinstance(dropped, bool):
+                self._scope_dropped_seen = max(self._scope_dropped_seen, dropped)
 
     def add_vulnerability_report(
         self,
@@ -1095,7 +1116,11 @@ class ReportState:
 
         persisted = self.run_record.get("scope_violations")
         existing: list[dict[str, Any]] = []
-        dropped = snapshot["dropped"]
+        # snapshot["dropped"] is process-cumulative; add only the new overflow
+        # so repeated saves cannot inflate the persisted count.
+        ledger_dropped = int(snapshot["dropped"])
+        dropped = ledger_dropped - self._scope_dropped_seen
+        self._scope_dropped_seen = ledger_dropped
         if isinstance(persisted, dict):
             raw_entries = persisted.get("entries")
             if isinstance(raw_entries, list):
