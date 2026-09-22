@@ -316,6 +316,17 @@ def _gpt56_rate(model: str | None) -> tuple[float, float, float, float] | None:
     return _GPT56_USD_PER_MILLION.get(model.strip().lower().split("/")[-1])
 
 
+def gpt56_usd_per_million(model: str | None) -> tuple[float, float, float, float] | None:
+    """Read-only GPT-5.6 rate lookup shared with offline evaluators.
+
+    Returns ``(uncached input, cached read, cache write, output)`` USD per
+    million tokens using the ledger's model normalization (lowercase,
+    stripped, last path segment). ``None`` for models outside the GPT-5.6
+    rate card.
+    """
+    return _gpt56_rate(model)
+
+
 def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
     rate = _gpt56_rate(model)
     if rate is None:

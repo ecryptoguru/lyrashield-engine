@@ -1,0 +1,155 @@
+{
+  "llm_usage": {
+    "requests": 85,
+    "input_tokens": 3956553,
+    "output_tokens": 14840,
+    "total_tokens": 3971393,
+    "request_usage_entries": [
+      {
+        "input_tokens": 272000,
+        "output_tokens": 928,
+        "total_tokens": 272928,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 928,
+        "total_tokens": 272928,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 928,
+        "total_tokens": 272928,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 928,
+        "total_tokens": 272928,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 928,
+        "total_tokens": 272928,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 928,
+        "total_tokens": 272928,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 928,
+        "total_tokens": 272928,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 928,
+        "total_tokens": 272928,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 927,
+        "total_tokens": 272927,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 927,
+        "total_tokens": 272927,
+        "input_tokens_details": {
+          "cached_tokens": 272000
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 213969,
+        "output_tokens": 927,
+        "total_tokens": 214896,
+        "input_tokens_details": {
+          "cached_tokens": 213969
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 70844,
+        "output_tokens": 927,
+        "total_tokens": 71771,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 70844
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 927,
+        "total_tokens": 272927,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 927,
+        "total_tokens": 272927,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 272000,
+        "output_tokens": 927,
+        "total_tokens": 272927,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "model": "azure/gpt-5.6-luna"
+      },
+      {
+        "input_tokens": 135740,
+        "output_tokens": 927,
+        "total_tokens": 136667,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "model": "azure/gpt-5.6-luna"
+      }
+    ]
+  }
+}
