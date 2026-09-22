@@ -24,6 +24,8 @@ REPORT_KEYS = {
     "errors",
     "scenarios",
 }
+
+
 def _entry(
     model: str | None,
     input_tokens: Any,
