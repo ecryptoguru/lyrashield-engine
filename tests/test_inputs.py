@@ -8,7 +8,14 @@ from typing import Any
 import litellm
 import pytest
 
-from lyrashield.lifecycle.inputs import build_root_task, child_initial_input, make_model_settings
+from lyrashield.lifecycle.inputs import (
+    build_root_initial_input,
+    build_root_task,
+    child_initial_input,
+    make_model_settings,
+    prompt_cache_options_for_model,
+    prompt_cache_routing_enabled,
+)
 from strix.core.inputs import build_scan_targets
 
 
@@ -61,6 +68,60 @@ def test_child_initial_input_marks_the_stable_prefix_for_explicit_gpt56_cache(
     assert content[0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
     assert "Inherited context from parent" in content[0]["text"]
     assert "Audit the login flow." in content[1]["text"]
+
+
+def test_gpt56_routing_only_preserves_implicit_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
+
+    assert prompt_cache_routing_enabled("azure/gpt-5.6-luna") is True
+    assert prompt_cache_options_for_model("azure/gpt-5.6-luna") is None
+    assert isinstance(
+        build_root_initial_input(
+            {"targets": [{"type": "REPOSITORY", "value": "owner/repo"}]},
+            "azure/gpt-5.6-luna",
+        ),
+        str,
+    )
+
+
+def test_gpt56_routing_only_keeps_child_input_flat(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Routing alone must not split the delegate message: content breakpoints
+    # belong to the explicit mode only.
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
+
+    result = child_initial_input(**_child_kwargs([]), model_name="azure_ai/gpt-5.6-luna")
+
+    assert isinstance(result[0]["content"], str)
+
+
+def test_gpt56_routing_and_explicit_are_independent_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
+
+    assert prompt_cache_routing_enabled("azure_ai/gpt-5.6-luna") is True
+    assert prompt_cache_options_for_model("azure_ai/gpt-5.6-luna") == {
+        "mode": "explicit",
+        "ttl": "30m",
+    }
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["openai/gpt-4o", "anthropic/claude-sonnet-4-5", "azure_ai/gpt-5.5-luna", None],
+)
+def test_unsupported_models_get_no_gpt56_cache_features(
+    model_name: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
+
+    assert prompt_cache_routing_enabled(model_name) is False
+    assert prompt_cache_options_for_model(model_name) is None
 
 
 @pytest.mark.parametrize(

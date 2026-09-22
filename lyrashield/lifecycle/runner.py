@@ -49,6 +49,7 @@ from lyrashield.lifecycle.inputs import (
     build_scope_context,
     make_model_settings,
     prompt_cache_options_for_model,
+    prompt_cache_routing_enabled,
 )
 from lyrashield.lifecycle.sessions import open_agent_session
 from lyrashield.policy.loader import load_settings
@@ -443,6 +444,12 @@ async def run_strix_scan(
         delegate_cache_options = (
             prompt_cache_options_for_model(delegate_model) if cache_enabled else None
         )
+        # Stable routing keys are decoupled from explicit cache options: when
+        # routing is enabled for an approved model, coordinator, delegates, and
+        # fallback each pin their prompt family to a stable key — with or
+        # without explicit breakpoints.
+        root_routing = cache_enabled and prompt_cache_routing_enabled(resolved_model)
+        delegate_routing = cache_enabled and prompt_cache_routing_enabled(delegate_model)
         initial_input: Any = (
             []
             if is_resume
@@ -470,7 +477,7 @@ async def run_strix_scan(
                         separators=(",", ":"),
                     ),
                 )
-                if root_cache_options
+                if root_routing
                 else None
             ),
             prompt_cache_options=root_cache_options,
@@ -497,7 +504,7 @@ async def run_strix_scan(
             max_output_tokens=delegate_max_output_tokens,
             prompt_cache_key=(
                 _stable_prompt_cache_key("delegates", delegate_cache_material)
-                if delegate_cache_options
+                if delegate_routing
                 else None
             ),
             prompt_cache_options=delegate_cache_options,
@@ -546,9 +553,10 @@ async def run_strix_scan(
                     ).hexdigest(),
                     "prompt_cache": {
                         "enabled": cache_enabled,
-                        "mode": root_cache_options["mode"] if root_cache_options else None,
+                        "routing_enabled": root_routing,
+                        "routing": "stable-prompt-v2" if root_routing else None,
+                        "mode": "explicit" if root_cache_options else "implicit",
                         "ttl": root_cache_options["ttl"] if root_cache_options else None,
-                        "routing": "stable-prompt-v2" if root_cache_options else None,
                     },
                     "model": resolved_model,
                     "reasoning_effort": llm_settings.reasoning_effort,
@@ -784,7 +792,7 @@ async def run_strix_scan(
                             separators=(",", ":"),
                         ),
                     )
-                    if delegate_cache_options
+                    if delegate_routing
                     else None
                 ),
                 prompt_cache_options=delegate_cache_options,

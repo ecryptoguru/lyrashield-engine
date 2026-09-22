@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 from agents import ModelSettings
+from agents.exceptions import ModelBehaviorError
 from openai import RateLimitError
 
 import lyrashield.tools.todo.tools as todo_tools
@@ -157,6 +158,8 @@ async def test_runner_uses_stable_prompt_cache_keys(
         "prompt_cache_options_for_model",
         lambda _model: {"mode": "explicit", "ttl": "30m"},
     )
+    # Stable keys now follow the routing gate, not the explicit-options flag.
+    monkeypatch.setattr(runner, "prompt_cache_routing_enabled", lambda _model: True)
 
     await runner.run_strix_scan(
         scan_config={"targets": [], "scan_mode": "standard"},
@@ -172,6 +175,223 @@ async def test_runner_uses_stable_prompt_cache_keys(
     assert all(len(key) <= 64 for key in cache_keys)
     assert all("scan-specific-id" not in key for key in cache_keys)
     assert cache_keys[0] != cache_keys[1]
+
+
+def _has_cache_breakpoint(initial_input: Any) -> bool:
+    """Return whether an agent input carries an explicit cache breakpoint part."""
+    if not isinstance(initial_input, list):
+        return False
+    for message in initial_input:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        if any(isinstance(part, dict) and part.get("prompt_cache_breakpoint") for part in content):
+            return True
+    return False
+
+
+def _gpt56_llm_settings() -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        llm=types.SimpleNamespace(
+            model="azure_ai/gpt-5.6-terra",
+            delegate_model="azure_ai/gpt-5.6-luna",
+            reasoning_effort="medium",
+            delegate_reasoning_effort="high",
+            force_required_tool_choice=False,
+            timeout=300,
+            prompt_cache=True,
+            extra_headers=None,
+            api_base="https://example.openai.azure.com",
+            api_key="test-key",
+        ),
+        runtime=types.SimpleNamespace(max_context_images=3),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routing_on", [False, True])
+@pytest.mark.parametrize("explicit_on", [False, True])
+async def test_prompt_cache_policy_matrix_across_construction_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    routing_on: bool,
+    explicit_on: bool,
+) -> None:
+    """Stable keys follow routing; options and breakpoints follow explicit mode.
+
+    Coordinator, delegate, and fallback model-settings construction must all
+    honor the same policy matrix:
+
+    | Routing | Explicit | Stable key | Cache options | Content breakpoint |
+    | Off     | Off      | No         | None          | No                 |
+    | On      | Off      | Yes        | None          | No                 |
+    | Off     | On       | No         | Explicit 30m  | Yes                |
+    | On      | On       | Yes        | Explicit 30m  | Yes                |
+    """
+    _patch_engine_scaffold(monkeypatch, tmp_path, {"scope": "built-in"})
+    if routing_on:
+        monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    else:
+        monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_ROUTING", raising=False)
+    if explicit_on:
+        monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
+    else:
+        monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
+    monkeypatch.setattr(runner, "load_settings", _gpt56_llm_settings)
+
+    settings_calls: list[dict[str, Any]] = []
+
+    def _make_model_settings(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        settings_calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(runner, "make_model_settings", _make_model_settings)
+
+    record = types.SimpleNamespace(
+        run_record={},
+        save_run_data=lambda: None,
+        set_cleanup_outcome=lambda _outcome: None,
+        set_terminal_reason=lambda _reason: None,
+    )
+    monkeypatch.setattr(runner, "get_global_report_state", lambda: record)
+
+    loop_calls: list[dict[str, Any]] = []
+
+    async def _run_agent_loop(*_args: Any, **kwargs: Any) -> Any:
+        loop_calls.append(kwargs)
+        if len(loop_calls) == 1:
+            # Drive the fallback path so its ModelSettings get built too.
+            raise ModelBehaviorError("coordinator failed")
+        return types.SimpleNamespace(final_output='{"scan_completed": true}')
+
+    monkeypatch.setattr(runner, "run_agent_loop", _run_agent_loop)
+
+    await runner.run_strix_scan(
+        scan_config={
+            "targets": [
+                {
+                    "type": "repository",
+                    "details": {
+                        "target_repo": "https://repo.example.com/a.git",
+                        "cloned_repo_path": "/workspace/a",
+                        "workspace_subdir": "a",
+                    },
+                },
+            ],
+            "scan_mode": "deep",
+        },
+        scan_id="scan-matrix",
+        image="img",
+        coordinator=AgentCoordinator(),
+    )
+
+    # Coordinator, delegates, and the model-error fallback each build their own
+    # ModelSettings; all three must emit the same cache posture.
+    assert len(settings_calls) == 3
+    expected_options = {"mode": "explicit", "ttl": "30m"} if explicit_on else None
+    for call in settings_calls:
+        assert (call["prompt_cache_key"] is not None) is routing_on
+        assert call["prompt_cache_options"] == expected_options
+        assert call["prompt_cache"] is True
+    if routing_on:
+        roles = [call["prompt_cache_key"].split(":")[2] for call in settings_calls]
+        assert roles == ["coordinator", "delegates", "fallback"]
+
+    assert _has_cache_breakpoint(loop_calls[0]["initial_input"]) is explicit_on
+
+    assert record.run_record["prompt_cache"] == {
+        "enabled": True,
+        "routing_enabled": routing_on,
+        "routing": "stable-prompt-v2" if routing_on else None,
+        "mode": "explicit" if explicit_on else "implicit",
+        "ttl": "30m" if explicit_on else None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stable_prompt_cache_keys_exclude_scan_material(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """Cache keys are digests: no raw target, workspace, instructions, or IDs."""
+    scope_context = {
+        "authorized_targets": [
+            {
+                "type": "repository",
+                "value": "https://sensitive-target.example.com",
+                "workspace_path": "/workspace/private-subdir",
+            },
+        ],
+    }
+    _patch_engine_scaffold(monkeypatch, tmp_path, scope_context)
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
+    monkeypatch.setattr(runner, "load_settings", _gpt56_llm_settings)
+
+    settings_calls: list[dict[str, Any]] = []
+
+    def _make_model_settings(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        settings_calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(runner, "make_model_settings", _make_model_settings)
+
+    seen: dict[str, Any] = {}
+
+    def _open_session(root_id: Any, _db: Any, **_kwargs: Any) -> object:
+        seen["root_id"] = root_id
+        return object()
+
+    monkeypatch.setattr(runner, "open_agent_session", _open_session)
+
+    loop_calls = 0
+
+    async def _run_agent_loop(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal loop_calls
+        loop_calls += 1
+        if loop_calls == 1:
+            raise ModelBehaviorError("coordinator failed")
+        return types.SimpleNamespace(final_output='{"scan_completed": true}')
+
+    monkeypatch.setattr(runner, "run_agent_loop", _run_agent_loop)
+
+    await runner.run_strix_scan(
+        scan_config={
+            "targets": [
+                {
+                    "type": "repository",
+                    "details": {
+                        "target_repo": "https://sensitive-target.example.com",
+                        "workspace_subdir": "private-subdir",
+                    },
+                },
+            ],
+            "user_instructions": "RAW-INSTRUCTION-MARKER",
+            "scan_mode": "deep",
+        },
+        scan_id="scan-SENSITIVE-ID",
+        image="img",
+        coordinator=AgentCoordinator(),
+        root_instructions_override="OVERRIDE-MARKER-123",
+    )
+
+    forbidden = [
+        "https://sensitive-target.example.com",
+        "private-subdir",
+        "RAW-INSTRUCTION-MARKER",
+        "OVERRIDE-MARKER-123",
+        "scan-SENSITIVE-ID",
+        str(seen["root_id"]),
+    ]
+    keys = [call["prompt_cache_key"] for call in settings_calls]
+    assert len(keys) == 3
+    for key in keys:
+        assert key is not None
+        assert key.startswith("lyrashield:v2:")
+        digest = key.rsplit(":", 1)[-1]
+        assert all(char in "0123456789abcdef" for char in digest)
+        for material in forbidden:
+            assert material not in key
 
 
 @pytest.mark.asyncio
