@@ -95,6 +95,15 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
   the key.
 </ParamField>
 
+### Offline cache-economics evaluator
+
+Run `python -m lyrashield.evals.cache_economics path/to/run.json` to produce a
+read-only, allowlisted accounting summary from provider request receipts. The
+evaluator makes no provider or target calls. It reports no cost or scenarios
+when request entries and declared usage totals do not reconcile. Optional
+`--input-reduction FRACTION` and `--cache-conversion FRACTION` outputs are
+hypothetical repricings of complete receipts, not measured savings.
+
 <ParamField path="LLM_DISABLE_STREAMING" default="false" type="boolean">
   Disable streaming on LLM calls. Alias: `LYRASHIELD_DISABLE_STREAMING`.
 </ParamField>
