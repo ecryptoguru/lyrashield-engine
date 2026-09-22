@@ -91,6 +91,25 @@ def prompt_cache_options_for_model(model_name: str | None) -> PromptCacheOptions
     return {"mode": "explicit", "ttl": "30m"}
 
 
+# Gate for emitting a stable ``prompt_cache_key`` that pins each scan role's
+# exact prompt family to one provider cache entry. This is independent of the
+# explicit-options flag: a routing key alone preserves the provider's implicit
+# rolling-history caching and needs no content breakpoints. Opt-in until a
+# smoke scan proves the target deployment honors it.
+_PROMPT_CACHE_ROUTING_ENV = "LYRASHIELD_PROMPT_CACHE_ROUTING"
+
+
+def prompt_cache_routing_enabled(model_name: str | None) -> bool:
+    """Return whether to emit stable ``prompt_cache_key`` routing keys.
+
+    This is off by default regardless of model; turn it on by setting
+    ``LYRASHIELD_PROMPT_CACHE_ROUTING=1`` for an approved GPT-5.6 deployment.
+    Independent of ``LYRASHIELD_PROMPT_CACHE_EXPLICIT``.
+    """
+    value = os.environ.get(_PROMPT_CACHE_ROUTING_ENV, "").strip().lower()
+    return value in ("1", "true", "yes") and is_gpt56_model(model_name)
+
+
 def _accepts_required_tool_choice(model_name: str | None) -> bool:
     name = (model_name or "").strip().lower()
     for prefix in ("litellm/", "any-llm/"):

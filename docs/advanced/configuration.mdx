@@ -80,11 +80,19 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
   Enable implicit prompt caching. Defaults to on. Alias of `STRIX_PROMPT_CACHE`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_PROMPT_CACHE_EXPLICIT" default="1" type="boolean">
+<ParamField path="LYRASHIELD_PROMPT_CACHE_EXPLICIT" default="false" type="boolean">
   Enable GPT-5.6 explicit cache breakpoints for prompt-cache reads and writes.
-  Unsupported routes ignore this setting. Stable coordinator and delegate cache
-  keys are scoped to the prompt bundle and scan role; usage artifacts separately
-  record cache-read and cache-write tokens when the provider reports them.
+  This is opt-in and requires a provider smoke scan for the exact deployment;
+  unsupported routes ignore it. Usage artifacts separately record cache-read
+  and cache-write tokens when the provider reports them.
+</ParamField>
+
+<ParamField path="LYRASHIELD_PROMPT_CACHE_ROUTING" default="false" type="boolean">
+  Opt in to stable GPT-5.6 `prompt_cache_key` routing keys for the coordinator,
+  delegate, and fallback prompt families. It is independent of explicit
+  breakpoints and does not turn caching on when `LYRASHIELD_PROMPT_CACHE=false`.
+  Enable only after a provider smoke scan confirms the exact deployment honors
+  the key.
 </ParamField>
 
 ### Offline cache-economics evaluator

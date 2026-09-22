@@ -1,5 +1,15 @@
 # LyraShield ownership and upstream-import ledger
 
+## Prompt-cache routing contract (2026-09-22)
+
+`run.json.prompt_cache` is a bounded execution receipt for the cache posture
+actually passed to the SDK. `enabled: false` now records `mode: null`, never
+the misleading implicit mode. The existing runner contract matrix serializes
+the coordinator, delegate, and fallback `ModelSettings` through the SDK and
+asserts the cache key/options fields for every cache, routing, and explicit-mode
+combination. `LYRASHIELD_PROMPT_CACHE_EXPLICIT` and the new routing key flag
+remain opt-in; neither changes the default implicit-cache posture.
+
 ## Viewer ownership documentation correction (2026-09-19)
 
 Docs-only correction; no code or gate behavior changed.
