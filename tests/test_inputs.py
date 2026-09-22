@@ -121,9 +121,7 @@ def test_gpt56_cache_settings_serialize_at_sdk_boundary(request_phase: str) -> N
 
     wire = settings.to_json_dict()
 
-    assert wire["extra_args"] == {
-        "prompt_cache_key": f"lyrashield:v2:coordinator:{request_phase}"
-    }
+    assert wire["extra_args"] == {"prompt_cache_key": f"lyrashield:v2:coordinator:{request_phase}"}
     assert wire["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
 
 

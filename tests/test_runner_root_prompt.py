@@ -298,17 +298,13 @@ async def test_prompt_cache_policy_matrix_across_construction_paths(
     # ModelSettings; all three must emit the same cache posture.
     assert len(settings_calls) == 3
     effective_routing = cache_enabled and routing_on
-    expected_options = (
-        {"mode": "explicit", "ttl": "30m"} if cache_enabled and explicit_on else None
-    )
+    expected_options = {"mode": "explicit", "ttl": "30m"} if cache_enabled and explicit_on else None
     for call in settings_calls:
         assert (call["prompt_cache_key"] is not None) is effective_routing
         assert call["prompt_cache_options"] == expected_options
         assert call["prompt_cache"] is cache_enabled
     for wire in wire_payloads:
-        assert (
-            (wire["extra_args"] or {}).get("prompt_cache_key") is not None
-        ) is effective_routing
+        assert ((wire["extra_args"] or {}).get("prompt_cache_key") is not None) is effective_routing
         assert wire["prompt_cache_options"] == expected_options
     if effective_routing:
         roles = [call["prompt_cache_key"].split(":")[2] for call in settings_calls]
