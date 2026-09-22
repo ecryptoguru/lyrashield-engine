@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lyrashield.artifacts.usage import (
-    _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS,
+    estimate_gpt56_request_cost_usd,
     gpt56_usd_per_million,
 )
 
@@ -61,7 +61,7 @@ class CacheEconomicsReport:
 class _PricedEntry:
     """One validated request receipt paired with its rate-card row."""
 
-    rate: tuple[float, float, float, float]
+    model: str
     input_tokens: int
     cached_tokens: int
     cache_write_tokens: int
@@ -120,16 +120,31 @@ def _evaluate(
             errors.append(result)
 
     requests = declared_requests if declared_requests is not None else len(raw_entries)
+    if declared_requests is not None and declared_requests != len(raw_entries):
+        errors.append("requests_mismatch")
+    totals = {
+        "input_tokens": sum(entry.input_tokens for entry in priced),
+        "output_tokens": sum(entry.output_tokens for entry in priced),
+        "total_tokens": sum(entry.input_tokens + entry.output_tokens for entry in priced),
+    }
+    for field, actual in totals.items():
+        if field not in usage:
+            continue
+        declared = _counter(usage[field])
+        if declared is None:
+            errors.append(f"{field}_invalid")
+        elif declared != actual:
+            errors.append(f"{field}_mismatch")
     report = CacheEconomicsReport(
         requests=requests,
-        input_tokens=sum(entry.input_tokens for entry in priced),
+        input_tokens=totals["input_tokens"],
         cached_input_tokens=sum(entry.cached_tokens for entry in priced),
         cache_write_input_tokens=sum(entry.cache_write_tokens for entry in priced),
         uncached_input_tokens=sum(entry.uncached_tokens for entry in priced),
-        output_tokens=sum(entry.output_tokens for entry in priced),
-        estimated_cost_usd=(
-            round(sum(_entry_cost(entry) for entry in priced), 6) if priced else None
-        ),
+        output_tokens=totals["output_tokens"],
+        estimated_cost_usd=round(sum(_entry_cost(entry) for entry in priced), 6)
+        if priced and not errors
+        else None,
         complete=not errors,
         errors=tuple(errors),
     )
@@ -174,7 +189,7 @@ def _parse_entry(index: int, raw: Any) -> _PricedEntry | str:
     if cached_tokens + cache_write_tokens > input_tokens:
         return f"{prefix}:cache_exceeds_input"
     return _PricedEntry(
-        rate=rate,
+        model=model,
         input_tokens=input_tokens,
         cached_tokens=cached_tokens,
         cache_write_tokens=cache_write_tokens,
@@ -190,55 +205,35 @@ def _counter(value: Any) -> int | None:
     return None
 
 
-def _entry_multipliers(input_tokens: int) -> tuple[float, float]:
-    if input_tokens > _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS:
-        return 2.0, 1.5
-    return 1.0, 1.0
-
-
-def _price(
-    rate: tuple[float, float, float, float],
-    uncached: float,
-    cached: float,
-    cache_write: float,
-    output: float,
-    input_multiplier: float,
-    output_multiplier: float,
+def _entry_cost(
+    entry: _PricedEntry,
+    *,
+    input_tokens: float | None = None,
+    cached_tokens: float | None = None,
+    cache_write_tokens: float | None = None,
 ) -> float:
-    return (
-        uncached * rate[0] * input_multiplier
-        + cached * rate[1] * input_multiplier
-        + cache_write * rate[2] * input_multiplier
-        + output * rate[3] * output_multiplier
-    ) / 1_000_000
-
-
-def _entry_cost(entry: _PricedEntry) -> float:
-    input_multiplier, output_multiplier = _entry_multipliers(entry.input_tokens)
-    return _price(
-        entry.rate,
-        entry.uncached_tokens,
-        entry.cached_tokens,
-        entry.cache_write_tokens,
-        entry.output_tokens,
-        input_multiplier,
-        output_multiplier,
+    cost = estimate_gpt56_request_cost_usd(
+        entry.model,
+        input_tokens=entry.input_tokens if input_tokens is None else input_tokens,
+        cached_input_tokens=entry.cached_tokens if cached_tokens is None else cached_tokens,
+        cache_write_input_tokens=(
+            entry.cache_write_tokens if cache_write_tokens is None else cache_write_tokens
+        ),
+        output_tokens=entry.output_tokens,
     )
+    assert cost is not None
+    return cost
 
 
 def _input_reduction_cost(entries: tuple[_PricedEntry, ...], fraction: float) -> float:
     keep = 1.0 - fraction
     total = 0.0
     for entry in entries:
-        input_multiplier, output_multiplier = _entry_multipliers(entry.input_tokens)
-        total += _price(
-            entry.rate,
-            entry.uncached_tokens * keep,
-            entry.cached_tokens * keep,
-            entry.cache_write_tokens * keep,
-            entry.output_tokens,
-            input_multiplier,
-            output_multiplier,
+        total += _entry_cost(
+            entry,
+            input_tokens=entry.input_tokens * keep,
+            cached_tokens=entry.cached_tokens * keep,
+            cache_write_tokens=entry.cache_write_tokens * keep,
         )
     return total
 
@@ -246,16 +241,11 @@ def _input_reduction_cost(entries: tuple[_PricedEntry, ...], fraction: float) ->
 def _cache_conversion_cost(entries: tuple[_PricedEntry, ...], fraction: float) -> float:
     total = 0.0
     for entry in entries:
-        input_multiplier, output_multiplier = _entry_multipliers(entry.input_tokens)
         converted = fraction * (entry.uncached_tokens + entry.cache_write_tokens)
-        total += _price(
-            entry.rate,
-            entry.uncached_tokens * (1.0 - fraction),
-            entry.cached_tokens + converted,
-            entry.cache_write_tokens * (1.0 - fraction),
-            entry.output_tokens,
-            input_multiplier,
-            output_multiplier,
+        total += _entry_cost(
+            entry,
+            cached_tokens=entry.cached_tokens + converted,
+            cache_write_tokens=entry.cache_write_tokens * (1.0 - fraction),
         )
     return total
 

@@ -327,10 +327,30 @@ def gpt56_usd_per_million(model: str | None) -> tuple[float, float, float, float
     return _gpt56_rate(model)
 
 
-def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
+def estimate_gpt56_request_cost_usd(
+    model: str | None,
+    *,
+    input_tokens: float,
+    cached_input_tokens: float,
+    cache_write_input_tokens: float,
+    output_tokens: float,
+) -> float | None:
+    """Price one validated GPT-5.6 request using the ledger rate card."""
     rate = _gpt56_rate(model)
     if rate is None:
         return None
+    input_multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS else 1.0
+    output_multiplier = 1.5 if input_multiplier > 1.0 else 1.0
+    uncached_input_tokens = input_tokens - cached_input_tokens - cache_write_input_tokens
+    return (
+        uncached_input_tokens * rate[0] * input_multiplier
+        + cached_input_tokens * rate[1] * input_multiplier
+        + cache_write_input_tokens * rate[2] * input_multiplier
+        + output_tokens * rate[3] * output_multiplier
+    ) / 1_000_000
+
+
+def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
     entries: list[Any] = list(usage.request_usage_entries or [])
     if not entries and usage.requests == 1:
         entries = [usage]
@@ -345,15 +365,16 @@ def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
         details = _details_to_dict(getattr(entry, "input_tokens_details", None))
         cached = min(_int_or_zero(details.get("cached_tokens")), input_tokens)
         cache_write = min(_int_or_zero(details.get("cache_write_tokens")), input_tokens - cached)
-        uncached = input_tokens - cached - cache_write
-        multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS else 1.0
-        output_multiplier = 1.5 if multiplier > 1 else 1.0
-        total += (
-            uncached * rate[0] * multiplier
-            + cached * rate[1] * multiplier
-            + cache_write * rate[2] * multiplier
-            + output_tokens * rate[3] * output_multiplier
-        ) / 1_000_000
+        cost = estimate_gpt56_request_cost_usd(
+            model,
+            input_tokens=input_tokens,
+            cached_input_tokens=cached,
+            cache_write_input_tokens=cache_write,
+            output_tokens=output_tokens,
+        )
+        if cost is None:
+            return None
+        total += cost
     return _round_cost(total)
 
 
