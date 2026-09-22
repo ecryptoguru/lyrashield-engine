@@ -109,6 +109,24 @@ def test_gpt56_routing_and_explicit_are_independent_flags(
     }
 
 
+@pytest.mark.parametrize("request_phase", ["normal", "resume", "post_compaction"])
+def test_gpt56_cache_settings_serialize_at_sdk_boundary(request_phase: str) -> None:
+    """Every request phase reuses these SDK settings, not a hand-built payload."""
+    settings = make_model_settings(
+        None,
+        model_name="azure_ai/gpt-5.6-luna",
+        prompt_cache_key=f"lyrashield:v2:coordinator:{request_phase}",
+        prompt_cache_options={"mode": "explicit", "ttl": "30m"},
+    )
+
+    wire = settings.to_json_dict()
+
+    assert wire["extra_args"] == {
+        "prompt_cache_key": f"lyrashield:v2:coordinator:{request_phase}"
+    }
+    assert wire["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+
+
 @pytest.mark.parametrize(
     "model_name",
     ["openai/gpt-4o", "anthropic/claude-sonnet-4-5", "azure_ai/gpt-5.5-luna", None],

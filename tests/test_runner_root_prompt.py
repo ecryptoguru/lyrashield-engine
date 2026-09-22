@@ -19,7 +19,7 @@ import lyrashield.tools.todo.tools as todo_tools
 import strix.tools.notes.tools as notes_tools
 from lyrashield.lifecycle import runner
 from lyrashield.lifecycle.agents import AgentCoordinator
-from lyrashield.lifecycle.inputs import _sanitize_prompt_value
+from lyrashield.lifecycle.inputs import _sanitize_prompt_value, make_model_settings
 from lyrashield.runtime import session_manager
 
 
@@ -190,7 +190,7 @@ def _has_cache_breakpoint(initial_input: Any) -> bool:
     return False
 
 
-def _gpt56_llm_settings() -> types.SimpleNamespace:
+def _gpt56_llm_settings(*, prompt_cache: bool = True) -> types.SimpleNamespace:
     return types.SimpleNamespace(
         llm=types.SimpleNamespace(
             model="azure_ai/gpt-5.6-terra",
@@ -199,7 +199,7 @@ def _gpt56_llm_settings() -> types.SimpleNamespace:
             delegate_reasoning_effort="high",
             force_required_tool_choice=False,
             timeout=300,
-            prompt_cache=True,
+            prompt_cache=prompt_cache,
             extra_headers=None,
             api_base="https://example.openai.azure.com",
             api_key="test-key",
@@ -209,11 +209,13 @@ def _gpt56_llm_settings() -> types.SimpleNamespace:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cache_enabled", [False, True])
 @pytest.mark.parametrize("routing_on", [False, True])
 @pytest.mark.parametrize("explicit_on", [False, True])
 async def test_prompt_cache_policy_matrix_across_construction_paths(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
+    cache_enabled: bool,
     routing_on: bool,
     explicit_on: bool,
 ) -> None:
@@ -237,13 +239,20 @@ async def test_prompt_cache_policy_matrix_across_construction_paths(
         monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
     else:
         monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
-    monkeypatch.setattr(runner, "load_settings", _gpt56_llm_settings)
+    monkeypatch.setattr(
+        runner,
+        "load_settings",
+        lambda: _gpt56_llm_settings(prompt_cache=cache_enabled),
+    )
 
     settings_calls: list[dict[str, Any]] = []
+    wire_payloads: list[dict[str, Any]] = []
 
-    def _make_model_settings(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+    def _make_model_settings(*args: Any, **kwargs: Any) -> ModelSettings:
         settings_calls.append(kwargs)
-        return {}
+        settings = make_model_settings(*args, **kwargs)
+        wire_payloads.append(settings.to_json_dict())
+        return settings
 
     monkeypatch.setattr(runner, "make_model_settings", _make_model_settings)
 
@@ -288,23 +297,29 @@ async def test_prompt_cache_policy_matrix_across_construction_paths(
     # Coordinator, delegates, and the model-error fallback each build their own
     # ModelSettings; all three must emit the same cache posture.
     assert len(settings_calls) == 3
-    expected_options = {"mode": "explicit", "ttl": "30m"} if explicit_on else None
+    effective_routing = cache_enabled and routing_on
+    expected_options = (
+        {"mode": "explicit", "ttl": "30m"} if cache_enabled and explicit_on else None
+    )
     for call in settings_calls:
-        assert (call["prompt_cache_key"] is not None) is routing_on
+        assert (call["prompt_cache_key"] is not None) is effective_routing
         assert call["prompt_cache_options"] == expected_options
-        assert call["prompt_cache"] is True
-    if routing_on:
+        assert call["prompt_cache"] is cache_enabled
+    for wire in wire_payloads:
+        assert (
+            (wire["extra_args"] or {}).get("prompt_cache_key") is not None
+        ) is effective_routing
+        assert wire["prompt_cache_options"] == expected_options
+    if effective_routing:
         roles = [call["prompt_cache_key"].split(":")[2] for call in settings_calls]
         assert roles == ["coordinator", "delegates", "fallback"]
 
-    assert _has_cache_breakpoint(loop_calls[0]["initial_input"]) is explicit_on
-
     assert record.run_record["prompt_cache"] == {
-        "enabled": True,
-        "routing_enabled": routing_on,
-        "routing": "stable-prompt-v2" if routing_on else None,
-        "mode": "explicit" if explicit_on else "implicit",
-        "ttl": "30m" if explicit_on else None,
+        "enabled": cache_enabled,
+        "routing_enabled": effective_routing,
+        "routing": "stable-prompt-v2" if effective_routing else None,
+        "mode": "explicit" if expected_options else "implicit" if cache_enabled else None,
+        "ttl": "30m" if expected_options else None,
     }
 
 

@@ -555,7 +555,13 @@ async def run_strix_scan(
                         "enabled": cache_enabled,
                         "routing_enabled": root_routing,
                         "routing": "stable-prompt-v2" if root_routing else None,
-                        "mode": "explicit" if root_cache_options else "implicit",
+                        "mode": (
+                            "explicit"
+                            if root_cache_options
+                            else "implicit"
+                            if cache_enabled
+                            else None
+                        ),
                         "ttl": root_cache_options["ttl"] if root_cache_options else None,
                     },
                     "model": resolved_model,
