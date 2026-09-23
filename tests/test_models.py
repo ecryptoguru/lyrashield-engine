@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     _azure_responses_base_url,
+    _AzureUsageResponsesModel,
     is_gpt56_model,
     is_gpt56_supported_provider,
     is_recommended_or_frontier_model,
@@ -137,6 +139,46 @@ def test_azure_gpt56_routes_through_responses_with_stripped_deployment_name() ->
     assert isinstance(model, OpenAIResponsesModel)
     assert model.model == "gpt-5.6-luna"
     assert str(model._client.base_url) == "https://example.services.ai.azure.com/openai/v1/"
+
+
+@pytest.mark.asyncio
+async def test_azure_gpt6_captures_raw_terminal_usage_before_sdk_normalizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="azure_ai/gpt-6-luna",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+        )
+    )
+    model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
+    assert isinstance(model, _AzureUsageResponsesModel)
+    captured: list[Any] = []
+    state = SimpleNamespace(capture_provider_usage=captured.append)
+    monkeypatch.setattr("lyrashield.artifacts.state.get_global_report_state", lambda: state)
+    response = SimpleNamespace(id="r1", status="completed")
+
+    async def fake_fetch(_self: Any, *_args: Any, stream: bool = False, **_kwargs: Any) -> Any:
+        if not stream:
+            return response
+
+        async def events() -> Any:
+            yield SimpleNamespace(type="response.completed", response=response)
+
+        return events()
+
+    monkeypatch.setattr(OpenAIResponsesModel, "_fetch_response", fake_fetch)
+    assert await model._fetch_response(stream=False) is response
+    stream = await model._fetch_response(stream=True)
+    assert [event.type async for event in stream] == ["response.completed"]
+    assert captured == [response, response]
+
+    def broken_capture(_response: Any) -> None:
+        raise ValueError("target-derived diagnostic")
+
+    state.capture_provider_usage = broken_capture
+    assert await model._fetch_response(stream=False) is response
 
 
 def test_azure_multi_segment_name_uses_final_deployment() -> None:

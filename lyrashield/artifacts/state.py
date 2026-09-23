@@ -18,7 +18,12 @@ from agents.usage import Usage
 from lyrashield.artifacts import evidence as _evidence
 from lyrashield.artifacts import quality as _quality
 from lyrashield.artifacts.sarif import write_sarif
-from lyrashield.artifacts.usage import LLMUsageLedger, _int_or_zero, _round_cost
+from lyrashield.artifacts.usage import (
+    LLMUsageLedger,
+    _int_or_zero,
+    _round_cost,
+    extract_provider_usage,
+)
 from lyrashield.artifacts.writer import (
     read_run_record,
     write_executive_report,
@@ -552,6 +557,7 @@ class ReportState:
         self._raw_targets_info: list[dict[str, Any]] = []
         self._raw_local_sources: list[dict[str, Any]] = []
         self._llm_usage = LLMUsageLedger()
+        self._provider_usage_receipts: dict[str, dict[str, Any]] = {}
         auth_mode = codex.auth_mode(load_settings().llm.model)
         self._llm_usage.zero_cost = auth_mode == "subscription"
         self.run_record = initial_run_record(run_name, auth_mode=auth_mode)
@@ -1169,6 +1175,7 @@ class ReportState:
         usage: Usage | None,
         agent_name: str | None = None,
         model: str | None = None,
+        response_id: str | None = None,
     ) -> None:
         """Record SDK-native token usage for one completed model run/cycle."""
         self._llm_usage.record(
@@ -1176,10 +1183,22 @@ class ReportState:
             agent_name=agent_name,
             model=model,
             usage=usage,
+            provider_receipt=self._provider_usage_receipts.pop(response_id, None)
+            if response_id
+            else None,
         )
         self._turn_count += 1
         self._set_phase("running")
         self.save_run_data()
+
+    def capture_provider_usage(self, response: Any) -> None:
+        """Capture raw numeric buckets before the SDK fills absent fields with zero."""
+        receipt = extract_provider_usage(response)
+        if receipt is not None:
+            self._provider_usage_receipts[receipt["response_id"]] = receipt
+
+    def provider_usage_receipt(self, response_id: str | None) -> dict[str, Any] | None:
+        return self._provider_usage_receipts.get(response_id) if response_id else None
 
     def record_observed_llm_cost(
         self,

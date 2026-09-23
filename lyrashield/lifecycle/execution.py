@@ -541,6 +541,7 @@ async def respawn_subagents(
 
 
 _INTERACTIVE_TOOL_RECOVERY_LIMIT = 3
+_AUTONOMOUS_TOOL_RECOVERY_LIMIT = 3
 
 
 async def _run_until_lifecycle(
@@ -566,7 +567,9 @@ async def _run_until_lifecycle(
     """
     result: RunResultBase | None = None
     input_data: Any = initial_input
-    recovery_limit = _INTERACTIVE_TOOL_RECOVERY_LIMIT if interactive else max(1, max_turns)
+    recovery_limit = (
+        _INTERACTIVE_TOOL_RECOVERY_LIMIT if interactive else _AUTONOMOUS_TOOL_RECOVERY_LIMIT
+    )
     is_root = context.get("parent_id") is None
 
     while True:

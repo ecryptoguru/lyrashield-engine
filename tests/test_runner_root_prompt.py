@@ -17,10 +17,26 @@ from openai import RateLimitError
 
 import lyrashield.tools.todo.tools as todo_tools
 import strix.tools.notes.tools as notes_tools
+from lyrashield.agents.prompt import render_system_prompt
 from lyrashield.lifecycle import runner
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.inputs import _sanitize_prompt_value, make_model_settings
 from lyrashield.runtime import session_manager
+
+
+def test_standard_prompt_is_bounded_without_changing_deep() -> None:
+    from lyrashield_adapter.cli import _register_lyrashield_skills  # noqa: PLC0415
+
+    _register_lyrashield_skills()
+    standard = render_system_prompt(scan_mode="standard", is_root=True, is_whitebox=True)
+    deep = render_system_prompt(scan_mode="deep", is_root=True, is_whitebox=True)
+
+    assert "# Standard assessment" in standard
+    assert "STANDARD RUNTIME CONTRACT" in standard
+    assert "one evidence-backed correction" in standard
+    assert "Missing required coverage remains incomplete" in standard
+    assert "MUST perform BOTH static AND dynamic analysis" not in standard
+    assert "MUST perform BOTH static AND dynamic analysis" in deep
 
 
 def _make_rate_limit_error() -> RateLimitError:

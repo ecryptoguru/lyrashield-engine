@@ -8,8 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 import pytest
+from agents.exceptions import MaxTurnsExceeded
 
 import lyrashield.lifecycle.hooks as hooks_mod
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.lifecycle.deadline import RunDeadline
 from lyrashield.lifecycle.hooks import (
     BudgetExceededError,
     BudgetPausedError,
@@ -591,6 +594,40 @@ async def test_turn_warning_has_system_notice_tag() -> None:
     await hooks.on_llm_start(_make_warn_context(requests=69), MagicMock(), None, items)
     assert items
     assert "[SYSTEM-NOTICE]" in items[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_hook_enforces_cumulative_turns_across_sdk_cycles() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    hooks = ReportUsageHooks(model="test-model", max_turns=2)
+    context = _make_warn_context(requests=0, agent_id="root")
+    context.context["coordinator"] = coordinator
+    for _ in range(2):
+        await hooks.on_llm_start(context, _agent(), None, [])
+    with pytest.raises(MaxTurnsExceeded):
+        await hooks.on_llm_start(context, _agent(), None, [])
+    assert coordinator.model_start_counts["root"] == 2
+
+
+@pytest.mark.asyncio
+async def test_hook_warns_once_then_refuses_provider_calls_after_deadline() -> None:
+    now = [0.0]
+    coordinator = AgentCoordinator()
+    coordinator.run_deadline = RunDeadline.start(100, clock=lambda: now[0])
+    hooks = ReportUsageHooks(model="test-model")
+    context = _make_warn_context(requests=0, agent_id="root")
+    context.context["coordinator"] = coordinator
+    now[0] = 81
+    first: list[Any] = []
+    await hooks.on_llm_start(context, _agent(), None, first)
+    assert "Runtime wrap-up" in first[0]["content"]
+    second: list[Any] = []
+    await hooks.on_llm_start(context, _agent(), None, second)
+    assert second == []
+    now[0] = 100
+    with pytest.raises(TimeoutError, match="runtime deadline"):
+        await hooks.on_llm_start(context, _agent(), None, [])
 
 
 @pytest.mark.usefixtures("_clear_estimate_cache")

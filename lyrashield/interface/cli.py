@@ -1,4 +1,5 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
+import asyncio
 import atexit
 import contextlib
 import logging
@@ -15,6 +16,8 @@ from rich.panel import Panel
 from rich.text import Text
 
 from lyrashield.artifacts.state import ReportState, set_global_report_state
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.lifecycle.deadline import RunDeadline
 from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
 from lyrashield.lifecycle.runner import run_strix_scan
 from lyrashield.runtime import session_manager
@@ -199,7 +202,16 @@ async def run_cli(args: Any) -> None:
             len(scan_config.get("targets") or []),
             bool(getattr(args, "interactive", False)),
         )
-        await run_strix_scan(
+        runtime_seconds = getattr(args, "runtime_budget_seconds", None)
+        if runtime_seconds is not None and not non_interactive:
+            raise ValueError("runtime budget is supported only for non-interactive scans")
+        deadline = (
+            RunDeadline.start(runtime_seconds) if non_interactive and runtime_seconds else None
+        )
+        coordinator = AgentCoordinator() if deadline is not None else None
+        if coordinator is not None:
+            coordinator.run_deadline = deadline
+        run = run_strix_scan(
             scan_config=scan_config,
             scan_id=args.run_name,
             image=_resolve_sandbox_image(),
@@ -210,7 +222,45 @@ async def run_cli(args: Any) -> None:
             max_turns=getattr(args, "max_turns", DEFAULT_MAX_TURNS),
             resume=bool(getattr(args, "resume", None)),
             artifact_state=report_state,
+            coordinator=coordinator,
         )
+        if deadline is None:
+            await run
+        else:
+
+            async def notify_wrap() -> None:
+                await asyncio.sleep(deadline.until_wrap_seconds())
+                if coordinator is None:
+                    return
+                for (
+                    agent_id,
+                    status,
+                    _parent,
+                    _name,
+                    _metadata,
+                ) in await coordinator.agents_with_metadata():
+                    if status in {"running", "waiting"}:
+                        await coordinator.send(
+                            agent_id,
+                            {
+                                "from": "system",
+                                "type": "runtime_wrap",
+                                "content": (
+                                    "Runtime wrap-up: stop new work, collect existing reports, "
+                                    "record unresolved coverage, and finish truthfully."
+                                ),
+                            },
+                            interrupt=False,
+                        )
+
+            wrap_task = asyncio.create_task(notify_wrap())
+            try:
+                async with asyncio.timeout(deadline.remaining_seconds()):
+                    await run
+            finally:
+                wrap_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await wrap_task
 
     try:
         if non_interactive:

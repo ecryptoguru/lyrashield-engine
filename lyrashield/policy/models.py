@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import inspect
+import logging
 import os
 import re
 import threading
@@ -333,6 +334,40 @@ class _CodexResponsesModel(OpenAIResponsesModel):
                     await result
 
 
+class _AzureUsageResponsesModel(OpenAIResponsesModel):
+    """Retain raw Azure usage presence before Agents SDK zero-fills detail fields."""
+
+    @staticmethod
+    def _capture(response: Any) -> None:
+        from lyrashield.artifacts.state import get_global_report_state
+
+        state = get_global_report_state()
+        if state is not None:
+            try:
+                state.capture_provider_usage(response)
+            except Exception:  # noqa: BLE001 - telemetry must not replay a paid provider response
+                # A valid model response must never be retried because numeric
+                # telemetry extraction failed. The ledger then fails closed.
+                logging.getLogger(__name__).warning("Raw provider usage capture failed")
+
+    async def _fetch_response(self, *args: Any, stream: bool = False, **kwargs: Any) -> Any:
+        result = await super()._fetch_response(*args, stream=stream, **kwargs)  # type: ignore[call-overload]
+        if not stream:
+            self._capture(result)
+            return result
+
+        async def captured() -> AsyncIterator[Any]:
+            try:
+                async for event in result:
+                    if getattr(event, "type", None) == "response.completed":
+                        self._capture(event.response)
+                    yield event
+            finally:
+                await _CodexResponsesModel._aclose(result)
+
+        return captured()
+
+
 class _NonStreamingModel(Model):
     """Serve the SDK's streamed run loop from a single non-streaming request.
 
@@ -580,6 +615,16 @@ class StrixProvider(MultiProvider):
         if route is not None and route.wrapper is not None and route.provider is not None:
             routed_name = f"{route.provider}/{route.model_path}"
         model = super().get_model(routed_name)
+        if (
+            _is_azure_model(model_name)
+            and is_gpt6_model(model_name)
+            and isinstance(model, OpenAIResponsesModel)
+        ):
+            model = _AzureUsageResponsesModel(
+                model.model,
+                model._get_client(),
+                model_is_explicit=model._model_is_explicit,
+            )
         if llm.disable_streaming:
             return _NonStreamingModel(model)
         return model
