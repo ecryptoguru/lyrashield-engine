@@ -182,7 +182,7 @@
       "from strix.config import load_settings",
       "            \"strix_image is not configured. Set it in ~/.strix/cli-config.json.\",",
       "    results_text.append(f\"strix_runs/{args.run_name}\", style=\"#60a5fa\")",
-      "        await run_strix_scan("
+      "        run = run_strix_scan("
     ],
     "lyrashield/interface/viewer/__init__.py": [
       "\"\"\"Local web viewer for Strix runs."

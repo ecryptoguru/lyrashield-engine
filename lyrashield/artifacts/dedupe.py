@@ -746,6 +746,7 @@ async def check_duplicate(
                 agent_name="dedupe",
                 model=resolved_model,
                 usage=response.usage,
+                response_id=response.response_id,
             )
         content = _extract_text(response)
         if not content:

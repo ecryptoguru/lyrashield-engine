@@ -1081,8 +1081,20 @@ async def test_noninteractive_recovery_exhaustion_crashes(
     with pytest.raises(MaxTurnsExceeded):
         await _drive(coordinator, "root", interactive=False, max_turns=2)
 
-    assert len(calls) == 2
+    assert len(calls) == execution._AUTONOMOUS_TOOL_RECOVERY_LIMIT
     assert coordinator.statuses["root"] == "crashed"
+
+
+@pytest.mark.asyncio
+async def test_model_turn_limit_survives_cycles_and_snapshot() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    assert [await coordinator.claim_model_turn("root", 5) for _ in range(4)] == [1, 2, 3, 4]
+    restored = AgentCoordinator()
+    await restored.restore(await coordinator.snapshot())
+    assert await restored.claim_model_turn("root", 5) == 5
+    with pytest.raises(MaxTurnsExceeded):
+        await restored.claim_model_turn("root", 5)
 
 
 @pytest.mark.asyncio

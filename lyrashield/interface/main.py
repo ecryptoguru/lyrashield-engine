@@ -869,6 +869,14 @@ Examples:
     )
 
     parser.add_argument(
+        "--runtime-budget-seconds",
+        type=_positive_budget,
+        default=None,
+        metavar="SECONDS",
+        help="Trusted non-interactive scan runtime allowance in seconds (> 0).",
+    )
+
+    parser.add_argument(
         "--run-name",
         type=validate_run_name,
         help="Stable run identifier supplied by an orchestrator.",

@@ -79,6 +79,7 @@ async def test_non_interactive_scan_bypasses_live_display() -> None:
         non_interactive=True,
         interactive=False,
         max_budget_usd=1.0,
+        runtime_budget_seconds=100.0,
     )
     report_state = MagicMock()
     report_state.final_scan_result = None
@@ -98,6 +99,7 @@ async def test_non_interactive_scan_bypasses_live_display() -> None:
         await cli.run_cli(args)
 
     run_scan.assert_awaited_once()
+    assert run_scan.call_args.kwargs["coordinator"].run_deadline.remaining_seconds() > 0
     cleanup.assert_awaited_once_with("scan-test")
     assert report_state.set_cleanup_outcome.call_args.args == ("removed",)
     report_state.hydrate_from_run_dir.assert_not_called()

@@ -403,6 +403,7 @@ async def _summarize(
                 agent_name="compaction",
                 model=model,
                 usage=response.usage,
+                response_id=response.response_id,
             )
         except Exception:
             logger.exception("failed to record SDK usage for compaction")

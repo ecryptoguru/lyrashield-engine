@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from agents.exceptions import MaxTurnsExceeded
+
 from lyrashield.lifecycle.sessions import session_write_lock
 
 
@@ -21,6 +23,8 @@ if TYPE_CHECKING:
 
     from agents.items import TResponseInputItem
     from agents.memory import Session
+
+    from lyrashield.lifecycle.deadline import RunDeadline
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +46,7 @@ _SNAPSHOT_SCHEMA: dict[str, type] = {
     "pending_counts": dict,
     "recovery_counts": dict,
     "idle_resume_counts": dict,
+    "model_start_counts": dict,
     "wait_kinds": dict,
     "mailboxes": dict,
     "errors": dict,
@@ -77,6 +82,7 @@ class AgentCoordinator:
         self.conversation_ids: dict[str, str] = {}
         self.recovery_counts: dict[str, int] = {}
         self.idle_resume_counts: dict[str, int] = {}
+        self.model_start_counts: dict[str, int] = {}
         self.wait_kinds: dict[str, WaitKind] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
         self._parent_notified: set[str] = set()
@@ -89,9 +95,12 @@ class AgentCoordinator:
         self._budget_paused = False
         self._extend_budget: Callable[[], None] | None = None
         self.max_agents = max(1, max_agents)
+        self.run_deadline: RunDeadline | None = None
 
     async def can_spawn_agent(self) -> bool:
         async with self._lock:
+            if self.run_deadline is not None and self.run_deadline.wrapping_up():
+                return False
             return len(self.statuses) < self.max_agents
 
     async def get_status(self, agent_id: str) -> Status | None:
@@ -216,6 +225,12 @@ class AgentCoordinator:
         skills: list[str] | None = None,
     ) -> None:
         async with self._lock:
+            if (
+                parent_id is not None
+                and self.run_deadline is not None
+                and self.run_deadline.wrapping_up()
+            ):
+                raise RuntimeError("Scan is wrapping up; new specialist work is closed")
             if agent_id not in self.statuses and len(self.statuses) >= self.max_agents:
                 raise RuntimeError(f"Scan agent limit reached ({self.max_agents})")
             self.statuses[agent_id] = "running"
@@ -282,6 +297,17 @@ class AgentCoordinator:
             self.recovery_counts[agent_id] = count
         await self._maybe_snapshot()
         return count
+
+    async def claim_model_turn(self, agent_id: str, limit: int) -> int:
+        """Enforce one per-agent allowance across SDK cycles and resumed runtimes."""
+        async with self._lock:
+            used = self.model_start_counts.get(agent_id, 0)
+            if used >= limit:
+                raise MaxTurnsExceeded(f"Agent {agent_id} reached its {limit}-turn limit")
+            used += 1
+            self.model_start_counts[agent_id] = used
+        await self._maybe_snapshot()
+        return used
 
     async def reset_recovery(self, agent_id: str) -> None:
         """Clear the nudge budget after real progress (new message or a lifecycle tool)."""
@@ -372,6 +398,11 @@ class AgentCoordinator:
         async with self._lock:
             if target_agent_id not in self.statuses:
                 logger.debug("agent.send dropped unknown target=%s", target_agent_id)
+                return False
+            if (
+                message.get("type") == "runtime_wrap"
+                and self.statuses[target_agent_id] not in _ACTIVE_STATUSES
+            ):
                 return False
             if self._unreachable_locked(target_agent_id):
                 logger.info(
@@ -673,6 +704,7 @@ class AgentCoordinator:
                 "pending_counts": dict(self.pending_counts),
                 "recovery_counts": dict(self.recovery_counts),
                 "idle_resume_counts": dict(self.idle_resume_counts),
+                "model_start_counts": dict(self.model_start_counts),
                 "wait_kinds": dict(self.wait_kinds),
                 "mailboxes": {
                     aid: [dict(m) for m in runtime.mailbox]
@@ -705,6 +737,7 @@ class AgentCoordinator:
             self.conversation_ids = dict(snap.get("conversation_ids", {}))
             self.recovery_counts = dict(snap.get("recovery_counts", {}))
             self.idle_resume_counts = dict(snap.get("idle_resume_counts", {}))
+            self.model_start_counts = dict(snap.get("model_start_counts", {}))
             self.wait_kinds = dict(snap.get("wait_kinds", {}))
             mailboxes = snap.get("mailboxes", {})
             if isinstance(mailboxes, dict):
