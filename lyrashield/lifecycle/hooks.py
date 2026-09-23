@@ -52,7 +52,7 @@ _SYSTEM_NOTICE_TAG = "[SYSTEM-NOTICE]"
 # reservation, and final pricing share one source of truth (I8).
 from lyrashield.artifacts.usage import (  # noqa: E402
     _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS,
-    _GPT56_USD_PER_MILLION,
+    _METERED_USD_PER_MILLION,
 )
 
 
@@ -116,13 +116,13 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
 def _model_rate_card(model: str) -> tuple[float, float, float, float]:
     """(input, cached, cache_write, output) dollars per 1M tokens for a model.
 
-    GPT-5.6 tiers come from the canonical rate card shared with final
+    LyraShield's admitted tiers and historical GPT-5.6 tiers use the rate card shared with final
     pricing; other models fall back to the LiteLLM cost map, then to
     conservative defaults that overestimate so budget enforcement errs on
     the side of protecting the cap.
     """
     suffix = model.strip().lower().split("/")[-1]
-    for tier, rates in _GPT56_USD_PER_MILLION.items():
+    for tier, rates in _METERED_USD_PER_MILLION.items():
         if tier in suffix:
             return rates
     return _fallback_model_rate_card(model)

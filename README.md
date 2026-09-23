@@ -48,23 +48,23 @@ The engine includes a comprehensive security hardening pass (see the [Security h
 
 ## Supported execution
 
-Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, allows GPT-5.6 Terra or Luna deployments through the LiteLLM/Strix-supported providers that carry them (currently OpenAI, Azure/Azure AI, and Bedrock Mantle), supports ChatGPT subscription-backed models by default, and always disables inherited telemetry.
+Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, admits GPT-6 Sol or Luna through the validated OpenAI or Azure/Azure AI routes, and always disables inherited telemetry. Historical GPT-5.6 prices remain available only for old receipts.
 
 Requirements:
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - Docker with the reviewed, pinned sandbox image available
-- a supported OpenAI, Azure/Azure AI, or Bedrock Mantle endpoint serving a GPT-5.6 Terra or Luna deployment
+- a supported OpenAI or Azure/Azure AI endpoint serving a GPT-6 Sol or Luna deployment
 
 ```bash
 uv sync --frozen
 uv run lyrashield --version
 uv run lyrashield --help
 
-export LYRASHIELD_LLM="openai/gpt-5.6-luna"
-# Optional for Deep scans: Terra coordinates while Luna runs focused specialists.
-export LYRASHIELD_DELEGATE_LLM="openai/gpt-5.6-luna"
+export LYRASHIELD_LLM="openai/gpt-6-luna"
+# Deep scans use Sol as the root and Luna for focused specialists.
+export LYRASHIELD_DELEGATE_LLM="openai/gpt-6-luna"
 export LLM_API_KEY="<credential>"
 export LLM_API_BASE="https://<approved-endpoint>"
 # Optional token caps (see docs/advanced/configuration.mdx for behavior):
@@ -73,9 +73,9 @@ export LLM_API_BASE="https://<approved-endpoint>"
 uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
 ```
 
-Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Terra or Luna.
+Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-6 agent turns use Azure's v1 Responses API; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must identify GPT-6 Sol or Luna.
 
-Supported execution paths are GPT-5.6 Terra or Luna deployments from the LiteLLM/Strix providers that currently carry them: `openai`, `azure`, `azure_ai`, and `bedrock_mantle`, e.g. `openai/gpt-5.6-luna`, `azure/eu/gpt-5.6-terra`, `azure_ai/gpt-5.6-luna`, or `bedrock_mantle/openai.gpt-5.6-luna`. ChatGPT subscription models are also supported by default: run `lyrashield auth login chatgpt` and set `LYRASHIELD_LLM=chatgpt/<model>`. Subscription runs are tracked with `auth_mode: "subscription"` and `llm_usage.cost: 0` in `run.json`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported until LiteLLM's cost map lists `gpt-5.6` for their provider markers.
+Supported metered execution paths are `openai`, `azure`, and `azure_ai`, e.g. `openai/gpt-6-luna`, `azure/gpt-6-sol`, or `azure_ai/gpt-6-luna`. The product worker disables subscription routing; other provider markers and older GPT-5 deployments are not scan-admissible. Test the exact endpoint's reasoning, tools, cache buckets, and billable rate before opening paid admission.
 
 ### Provider capability gate
 

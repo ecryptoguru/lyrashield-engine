@@ -16,6 +16,11 @@ _GPT56_USD_PER_MILLION: dict[str, tuple[float, float, float, float]] = {
     "gpt-5.6-terra": (2.0, 0.2, 2.5, 12.0),
     "gpt-5.6-luna": (0.2, 0.02, 0.25, 1.2),
 }
+_GPT6_USD_PER_MILLION: dict[str, tuple[float, float, float, float]] = {
+    "gpt-6-sol": (2.0, 0.2, 2.5, 10.0),
+    "gpt-6-luna": (0.1, 0.01, 0.125, 0.5),
+}
+_METERED_USD_PER_MILLION = {**_GPT56_USD_PER_MILLION, **_GPT6_USD_PER_MILLION}
 _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
 
 
@@ -72,7 +77,7 @@ class LLMUsageLedger:
 
         if not self.zero_cost and _normalized_model_key(model) not in self._observed_cost_models:
             estimated = _estimate_gpt56_cost(usage, model)
-            if estimated is None and not _is_litellm_routed(model):
+            if estimated is None and _gpt56_rate(model) is None and not _is_litellm_routed(model):
                 estimated = _estimate_litellm_cost(usage, model)
             if estimated:
                 self._total_cost += estimated
@@ -313,16 +318,16 @@ def _is_litellm_routed(model: str | None) -> bool:
 def _gpt56_rate(model: str | None) -> tuple[float, float, float, float] | None:
     if not model:
         return None
-    return _GPT56_USD_PER_MILLION.get(model.strip().lower().split("/")[-1])
+    return _METERED_USD_PER_MILLION.get(model.strip().lower().split("/")[-1])
 
 
 def gpt56_usd_per_million(model: str | None) -> tuple[float, float, float, float] | None:
-    """Read-only GPT-5.6 rate lookup shared with offline evaluators.
+    """Read-only LyraShield model rate lookup shared with offline evaluators.
 
     Returns ``(uncached input, cached read, cache write, output)`` USD per
     million tokens using the ledger's model normalization (lowercase,
     stripped, last path segment). ``None`` for models outside the GPT-5.6
-    rate card.
+    rate card, including historical GPT-5.6 receipts.
     """
     return _gpt56_rate(model)
 
@@ -335,7 +340,7 @@ def estimate_gpt56_request_cost_usd(
     cache_write_input_tokens: float,
     output_tokens: float,
 ) -> float | None:
-    """Price one validated GPT-5.6 request using the ledger rate card."""
+    """Price one validated request using the versioned LyraShield rate card."""
     rate = _gpt56_rate(model)
     if rate is None:
         return None
@@ -363,6 +368,10 @@ def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
         if input_tokens + output_tokens <= 0:
             continue
         details = _details_to_dict(getattr(entry, "input_tokens_details", None))
+        if _normalized_model_key(model) in _GPT6_USD_PER_MILLION and (
+            "cached_tokens" not in details or "cache_write_tokens" not in details
+        ):
+            return None
         cached = min(_int_or_zero(details.get("cached_tokens")), input_tokens)
         cache_write = min(_int_or_zero(details.get("cache_write_tokens")), input_tokens - cached)
         cost = estimate_gpt56_request_cost_usd(

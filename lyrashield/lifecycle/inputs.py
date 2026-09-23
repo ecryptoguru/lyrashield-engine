@@ -17,6 +17,7 @@ from lyrashield.policy.models import (
     bedrock_route_supports_prompt_caching,
     is_bedrock_route,
     is_claude_model,
+    is_gpt6_model,
     is_gpt56_model,
     is_known_openai_bare_model,
     model_supports_reasoning,
@@ -81,7 +82,7 @@ def _prompt_cache_explicit_enabled(model_name: str | None) -> bool:
     env = os.environ.get(_PROMPT_CACHE_EXPLICIT_ENV, "").strip().lower()
     if env in ("0", "false", "no"):
         return False
-    return env in ("1", "true", "yes") and is_gpt56_model(model_name)
+    return env in ("1", "true", "yes") and (is_gpt56_model(model_name) or is_gpt6_model(model_name))
 
 
 def prompt_cache_options_for_model(model_name: str | None) -> PromptCacheOptions | None:
@@ -107,7 +108,9 @@ def prompt_cache_routing_enabled(model_name: str | None) -> bool:
     Independent of ``LYRASHIELD_PROMPT_CACHE_EXPLICIT``.
     """
     value = os.environ.get(_PROMPT_CACHE_ROUTING_ENV, "").strip().lower()
-    return value in ("1", "true", "yes") and is_gpt56_model(model_name)
+    return value in ("1", "true", "yes") and (
+        is_gpt56_model(model_name) or is_gpt6_model(model_name)
+    )
 
 
 def _accepts_required_tool_choice(model_name: str | None) -> bool:

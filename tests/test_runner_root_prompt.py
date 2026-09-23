@@ -405,6 +405,13 @@ async def test_stable_prompt_cache_keys_exclude_scan_material(
             assert material not in key
 
 
+def test_cache_routing_is_stable_within_scan_and_private_across_scans() -> None:
+    material = "same model and prompt"
+    first = runner._stable_prompt_cache_key("coordinator", material, "scan-one")
+    assert first == runner._stable_prompt_cache_key("coordinator", material, "scan-one")
+    assert first != runner._stable_prompt_cache_key("coordinator", material, "scan-two")
+
+
 @pytest.mark.asyncio
 async def test_delegate_run_uses_delegate_model_config(
     monkeypatch: pytest.MonkeyPatch,

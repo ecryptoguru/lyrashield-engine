@@ -75,6 +75,14 @@ def is_gpt56_model(model_name: str | None) -> bool:
     return re.search(r"(?:^|[/.-])gpt-5\.6-(?:terra|luna)(?:$|[/.-])", normalized) is not None
 
 
+def is_gpt6_model(model_name: str | None) -> bool:
+    """Recognize only the GPT-6 Sol/Luna deployments admitted for new scans."""
+    if not model_name:
+        return False
+    normalized = model_name.strip().lower().replace("_", "-")
+    return re.search(r"(?:^|/)gpt-6-(?:sol|luna)$", normalized) is not None
+
+
 # Providers LiteLLM's cost map lists for gpt-5.6-* deployments, plus the Azure
 # alias and the ChatGPT subscription route. Keep in sync with the LiteLLM model
 # cost map; run ``scripts/list-gpt56-providers.py`` to refresh.
@@ -87,6 +95,7 @@ _GPT56_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
         "chatgpt",
     }
 )
+_GPT6_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "azure", "azure_ai"})
 
 # Documented passthrough wrappers: exactly one may lead a route, and the
 # provider selected by routing is then the first component after it.
@@ -180,6 +189,19 @@ def is_gpt56_supported_provider(model_name: str | None) -> bool:
         # Bare OpenAI model names route to the default OpenAI provider.
         return True
     return route.provider in _GPT56_SUPPORTED_PROVIDERS
+
+
+def is_gpt6_supported_provider(model_name: str | None) -> bool:
+    """Admit only a strict GPT-6 Sol/Luna route with a supported provider."""
+    if not is_gpt6_model(model_name):
+        return False
+    try:
+        route = parse_model_route(model_name)
+    except ValueError:
+        return False
+    if route is None:
+        return False
+    return route.provider is None or route.provider in _GPT6_SUPPORTED_PROVIDERS
 
 
 def model_supports_programmatic_tool_calling(model_name: str | None) -> bool:
@@ -478,14 +500,15 @@ class StrixProvider(MultiProvider):
             else (None, None)
         )
         self._azure_responses_enabled = any(
-            _is_azure_model(model_name) and is_gpt56_model(model_name)
+            _is_azure_model(model_name)
+            and (is_gpt56_model(model_name) or is_gpt6_model(model_name))
             for model_name in configured_models
         )
 
         if self._azure_responses_enabled:
             if llm is None or not llm.api_base:
                 raise RuntimeError(
-                    "Azure GPT-5.6 requires LLM_API_BASE or an Azure endpoint variable."
+                    "Azure GPT-6 requires LLM_API_BASE or an Azure endpoint variable."
                 )
             super().__init__(
                 openai_api_key=llm.api_key,
@@ -896,7 +919,7 @@ def model_supports_reasoning(model_name: str) -> bool:
     # LyraShield validates this product-owned model family before execution.
     # LiteLLM's bundled cost map can lag a newly approved deployment, so it is
     # not authoritative for the GPT-5.6 capability contract.
-    if is_gpt56_model(name):
+    if is_gpt56_model(name) or is_gpt6_model(name):
         return True
     for prefix in ("litellm/", "any-llm/", "openai/"):
         if name.startswith(prefix):

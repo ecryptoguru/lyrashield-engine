@@ -98,9 +98,9 @@ def _model_routing_policy(
     )
 
 
-def _stable_prompt_cache_key(role: str, material: str) -> str:
-    """Return an Azure-compatible, non-sensitive key for an exact prompt family."""
-    fingerprint = hashlib.sha256(material.encode("utf-8")).hexdigest()
+def _stable_prompt_cache_key(role: str, material: str, scan_id: str) -> str:
+    """Route repeated turns together without sharing private cache across scans."""
+    fingerprint = hashlib.sha256(f"{scan_id}\0{material}".encode()).hexdigest()
     # Azure Responses accepts at most 64 characters. The longest current role
     # ("coordinator") leaves 38 hexadecimal characters: 152 bits of routing
     # entropy, while retaining a recognizable product/version prefix.
@@ -476,6 +476,7 @@ async def run_strix_scan(
                         sort_keys=True,
                         separators=(",", ":"),
                     ),
+                    scan_id,
                 )
                 if root_routing
                 else None
@@ -503,7 +504,7 @@ async def run_strix_scan(
             request_timeout=llm_settings.timeout,
             max_output_tokens=delegate_max_output_tokens,
             prompt_cache_key=(
-                _stable_prompt_cache_key("delegates", delegate_cache_material)
+                _stable_prompt_cache_key("delegates", delegate_cache_material, scan_id)
                 if delegate_routing
                 else None
             ),
@@ -797,6 +798,7 @@ async def run_strix_scan(
                             sort_keys=True,
                             separators=(",", ":"),
                         ),
+                        scan_id,
                     )
                     if delegate_routing
                     else None

@@ -69,7 +69,7 @@ from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     configure_sdk_model_defaults,
-    is_gpt56_supported_provider,
+    is_gpt6_supported_provider,
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
 )
@@ -133,8 +133,8 @@ def _reject_resolved_subscription_models(settings: Settings, console: Console) -
             continue
         console.print(
             f"[bold red]{name}={value} routes through a ChatGPT subscription, "
-            "which is not supported for LyraShield scans.[/] Configure a GPT-5.6 "
-            "Terra or Luna API deployment instead."
+            "which is not supported for LyraShield scans.[/] Configure a GPT-6 "
+            "Sol or Luna API deployment instead."
         )
         sys.exit(1)
 
@@ -159,8 +159,8 @@ def validate_environment() -> None:
             console.print(
                 f"[bold red]STRIX_LLM={settings.llm.model} routes through a ChatGPT "
                 "subscription, which is not supported for LyraShield scans.[/] "
-                "Set LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=1 or configure a GPT-5.6 "
-                "Terra or Luna API deployment instead."
+                "Set LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=1 or configure a GPT-6 "
+                "Sol or Luna API deployment instead."
             )
             sys.exit(1)
         if not codex.is_authenticated():
@@ -175,15 +175,15 @@ def validate_environment() -> None:
     if not settings.llm.model:
         missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
     elif (
-        not is_gpt56_supported_provider(settings.llm.model)
+        not is_gpt6_supported_provider(settings.llm.model)
         or (
             settings.llm.delegate_model
-            and not is_gpt56_supported_provider(settings.llm.delegate_model)
+            and not is_gpt6_supported_provider(settings.llm.delegate_model)
         )
-        or (settings.dedupe.model and not is_gpt56_supported_provider(settings.dedupe.model))
+        or (settings.dedupe.model and not is_gpt6_supported_provider(settings.dedupe.model))
     ):
         error_text = Text(
-            "LyraShield scans require a GPT-5.6 Terra or Luna deployment from a supported provider",
+            "LyraShield scans require a GPT-6 Sol or Luna deployment from a supported provider",
             style="bold red",
         )
         console.print("\n")
@@ -226,7 +226,7 @@ def validate_environment() -> None:
                 error_text.append("• ", style="white")
                 error_text.append("STRIX_LLM / LYRASHIELD_LLM", style="bold cyan")
                 error_text.append(
-                    " - GPT-5.6 Terra or Luna deployment name\n",
+                    " - GPT-6 Sol or Luna deployment name\n",
                     style="white",
                 )
 
@@ -237,14 +237,14 @@ def validate_environment() -> None:
                     error_text.append("• ", style="white")
                     error_text.append("LLM_API_KEY", style="bold cyan")
                     error_text.append(
-                        " - API key for the configured GPT-5.6 endpoint\n",
+                        " - API key for the configured GPT-6 endpoint\n",
                         style="white",
                     )
                 elif var == "LLM_API_BASE":
                     error_text.append("• ", style="white")
                     error_text.append("LLM_API_BASE", style="bold cyan")
                     error_text.append(
-                        " - Base URL for the configured GPT-5.6 endpoint\n",
+                        " - Base URL for the configured GPT-6 endpoint\n",
                         style="white",
                     )
                 elif var in {"STRIX_REASONING_EFFORT", "LYRASHIELD_REASONING_EFFORT"}:
@@ -261,7 +261,7 @@ def validate_environment() -> None:
 
         error_text.append("\nExample setup:\n", style="white")
         error_text.append(
-            "export STRIX_LLM='openai/gpt-5.6-luna'  # or LYRASHIELD_LLM\n",
+            "export LYRASHIELD_LLM='openai/gpt-6-luna'\n",
             style="dim white",
         )
 
@@ -270,12 +270,12 @@ def validate_environment() -> None:
                 if var == "LLM_API_KEY":
                     error_text.append(
                         "export LLM_API_KEY='your-api-key-here'  "
-                        "# credential for the configured GPT-5.6 endpoint\n",
+                        "# credential for the configured GPT-6 endpoint\n",
                         style="dim white",
                     )
                 elif var == "LLM_API_BASE":
                     error_text.append(
-                        "export LLM_API_BASE='https://your-gpt-5-6-endpoint.example'\n",
+                        "export LLM_API_BASE='https://your-gpt-6-endpoint.example'\n",
                         style="dim white",
                     )
                 elif var in {"STRIX_REASONING_EFFORT", "LYRASHIELD_REASONING_EFFORT"}:
