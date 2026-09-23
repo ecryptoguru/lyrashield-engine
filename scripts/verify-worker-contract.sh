@@ -75,6 +75,7 @@ required_flags=(
   "--scan-mode"
   "--instruction"
   "--max-budget-usd"
+  "--runtime-budget-seconds"
 )
 for flag in "${required_flags[@]}"; do
   if ! grep -Fq -- "$flag" <<< "$help"; then
