@@ -11,8 +11,7 @@ SCRIPT = ROOT / "scripts" / "verify-worker-contract.sh"
 PIN_FILE = ROOT / ".lyrashield-worker-pin"
 TESTS_FILE = ROOT / "scripts" / "worker-contract-tests.txt"
 REQUIRED_FLAGS = (
-    "--non-interactive --target --scan-mode --instruction "
-    "--max-budget-usd --runtime-budget-seconds"
+    "--non-interactive --target --scan-mode --instruction --max-budget-usd --runtime-budget-seconds"
 )
 
 # The declared contract-test list lives in scripts/worker-contract-tests.txt so
