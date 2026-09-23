@@ -1,18 +1,18 @@
 ---
 title: "Azure-compatible"
-description: "Configure GPT-5.6 through Azure AI or Azure OpenAI"
+description: "Configure GPT-6 through Azure AI or Azure OpenAI"
 ---
 
-Use an Azure deployment whose configured name identifies GPT-5.6 Terra or Luna. ChatGPT subscription-backed Azure routes are rejected.
+Use an Azure deployment whose configured name identifies GPT-6 Sol or Luna. Probe the exact deployment and API version before admission. ChatGPT subscription-backed Azure routes are rejected.
 
 ```bash
-export LYRASHIELD_LLM="azure_ai/gpt-5.6-luna"
+export LYRASHIELD_LLM="azure_ai/gpt-6-luna"
 export AZURE_AI_API_KEY="<credential>"
 export AZURE_AI_API_BASE="https://<approved-resource-endpoint>"
 export LLM_API_VERSION="<approved-api-version>"
 ```
 
-The same model name may also be written as `azure/gpt-5.6-luna` or `azure_ai/gpt-5.6-terra`.
+The same model name may also be written as `azure/gpt-6-luna`; Deep uses `azure_ai/gpt-6-sol` as root and Luna specialists.
 
 ## Environment aliases
 
@@ -35,11 +35,11 @@ The credential and endpoint variables accept the same compatibility aliases as b
 | Endpoint | `AZURE_AI_API_BASE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_BASE`, `LLM_API_BASE` |
 | API version | `LLM_API_VERSION`, `AZURE_API_VERSION`, `AZURE_OPENAI_API_VERSION` |
 
-Use one coherent route per deployment. Do not mix endpoints and credentials from different Azure resources. The application worker, not end-user input, selects Luna or Terra and the reasoning effort in production.
+Use one coherent route per deployment. Do not mix endpoints and credentials from different Azure resources. The application worker, not end-user input, selects Luna or Sol and the reasoning effort in production.
 
 ## Capability gate
 
-The configured Azure AI Foundry GPT-5.6 endpoint supports baseline Responses requests and `previous_response_id`, but rejects the Responses `programmatic_tool_calling` tool type. Use direct JSON function tools in production. Keep `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` unset unless this bounded gate succeeds against the exact deployment:
+Use direct JSON function tools in production. Keep `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` unset unless this bounded gate succeeds against the exact GPT-6 deployment:
 
 ```bash
 # Verify baseline + previous_response_id support first

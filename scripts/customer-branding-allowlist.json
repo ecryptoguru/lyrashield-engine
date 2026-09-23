@@ -595,6 +595,8 @@
       "        re.compile(r\"/workspace/\\.strix/tool-output/[^\\s\\\"'<>]+\"),"
     ],
     "docs/advanced/configuration.mdx": [
+      "Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and admits GPT-6 Sol or Luna deployments from OpenAI or Azure/Azure AI.",
+      "  `openai/gpt-6-luna` or `azure_ai/gpt-6-sol`). Alias of `STRIX_LLM`.",
       "  Alias of `STRIX_CONTEXT_FALLBACK_TOKENS`.",
       "  Alias of `STRIX_DELEGATE_REASONING_EFFORT`.",
       "  Alias of `STRIX_MAX_CONTEXT_IMAGES`.",

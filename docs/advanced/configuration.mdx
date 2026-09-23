@@ -3,30 +3,27 @@ title: "Configuration"
 description: "Environment variables and config file for LyraShield Engine"
 ---
 
-Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and only allows GPT-5.6 Terra or Luna deployments from LiteLLM/Strix-supported providers that currently carry them (OpenAI, Azure/Azure AI, and Bedrock Mantle).
+Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and admits GPT-6 Sol or Luna deployments from OpenAI or Azure/Azure AI.
 
 <Warning>
-Only approved GPT-5.6 Terra or Luna deployments from supported LiteLLM/Strix providers are accepted as the main model. The current allow-list is OpenAI, Azure/Azure AI, and Bedrock Mantle. ChatGPT subscription-backed models are supported by default; run `lyrashield auth login chatgpt` and use `chatgpt/<model>` for `LYRASHIELD_LLM`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported as LLM endpoints until LiteLLM's cost map lists `gpt-5.6` for their provider markers.
+Only approved GPT-6 Sol or Luna API deployments are accepted as metered scan routes. The current allow-list is OpenAI and Azure/Azure AI. The production worker disables subscription routing. Older GPT-5 deployments and other provider markers are not admitted to new scans; their historical rate definitions remain for receipt interpretation.
 
-Parallel Search may be used as an optional `web_search` tool when explicitly enabled with `LYRASHIELD_WEB_SEARCH_ENABLED=1` and `PARALLEL_API_KEY` or `LYRASHIELD_WEB_SEARCH_API_KEY`. It is not a model route and never replaces the GPT-5.6 main model.
+Parallel Search may be used as an optional `web_search` tool when explicitly enabled with `LYRASHIELD_WEB_SEARCH_ENABLED=1` and `PARALLEL_API_KEY` or `LYRASHIELD_WEB_SEARCH_API_KEY`. It is not a model route and never replaces the GPT-6 main model.
 
 </Warning>
 
 ## LLM configuration
 
 <ParamField path="LYRASHIELD_LLM" type="string" required>
-  Primary model in LiteLLM format. Metered `openai`, `azure`, `azure_ai`, and
-  `bedrock_mantle` routes must identify a GPT-5.6 Terra or Luna deployment (for
-  example `openai/gpt-5.6-luna` or `azure_ai/gpt-5.6-terra`). An authenticated
-  subscription-backed `chatgpt/<model>` route is exempt from the Terra/Luna
-  name requirement and follows the subscription accounting rules below. Alias
-  of `STRIX_LLM`.
+  Primary model in LiteLLM format. Metered `openai`, `azure`, and `azure_ai`
+  routes must identify a GPT-6 Sol or Luna deployment (for example
+  `openai/gpt-6-luna` or `azure_ai/gpt-6-sol`). Alias of `STRIX_LLM`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">
-  Bounded specialist tier model for Deep scans. The Terra/medium root owns
+  Bounded specialist tier model for Deep scans. The Sol/medium root owns
   coordination and cross-file judgment; Luna/high child specialists handle
-  focused tasks. Must identify a GPT-5.6 Terra or Luna deployment. Alias of
+  focused tasks. Must identify a GPT-6 Luna deployment. Alias of
   `STRIX_DELEGATE_LLM`.
 </ParamField>
 
@@ -81,14 +78,14 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
 </ParamField>
 
 <ParamField path="LYRASHIELD_PROMPT_CACHE_EXPLICIT" default="false" type="boolean">
-  Enable GPT-5.6 explicit cache breakpoints for prompt-cache reads and writes.
+  Enable GPT-6 explicit cache breakpoints for prompt-cache reads and writes.
   This is opt-in and requires a provider smoke scan for the exact deployment;
   unsupported routes ignore it. Usage artifacts separately record cache-read
   and cache-write tokens when the provider reports them.
 </ParamField>
 
 <ParamField path="LYRASHIELD_PROMPT_CACHE_ROUTING" default="false" type="boolean">
-  Opt in to stable GPT-5.6 `prompt_cache_key` routing keys for the coordinator,
+  Opt in to stable, scan-isolated GPT-6 `prompt_cache_key` routing keys for the coordinator,
   delegate, and fallback prompt families. It is independent of explicit
   breakpoints and does not turn caching on when `LYRASHIELD_PROMPT_CACHE=false`.
   Enable only after a provider smoke scan confirms the exact deployment honors

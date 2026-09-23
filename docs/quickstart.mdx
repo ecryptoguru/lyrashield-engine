@@ -9,7 +9,7 @@ description: "Install and validate LyraShield Engine"
 - Docker running locally
 - [uv](https://docs.astral.sh/uv/)
 - a reviewed sandbox image
-- for an authorized scan only, an approved GPT-5.6 Terra or Luna endpoint
+- for an authorized scan only, an approved GPT-6 Sol or Luna endpoint
 
 ## Install from source
 
@@ -23,10 +23,10 @@ uv run lyrashield --help
 
 There is no supported `strix` executable or `strix.ai` installer in this distribution. Production builds the sibling engine source into the LyraShield worker image.
 
-## Configure GPT-5.6
+## Configure GPT-6
 
 ```bash
-export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+export LYRASHIELD_LLM="openai/gpt-6-luna"
 export LYRASHIELD_REASONING_EFFORT="medium"
 export LLM_API_KEY="<credential>"
 export LLM_API_BASE="https://<approved-endpoint>"

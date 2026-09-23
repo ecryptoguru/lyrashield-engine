@@ -9,8 +9,8 @@ values are asserted here.
 
 from __future__ import annotations
 
-from lyrashield.artifacts.usage import _GPT56_USD_PER_MILLION
-from lyrashield.lifecycle.hooks import _GPT56_USD_PER_MILLION as _HOOKS_CARD
+from lyrashield.artifacts.usage import _GPT56_USD_PER_MILLION, _METERED_USD_PER_MILLION
+from lyrashield.lifecycle.hooks import _METERED_USD_PER_MILLION as _HOOKS_CARD
 
 
 def test_terra_rates() -> None:
@@ -30,7 +30,7 @@ def test_rate_table_has_exactly_two_tiers() -> None:
 
 def test_hooks_reservations_use_the_canonical_card() -> None:
     """Reservation math must consume the same card as final pricing (I8)."""
-    assert _HOOKS_CARD is _GPT56_USD_PER_MILLION
+    assert _HOOKS_CARD is _METERED_USD_PER_MILLION
 
 
 def test_long_context_threshold_is_272k() -> None:
