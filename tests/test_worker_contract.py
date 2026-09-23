@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify-worker-contract.sh"
 PIN_FILE = ROOT / ".lyrashield-worker-pin"
 TESTS_FILE = ROOT / "scripts" / "worker-contract-tests.txt"
-REQUIRED_FLAGS = "--non-interactive --target --scan-mode --instruction --max-budget-usd"
+REQUIRED_FLAGS = "--non-interactive --target --scan-mode --instruction --max-budget-usd --runtime-budget-seconds"
 
 # The declared contract-test list lives in scripts/worker-contract-tests.txt so
 # this test and the shell gate consume one source of truth (I17); the canonical
