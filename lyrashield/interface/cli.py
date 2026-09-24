@@ -17,7 +17,7 @@ from rich.text import Text
 
 from lyrashield.artifacts.state import ReportState, set_global_report_state
 from lyrashield.lifecycle.agents import AgentCoordinator
-from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceeded
+from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
 from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
 from lyrashield.lifecycle.runner import run_strix_scan
 from lyrashield.runtime import session_manager
@@ -258,14 +258,14 @@ async def run_cli(args: Any) -> None:
             try:
                 async with scan_timeout:
                     await run
-            except (TimeoutError, RunDeadlineExceeded) as exc:
+            except (TimeoutError, RunDeadlineExceededError) as exc:
                 # Only the deadline itself is salvageable. Two cases reach here:
                 # the asyncio timeout context actually expired, or the lifecycle
-                # refused a model start past the deadline (RunDeadlineExceeded).
+                # refused a model start past the deadline (RunDeadlineExceededError).
                 # An internal TimeoutError that escaped the run while the
                 # context had NOT expired is a real failure and must not be
                 # relabelled as a bounded partial result.
-                if not (scan_timeout.expired() or isinstance(exc, RunDeadlineExceeded)):
+                if not (scan_timeout.expired() or isinstance(exc, RunDeadlineExceededError)):
                     raise
                 # The hard runtime deadline fired. Record the reason so the
                 # worker can keep the findings already filed and report a

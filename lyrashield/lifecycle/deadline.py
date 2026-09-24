@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-class RunDeadlineExceeded(Exception):
+class RunDeadlineExceededError(Exception):
     """Raised by the lifecycle when a model start is attempted past the deadline.
 
     Distinct from the built-in ``TimeoutError`` on purpose: an internal

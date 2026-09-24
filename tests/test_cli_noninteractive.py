@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from lyrashield.interface import cli
-from lyrashield.lifecycle.deadline import RunDeadlineExceeded
+from lyrashield.lifecycle.deadline import RunDeadlineExceededError
 
 
 main_module = import_module("lyrashield.interface.main")
@@ -238,7 +238,7 @@ async def test_a_non_deadline_failure_still_propagates() -> None:
 
 @pytest.mark.asyncio
 async def test_a_lifecycle_deadline_refusal_is_salvaged() -> None:
-    """RunDeadlineExceeded is the dedicated deadline signal and must salvage.
+    """RunDeadlineExceededError is the dedicated deadline signal and must salvage.
 
     The lifecycle raises this type from ``on_llm_start`` when a model start is
     attempted past the deadline. It is distinguishable from an internal
@@ -264,7 +264,7 @@ async def test_a_lifecycle_deadline_refusal_is_salvaged() -> None:
     report_state.final_scan_result = None
 
     async def _deadline_refusal(*_args: object, **_kwargs: object) -> None:
-        raise RunDeadlineExceeded("scan runtime deadline reached")
+        raise RunDeadlineExceededError("scan runtime deadline reached")
 
     with (
         patch.object(cli, "ReportState", return_value=report_state),
