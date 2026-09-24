@@ -278,15 +278,13 @@
     "lyrashield/README.md": [
       "  directories before `strix/agents/prompts/`, so",
       "  inherited `strix/skills/`.",
-      "(`strix/config/loader.py` and `strix/skills/__init__.py`).",
       "- `strix.agents.factory.register_model_policy` \u2014 registers the product",
       "- `strix.agents.factory.register_tool_override` \u2014 replaces upstream base tools",
       "- `strix.agents.prompt.FileSystemLoader` \u2014 searches registered skill",
       "- `strix.config.loader.register_settings_loader` \u2014 registers",
       "- `strix.skills.register_skill_dir` \u2014 loads `lyrashield/skills/` alongside",
       "`strix/**` substrate:",
-      "upstream Strix v1.5.3 except for two generic, reviewed seams",
-      "worker artifact contract. The retained `strix/**` substrate is exact"
+      "worker artifact contract. The retained `strix/**` substrate is the upstream"
     ],
     "lyrashield/agents/factory.py": [
       "        return build_strix_agent(",
