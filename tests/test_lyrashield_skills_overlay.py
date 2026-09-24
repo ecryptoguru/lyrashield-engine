@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lyrashield.agents.prompt import render_system_prompt
-from strix.skills import _EXTRA_SKILL_DIRS, load_skills, register_skill_dir
+from strix.skills import _EXTRA_SKILL_DIRS, load_skills
 
 
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "lyrashield" / "skills"
@@ -21,7 +21,11 @@ def _content_for(skill_name: str) -> str:
 
 @pytest.fixture(scope="module", autouse=True)
 def _register_overlay() -> None:
-    register_skill_dir(SKILLS_DIR)
+    # Use the production registration path so the overlay's coverage phrasings
+    # (websocket et al.) are registered exactly as a real scan would see them.
+    from lyrashield_adapter.cli import _register_lyrashield_skills  # noqa: PLC0415
+
+    _register_lyrashield_skills()
 
 
 @pytest.mark.parametrize(

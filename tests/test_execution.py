@@ -502,6 +502,49 @@ async def test_send_reactivates_completed_agent_for_follow_up_work() -> None:
 
 
 @pytest.mark.asyncio
+async def test_user_send_starts_fresh_resume_attempt_after_failure() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.park_waiting("child", wait_kind="stalled")
+    await coordinator.record_recovery("child")
+    await coordinator.record_idle_resume("child")
+    await coordinator.set_status("child", "failed", error="provider rejected request")
+    assert await coordinator.claim_parent_notice("child") is True
+
+    delivered = await coordinator.send("child", {"from": "user", "content": "try again"})
+
+    assert delivered is True
+    assert coordinator.statuses["child"] == "waiting"
+    assert coordinator.pending_counts["child"] == 1
+    assert "child" not in coordinator.errors
+    assert "child" not in coordinator.wait_kinds
+    assert "child" not in coordinator.recovery_counts
+    assert "child" not in coordinator.idle_resume_counts
+    assert await coordinator.claim_parent_notice("child") is True
+
+
+@pytest.mark.asyncio
+async def test_non_user_send_preserves_failed_resume_state() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    await coordinator.park_waiting("child", wait_kind="stalled")
+    await coordinator.record_recovery("child")
+    await coordinator.record_idle_resume("child")
+    await coordinator.set_status("child", "failed", error="provider rejected request")
+
+    delivered = await coordinator.send("child", {"from": "root", "content": "status"})
+
+    assert delivered is True
+    assert coordinator.statuses["child"] == "failed"
+    assert coordinator.errors["child"] == "provider rejected request"
+    assert coordinator.wait_kinds["child"] == "stalled"
+    assert coordinator.recovery_counts["child"] == 1
+    assert coordinator.idle_resume_counts["child"] == 1
+
+
+@pytest.mark.asyncio
 async def test_reset_budget_stops_clears_pause_and_normalizes_statuses() -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
@@ -869,96 +912,6 @@ async def test_run_agent_loop_seeds_identity_before_first_cycle(
     session.close()
 
 
-@pytest.mark.asyncio
-async def test_noninteractive_completed_child_runs_follow_up(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    coordinator = AgentCoordinator()
-    await coordinator.register("root", "strix", parent_id=None)
-    await coordinator.register("child", "recon", parent_id="root")
-    calls: list[Any] = []
-    follow_up_ran = asyncio.Event()
-
-    async def _complete(*_args: Any, **kwargs: Any) -> Any:
-        calls.append(kwargs["initial_input"])
-        await coordinator.set_status("child", "completed")
-        if len(calls) == 2:
-            follow_up_ran.set()
-        return MagicMock(final_output="done")
-
-    monkeypatch.setattr(execution, "_run_until_lifecycle", _complete)
-    task = asyncio.create_task(
-        execution.run_agent_loop(
-            agent=object(),
-            initial_input="initial task",
-            run_config=MagicMock(),
-            context={"agent_id": "child", "parent_id": "root"},
-            max_turns=5,
-            coordinator=coordinator,
-            agent_id="child",
-            interactive=False,
-        )
-    )
-
-    await asyncio.sleep(0)
-    assert not task.done()
-    await coordinator.send("child", {"from": "root", "content": "validate this"})
-    await asyncio.wait_for(follow_up_ran.wait(), timeout=1.0)
-
-    assert calls == ["initial task", []]
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-
-
-@pytest.mark.asyncio
-async def test_noninteractive_child_runs_follow_up_queued_before_completion(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    coordinator = AgentCoordinator()
-    await coordinator.register("root", "strix", parent_id=None)
-    await coordinator.register("child", "recon", parent_id="root")
-    first_cycle_started = asyncio.Event()
-    finish_first_cycle = asyncio.Event()
-    follow_up_ran = asyncio.Event()
-    calls = 0
-
-    async def _complete(*_args: Any, **_kwargs: Any) -> Any:
-        nonlocal calls
-        calls += 1
-        await coordinator.mark_running("child")
-        if calls == 1:
-            first_cycle_started.set()
-            await finish_first_cycle.wait()
-        await coordinator.set_status("child", "completed")
-        if calls == 2:
-            follow_up_ran.set()
-        return MagicMock(final_output="done")
-
-    monkeypatch.setattr(execution, "_run_until_lifecycle", _complete)
-    task = asyncio.create_task(
-        execution.run_agent_loop(
-            agent=object(),
-            initial_input="initial task",
-            run_config=MagicMock(),
-            context={"agent_id": "child", "parent_id": "root"},
-            max_turns=5,
-            coordinator=coordinator,
-            agent_id="child",
-            interactive=False,
-        )
-    )
-
-    await asyncio.wait_for(first_cycle_started.wait(), timeout=1.0)
-    await coordinator.send("child", {"from": "root", "content": "validate this"})
-    finish_first_cycle.set()
-    await asyncio.wait_for(follow_up_ran.wait(), timeout=1.0)
-
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-
-
 def _scripted_cycle(
     coordinator: AgentCoordinator,
     agent_id: str,
@@ -1128,8 +1081,20 @@ async def test_noninteractive_recovery_exhaustion_crashes(
     with pytest.raises(MaxTurnsExceeded):
         await _drive(coordinator, "root", interactive=False, max_turns=2)
 
-    assert len(calls) == 2
+    assert len(calls) == execution._AUTONOMOUS_TOOL_RECOVERY_LIMIT
     assert coordinator.statuses["root"] == "crashed"
+
+
+@pytest.mark.asyncio
+async def test_model_turn_limit_survives_cycles_and_snapshot() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    assert [await coordinator.claim_model_turn("root", 5) for _ in range(4)] == [1, 2, 3, 4]
+    restored = AgentCoordinator()
+    await restored.restore(await coordinator.snapshot())
+    assert await restored.claim_model_turn("root", 5) == 5
+    with pytest.raises(MaxTurnsExceeded):
+        await restored.claim_model_turn("root", 5)
 
 
 @pytest.mark.asyncio

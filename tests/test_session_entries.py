@@ -36,6 +36,33 @@ def test_copied_source_becomes_localdir_entry(tmp_path: Path) -> None:
     assert any(g.path == str(tmp_path.resolve()) for g in grants)
 
 
+def test_copied_source_snapshot_is_frozen_and_hashes_uploaded_bytes(tmp_path: Path) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    tracked = source / "tracked.py"
+    untracked = source / "untracked.py"
+    tracked.write_text("old\n", encoding="utf-8")
+    untracked.write_text("first\n", encoding="utf-8")
+    snapshots: list[dict[str, Any]] = []
+
+    entries, _, staged_dirs, _ = build_session_entries(
+        [_source("repo", str(source))], source_snapshots=snapshots
+    )
+    try:
+        staged = entries["repo"].src
+        assert staged != source.resolve()
+        assert snapshots[0]["workspace_subdir"] == "repo"
+        assert snapshots[0]["snapshot_digest"].startswith("sha256:")
+        tracked.write_text("new\n", encoding="utf-8")
+        untracked.write_text("second\n", encoding="utf-8")
+        assert (staged / "tracked.py").read_text(encoding="utf-8") == "old\n"
+        assert (staged / "untracked.py").read_text(encoding="utf-8") == "first\n"
+        assert snapshots[0]["snapshot_digest"] == session_manager.staged_tree_digest(staged)
+    finally:
+        for staged in staged_dirs:
+            shutil.rmtree(staged)
+
+
 def test_host_gateway_is_not_advertised_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STRIX_SANDBOX_ALLOW_HOST_GATEWAY", raising=False)
 
@@ -161,6 +188,9 @@ async def test_create_or_reuse_passes_path_grants_to_the_manifest(
     captured: dict[str, Any] = {}
 
     class Session:
+        async def exec(self, *_args: Any, **_kwargs: Any) -> Any:
+            return SimpleNamespace(ok=lambda: True, stdout=b"", stderr=b"", exit_code=0)
+
         async def resolve_exposed_port(self, _port: int) -> Any:
             return SimpleNamespace(tls=False, host="127.0.0.1", port=48080)
 
@@ -168,10 +198,16 @@ async def test_create_or_reuse_passes_path_grants_to_the_manifest(
         captured.update(kwargs)
         return SimpleNamespace(), Session()
 
-    async def no_caido(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    async def no_caido(*_args: Any, **_kwargs: Any) -> Any:
+        # A real bootstrap returns a client or raises; preflight treats a
+        # missing capture client as a required-control failure.
+        return SimpleNamespace()
 
     scan_id = "manifest-grants"
+    # The fake backend bypasses docker admission, so give the capability
+    # probe a configured network — unverifiable isolation degrades rather
+    # than fails for a stub session without container attrs.
+    monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", "strix-sandbox")
     monkeypatch.setattr(
         session_manager,
         "load_settings",
@@ -182,7 +218,7 @@ async def test_create_or_reuse_passes_path_grants_to_the_manifest(
     session_manager._SESSION_CACHE.pop(scan_id, None)
 
     try:
-        await session_manager.create_or_reuse(
+        bundle = await session_manager.create_or_reuse(
             scan_id,
             image="test-image",
             local_sources=[_source("repo", str(tmp_path))],
@@ -190,9 +226,10 @@ async def test_create_or_reuse_passes_path_grants_to_the_manifest(
     finally:
         session_manager._SESSION_CACHE.pop(scan_id, None)
 
-    assert [grant.path for grant in captured["manifest"].extra_path_grants] == [
-        str(tmp_path.resolve())
-    ]
+    upload = captured["manifest"].entries["repo"].src
+    assert upload != tmp_path.resolve()
+    assert [grant.path for grant in captured["manifest"].extra_path_grants] == [str(upload)]
+    assert bundle["source_snapshots"][0]["snapshot_digest"].startswith("sha256:")
 
 
 @pytest.mark.parametrize("missing", ["STRIX_TARGET_RELAY_URL", "STRIX_TARGET_RELAY_GRANT"])

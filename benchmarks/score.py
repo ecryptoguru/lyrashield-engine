@@ -213,6 +213,32 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
     )
     clean_runs = [r for r in manifest["runs"] if r.get("variant") == "clean"]
 
+    engine_runs_meta = [r for r in manifest["runs"] if r.get("detector") == "engine"]
+    receipts = [
+        r["runReceipt"]
+        for r in engine_runs_meta
+        if isinstance(r.get("runReceipt"), dict) and not r["runReceipt"].get("error")
+    ]
+    # Comparable receipts: whether every engine run carried the same run.json
+    # provenance fields (schema, probed capability statuses). Presence is
+    # counted, never inferred — a run without a receipt is just absent.
+    engine_receipts = {
+        "total": len(engine_runs_meta),
+        "withReceipt": len(receipts),
+        "schemaVersions": sorted(
+            {str(r.get("schemaVersion")) for r in receipts if r.get("schemaVersion")}
+        ),
+        "capabilityStatuses": sorted(
+            {
+                f"{name}={status}"
+                for r in receipts
+                for name, status in (
+                    (r.get("sandboxCapabilities") or {}).get("statuses") or {}
+                ).items()
+            }
+        ),
+    }
+
     summary = {
         "status": status,
         "failedRuns": len(failures),
@@ -236,6 +262,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
         "engineStability": stability,
         "totalRuntimeMs": sum(r.get("runtimeMs", 0) for r in manifest["runs"]),
         "discoveryReceipts": len(discovery_receipts),
+        "engineReceipts": engine_receipts,
         "engineRevision": manifest.get("engineRevision"),
     }
     (results_dir / "results.json").write_text(json.dumps(summary, indent=2))

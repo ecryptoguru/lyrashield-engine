@@ -1,4 +1,5 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
+import asyncio
 import atexit
 import contextlib
 import logging
@@ -15,6 +16,8 @@ from rich.panel import Panel
 from rich.text import Text
 
 from lyrashield.artifacts.state import ReportState, set_global_report_state
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
 from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
 from lyrashield.lifecycle.runner import run_strix_scan
 from lyrashield.runtime import session_manager
@@ -115,8 +118,11 @@ async def run_cli(args: Any) -> None:
         "scan_mode": scan_mode,
         "non_interactive": bool(getattr(args, "non_interactive", False)),
         "local_sources": getattr(args, "local_sources", None) or [],
+        "attachments": getattr(args, "attachments", None) or [],
         "scope_mode": getattr(args, "scope_mode", "auto"),
         "diff_base": getattr(args, "diff_base", None),
+        "diff_head": getattr(args, "diff_head", None),
+        "repository_revision": getattr(args, "repository_revision", None),
         "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
     }
 
@@ -196,17 +202,80 @@ async def run_cli(args: Any) -> None:
             len(scan_config.get("targets") or []),
             bool(getattr(args, "interactive", False)),
         )
-        await run_strix_scan(
+        runtime_seconds = getattr(args, "runtime_budget_seconds", None)
+        if runtime_seconds is not None and not non_interactive:
+            raise ValueError("runtime budget is supported only for non-interactive scans")
+        deadline = (
+            RunDeadline.start(runtime_seconds) if non_interactive and runtime_seconds else None
+        )
+        coordinator = AgentCoordinator() if deadline is not None else None
+        if coordinator is not None:
+            coordinator.run_deadline = deadline
+        run = run_strix_scan(
             scan_config=scan_config,
             scan_id=args.run_name,
             image=_resolve_sandbox_image(),
             local_sources=getattr(args, "local_sources", None) or [],
+            attachments=getattr(args, "attachments", None) or [],
             interactive=bool(getattr(args, "interactive", False)),
             max_budget_usd=getattr(args, "max_budget_usd", None),
             max_turns=getattr(args, "max_turns", DEFAULT_MAX_TURNS),
             resume=bool(getattr(args, "resume", None)),
             artifact_state=report_state,
+            coordinator=coordinator,
         )
+        if deadline is None:
+            await run
+        else:
+
+            async def notify_wrap() -> None:
+                await asyncio.sleep(deadline.until_wrap_seconds())
+                if coordinator is None:
+                    return
+                for (
+                    agent_id,
+                    status,
+                    _parent,
+                    _name,
+                    _metadata,
+                ) in await coordinator.agents_with_metadata():
+                    if status in {"running", "waiting"}:
+                        await coordinator.send(
+                            agent_id,
+                            {
+                                "from": "system",
+                                "type": "runtime_wrap",
+                                "content": (
+                                    "Runtime wrap-up: stop new work, collect existing reports, "
+                                    "record unresolved coverage, and finish truthfully."
+                                ),
+                            },
+                            interrupt=False,
+                        )
+
+            wrap_task = asyncio.create_task(notify_wrap())
+            scan_timeout = asyncio.timeout(deadline.remaining_seconds())
+            try:
+                async with scan_timeout:
+                    await run
+            except (TimeoutError, RunDeadlineExceededError) as exc:
+                # Only the deadline itself is salvageable. Two cases reach here:
+                # the asyncio timeout context actually expired, or the lifecycle
+                # refused a model start past the deadline (RunDeadlineExceededError).
+                # An internal TimeoutError that escaped the run while the
+                # context had NOT expired is a real failure and must not be
+                # relabelled as a bounded partial result.
+                if not (scan_timeout.expired() or isinstance(exc, RunDeadlineExceededError)):
+                    raise
+                # The hard runtime deadline fired. Record the reason so the
+                # worker can keep the findings already filed and report a
+                # truthful bounded result.
+                report_state.set_terminal_reason("runtime_deadline")
+                logger.warning("Scan runtime deadline reached; salvaging partial results")
+            finally:
+                wrap_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await wrap_task
 
     try:
         if non_interactive:

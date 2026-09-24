@@ -178,12 +178,15 @@ def write_resume_record(
     *,
     targets_info: list[dict[str, Any]] | None = None,
     local_sources: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write the private resume record preserving unsanitized execution fields.
 
     ``targets_info`` and ``local_sources`` are stored exactly as supplied so
     resume can recover ``cloned_repo_path`` and ``source_path`` values that
-    the public run.json intentionally redacts.
+    the public run.json intentionally redacts. ``attachments`` keeps each
+    entry's host ``source_path`` and recorded ``sha256`` so a resumed run can
+    re-stage the same input evidence — and reject it if the digest changed.
     """
     path = resume_record_path(run_dir)
     payload: dict[str, Any] = {"schema_version": 1}
@@ -191,6 +194,8 @@ def write_resume_record(
         payload["targets_info"] = targets_info
     if local_sources is not None:
         payload["local_sources"] = local_sources
+    if attachments is not None:
+        payload["attachments"] = attachments
     _atomic_write_text(
         path,
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
@@ -302,6 +307,22 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
     cvss = report.get("cvss")
     if cvss is not None:
         metadata.append(("CVSS", cvss))
+    # Schema 1.1 carries advisory_cvss as a structured object (score + vector +
+    # metric reasoning); the legacy flat number inside dependency_metadata is
+    # still rendered for older reports.
+    advisory_raw = report.get("advisory_cvss")
+    advisory_cvss = dep_meta.get("advisory_cvss")
+    if isinstance(advisory_raw, dict):
+        advisory = cast("dict[str, Any]", advisory_raw)
+        advisory_cvss = advisory.get("score")
+        if advisory.get("vector"):
+            metadata.append(("Advisory CVSS Vector", advisory["vector"]))
+    if advisory_cvss is not None and advisory_cvss != cvss:
+        metadata.append(("Advisory CVSS", advisory_cvss))
+    if dep_meta.get("contextual_cvss_vector"):
+        metadata.append(("Contextual CVSS Vector", dep_meta["contextual_cvss_vector"]))
+    if report.get("confidence"):
+        metadata.append(("Confidence", str(report["confidence"]).title()))
     if report.get("fix_effort"):
         metadata.append(("Fix Effort", str(report["fix_effort"]).title()))
     for label, value in metadata:
@@ -321,6 +342,21 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
     if report.get("impact"):
         lines.append("## Impact\n")
         lines.append(str(report["impact"]))
+        lines.append("")
+
+    if report.get("counterevidence"):
+        lines.append("## Counterevidence\n")
+        lines.append(str(report["counterevidence"]))
+        lines.append("")
+
+    if report.get("confidence_rationale"):
+        lines.append("## Confidence Rationale\n")
+        lines.append(str(report["confidence_rationale"]))
+        lines.append("")
+
+    if report.get("severity_change_conditions"):
+        lines.append("## What Would Change This Severity\n")
+        lines.append(str(report["severity_change_conditions"]))
         lines.append("")
 
     if report.get("technical_analysis"):
@@ -374,6 +410,57 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
     if report.get("remediation_steps"):
         lines.append("## Remediation\n")
         lines.append(str(report["remediation_steps"]))
+        lines.append("")
+
+    if report.get("fix_verification"):
+        lines.append("## Fix Verification\n")
+        fv = report["fix_verification"]
+        if isinstance(fv, dict):
+            # Schema 1.1 object: an engine attestation of the filing agent's
+            # check — rendered with the marker so it cannot be mistaken for a
+            # verification receipt.
+            lines.append(str(fv.get("statement") or ""))
+            if fv.get("method"):
+                lines.append(f"\n**Method:** {fv['method']}")
+            if fv.get("recorded_at"):
+                lines.append(f"\n**Attested at:** {fv['recorded_at']}")
+            lines.append(
+                "\n*Engine attestation of the reporter's check — not an "
+                "independent verification receipt.*"
+            )
+        else:
+            lines.append(str(fv))
+        lines.append("")
+
+    if report.get("advisory_cvss") and isinstance(report["advisory_cvss"], dict):
+        reasoning = cast("dict[str, Any]", report["advisory_cvss"]).get("metric_reasoning")
+        if reasoning:
+            lines.append("## Advisory CVSS Reasoning\n")
+            lines.append(str(reasoning))
+            lines.append("")
+
+    http_ids = report.get("http_exchange_ids")
+    if isinstance(http_ids, list) and http_ids:
+        # The proxy request ids are correlation references; the durable,
+        # redacted, checksummed evidence lives in http_exchanges.json.
+        lines.append("## HTTP Exchange Evidence\n")
+        lines.append(
+            f"{len(http_ids)} captured proxied exchange(s) back this finding — "
+            "see `http_exchanges.json` in the run artifacts for the redacted "
+            "request/response metadata and checksums."
+        )
+        lines.append("")
+
+    history = report.get("update_history")
+    if isinstance(history, list) and history:
+        lines.append("## Revision History\n")
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            fields = ", ".join(str(f) for f in entry.get("fields", [])) or "—"
+            lines.append(f"- **{entry.get('timestamp', '')}** — updated: {fields}")
+            if entry.get("reason"):
+                lines.append(f"  reason: {entry['reason']}")
         lines.append("")
 
     if report.get("assumptions"):

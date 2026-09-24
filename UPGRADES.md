@@ -1,10 +1,83 @@
 # LyraShield ownership and upstream-import ledger
 
+## Prompt-cache routing contract (2026-09-22)
+
+`run.json.prompt_cache` is a bounded execution receipt for the cache posture
+actually passed to the SDK. `enabled: false` now records `mode: null`, never
+the misleading implicit mode. The existing runner contract matrix serializes
+the coordinator, delegate and fallback `ModelSettings` through the SDK and
+asserts the cache key/options fields for every cache, routing and explicit-mode
+combination. `LYRASHIELD_PROMPT_CACHE_EXPLICIT` remains opt-in. The routing key
+flag is off by default in the standalone engine and on by default in the
+LyraShield product worker for the admitted GPT-6 deployments, where an operator
+can turn it off with `LYRASHIELD_PROMPT_CACHE_ROUTING=0`. Neither flag changes
+the default implicit-cache posture.
+
+## Viewer ownership documentation correction (2026-09-19)
+
+Docs-only correction; no code or gate behavior changed.
+
+`lyrashield/interface/viewer/**` is owned product code: it carries the
+LyraShield wordmark, the loopback-only local server (`127.0.0.1` default bind
+with a per-process session capability), and the product's authorization model.
+Earlier contributor guidance treated the viewer as upstream-import-only
+substrate; that was wrong — the viewer lives in `lyrashield/**`, outside the
+`strix/**` allowlist and patch digest, and follows the normal owned-code
+review path plus the rebuild-from-source flow documented below. The retained
+upstream substrate remains `strix/**` only.
+
+The viewer's OTP relay endpoints were removed outright, and relay-backed
+email/feedback features fail closed unless an operator explicitly sets
+`LYRASHIELD_APP_URL` (empty default; no LyraShield-owned relay exists). The
+configuration reference no longer promises email verification or encrypted
+email delivery.
+
+## Offline target classification and `--target-type`
+
+Target-kind inference no longer probes `GET <url>/info/refs?service=git-upload-pack`
+from the host: that request fired before target authorization and could reach
+private or internal addresses during classification alone. Inference is now
+offline-only — no DNS resolution, no HTTP — recognizing local paths, `git@` and
+`git://` remotes, credential-bearing URLs, and `.git` suffixes as repositories.
+
+Compatibility change: an HTTP(S) Git remote that does not end in `.git` (for
+example `https://github.com/org/repo`) now classifies as `web_application`
+instead of being probed. Pass the new `--target-type repository` flag for those
+targets. The flag validates the input's shape and errors actionably on a
+kind/input mismatch; it never authorizes fetching private or internal addresses,
+and repository acquisition still uses the existing guarded clone path. The
+upstream-retained `strix.interface` copy is unreachable from the shipped
+`lyrashield`/`lyrashield-local` entry points and remains pinned by the
+controlled-derivative gate.
+
 ## Security dependency audit and Intel macOS packaging
 
 CI audits the frozen Python dependency graph (all extras and groups) and the
 Desktop Cargo lockfile. Dependabot uses the uv ecosystem without blanket major
 version ignores. Known vulnerabilities fail the audit rather than being ignored.
+
+### AnyIO 4.14.2 security patch (2026-09-19)
+
+The frozen audit flagged anyio 4.14.1 for three advisories — CVE-2026-63374
+([GHSA-82r6-8w77-94w6](https://github.com/agronholm/anyio/security/advisories/GHSA-82r6-8w77-94w6),
+TLS server-hostname handling), CVE-2026-64847
+([GHSA-5p39-cfhj-2xmp](https://github.com/agronholm/anyio/security/advisories/GHSA-5p39-cfhj-2xmp),
+process pool) and CVE-2026-63349
+([GHSA-3w57-8xmc-8v26](https://github.com/agronholm/anyio/security/advisories/GHSA-3w57-8xmc-8v26),
+subprocess supplementary groups) — all fixed in 4.14.2.
+
+`uv lock --upgrade-package anyio==4.14.2` produced a minimal lock diff: the
+anyio version plus its sdist/wheel hashes, nothing else. `pyproject.toml` was
+not changed; anyio is a transitive dependency and the existing resolver
+constraints already express the patch floor. The frozen export re-audits clean.
+
+Two upstream fixes are covered by `tests/test_anyio_security_patch.py`:
+`open_process`/`run_process` now forward `extra_groups` to the backend instead
+of silently substituting `group` (Linux-only tests, mocked backend — no real
+privilege-changing subprocess), and `TLSStream.wrap` now IDNA-2008-encodes
+international `server_hostname` values before `ssl` certificate hostname
+checking instead of leaving the obsolete IDNA 2003 mapping to `ssl`.
+Certificate validation is not disabled in the tests.
 
 The reviewed lock advances aiohttp to 3.14.3, pypdf to 6.16.1 and cryptography to
 50.0.0; cryptography matches the existing sandbox requirements. Version 49 removed
@@ -87,6 +160,43 @@ upstream tree. Preserve this reviewed boundary while syncing releases.
 > product-outside-Strix migration superseded it with a hard reviewed-patch gate.
 > The larger v1.4.1-era measurements below remain only as an audit trail and are
 > not the current contribution policy.
+
+## Upgrade to v1.6.2 product-outside-strix (2026-09-19)
+
+The `strix/**` substrate is advanced to upstream release v1.6.2
+(`ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2`), imported with the mandated
+no-common-ancestor workflow (`git diff v1.5.3..v1.6.2 | git apply --3way`).
+All 86 non-merge commits were individually dispositioned; the ledger lives at
+`docs/superpowers/plans/2026-09-19-strix-162-disposition.md`.
+
+Substrate imports now include the MCP tool layer, the cloud/platform CLI modules
+(unwired at the product boundary — `lyrashield` is the only supported entry
+point and `--update` still fails closed), the coverage/evidence pipeline, the
+dedupe provider-binding fix, the resumable-agent lifecycle model, and curated
+skills. `strix/skills/tooling/{hurl,hypothesis}.md` are excluded as reviewed
+deletions (the sandbox image ships neither tool) and the `semantic_confusion`
+skill's references to them were rewritten. `strix/skills/__init__.py` now matches
+upstream exactly — the telemetry gate moved out of the substrate.
+
+Coherent fixes were ported into owned code rather than letting the substrate
+drift: config merge-persist with linked LLM-connection invalidation and
+active-alias writes (`lyrashield/policy/loader.py`), provider-bound dedupe
+credentials via `resolve_dedupe_model` (`lyrashield/artifacts/dedupe.py`,
+`lyrashield/policy/models.py`, warm-up in `lyrashield/interface/main.py`),
+`reasoning=max` in top-level `extra_body` and the LiteLLM-only prompt-cache
+gate (`lyrashield/lifecycle/inputs.py`), the resumable/unreachable agent model
+with `claim_parent_notice` and terminal-send refusal
+(`lyrashield/lifecycle/{agents,execution}.py`, `lyrashield/tools/agents_graph/tools.py`),
+`clean_optional` nullish-filter handling (`lyrashield/tools/proxy/tools.py`,
+`lyrashield/tools/reporting/tool.py`), session capability required for all
+viewer run data including the launched run (`lyrashield/interface/viewer/server.py`),
+the markdown-it-py PDF renderer with text normalization and severity/duration
+guards (`lyrashield/interface/viewer/report_pdf.py`, new `markdown-it-py` viewer
+dependency), and calibration-metadata rendering in `lyrashield/artifacts/writer.py`.
+
+The verification gate's allowlist, footprint ceiling, and patch digest were
+recomputed against the v1.6.2 base; `strix/skills/tooling/{hurl,hypothesis}.md`
+are recorded as reviewed deletions.
 
 ## Artifact persistence optimization (2026-08-24)
 

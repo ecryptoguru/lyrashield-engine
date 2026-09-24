@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any, cast
 
 from agents.usage import Usage, deserialize_usage, serialize_usage
@@ -16,7 +17,49 @@ _GPT56_USD_PER_MILLION: dict[str, tuple[float, float, float, float]] = {
     "gpt-5.6-terra": (2.0, 0.2, 2.5, 12.0),
     "gpt-5.6-luna": (0.2, 0.02, 0.25, 1.2),
 }
+_GPT6_USD_PER_MILLION: dict[str, tuple[float, float, float, float]] = {
+    "gpt-6-sol": (2.0, 0.2, 2.5, 10.0),
+    "gpt-6-luna": (0.1, 0.01, 0.125, 0.5),
+}
+_METERED_USD_PER_MILLION = {**_GPT56_USD_PER_MILLION, **_GPT6_USD_PER_MILLION}
 _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
+
+
+def extract_provider_usage(response: Any) -> dict[str, Any] | None:
+    """Keep only validated numeric usage from a completed raw Responses result."""
+    raw = response.model_dump(exclude_unset=True) if hasattr(response, "model_dump") else response
+    if not isinstance(raw, Mapping) or raw.get("status") != "completed":
+        return None
+    response_id = raw.get("id")
+    usage = raw.get("usage")
+    if not isinstance(response_id, str) or not response_id or not isinstance(usage, Mapping):
+        return None
+    details = usage.get("input_tokens_details")
+    if not isinstance(details, Mapping):
+        return None
+    values = (
+        usage.get("input_tokens"),
+        details.get("cached_tokens"),
+        details.get("cache_write_tokens"),
+        usage.get("output_tokens"),
+    )
+    if any(type(value) is not int or value < 0 for value in values):
+        return None
+    input_tokens, cached_tokens, cache_write_tokens, output_tokens = cast(
+        "tuple[int, int, int, int]", values
+    )
+    if cached_tokens + cache_write_tokens > input_tokens:
+        return None
+    return {
+        "response_id": response_id,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "input_tokens_details": {
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
+        },
+    }
 
 
 class LLMUsageLedger:
@@ -27,6 +70,9 @@ class LLMUsageLedger:
         self._agent_usage: dict[str, Usage] = {}
         self._agent_metadata: dict[str, dict[str, str]] = {}
         self._request_usage_entries: list[dict[str, Any]] = []
+        self._gpt6_accounting_complete = True
+        self._gpt6_seen = False
+        self._recorded_response_ids: set[str] = set()
         self._total_cost = 0.0
         self._has_cost = False
         # Per-agent cost accumulated at record() time from the model rate card.
@@ -55,14 +101,34 @@ class LLMUsageLedger:
         usage: Usage | None,
         agent_name: str | None = None,
         model: str | None = None,
+        provider_receipt: dict[str, Any] | None = None,
     ) -> bool:
         if usage is None or not _usage_has_activity(usage):
             return False
 
+        is_gpt6 = _normalized_model_key(model) in _GPT6_USD_PER_MILLION
+        if is_gpt6:
+            self._gpt6_seen = True
+            response_id = provider_receipt.get("response_id") if provider_receipt else None
+            if isinstance(response_id, str) and response_id in self._recorded_response_ids:
+                return False
+            complete = (
+                provider_receipt is not None
+                and usage.requests == 1
+                and provider_receipt["input_tokens"] == usage.input_tokens
+                and provider_receipt["output_tokens"] == usage.output_tokens
+            )
+            self._gpt6_accounting_complete = self._gpt6_accounting_complete and complete
+            if isinstance(response_id, str):
+                self._recorded_response_ids.add(response_id)
+
         normalized_agent_id = str(agent_id or "unknown")
         self._total_usage.add(usage)
         self._agent_usage.setdefault(normalized_agent_id, Usage()).add(usage)
-        self._request_usage_entries.extend(_serialize_request_usage_entries(usage, model=model))
+        if is_gpt6 and provider_receipt is not None and usage.requests == 1:
+            self._request_usage_entries.append({**provider_receipt, "model": model})
+        elif not is_gpt6:
+            self._request_usage_entries.extend(_serialize_request_usage_entries(usage, model=model))
 
         metadata = self._agent_metadata.setdefault(normalized_agent_id, {})
         if agent_name:
@@ -71,8 +137,22 @@ class LLMUsageLedger:
             metadata["model"] = model
 
         if not self.zero_cost and _normalized_model_key(model) not in self._observed_cost_models:
-            estimated = _estimate_gpt56_cost(usage, model)
-            if estimated is None and not _is_litellm_routed(model):
+            estimated = (
+                estimate_gpt56_request_cost_usd(
+                    model,
+                    input_tokens=provider_receipt["input_tokens"],
+                    cached_input_tokens=provider_receipt["input_tokens_details"]["cached_tokens"],
+                    cache_write_input_tokens=provider_receipt["input_tokens_details"][
+                        "cache_write_tokens"
+                    ],
+                    output_tokens=provider_receipt["output_tokens"],
+                )
+                if is_gpt6 and provider_receipt is not None and usage.requests == 1
+                else None
+                if is_gpt6
+                else _estimate_gpt56_cost(usage, model)
+            )
+            if estimated is None and _gpt56_rate(model) is None and not _is_litellm_routed(model):
                 estimated = _estimate_litellm_cost(usage, model)
             if estimated:
                 self._total_cost += estimated
@@ -140,11 +220,19 @@ class LLMUsageLedger:
         # billable dimension.
         if self._request_usage_entries:
             record["request_usage_entries"] = list(self._request_usage_entries)
-        elif self._total_usage.requests != 1:
+        elif self._gpt6_seen or self._total_usage.requests != 1:
             # The SDK may synthesize one request entry from a multi-request
             # aggregate. It has no per-call cache buckets, so it cannot be
             # used for exact pricing.
             record.pop("request_usage_entries", None)
+        if self._gpt6_seen:
+            gpt6_receipts = sum(
+                _normalized_model_key(entry.get("model")) in _GPT6_USD_PER_MILLION
+                for entry in self._request_usage_entries
+            )
+            record["accounting_complete"] = self._gpt6_accounting_complete and (
+                gpt6_receipts == self._total_usage.requests
+            )
         ancillary_total = sum(self._ancillary_costs.values())
         reconciled = self._total_cost + ancillary_total
         if self._has_cost or self.zero_cost or ancillary_total > 0:
@@ -220,6 +308,9 @@ class LLMUsageLedger:
         self._agent_usage.clear()
         self._agent_metadata.clear()
         self._request_usage_entries.clear()
+        self._gpt6_accounting_complete = True
+        self._gpt6_seen = False
+        self._recorded_response_ids.clear()
         self._total_cost = 0.0
         self._has_cost = False
         self._agent_costs.clear()
@@ -253,6 +344,19 @@ class LLMUsageLedger:
         self._request_usage_entries = _hydrate_request_usage_entries(
             raw_usage.get("request_usage_entries")
         )
+        self._recorded_response_ids = {
+            entry["response_id"]
+            for entry in self._request_usage_entries
+            if isinstance(entry.get("response_id"), str)
+        }
+        self._gpt6_seen = (
+            any(
+                _normalized_model_key(entry.get("model")) in _GPT6_USD_PER_MILLION
+                for entry in self._request_usage_entries
+            )
+            or "accounting_complete" in raw_usage
+        )
+        self._gpt6_accounting_complete = raw_usage.get("accounting_complete") is True
 
         raw_agents = raw_usage.get("agents")
         if isinstance(raw_agents, list):
@@ -313,13 +417,44 @@ def _is_litellm_routed(model: str | None) -> bool:
 def _gpt56_rate(model: str | None) -> tuple[float, float, float, float] | None:
     if not model:
         return None
-    return _GPT56_USD_PER_MILLION.get(model.strip().lower().split("/")[-1])
+    return _METERED_USD_PER_MILLION.get(model.strip().lower().split("/")[-1])
 
 
-def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
+def gpt56_usd_per_million(model: str | None) -> tuple[float, float, float, float] | None:
+    """Read-only LyraShield model rate lookup shared with offline evaluators.
+
+    Returns ``(uncached input, cached read, cache write, output)`` USD per
+    million tokens using the ledger's model normalization (lowercase,
+    stripped, last path segment). ``None`` for models outside the GPT-5.6
+    rate card, including historical GPT-5.6 receipts.
+    """
+    return _gpt56_rate(model)
+
+
+def estimate_gpt56_request_cost_usd(
+    model: str | None,
+    *,
+    input_tokens: float,
+    cached_input_tokens: float,
+    cache_write_input_tokens: float,
+    output_tokens: float,
+) -> float | None:
+    """Price one validated request using the versioned LyraShield rate card."""
     rate = _gpt56_rate(model)
     if rate is None:
         return None
+    input_multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS else 1.0
+    output_multiplier = 1.5 if input_multiplier > 1.0 else 1.0
+    uncached_input_tokens = input_tokens - cached_input_tokens - cache_write_input_tokens
+    return (
+        uncached_input_tokens * rate[0] * input_multiplier
+        + cached_input_tokens * rate[1] * input_multiplier
+        + cache_write_input_tokens * rate[2] * input_multiplier
+        + output_tokens * rate[3] * output_multiplier
+    ) / 1_000_000
+
+
+def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
     entries: list[Any] = list(usage.request_usage_entries or [])
     if not entries and usage.requests == 1:
         entries = [usage]
@@ -332,17 +467,22 @@ def _estimate_gpt56_cost(usage: Usage, model: str | None) -> float | None:
         if input_tokens + output_tokens <= 0:
             continue
         details = _details_to_dict(getattr(entry, "input_tokens_details", None))
+        if _normalized_model_key(model) in _GPT6_USD_PER_MILLION and (
+            "cached_tokens" not in details or "cache_write_tokens" not in details
+        ):
+            return None
         cached = min(_int_or_zero(details.get("cached_tokens")), input_tokens)
         cache_write = min(_int_or_zero(details.get("cache_write_tokens")), input_tokens - cached)
-        uncached = input_tokens - cached - cache_write
-        multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS else 1.0
-        output_multiplier = 1.5 if multiplier > 1 else 1.0
-        total += (
-            uncached * rate[0] * multiplier
-            + cached * rate[1] * multiplier
-            + cache_write * rate[2] * multiplier
-            + output_tokens * rate[3] * output_multiplier
-        ) / 1_000_000
+        cost = estimate_gpt56_request_cost_usd(
+            model,
+            input_tokens=input_tokens,
+            cached_input_tokens=cached,
+            cache_write_input_tokens=cache_write,
+            output_tokens=output_tokens,
+        )
+        if cost is None:
+            return None
+        total += cost
     return _round_cost(total)
 
 
@@ -467,7 +607,9 @@ def _serialize_request_usage_entries(
     return serialized
 
 
-def _serialize_request_usage_entry(entry: Any) -> dict[str, Any]:
+def _serialize_request_usage_entry(
+    entry: Any, *, preserve_zero_write: bool = False
+) -> dict[str, Any]:
     input_tokens = _int_or_zero(getattr(entry, "input_tokens", 0))
     output_tokens = _int_or_zero(getattr(entry, "output_tokens", 0))
     total_tokens = _int_or_zero(getattr(entry, "total_tokens", 0))
@@ -476,7 +618,7 @@ def _serialize_request_usage_entry(entry: Any) -> dict[str, Any]:
         "cached_tokens": _int_or_zero(input_details.get("cached_tokens")),
     }
     cache_write_tokens = input_details.get("cache_write_tokens")
-    if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
+    if isinstance(cache_write_tokens, int) and (cache_write_tokens > 0 or preserve_zero_write):
         details["cache_write_tokens"] = cache_write_tokens
     return {
         "input_tokens": input_tokens,
@@ -494,10 +636,15 @@ def _hydrate_request_usage_entries(value: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         entry = cast("dict[str, Any]", entry)
-        serialized = _serialize_request_usage_entry(_UsageEntryAdapter(entry))
+        serialized = _serialize_request_usage_entry(
+            _UsageEntryAdapter(entry), preserve_zero_write=bool(entry.get("response_id"))
+        )
         model = entry.get("model")
         if isinstance(model, str) and model:
             serialized["model"] = model
+        response_id = entry.get("response_id")
+        if isinstance(response_id, str) and response_id:
+            serialized["response_id"] = response_id
         entries.append(serialized)
     return entries
 

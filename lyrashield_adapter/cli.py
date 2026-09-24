@@ -31,7 +31,7 @@ except ImportError:
 
 
 # ``chatgpt/<model>`` routes inference through a ChatGPT subscription
-# (``strix/config/codex.py``), which bypasses the Terra/Luna deployment gate and
+# (``strix/config/codex.py``), which bypasses the Sol/Luna deployment gate and
 # records the run with zero metered cost. LyraShield scans are metered per token,
 # so the product entry point refuses subscription-backed models outright.
 _SUBSCRIPTION_PREFIX = "chatgpt/"
@@ -115,7 +115,7 @@ def prepare_environment(
     env["STRIX_NO_UPDATE_CHECK"] = "1"
     env[PRODUCT_BOUNDARY_ENV_VAR] = "1"
     _reject_subscription_models(env)
-    _reject_unsupported_gpt56_providers(env)
+    _reject_unsupported_models(env)
     return env
 
 
@@ -127,38 +127,27 @@ def _reject_subscription_models(env: MutableMapping[str, str]) -> None:
         if value.lower().startswith(_SUBSCRIPTION_PREFIX):
             msg = (
                 f"{name}={value} routes through a ChatGPT subscription, which is "
-                "not supported for LyraShield scans. Configure a GPT-5.6 Terra or "
+                "not supported for LyraShield scans. Configure a GPT-6 Sol or "
                 "Luna API deployment instead."
             )
             raise SystemExit(msg)
 
 
-def _reject_unsupported_gpt56_providers(env: MutableMapping[str, str]) -> None:
-    """Fail fast if a model env var names a GPT-5.6 deployment from an unsupported provider.
-
-    LiteLLM's cost map currently only lists ``openai``, ``azure``, and
-    ``bedrock_mantle`` for ``gpt-5.6-*``. The Azure alias ``azure_ai`` and the
-    ChatGPT subscription route ``chatgpt/`` are also allowed.
-    """
+def _reject_unsupported_models(env: MutableMapping[str, str]) -> None:
+    """Fail fast when a product model is not an approved GPT-6 Sol/Luna route."""
     from lyrashield.policy.models import (  # noqa: PLC0415
-        is_gpt56_model,
-        is_gpt56_supported_provider,
+        is_gpt6_supported_provider,
     )
 
     for name in _MODEL_ENV_VARS:
         value = env.get(name, "").strip()
         if not value:
             continue
-        if is_gpt56_supported_provider(value):
-            continue
-        if is_gpt56_model(value):
-            msg = (
-                f"{name}={value} is a GPT-5.6 Terra/Luna deployment, but its "
-                "provider is not currently supported by LyraShield. Supported "
-                "providers are openai, azure, azure_ai, bedrock_mantle, and "
-                "chatgpt (with `lyrashield auth login chatgpt`)."
+        if not is_gpt6_supported_provider(value):
+            raise SystemExit(
+                f"{name}={value} is not an approved GPT-6 Sol/Luna deployment "
+                "from openai, azure, or azure_ai."
             )
-            raise SystemExit(msg)
 
 
 def get_version() -> str:
@@ -172,6 +161,16 @@ def _register_lyrashield_skills() -> None:
     from strix.skills import register_skill_dir  # noqa: PLC0415
 
     register_skill_dir(Path(__file__).resolve().parents[1] / "lyrashield" / "skills")
+
+    # The coverage ledger matches skills to rows by phrasing; a skill the
+    # substrate doesn't ship must declare its phrasings or a finding it owns
+    # would be reported as an uncovered risk class.
+    from strix.report.coverage import _SKILL_PHRASINGS  # noqa: PLC0415
+
+    _SKILL_PHRASINGS.setdefault(
+        "websocket",
+        ("websocket", "ws", "socket", "channel", "message"),
+    )
 
 
 # Product tool overrides, mapped as override name -> (module, attribute). The

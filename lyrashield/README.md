@@ -1,16 +1,18 @@
 # `lyrashield` package
 
 This package holds all LyraShield product-critical behavior: model policy,
-lifecycle, budget hooks, tools, skills, interface, telemetry, and the
-worker artifact contract. The retained `strix/**` substrate is exact
-upstream Strix v1.5.3 except for two generic, reviewed seams
-(`strix/config/loader.py` and `strix/skills/__init__.py`).
+lifecycle, budget hooks, tools, skills, interface, telemetry and the
+worker artifact contract. The retained `strix/**` substrate is the upstream
+release pinned in the repository-root `.lyrashield-upstream-base` (v1.6.2),
+imported with only the reviewed modifications listed in
+`scripts/verify-controlled-derivative.sh`. Carrier code outside `lyrashield/**`
+retains the upstream attribution documented in `NOTICE`.
 
 ## Module map
 
 | Module | Contents |
 | --- | --- |
-| `lyrashield/policy/` | GPT-5.6 model acceptance, reasoning policy, `LYRASHIELD_*` env aliases, subscription gating, provider-contract probing |
+| `lyrashield/policy/` | GPT-6 model acceptance (the provider allowlist that refuses subscription routes), reasoning policy, `LYRASHIELD_*` env aliases, provider-contract probing |
 | `lyrashield/lifecycle/` | Non-interactive agent loop, execution, budget hooks, context compaction, prompt sanitization, cancellation, sessions |
 | `lyrashield/runtime/` | Sandbox session, Docker client, Caido bootstrap, local-dir staging |
 | `lyrashield/agents/` | Product agent factory, programmatic tool calling, output-store binding, redaction, system-prompt renderer |
@@ -31,7 +33,7 @@ Product modules register themselves through generic seams in the retained
 - `strix.agents.factory.register_tool_override` — replaces upstream base tools
   with product implementations from `lyrashield/tools/`.
 - `strix.agents.factory.register_model_policy` — registers the product
-  GPT-5.6 model-acceptance policy from `lyrashield/policy/models.py`.
+  GPT-6 model-acceptance policy from `lyrashield/policy/models.py`.
 - `strix.config.loader.register_settings_loader` — registers
   `lyrashield/policy/loader.py` as the product settings loader.
 - `strix.agents.prompt.FileSystemLoader` — searches registered skill

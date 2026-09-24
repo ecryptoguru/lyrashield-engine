@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from lyrashield.artifacts.evidence import evidence_v1_1_enabled
 from strix.skills import get_available_skills, load_skills, skill_search_dirs
 from strix.utils.resource_paths import get_strix_resource_path
 
@@ -110,6 +111,7 @@ def render_system_prompt(
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
             system_prompt_context=system_prompt_context or {},
+            evidence_v1_1=evidence_v1_1_enabled(),
             **skill_content,
         )
     except Exception as exc:

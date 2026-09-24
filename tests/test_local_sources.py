@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import subprocess  # nosec B404
 import sys
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -195,10 +196,15 @@ def test_clone_repository_checks_out_the_requested_branch(tmp_path: Path) -> Non
 
 def test_clone_repository_checks_out_a_full_commit_sha_detached(tmp_path: Path) -> None:
     commit_sha = "a" * 40
+
+    def fake_run(argv: list[str], **_kwargs: Any) -> Any:
+        stdout = commit_sha if argv[:1] == ["/usr/bin/git"] and "rev-parse" in argv else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
     with (
         patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
         patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
-        patch.object(interface_utils.subprocess, "run") as run,
+        patch.object(interface_utils.subprocess, "run", side_effect=fake_run) as run,
     ):
         clone_repository("https://github.com/org/repo", "sha-run", branch=commit_sha)
 
@@ -213,6 +219,10 @@ def test_clone_repository_checks_out_a_full_commit_sha_detached(tmp_path: Path) 
         "--detach",
         commit_sha,
     ]
+    # The pinned checkout must be verified: a rev-parse HEAD assertion runs
+    # after the detach so a mismatched checkout can never pass silently.
+    rev_parse_argv = run.call_args_list[2].args[0]
+    assert rev_parse_argv[-2:] == ["rev-parse", "HEAD"]
 
 
 def test_build_mount_targets_info_for_valid_dir(tmp_path: Path) -> None:

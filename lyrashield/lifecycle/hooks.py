@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.lifecycle import RunHooks
 
 from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.lifecycle.deadline import RunDeadlineExceededError
 from lyrashield.tools.output_store import _take_prefix, _take_suffix
 
 
@@ -52,7 +53,7 @@ _SYSTEM_NOTICE_TAG = "[SYSTEM-NOTICE]"
 # reservation, and final pricing share one source of truth (I8).
 from lyrashield.artifacts.usage import (  # noqa: E402
     _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS,
-    _GPT56_USD_PER_MILLION,
+    _METERED_USD_PER_MILLION,
 )
 
 
@@ -116,13 +117,13 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
 def _model_rate_card(model: str) -> tuple[float, float, float, float]:
     """(input, cached, cache_write, output) dollars per 1M tokens for a model.
 
-    GPT-5.6 tiers come from the canonical rate card shared with final
+    LyraShield's admitted tiers and historical GPT-5.6 tiers use the rate card shared with final
     pricing; other models fall back to the LiteLLM cost map, then to
     conservative defaults that overestimate so budget enforcement errs on
     the side of protecting the cap.
     """
     suffix = model.strip().lower().split("/")[-1]
-    for tier, rates in _GPT56_USD_PER_MILLION.items():
+    for tier, rates in _METERED_USD_PER_MILLION.items():
         if tier in suffix:
             return rates
     return _fallback_model_rate_card(model)
@@ -609,6 +610,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._budget_increment = max_budget_usd
         self._max_turns = max_turns
         self._interactive = interactive
+        self._deadline_notified: set[str] = set()
 
     def extend_budget(self) -> None:
         if self._max_budget_usd is None or self._budget_increment is None:
@@ -729,14 +731,16 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self,
         context: RunContextWrapper[dict[str, Any]],
         input_items: list[TResponseInputItem],
+        turns_used: int | None = None,
     ) -> None:
         if not self._max_turns:
             return
-        usage = getattr(context, "usage", None)
-        requests = getattr(usage, "requests", None)
-        if not isinstance(requests, int):
-            return
-        turns_used = requests + 1
+        if turns_used is None:
+            usage = getattr(context, "usage", None)
+            requests = getattr(usage, "requests", None)
+            if not isinstance(requests, int):
+                return
+            turns_used = requests + 1
         stage = _crossed_stage(turns_used / self._max_turns, _TURN_WARN_BANDS)
         if stage is None:
             return
@@ -825,8 +829,30 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         system_prompt: str | None,
         input_items: list[TResponseInputItem],
     ) -> None:
+        turns_used: int | None = None
+        coordinator = context.context.get("coordinator")
+        agent_id = self._agent_id(context, agent)
+        deadline = getattr(coordinator, "run_deadline", None)
+        if deadline is not None:
+            if deadline.remaining_seconds() <= 0:
+                raise RunDeadlineExceededError("scan runtime deadline reached")
+            if deadline.wrapping_up() and agent_id not in self._deadline_notified:
+                self._deadline_notified.add(agent_id)
+                input_items.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{_SYSTEM_NOTICE_TAG} [CRITICAL] Runtime wrap-up: stop new tasks, "
+                            "file supported findings, collect existing reports, record unresolved "
+                            "coverage, and call the lifecycle finish tool before the deadline."
+                        ),
+                    }
+                )
+        claim = getattr(coordinator, "claim_model_turn", None)
+        if self._max_turns and callable(claim):
+            turns_used = await claim(agent_id, self._max_turns)
         try:
-            self._maybe_warn_turns(context, input_items)
+            self._maybe_warn_turns(context, input_items, turns_used)
             self._maybe_warn_budget(context, input_items)
         except Exception:
             logger.exception("budget/turn warning injection failed")
@@ -898,6 +924,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     agent_name=agent_name,
                     model=model,
                     usage=response.usage,
+                    response_id=response.response_id,
                 )
             except Exception:
                 logger.exception("failed to record SDK usage for agent %s", agent_id)

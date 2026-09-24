@@ -145,9 +145,10 @@ async def finish_scan(
     3. Don't double-report — one report per distinct vulnerability.
     4. **Attack-chaining gate.** Do NOT finish until you have genuinely
        considered chaining the confirmed findings into higher-impact,
-       end-to-end attack paths and tested every plausibly-related
-       combination. You may rule out combinations you can confidently
-       call unrelated — note why instead of padding chains. Any
+       end-to-end attack paths. Test materially related combinations when
+       scope, evidence, and remaining budget allow; record unresolved chains
+       as unverified rather than extending the run indefinitely. You may rule
+       out combinations you can confidently call unrelated. Any
        validated chain must already be filed via
        ``create_vulnerability_report`` — a demonstrated end-to-end chain
        is a PoC-backed vulnerability, so it uses that tool even when one
@@ -155,8 +156,7 @@ async def finish_scan(
        ``create_dependency_report``) — and surfaced prominently in
        ``executive_summary`` / ``technical_analysis``. Finding no real
        chain after a serious attempt is acceptable; skipping the
-       chaining reasoning, or ignoring a plausibly-related combination,
-       is not.
+       chaining reasoning is not.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.

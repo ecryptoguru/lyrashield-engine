@@ -3,7 +3,91 @@ from __future__ import annotations
 from agents.usage import Usage
 from openai.types.responses.response_usage import InputTokensDetails
 
-from lyrashield.artifacts.usage import LLMUsageLedger
+from lyrashield.artifacts.usage import LLMUsageLedger, extract_provider_usage
+
+
+def test_raw_gpt6_usage_distinguishes_zero_from_missing() -> None:
+    response = {
+        "id": "response-1",
+        "status": "completed",
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        },
+    }
+    assert extract_provider_usage(response) == {
+        "response_id": "response-1",
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "total_tokens": 110,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+    }
+    del response["usage"]["input_tokens_details"]["cache_write_tokens"]
+    assert extract_provider_usage(response) is None
+
+
+def test_gpt6_ledger_requires_matching_raw_response_and_deduplicates() -> None:
+    usage = Usage(requests=1, input_tokens=100, output_tokens=10, total_tokens=110)
+    ledger = LLMUsageLedger()
+    assert ledger.record(agent_id="root", usage=usage, model="azure_ai/gpt-6-luna")
+    assert ledger.to_record()["accounting_complete"] is False
+
+    complete = LLMUsageLedger()
+    receipt = extract_provider_usage(
+        {
+            "id": "response-1",
+            "status": "completed",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+            },
+        }
+    )
+    assert receipt is not None
+    assert complete.record(
+        agent_id="root", usage=usage, model="azure_ai/gpt-6-luna", provider_receipt=receipt
+    )
+    assert not complete.record(
+        agent_id="root", usage=usage, model="azure_ai/gpt-6-luna", provider_receipt=receipt
+    )
+    record = complete.to_record()
+    assert record["accounting_complete"] is True
+    assert record["request_usage_entries"][0]["input_tokens_details"] == {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+    assert record["cost"] == 0.000015
+
+
+def test_gpt6_ledger_resume_keeps_zero_receipt_and_completion() -> None:
+    usage = Usage(requests=1, input_tokens=100, output_tokens=10, total_tokens=110)
+    receipt = extract_provider_usage(
+        {
+            "id": "response-1",
+            "status": "completed",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+            },
+        }
+    )
+    assert receipt is not None
+    ledger = LLMUsageLedger()
+    ledger.record(
+        agent_id="root", usage=usage, model="azure_ai/gpt-6-luna", provider_receipt=receipt
+    )
+    restored = LLMUsageLedger()
+    restored.hydrate(ledger.to_record())
+    assert restored.to_record()["accounting_complete"] is True
+    assert (
+        restored.to_record()["request_usage_entries"][0]["input_tokens_details"][
+            "cache_write_tokens"
+        ]
+        == 0
+    )
 
 
 def test_usage_ledger_preserves_provider_cache_write_receipts() -> None:

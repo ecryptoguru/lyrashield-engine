@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from agents.agent_output import AgentOutputSchema
-from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
 from pydantic import BaseModel, Field, ValidationError
@@ -27,6 +26,8 @@ from lyrashield.policy.models import (
 
 if TYPE_CHECKING:
     from agents.items import ModelResponse
+    from agents.model_settings import ModelSettings
+    from agents.models.interface import Model
 
     from lyrashield.policy.settings import DedupeSettings, Settings
 
@@ -34,23 +35,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def dedupe_extra_args(dedupe: DedupeSettings) -> dict[str, str]:
-    """Per-call credential + endpoint for the dedupe model.
+def resolve_dedupe_model(
+    dedupe: DedupeSettings, model_name: str, settings: Settings | None = None
+) -> Model:
+    """Resolve the dedupe model, bound to its own endpoint when it has one.
 
-    Provider env vars and the global base URL are process-wide, so a
-    shared-provider dedupe key or a distinct dedupe endpoint can't be installed
-    globally without clobbering (or being clobbered by) the main model's
-    config. Passing them per call keeps the two apart. Only applies when a
-    dedicated dedupe model is configured.
+    Credentials can't ride on the request: every model implementation already
+    passes its own ``api_key``/``base_url``, so the same keys in ``extra_args``
+    collide with them and raise before anything is sent. A provider bound to
+    the dedupe endpoint keeps it apart from the main model's process-wide
+    defaults.
     """
-    if not dedupe.model:
-        return {}
-    extra: dict[str, str] = {}
-    if dedupe.api_key and dedupe.api_key.strip():
-        extra["api_key"] = dedupe.api_key.strip()
-    if dedupe.api_base and dedupe.api_base.strip():
-        extra["api_base"] = dedupe.api_base.strip()
-    return extra
+    api_key = (dedupe.api_key or "").strip() if dedupe.model else ""
+    api_base = (dedupe.api_base or "").strip() if dedupe.model else ""
+    if not (api_key or api_base):
+        return StrixProvider(settings=settings).get_model(model_name)
+    return StrixProvider(
+        settings=settings, api_key=api_key or None, base_url=api_base or None
+    ).get_model(model_name)
 
 
 def _dedupe_model_settings(
@@ -60,7 +62,7 @@ def _dedupe_model_settings(
     settings: Settings | None = None,
 ) -> ModelSettings:
     llm = settings.llm if settings is not None else load_settings().llm
-    model_settings = make_model_settings(
+    return make_model_settings(
         dedupe.reasoning_effort,
         model_name=model_name,
         max_output_tokens=_DEDUPE_MAX_OUTPUT_TOKENS,
@@ -72,10 +74,6 @@ def _dedupe_model_settings(
         # gets its own DEDUPE_LLM_EXTRA_HEADERS instead.
         extra_headers=dedupe.extra_headers if dedupe.model else llm.extra_headers,
     )
-    extra = dedupe_extra_args(dedupe)
-    if extra:
-        model_settings = model_settings.resolve(ModelSettings(extra_args=extra))
-    return model_settings
 
 
 DEDUPE_SYSTEM_PROMPT = """You are an expert vulnerability report deduplication judge.
@@ -736,7 +734,7 @@ async def check_duplicate(
             dedupe, resolved_model, settings.llm.timeout, settings=settings
         )
         response = await _request_dedupe_judgement(
-            model=StrixProvider(settings=settings).get_model(resolved_model),
+            model=resolve_dedupe_model(dedupe, resolved_model, settings=settings),
             model_name=resolved_model,
             model_settings=dedupe_settings,
             user_msg=user_msg,
@@ -748,6 +746,7 @@ async def check_duplicate(
                 agent_name="dedupe",
                 model=resolved_model,
                 usage=response.usage,
+                response_id=response.response_id,
             )
         content = _extract_text(response)
         if not content:

@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from typing import TYPE_CHECKING
 
-from lyrashield.runtime.local_dir_staging import stage_symlink_safe_dir, tree_has_symlink
+import pytest
+
+from lyrashield.runtime.local_dir_staging import (
+    stage_frozen_dir,
+    stage_symlink_safe_dir,
+    tree_has_symlink,
+)
 
 
 if TYPE_CHECKING:
@@ -139,3 +147,60 @@ def test_staged_path_has_no_symlink_ancestor(tmp_path: Path, monkeypatch) -> Non
     assert upload_path == staged
     for path in (staged, *staged.parents):
         assert not path.is_symlink(), f"staged path has a symlink ancestor: {path}"
+
+
+def test_frozen_staging_copies_internal_links_as_independent_bytes(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "pkg_alias").symlink_to("pkg")
+    (repo / "link.py").symlink_to("pkg/mod.py")
+
+    staged = stage_frozen_dir(repo)
+    try:
+        (repo / "pkg" / "mod.py").write_text("changed\n")
+        assert (staged / "pkg" / "mod.py").read_text() == "x = 1\n"
+        assert (staged / "pkg_alias" / "mod.py").read_text() == "x = 1\n"
+        assert (staged / "link.py").read_text() == "x = 1\n"
+        assert not tree_has_symlink(staged)
+    finally:
+        shutil.rmtree(staged)
+
+
+def test_frozen_staging_rejects_directory_swap_to_external_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _make_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.py").write_text("secret\n")
+    original_open = os.open
+    swapped = False
+
+    def swap_before_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == "pkg" and dir_fd is not None and not swapped:
+            swapped = True
+            (repo / "pkg").rename(repo / "parked")
+            (repo / "pkg").symlink_to(outside)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", swap_before_open)
+    with pytest.raises(OSError):
+        stage_frozen_dir(repo)
+    assert swapped
+
+
+def test_frozen_staging_rejects_temp_directory_inside_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _make_repo(tmp_path)
+    temp_inside = repo / "staging"
+
+    def inside_mkdtemp(*, prefix: str) -> str:
+        assert prefix
+        temp_inside.mkdir()
+        return str(temp_inside)
+
+    monkeypatch.setattr("lyrashield.runtime.local_dir_staging.tempfile.mkdtemp", inside_mkdtemp)
+    with pytest.raises(OSError, match="contains its own staging"):
+        stage_frozen_dir(repo)
+    assert not temp_inside.exists()
