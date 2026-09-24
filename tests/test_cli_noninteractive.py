@@ -233,3 +233,49 @@ async def test_a_non_deadline_failure_still_propagates() -> None:
         await cli.run_cli(args)
 
     report_state.set_terminal_reason.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_an_internal_timeout_is_not_relabeled_as_a_deadline() -> None:
+    """A TimeoutError raised while time remains is a real failure, not a deadline.
+
+    An internal ``asyncio.wait_for``, a provider call timeout or a tool timeout
+    that escapes the run must NOT be reported as a bounded partial result. Only
+    the hard deadline is salvageable.
+    """
+    args = SimpleNamespace(
+        run_name="scan-internal-timeout",
+        targets_info=[{"original": "example.test"}],
+        instruction=None,
+        diff_scope={"active": False},
+        local_sources=[],
+        scope_mode="auto",
+        diff_base=None,
+        user_explicit_instruction=None,
+        scan_mode="quick",
+        non_interactive=True,
+        interactive=False,
+        max_budget_usd=1.0,
+        # Plenty of time left: the deadline is nowhere near expiring.
+        runtime_budget_seconds=100.0,
+    )
+    report_state = MagicMock()
+    report_state.final_scan_result = None
+
+    async def _internal_timeout(*_args: object, **_kwargs: object) -> None:
+        raise TimeoutError("an internal wait_for expired")
+
+    with (
+        patch.object(cli, "ReportState", return_value=report_state),
+        patch.object(cli, "set_global_report_state"),
+        patch.object(cli, "_resolve_sandbox_image", return_value="sandbox@sha256:test"),
+        patch.object(cli, "run_strix_scan", new=_internal_timeout),
+        patch.object(cli.session_manager, "cleanup", new=AsyncMock(return_value="removed")),
+        patch.object(cli, "Live", side_effect=AssertionError("Live must not be created")),
+        patch.object(cli.atexit, "register"),
+        patch.object(cli.signal, "signal"),
+        pytest.raises(TimeoutError, match="an internal wait_for expired"),
+    ):
+        await cli.run_cli(args)
+
+    report_state.set_terminal_reason.assert_not_called()
