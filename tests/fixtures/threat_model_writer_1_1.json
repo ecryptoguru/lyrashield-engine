@@ -1,0 +1,22 @@
+{
+  "schema_version": "lyrashield-threat-model/1.0",
+  "generated_at": "2026-09-20 00:59:10 UTC",
+  "run_id": "fixture-run-1-1",
+  "run_name": "scan-fixture-1-1",
+  "models": [
+    {
+      "target": "https://app.example.test/?[SECRET]",
+      "written_at": "2026-09-20T00:00:00+00:00",
+      "written_by": "recon",
+      "content": "Assets: customer records. Trust boundary: public API to data store. [SECRET]",
+      "amendments": [
+        {
+          "by": "reviewer",
+          "at": "2026-09-20T00:01:00+00:00",
+          "content": "Unverified admin path; check authorization."
+        }
+      ]
+    }
+  ],
+  "note": "The threat model records the scan's declared assets, trust boundaries, entry points and assumptions. It is not proof that its attack paths were tested."
+}

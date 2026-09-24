@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from agents.exceptions import MaxTurnsExceeded
+
 from lyrashield.lifecycle.sessions import session_write_lock
 
 
@@ -21,6 +23,8 @@ if TYPE_CHECKING:
 
     from agents.items import TResponseInputItem
     from agents.memory import Session
+
+    from lyrashield.lifecycle.deadline import RunDeadline
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +46,7 @@ _SNAPSHOT_SCHEMA: dict[str, type] = {
     "pending_counts": dict,
     "recovery_counts": dict,
     "idle_resume_counts": dict,
+    "model_start_counts": dict,
     "wait_kinds": dict,
     "mailboxes": dict,
     "errors": dict,
@@ -55,6 +60,10 @@ class AgentRuntime:
     task: asyncio.Task[Any] | None = None
     stream: Any | None = None
     interrupt_on_message: bool = False
+    # Whether this agent's loop parks for wake-ups after finishing. An
+    # interactive (resumable) agent can be re-driven by a later user message;
+    # a finished non-interactive agent's loop is gone for good.
+    resumable: bool = True
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     mailbox: list[dict[str, Any]] = field(default_factory=list)
     user_wake_required: bool = False
@@ -73,8 +82,10 @@ class AgentCoordinator:
         self.conversation_ids: dict[str, str] = {}
         self.recovery_counts: dict[str, int] = {}
         self.idle_resume_counts: dict[str, int] = {}
+        self.model_start_counts: dict[str, int] = {}
         self.wait_kinds: dict[str, WaitKind] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
+        self._parent_notified: set[str] = set()
         self._lock = asyncio.Lock()
         self._snapshot_lock = asyncio.Lock()
         self._snapshot_path: Path | None = None
@@ -84,9 +95,12 @@ class AgentCoordinator:
         self._budget_paused = False
         self._extend_budget: Callable[[], None] | None = None
         self.max_agents = max(1, max_agents)
+        self.run_deadline: RunDeadline | None = None
 
     async def can_spawn_agent(self) -> bool:
         async with self._lock:
+            if self.run_deadline is not None and self.run_deadline.wrapping_up():
+                return False
             return len(self.statuses) < self.max_agents
 
     async def get_status(self, agent_id: str) -> Status | None:
@@ -211,6 +225,12 @@ class AgentCoordinator:
         skills: list[str] | None = None,
     ) -> None:
         async with self._lock:
+            if (
+                parent_id is not None
+                and self.run_deadline is not None
+                and self.run_deadline.wrapping_up()
+            ):
+                raise RuntimeError("Scan is wrapping up; new specialist work is closed")
             if agent_id not in self.statuses and len(self.statuses) >= self.max_agents:
                 raise RuntimeError(f"Scan agent limit reached ({self.max_agents})")
             self.statuses[agent_id] = "running"
@@ -232,6 +252,7 @@ class AgentCoordinator:
         session: Session | None = None,
         task: asyncio.Task[Any] | None = None,
         interrupt_on_message: bool | None = None,
+        resumable: bool | None = None,
     ) -> None:
         async with self._lock:
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
@@ -241,6 +262,8 @@ class AgentCoordinator:
                 runtime.task = task
             if interrupt_on_message is not None:
                 runtime.interrupt_on_message = interrupt_on_message
+            if resumable is not None:
+                runtime.resumable = resumable
 
     async def mark_running(self, agent_id: str) -> None:
         async with self._lock:
@@ -249,6 +272,7 @@ class AgentCoordinator:
                 self.errors.pop(agent_id, None)
                 self.wait_kinds.pop(agent_id, None)
                 self.runtimes.setdefault(agent_id, AgentRuntime()).user_wake_required = False
+                self._parent_notified.discard(agent_id)
         await self._maybe_snapshot()
 
     async def park_waiting(self, agent_id: str, *, wait_kind: WaitKind) -> None:
@@ -273,6 +297,17 @@ class AgentCoordinator:
             self.recovery_counts[agent_id] = count
         await self._maybe_snapshot()
         return count
+
+    async def claim_model_turn(self, agent_id: str, limit: int) -> int:
+        """Enforce one per-agent allowance across SDK cycles and resumed runtimes."""
+        async with self._lock:
+            used = self.model_start_counts.get(agent_id, 0)
+            if used >= limit:
+                raise MaxTurnsExceeded(f"Agent {agent_id} reached its {limit}-turn limit")
+            used += 1
+            self.model_start_counts[agent_id] = used
+        await self._maybe_snapshot()
+        return used
 
     async def reset_recovery(self, agent_id: str) -> None:
         """Clear the nudge budget after real progress (new message or a lifecycle tool)."""
@@ -308,22 +343,73 @@ class AgentCoordinator:
                 self.errors[agent_id] = error
             elif status == "running":
                 self.errors.pop(agent_id, None)
+            if status == "running":
+                # Running again means a fresh stint that owes its parent its own notice.
+                self._parent_notified.discard(agent_id)
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.user_wake_required = status in {"failed", "crashed"}
             runtime.wake.set()
         logger.info("agent.status %s=%s", agent_id, status)
         await self._maybe_snapshot()
 
+    async def claim_parent_notice(self, agent_id: str) -> bool:
+        """Reserve the one notice a child owes its parent when it stops running.
+
+        A completion report and a terminal notice carry the same information, so
+        whichever comes first claims the slot and the other is skipped.
+        """
+        async with self._lock:
+            if agent_id in self._parent_notified:
+                return False
+            self._parent_notified.add(agent_id)
+            return True
+
+    def _unreachable_locked(self, agent_id: str) -> bool:
+        """Return True when no loop will ever consume a queued message.
+
+        A terminal agent whose loop is gone cannot be woken — sends to it sit
+        in a mailbox nobody drains while the sender blocks on a reply. Must be
+        called under ``self._lock``.
+        """
+        if self.statuses.get(agent_id) not in {"completed", "stopped", "crashed", "failed"}:
+            return False
+        runtime = self.runtimes.get(agent_id)
+        return runtime is not None and not runtime.resumable
+
+    async def reachability(self, agent_id: str) -> tuple[bool, Status | None]:
+        """Return whether a queued message to ``agent_id`` would be consumed."""
+        async with self._lock:
+            status = self.statuses.get(agent_id)
+            if status is None:
+                return False, None
+            return not self._unreachable_locked(agent_id), status
+
     async def send(
         self, target_agent_id: str, message: dict[str, Any], *, interrupt: bool = True
     ) -> bool:
-        """Queue a user/peer message in the target's mailbox and wake it."""
+        """Queue a user/peer message in the target's mailbox and wake it.
+
+        Returns False when nothing will ever read the message: the target is
+        unknown, or it is terminal and its loop does not park for wake-ups.
+        """
         from_user = message.get("from") == "user"
         if from_user and self._budget_paused:
             await self.resume_from_budget_pause(exclude=target_agent_id)
         async with self._lock:
             if target_agent_id not in self.statuses:
                 logger.debug("agent.send dropped unknown target=%s", target_agent_id)
+                return False
+            if (
+                message.get("type") == "runtime_wrap"
+                and self.statuses[target_agent_id] not in _ACTIVE_STATUSES
+            ):
+                return False
+            if self._unreachable_locked(target_agent_id):
+                logger.info(
+                    "agent.send dropped: target=%s is %s and cannot be woken",
+                    target_agent_id,
+                    self.statuses[target_agent_id],
+                )
                 return False
             runtime = self.runtimes.setdefault(target_agent_id, AgentRuntime())
             # Follow-up work is valid after a child has reported completion.
@@ -337,6 +423,16 @@ class AgentCoordinator:
             self.pending_counts[target_agent_id] = self.pending_counts.get(target_agent_id, 0) + 1
             if from_user:
                 runtime.user_wake_required = False
+                # A real user message starts a fresh resume attempt: the prior
+                # failure, stall counters, and the "parent already told" flag
+                # belong to the abandoned attempt, not the new one.
+                self.errors.pop(target_agent_id, None)
+                self.wait_kinds.pop(target_agent_id, None)
+                self.recovery_counts.pop(target_agent_id, None)
+                self.idle_resume_counts.pop(target_agent_id, None)
+                self._parent_notified.discard(target_agent_id)
+                if self.statuses[target_agent_id] not in {"running"}:
+                    self.statuses[target_agent_id] = "waiting"
             runtime.wake.set()
             stream = runtime.stream
             interrupt_on_message = runtime.interrupt_on_message
@@ -608,6 +704,7 @@ class AgentCoordinator:
                 "pending_counts": dict(self.pending_counts),
                 "recovery_counts": dict(self.recovery_counts),
                 "idle_resume_counts": dict(self.idle_resume_counts),
+                "model_start_counts": dict(self.model_start_counts),
                 "wait_kinds": dict(self.wait_kinds),
                 "mailboxes": {
                     aid: [dict(m) for m in runtime.mailbox]
@@ -640,6 +737,7 @@ class AgentCoordinator:
             self.conversation_ids = dict(snap.get("conversation_ids", {}))
             self.recovery_counts = dict(snap.get("recovery_counts", {}))
             self.idle_resume_counts = dict(snap.get("idle_resume_counts", {}))
+            self.model_start_counts = dict(snap.get("model_start_counts", {}))
             self.wait_kinds = dict(snap.get("wait_kinds", {}))
             mailboxes = snap.get("mailboxes", {})
             if isinstance(mailboxes, dict):

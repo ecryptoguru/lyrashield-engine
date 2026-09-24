@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from agents.extensions.models.litellm_model import LitellmModel
 from agents.model_settings import ModelSettings
 from agents.models.openai_responses import OpenAIResponsesModel
 
@@ -12,6 +14,7 @@ from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     _azure_responses_base_url,
+    _AzureUsageResponsesModel,
     is_gpt56_model,
     is_gpt56_supported_provider,
     is_recommended_or_frontier_model,
@@ -20,6 +23,7 @@ from lyrashield.policy.models import (
     uses_chat_completions_tool_schema,
 )
 from lyrashield.policy.settings import LlmSettings, Settings
+from strix.config import models as strix_models
 
 
 @pytest.mark.parametrize("model_name", RECOMMENDED_MODEL_NAMES)
@@ -137,6 +141,46 @@ def test_azure_gpt56_routes_through_responses_with_stripped_deployment_name() ->
     assert str(model._client.base_url) == "https://example.services.ai.azure.com/openai/v1/"
 
 
+@pytest.mark.asyncio
+async def test_azure_gpt6_captures_raw_terminal_usage_before_sdk_normalizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="azure_ai/gpt-6-luna",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+        )
+    )
+    model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
+    assert isinstance(model, _AzureUsageResponsesModel)
+    captured: list[Any] = []
+    state = SimpleNamespace(capture_provider_usage=captured.append)
+    monkeypatch.setattr("lyrashield.artifacts.state.get_global_report_state", lambda: state)
+    response = SimpleNamespace(id="r1", status="completed")
+
+    async def fake_fetch(_self: Any, *_args: Any, stream: bool = False, **_kwargs: Any) -> Any:
+        if not stream:
+            return response
+
+        async def events() -> Any:
+            yield SimpleNamespace(type="response.completed", response=response)
+
+        return events()
+
+    monkeypatch.setattr(OpenAIResponsesModel, "_fetch_response", fake_fetch)
+    assert await model._fetch_response(stream=False) is response
+    stream = await model._fetch_response(stream=True)
+    assert [event.type async for event in stream] == ["response.completed"]
+    assert captured == [response, response]
+
+    def broken_capture(_response: Any) -> None:
+        raise ValueError("target-derived diagnostic")
+
+    state.capture_provider_usage = broken_capture
+    assert await model._fetch_response(stream=False) is response
+
+
 def test_azure_multi_segment_name_uses_final_deployment() -> None:
     """``azure/<region>/<deployment>`` must resolve to just the deployment slug."""
     settings = Settings(
@@ -219,6 +263,13 @@ def test_azure_gpt56_uses_responses_tools_when_programmatic_is_opted_in(
         "moonshot/kimi-k2.6",
         "kimi-k2.7-code",
         "moonshot/kimi-k3",
+        "anthropic/claude-fable-5-1",
+        "vertex_ai/claude-fable-5-1@default",
+        "gemini/gemini-3.7-flash",
+        "glm-5.3",
+        "zai/glm-5.3-flash",
+        "openrouter/z-ai/glm-5.3",
+        "novita/zai-org/glm-5.2",
     ],
 )
 def test_frontier_model_families_are_accepted(model_name: str) -> None:
@@ -243,6 +294,9 @@ def test_frontier_model_families_are_accepted(model_name: str) -> None:
         "novita/gpt-5.6-luna",
         "mistral/mistral-medium-3-5",
         "mistral/magistral-medium-latest",
+        "zai/glm-4.7",
+        "openrouter/z-ai/glm-5",
+        "custom-provider/glm-5.3-local",
     ],
 )
 def test_non_frontier_models_are_rejected(model_name: str) -> None:
@@ -415,3 +469,59 @@ def test_parse_model_route_documented_forms() -> None:
     assert (azure.provider, azure.model_path) == ("azure", "eu/gpt-5.6-terra")
     bedrock = parse_model_route("bedrock_mantle/openai.gpt-5.6-luna")
     assert (bedrock.provider, bedrock.model_path) == ("bedrock_mantle", "openai.gpt-5.6-luna")
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "anthropic/claude-sonnet-4-6",
+        "bedrock/anthropic.claude-opus-4-8-v1:0",
+        "vertex_ai/claude-sonnet-5",
+        "Sonnet-5",
+    ],
+)
+def test_claude_routes_reject_strict_tool_schemas(model_name: str) -> None:
+    assert not strix_models.supports_strict_tool_schemas(model_name)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["openai/gpt-5.4", "gpt-5.4", "gemini/gemini-3.1-pro-preview", "deepseek/deepseek-v4"],
+)
+def test_other_routes_keep_strict_tool_schemas(model_name: str) -> None:
+    assert strix_models.supports_strict_tool_schemas(model_name)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "litellm"),
+    [
+        ("claude-sonnet-4-5", False),
+        ("openai/claude-sonnet-4-5", False),
+        ("any-llm/anthropic/claude-sonnet-4-5", False),
+        ("anthropic/claude-sonnet-4-5", True),
+        ("litellm/anthropic/claude-sonnet-4-5", True),
+        ("bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0", True),
+        ("ollama/llama3", True),
+    ],
+)
+def test_routes_through_litellm_matches_the_provider(
+    monkeypatch: pytest.MonkeyPatch, model_name: str, litellm: bool
+) -> None:
+    """The helper must agree with what StrixProvider actually builds.
+
+    Callers use it to decide whether a LiteLLM-only request field is safe to
+    attach; on the SDK's own clients such a field raises TypeError mid-turn, so
+    drift here breaks every request on that route.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    assert strix_models.routes_through_litellm(model_name) is litellm
+    try:
+        model = strix_models.StrixProvider().get_model(model_name)
+    except ImportError:
+        # any-llm's client is an optional dependency; reaching it at all already
+        # proves the route is not LiteLLM's.
+        assert not litellm
+        return
+    while isinstance(model, strix_models._NonStreamingModel | strix_models._TurnGuardModel):
+        model = model._inner
+    assert isinstance(model, LitellmModel) is litellm

@@ -3,30 +3,27 @@ title: "Configuration"
 description: "Environment variables and config file for LyraShield Engine"
 ---
 
-Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and only allows GPT-5.6 Terra or Luna deployments from LiteLLM/Strix-supported providers that currently carry them (OpenAI, Azure/Azure AI, and Bedrock Mantle).
+Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and admits GPT-6 Sol or Luna deployments from OpenAI or Azure/Azure AI.
 
 <Warning>
-Only approved GPT-5.6 Terra or Luna deployments from supported LiteLLM/Strix providers are accepted as the main model. The current allow-list is OpenAI, Azure/Azure AI, and Bedrock Mantle. ChatGPT subscription-backed models are supported by default; run `lyrashield auth login chatgpt` and use `chatgpt/<model>` for `LYRASHIELD_LLM`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported as LLM endpoints until LiteLLM's cost map lists `gpt-5.6` for their provider markers.
+Only approved GPT-6 Sol or Luna API deployments are accepted as metered scan routes. The current allow-list is OpenAI and Azure/Azure AI; the GPT-6 provider allowlist (`is_gpt6_supported_provider` / `_reject_unsupported_models`) is the gate that refuses everything else, including `chatgpt/` subscription routes. `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION` still defaults to enabled for the standalone engine, so the allowlist — not that flag — is what keeps a subscription model out of a product scan. Older GPT-5 deployments and other provider markers are not admitted to new scans; their historical rate definitions remain for receipt interpretation.
 
-Parallel Search may be used as an optional `web_search` tool when explicitly enabled with `LYRASHIELD_WEB_SEARCH_ENABLED=1` and `PARALLEL_API_KEY` or `LYRASHIELD_WEB_SEARCH_API_KEY`. It is not a model route and never replaces the GPT-5.6 main model.
+Parallel Search may be used as an optional `web_search` tool when explicitly enabled with `LYRASHIELD_WEB_SEARCH_ENABLED=1` and `PARALLEL_API_KEY` or `LYRASHIELD_WEB_SEARCH_API_KEY`. It is not a model route and never replaces the GPT-6 main model.
 
 </Warning>
 
 ## LLM configuration
 
 <ParamField path="LYRASHIELD_LLM" type="string" required>
-  Primary model in LiteLLM format. Metered `openai`, `azure`, `azure_ai`, and
-  `bedrock_mantle` routes must identify a GPT-5.6 Terra or Luna deployment (for
-  example `openai/gpt-5.6-luna` or `azure_ai/gpt-5.6-terra`). An authenticated
-  subscription-backed `chatgpt/<model>` route is exempt from the Terra/Luna
-  name requirement and follows the subscription accounting rules below. Alias
-  of `STRIX_LLM`.
+  Primary model in LiteLLM format. Metered `openai`, `azure`, and `azure_ai`
+  routes must identify a GPT-6 Sol or Luna deployment (for example
+  `openai/gpt-6-luna` or `azure_ai/gpt-6-sol`). Alias of `STRIX_LLM`.
 </ParamField>
 
 <ParamField path="LYRASHIELD_DELEGATE_LLM" type="string">
-  Bounded specialist tier model for Deep scans. The Terra/medium root owns
+  Bounded specialist tier model for Deep scans. The Sol/medium root owns
   coordination and cross-file judgment; Luna/high child specialists handle
-  focused tasks. Must identify a GPT-5.6 Terra or Luna deployment. Alias of
+  focused tasks. Must identify a GPT-6 Luna deployment. Alias of
   `STRIX_DELEGATE_LLM`.
 </ParamField>
 
@@ -80,12 +77,32 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
   Enable implicit prompt caching. Defaults to on. Alias of `STRIX_PROMPT_CACHE`.
 </ParamField>
 
-<ParamField path="LYRASHIELD_PROMPT_CACHE_EXPLICIT" default="1" type="boolean">
-  Enable GPT-5.6 explicit cache breakpoints for prompt-cache reads and writes.
-  Unsupported routes ignore this setting. Stable coordinator and delegate cache
-  keys are scoped to the prompt bundle and scan role; usage artifacts separately
-  record cache-read and cache-write tokens when the provider reports them.
+<ParamField path="LYRASHIELD_PROMPT_CACHE_EXPLICIT" default="false" type="boolean">
+  Enable GPT-6 explicit cache breakpoints for prompt-cache reads and writes.
+  This is opt-in and requires a provider smoke scan for the exact deployment;
+  unsupported routes ignore it. Usage artifacts separately record cache-read
+  and cache-write tokens when the provider reports them.
 </ParamField>
+
+<ParamField path="LYRASHIELD_PROMPT_CACHE_ROUTING" default="false" type="boolean">
+  Emit stable, scan-isolated GPT-6 `prompt_cache_key` routing keys for the coordinator,
+  delegate and fallback prompt families. The standalone engine default is off.
+  The LyraShield product worker turns it on by default for the admitted GPT-6
+  deployments and an operator can set `LYRASHIELD_PROMPT_CACHE_ROUTING=0` to
+  turn it off. It is independent of explicit breakpoints and does not turn
+  caching on when `LYRASHIELD_PROMPT_CACHE=false`. Enable it for a GPT-6
+  deployment only after a provider smoke scan confirms that deployment honors
+  the key.
+</ParamField>
+
+### Offline cache-economics evaluator
+
+Run `python -m lyrashield.evals.cache_economics path/to/run.json` to produce a
+read-only, allowlisted accounting summary from provider request receipts. The
+evaluator makes no provider or target calls. It reports no cost or scenarios
+when request entries and declared usage totals do not reconcile. Optional
+`--input-reduction FRACTION` and `--cache-conversion FRACTION` outputs are
+hypothetical repricings of complete receipts, not measured savings.
 
 <ParamField path="LLM_DISABLE_STREAMING" default="false" type="boolean">
   Disable streaming on LLM calls. Alias: `LYRASHIELD_DISABLE_STREAMING`.
@@ -371,8 +388,12 @@ The `publish-sandbox` workflow pushes one multi-architecture candidate, runs the
   default=""
   type="string"
 >
-  Base URL of the relay the local viewer proxies to for email verification and
-  encrypted report delivery. The browser never talks to the relay directly; the
+  Optional base URL of an operator-controlled relay for the viewer's legacy
+  report-delivery and feedback endpoints. The default is empty — no
+  LyraShield-owned relay exists — and every relay-backed feature fails closed
+  with `RelayError("unavailable")`. The viewer offers no email verification or
+  OTP unlock flow; the OTP relay endpoints were removed outright. The browser
+  never talks to a relay directly; the
   local server is the only caller. Alias of `STRIX_APP_URL`.
 </ParamField>
 

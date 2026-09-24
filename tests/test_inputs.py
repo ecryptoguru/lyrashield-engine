@@ -8,7 +8,15 @@ from typing import Any
 import litellm
 import pytest
 
-from lyrashield.lifecycle.inputs import build_root_task, child_initial_input, make_model_settings
+from lyrashield.lifecycle.inputs import (
+    build_root_initial_input,
+    build_root_task,
+    child_initial_input,
+    make_model_settings,
+    prompt_cache_options_for_model,
+    prompt_cache_routing_enabled,
+)
+from strix.core.inputs import build_scan_targets
 
 
 def _child_kwargs(parent_history: list[Any]) -> dict[str, Any]:
@@ -62,6 +70,76 @@ def test_child_initial_input_marks_the_stable_prefix_for_explicit_gpt56_cache(
     assert "Audit the login flow." in content[1]["text"]
 
 
+def test_gpt56_routing_only_preserves_implicit_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
+
+    assert prompt_cache_routing_enabled("azure/gpt-5.6-luna") is True
+    assert prompt_cache_options_for_model("azure/gpt-5.6-luna") is None
+    assert isinstance(
+        build_root_initial_input(
+            {"targets": [{"type": "REPOSITORY", "value": "owner/repo"}]},
+            "azure/gpt-5.6-luna",
+        ),
+        str,
+    )
+
+
+def test_gpt56_routing_only_keeps_child_input_flat(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Routing alone must not split the delegate message: content breakpoints
+    # belong to the explicit mode only.
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
+
+    result = child_initial_input(**_child_kwargs([]), model_name="azure_ai/gpt-5.6-luna")
+
+    assert isinstance(result[0]["content"], str)
+
+
+def test_gpt56_routing_and_explicit_are_independent_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
+
+    assert prompt_cache_routing_enabled("azure_ai/gpt-5.6-luna") is True
+    assert prompt_cache_options_for_model("azure_ai/gpt-5.6-luna") == {
+        "mode": "explicit",
+        "ttl": "30m",
+    }
+
+
+@pytest.mark.parametrize("request_phase", ["normal", "resume", "post_compaction"])
+def test_gpt56_cache_settings_serialize_at_sdk_boundary(request_phase: str) -> None:
+    """Every request phase reuses these SDK settings, not a hand-built payload."""
+    settings = make_model_settings(
+        None,
+        model_name="azure_ai/gpt-5.6-luna",
+        prompt_cache_key=f"lyrashield:v2:coordinator:{request_phase}",
+        prompt_cache_options={"mode": "explicit", "ttl": "30m"},
+    )
+
+    wire = settings.to_json_dict()
+
+    assert wire["extra_args"] == {"prompt_cache_key": f"lyrashield:v2:coordinator:{request_phase}"}
+    assert wire["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["openai/gpt-4o", "anthropic/claude-sonnet-4-5", "azure_ai/gpt-5.5-luna", None],
+)
+def test_unsupported_models_get_no_gpt56_cache_features(
+    model_name: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
+    monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
+
+    assert prompt_cache_routing_enabled(model_name) is False
+    assert prompt_cache_options_for_model(model_name) is None
+
+
 @pytest.mark.parametrize(
     "parent_history",
     [[], [{"role": "assistant", "content": "previous work"}]],
@@ -99,6 +177,16 @@ def test_make_model_settings_enables_prompt_cache_for_non_bedrock_claude(model_n
         {"location": "message", "role": "system"},
         {"location": "message", "index": -1},
     ]
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["claude-sonnet-4-5", "openai/claude-sonnet-4-5", "any-llm/anthropic/claude-sonnet-4-5"],
+)
+def test_no_prompt_cache_for_claude_off_the_litellm_route(model_name: str) -> None:
+    # These names are served by SDK clients that raise TypeError on LiteLLM-only
+    # request kwargs — e.g. a gateway in front of Claude reached with a bare name.
+    assert _cache_points(model_name) is None
 
 
 def test_tool_config_point_not_leaked_to_non_bedrock_claude() -> None:
@@ -152,7 +240,8 @@ def test_max_reasoning_effort_sent_as_raw_body_field() -> None:
     # when LiteLLM's bundled metadata predates that model family.
     settings = make_model_settings("max", model_name="azure_ai/gpt-5.6-terra", request_timeout=30)
     assert settings.reasoning is None
-    assert settings.extra_args == {"timeout": 30, "extra_body": {"reasoning_effort": "max"}}
+    assert settings.extra_args == {"timeout": 30}
+    assert settings.extra_body == {"reasoning_effort": "max"}
 
 
 def test_conversation_tail_breakpoint_moves_with_appended_transcript() -> None:
@@ -333,3 +422,32 @@ def test_make_model_settings_timeout_survives_reasoning_resolve() -> None:
 
     assert settings.extra_args is not None
     assert settings.extra_args["timeout"] == 120.0
+
+
+def test_scan_targets_prefer_the_workspace_checkout_over_the_remote_url() -> None:
+    config = {
+        "targets": [
+            {
+                "type": "repository",
+                "details": {
+                    "target_repo": "https://github.com/acme/billing",
+                    "workspace_subdir": "billing",
+                },
+            },
+            {"type": "web_application", "details": {"target_url": "https://app.example.com"}},
+        ]
+    }
+
+    assert build_scan_targets(config) == ["/workspace/billing", "https://app.example.com"]
+
+
+def test_scan_targets_drop_empty_and_duplicate_entries() -> None:
+    config = {
+        "targets": [
+            {"type": "web_application", "details": {"target_url": "https://app.example.com"}},
+            {"type": "web_application", "details": {"target_url": "https://app.example.com"}},
+            {"type": "ip_address", "details": {}},
+        ]
+    }
+
+    assert build_scan_targets(config) == ["https://app.example.com"]

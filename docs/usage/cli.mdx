@@ -44,6 +44,16 @@ Serves the prebuilt local viewer SPA. Source lives in `lyrashield/interface/view
   Path to a file containing targets, one per non-empty, non-comment line. Lines starting with `#` are ignored. Can be specified multiple times and combined with `--target`.
 </ParamField>
 
+<ParamField path="--target-type" type="string">
+  Explicit kind for every `--target`/`--target-list` entry: `repository`, `web_application`, `local_code`, or `ip_address`. The flag validates that each input matches the declared kind and exits with an actionable error when it does not.
+
+  Classification is offline-only: the engine never resolves DNS and never sends HTTP requests to the target while deciding its kind. When omitted, local directories, `git@`/`git://` remotes, credential-bearing URLs, and URLs ending in `.git` classify as repositories; other HTTP(S) URLs and bare domains classify as web applications.
+
+  <Note>
+    Compatibility: an HTTP(S) Git remote that does not end in `.git` (for example `https://github.com/org/repo`) was previously detected by a host-side probe and now classifies as `web_application` unless you pass `--target-type repository`. The flag only classifies input — it never authorizes fetching private or internal addresses, and repository acquisition still uses the existing guarded clone path.
+  </Note>
+</ParamField>
+
 <ParamField path="--mount" type="string">
   Bind-mount a local directory into the sandbox (read-only) instead of copying it in file-by-file. Use this for large repositories that are too big to stream into the container. Can be specified multiple times.
 
@@ -71,11 +81,19 @@ Serves the prebuilt local viewer SPA. Source lives in `lyrashield/interface/view
 </ParamField>
 
 <ParamField path="--scope-mode" type="string" default="auto">
-  Code scope mode: `auto` (enable PR diff-scope in CI/headless runs), `diff` (force changed-files scope), or `full` (disable diff-scope). Diff scope narrows repository context for suitable CI/headless work; it is a scope statement, not proof that unchanged code or deployed behavior is safe.
+  Code scope mode: `auto` (enable PR diff-scope in CI/headless runs), `diff` (force changed-files scope — requires `--diff-base` and `--diff-head`), or `full` (disable diff-scope). Diff scope narrows repository context for suitable CI/headless work; it is a scope statement, not proof that unchanged code or deployed behavior is safe.
 </ParamField>
 
 <ParamField path="--diff-base" type="string">
-  Target branch or commit to compare against (e.g., `origin/main`). Defaults to the repository's default branch.
+  Target branch or commit to compare against (e.g., `origin/main`). Defaults to the repository's default branch. With `--diff-head` this must be a full 40- or 64-character lowercase hex Git object ID.
+</ParamField>
+
+<ParamField path="--diff-head" type="string">
+  Asserted comparison head for diff-scope: a full 40- or 64-character lowercase hex Git object ID. Requires `--diff-base`; the checkout's `HEAD` must equal this revision or the run fails closed with a named preflight error.
+</ParamField>
+
+<ParamField path="--repository-revision" type="string">
+  Exact immutable commit to check out for repository targets (full 40- or 64-character lowercase hex object ID). The clone detaches at this revision and `HEAD` is asserted to match; when combined with `--repository-branch`, the branch is only a fetch hint.
 </ParamField>
 
 <ParamField path="--non-interactive, -n" type="boolean">
@@ -141,8 +159,8 @@ uv run lyrashield --target ./approved-repository --instruction-file ./instructio
 # Cap cost and per-agent turns
 uv run lyrashield --target ./approved-repository -n --max-budget 25 --max-turns 300
 
-# Force diff-scope against a specific base ref
-uv run lyrashield -n --target ./ --scan-mode quick --scope-mode diff --diff-base origin/main
+# Review Changes: force diff-scope between immutable revisions
+uv run lyrashield -n --target ./ --scan-mode quick --scope-mode diff --diff-base <base-sha> --diff-head <head-sha>
 
 # Multi-target white-box testing (operator-only; production sends one repository target)
 uv run lyrashield -t https://github.com/org/app -t https://staging.example.com

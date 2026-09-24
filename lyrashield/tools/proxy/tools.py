@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import json
 import logging
 import re
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from agents import RunContextWrapper, function_tool
 
 from lyrashield.tools.proxy import caido_api
+from strix.tools.nullish import clean_optional
 
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,41 @@ async def _call[T](client: Client, fn: Callable[[Client], Awaitable[T]]) -> T:
     """Run ``fn`` against the shared client, serialized under ``_CAIDO_CALL_LOCK``."""
     async with _CAIDO_CALL_LOCK:
         return await fn(client)
+
+
+async def existing_request_ids(
+    ctx: RunContextWrapper, request_ids: list[str]
+) -> tuple[set[str] | None, str | None]:
+    """Which ids the proxy actually holds — for evidence validation.
+
+    ``(ids, None)`` on success, ``(None, warning)`` when the proxy client is
+    unavailable, ``(set(), reason)`` when the proxy answered but the tool ran
+    against a stale snapshot.
+    """
+    client = _ctx_client(ctx)
+    if client is None:
+        return None, "proxy client unavailable; ids could not be validated"
+    try:
+        missing = [
+            request_id
+            for request_id in request_ids
+            if (
+                await _call(
+                    client,
+                    functools.partial(caido_api.get_request_with_client, request_id=request_id),
+                )
+            )
+            is None
+        ]
+    except Exception:
+        logger.exception("caido evidence lookup failed")
+        return None, "proxy lookup failed; ids could not be validated"
+    if missing:
+        return set(), (
+            f"no proxy request with id {missing[0]} exists in this scan; "
+            "copy the id from list_requests or view_request"
+        )
+    return {str(request_id) for request_id in request_ids}, None
 
 
 def _to_tool_json(value: Any) -> Any:
@@ -179,6 +216,10 @@ async def list_requests(
     client = _ctx_client(ctx)
     if client is None:
         return _no_client()
+
+    httpql_filter = clean_optional(httpql_filter)
+    after = clean_optional(after)
+    scope_id = clean_optional(scope_id)
 
     try:
         connection = await _call(
@@ -485,6 +526,8 @@ async def list_sitemap(
     client = _ctx_client(ctx)
     if client is None:
         return _no_client()
+    scope_id = clean_optional(scope_id)
+    parent_id = clean_optional(parent_id)
     try:
         payload = await _call(
             client,

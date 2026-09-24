@@ -60,18 +60,21 @@ def _isolated_product_env(monkeypatch: pytest.MonkeyPatch) -> None:
     ],
 )
 def test_prepare_environment_maps_product_variable(product: str, upstream: str) -> None:
-    env: MutableMapping[str, str] = {product: "product-value"}
+    value = (
+        "openai/gpt-6-luna" if upstream in {"STRIX_LLM", "STRIX_DELEGATE_LLM"} else "product-value"
+    )
+    env: MutableMapping[str, str] = {product: value}
     cli.prepare_environment(env)
-    assert env[upstream] == "product-value"
+    assert env[upstream] == value
 
 
 def test_prepare_environment_keeps_explicit_upstream_value() -> None:
     env: MutableMapping[str, str] = {
-        "LYRASHIELD_LLM": "product-model",
-        "STRIX_LLM": "operator-model",
+        "LYRASHIELD_LLM": "openai/gpt-6-luna",
+        "STRIX_LLM": "openai/gpt-6-sol",
     }
     cli.prepare_environment(env)
-    assert env["STRIX_LLM"] == "operator-model"
+    assert env["STRIX_LLM"] == "openai/gpt-6-sol"
 
 
 def test_prepare_environment_forces_telemetry_off() -> None:
@@ -130,21 +133,21 @@ def test_prepare_environment_rejects_subscription_model_via_product_alias_when_d
         cli.prepare_environment(env)
 
 
-def test_prepare_environment_accepts_chatgpt_by_default() -> None:
+def test_prepare_environment_rejects_chatgpt_even_when_subscription_enabled() -> None:
     env: MutableMapping[str, str] = {"LYRASHIELD_LLM": "chatgpt/gpt-5.6-terra"}
-    assert cli.prepare_environment(env)["STRIX_LLM"] == "chatgpt/gpt-5.6-terra"
+    with pytest.raises(SystemExit, match="not an approved GPT-6"):
+        cli.prepare_environment(env)
 
 
 @pytest.mark.parametrize(
     "model",
     [
-        "openai/gpt-5.6-luna",
-        "azure/eu/gpt-5.6-terra",
-        "azure_ai/gpt-5.6-luna",
-        "bedrock_mantle/openai.gpt-5.6-luna",
+        "openai/gpt-6-luna",
+        "azure/gpt-6-sol",
+        "azure_ai/gpt-6-luna",
     ],
 )
-def test_prepare_environment_accepts_supported_gpt56_providers(model: str) -> None:
+def test_prepare_environment_accepts_supported_gpt6_providers(model: str) -> None:
     env: MutableMapping[str, str] = {"LYRASHIELD_LLM": model}
     assert cli.prepare_environment(env)["STRIX_LLM"] == model
 
@@ -160,17 +163,17 @@ def test_prepare_environment_accepts_supported_gpt56_providers(model: str) -> No
 )
 def test_prepare_environment_rejects_unsupported_gpt56_providers(model: str) -> None:
     env: MutableMapping[str, str] = {"LYRASHIELD_LLM": model}
-    with pytest.raises(SystemExit, match="provider is not currently supported"):
+    with pytest.raises(SystemExit, match="not an approved GPT-6"):
         cli.prepare_environment(env)
 
 
 def test_prepare_environment_accepts_api_key_deployments() -> None:
     env: MutableMapping[str, str] = {
-        "LYRASHIELD_LLM": "azure/gpt-5.6-terra",
-        "STRIX_DELEGATE_LLM": "azure/gpt-5.6-luna",
+        "LYRASHIELD_LLM": "azure/gpt-6-sol",
+        "STRIX_DELEGATE_LLM": "azure/gpt-6-luna",
     }
     cli.prepare_environment(env)
-    assert env["STRIX_LLM"] == "azure/gpt-5.6-terra"
+    assert env["STRIX_LLM"] == "azure/gpt-6-sol"
 
 
 def test_cli_update_flag_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,16 +206,15 @@ def test_config_file_can_use_subscription_model(
 @pytest.mark.parametrize(
     "model",
     [
-        "openai/gpt-5.6-luna",
-        "azure/eu/gpt-5.6-terra",
-        "azure_ai/gpt-5.6-luna",
-        "bedrock_mantle/openai.gpt-5.6-luna",
+        "openai/gpt-6-luna",
+        "azure/gpt-6-sol",
+        "azure_ai/gpt-6-luna",
     ],
 )
-def test_config_file_can_use_supported_gpt56_provider(
+def test_config_file_can_use_supported_gpt6_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model: str
 ) -> None:
-    """`--config` can name a GPT-5.6 model from a supported provider."""
+    """`--config` can name a GPT-6 model from a supported provider."""
     monkeypatch.setattr(loader, "_override", None, raising=False)
     monkeypatch.setattr(loader, "_cached", None, raising=False)
 

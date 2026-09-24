@@ -44,7 +44,9 @@
       "    from strix.tools.notes.tools import hydrate_notes_from_disk",
       "            model_provider=StrixProvider(settings=settings),",
       "        root_agent = build_strix_agent(",
-      "            fallback_agent = build_strix_agent("
+      "            fallback_agent = build_strix_agent(",
+      "    from strix.tools.coverage.tools import hydrate_coverage_from_disk",
+      "    from strix.tools.threat_model.tools import hydrate_threat_models_from_disk"
     ],
     "lyrashield/lifecycle/sessions.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
@@ -180,7 +182,7 @@
       "from strix.config import load_settings",
       "            \"strix_image is not configured. Set it in ~/.strix/cli-config.json.\",",
       "    results_text.append(f\"strix_runs/{args.run_name}\", style=\"#60a5fa\")",
-      "        await run_strix_scan("
+      "        run = run_strix_scan("
     ],
     "lyrashield/interface/viewer/__init__.py": [
       "\"\"\"Local web viewer for Strix runs."
@@ -276,15 +278,13 @@
     "lyrashield/README.md": [
       "  directories before `strix/agents/prompts/`, so",
       "  inherited `strix/skills/`.",
-      "(`strix/config/loader.py` and `strix/skills/__init__.py`).",
       "- `strix.agents.factory.register_model_policy` \u2014 registers the product",
       "- `strix.agents.factory.register_tool_override` \u2014 replaces upstream base tools",
       "- `strix.agents.prompt.FileSystemLoader` \u2014 searches registered skill",
       "- `strix.config.loader.register_settings_loader` \u2014 registers",
       "- `strix.skills.register_skill_dir` \u2014 loads `lyrashield/skills/` alongside",
       "`strix/**` substrate:",
-      "upstream Strix v1.5.3 except for two generic, reviewed seams",
-      "worker artifact contract. The retained `strix/**` substrate is exact"
+      "worker artifact contract. The retained `strix/**` substrate is the upstream"
     ],
     "lyrashield/agents/factory.py": [
       "        return build_strix_agent(",
@@ -301,7 +301,9 @@
       "from strix.tools.agents_graph.tools import (",
       "from strix.tools.load_skill.tool import load_skill",
       "from strix.tools.notes.tools import (",
-      "from strix.tools.thinking.tool import think"
+      "from strix.tools.thinking.tool import think",
+      "from strix.tools.coverage.tools import list_coverage, record_coverage, update_coverage",
+      "from strix.tools.threat_model.tools import ("
     ],
     "lyrashield/agents/overrides.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
@@ -315,7 +317,9 @@
     "lyrashield/artifacts/dedupe.py": [
       "            model=StrixProvider(settings=settings).get_model(resolved_model),",
       "    StrixProvider,",
-      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "        return StrixProvider(settings=settings).get_model(model_name)",
+      "    return StrixProvider("
     ],
     "lyrashield/artifacts/sarif.py": [
       "            # line because Strix code_locations carry the SINK line,",
@@ -344,6 +348,10 @@
       "def _strix_version() -> str | None:",
       "from strix.config import codex",
       "from strix.config.loader import load_settings",
+      "from strix.core.paths import run_dir_for, runtime_state_dir",
+      "                tool_version=_strix_version(),",
+      "    from strix.report.coverage import read_agent_graph",
+      "    from strix.tools.coverage.tools import get_coverage_entries",
       "from strix.core.paths import run_dir_for"
     ],
     "lyrashield/artifacts/usage.py": [
@@ -369,7 +377,8 @@
       "_DEFAULT_PATH: Path = Path.home() / \".strix\" / \"cli-config.json\"",
       "_register_with_strix()",
       "def _register_with_strix() -> None:",
-      "from strix.config import loader as _strix_loader"
+      "from strix.config import loader as _strix_loader",
+      "from strix.utils.secret_files import write_secret_text"
     ],
     "lyrashield/policy/models.py": [
       "            or os.environ.get(\"STRIX_PROGRAMMATIC_TOOL_CALLING\", \"\")",
@@ -383,7 +392,8 @@
       "    lost and Strix falls back to a cost-map estimate that is missing entirely",
       "    regardless of the ``STRIX_LLM`` prefix.",
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
-      "class StrixProvider(MultiProvider):"
+      "class StrixProvider(MultiProvider):",
+      "    \"\"\"Whether :class:`StrixProvider` sends this model through LiteLLM."
     ],
     "lyrashield/policy/provider_contract.py": [
       "    model = StrixProvider(settings=settings).get_model(model_name)",
@@ -504,9 +514,10 @@
       "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL must be an http(s) origin\")",
       "        raise RuntimeError(\"STRIX_TARGET_RELAY_URL requires HTTPS outside loopback\")",
       "        environment[\"STRIX_TARGET_RELAY\"] = \"1\"",
-      "        if environment.get(\"STRIX_TARGET_RELAY\"):",
-      "        environment[\"STRIX_RUN_ID\"] = scan_id",
-      "                target_relay=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
+      "            if environment.get(\"STRIX_TARGET_RELAY\"):",
+      "            environment[\"STRIX_RUN_ID\"] = scan_id",
+      "                target_relay=bool(environment.get(\"STRIX_TARGET_RELAY\")),",
+      "                relay_configured=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
     ],
     "lyrashield/telemetry/README.md": [
       "- `STRIX_NO_UPDATE_CHECK=1` \u2014 disables the upstream self-update network check.",
@@ -559,17 +570,17 @@
       "``/workspace/.strix/tool-output/<id>.txt``; the agent sees a head + tail slice"
     ],
     "lyrashield/tools/proxy/caido_api.py": [
-      "        return \"host.docker.internal (set STRIX_SANDBOX_ALLOW_HOST_GATEWAY=1 to allow)\"",
       "    # STRIX_RUN_ID is set (inside the container). A wrong-run policy is",
       "    ``STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS`` opt-in is honored). When a policy",
       "    expected_run_id = os.environ.get(\"STRIX_RUN_ID\", \"\").strip()",
-      "    final_headers.setdefault(\"User-Agent\", \"strix\")",
       "    return os.environ.get(\"STRIX_CAIDO_URL\", _DEFAULT_CAIDO_URL).rstrip(\"/\")",
       "    return os.environ.get(\"STRIX_SANDBOX_ALLOW_HOST_GATEWAY\", \"\").strip().lower() in {",
-      "_PRIVATE_EGRESS_OPT_IN_ENV = \"STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS\""
+      "_PRIVATE_EGRESS_OPT_IN_ENV = \"STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS\"",
+      "            \"host.docker.internal (set STRIX_SANDBOX_ALLOW_HOST_GATEWAY=1 to allow)\","
     ],
     "lyrashield/tools/reporting/tool.py": [
-      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.tools.nullish import clean_optional"
     ],
     "lyrashield/triage/service.py": [
       "            model = cast(\"_Model\", StrixProvider(settings=settings).get_model(model_route))",
@@ -582,6 +593,8 @@
       "        re.compile(r\"/workspace/\\.strix/tool-output/[^\\s\\\"'<>]+\"),"
     ],
     "docs/advanced/configuration.mdx": [
+      "Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and admits GPT-6 Sol or Luna deployments from OpenAI or Azure/Azure AI.",
+      "  `openai/gpt-6-luna` or `azure_ai/gpt-6-sol`). Alias of `STRIX_LLM`.",
       "  Alias of `STRIX_CONTEXT_FALLBACK_TOKENS`.",
       "  Alias of `STRIX_DELEGATE_REASONING_EFFORT`.",
       "  Alias of `STRIX_MAX_CONTEXT_IMAGES`.",
@@ -694,6 +707,58 @@
     ],
     "lyrashield/skills/custom/live_target_testing.md": [
       "(`STRIX_TARGET_RELAY=1` in the environment). The relay enforces the authorized"
+    ],
+    "lyrashield/tools/proxy/tools.py": [
+      "from strix.tools.nullish import clean_optional"
+    ],
+    "docs/superpowers/plans/2026-09-19-strix-162-disposition.md": [
+      "# Strix v1.6.2 controlled import \u2014 commit/path disposition ledger",
+      "Dispositions: `ADOPT_SUBSTRATE` (upstream `strix/**` content lands verbatim),",
+      "| afce7d95 | fix(telemetry): classify setup-mode TUI preflight failures | ADOPT_SUBSTRATE | Telemetry substrate; product forces `STRIX_TELEMETRY=0` at the boundary. |",
+      "| f4b0416b | docs: update README and CLI links (#1272) | ADOPT_SUBSTRATE | `strix/` viewer assets + `cli_args.py` links land; owned README/docs/install.sh paths excluded. |",
+      "| bb7e82b6 | chore(telemetry): drop per-load skill_loaded beacons | ADOPT_SUBSTRATE | `_track_skill_loaded` now only fills a set \u2014 lets us DROP the fork's telemetry gate in `strix/skills/__init__.py` (genuinely equivalent: nothing sent at load). |",
+      "| 9cc9de8c | fix(warmup): drop docker from WARMUP_MODULES | ADOPT_SUBSTRATE | Startup perf; substrate-only file `strix/llm/warmup.py` (new). |",
+      "| 7f46dd17 | fix(cli): wait for import warm-up before agents SDK import | ADOPT_SUBSTRATE | `strix/interface/main.py` is substrate; product CLI is `lyrashield/interface/main.py`. |",
+      "| 5d015df6 | fix(cloud): top-up instructions on 402 | EXCLUDE_PRODUCT | Cloud/billing feature rejected; `strix/interface/cloud/` files land only for tree parity, unreachable (product CLI never dispatches `cloud`). |",
+      "| a8642de7 | docs(readme): trim strix cloud section | EXCLUDE_PRODUCT | Owned README. |",
+      "| 75b89018 | docs: openrouter/z-ai/glm-5.3 default in examples | ADOPT_SUBSTRATE | `strix/interface/environment.py` setup-hint change lands; docs/README/AGENTS.md excluded (owned). Product model gate unaffected. |",
+      "| 42baa7c0 | skills: point to strix cloud CLI in every skill | EXCLUDE_PRODUCT | Top-level `skills/` coding-agent packages are not shipped by this fork; content pushes the rejected cloud CLI. |",
+      "| 46cf2f52 | report: add update_vulnerability_report (#1210) | ADOPT_SUBSTRATE | Lands in substrate (`strix/tools/reporting/tool.py`, report state/writer). Product reporting tool is the owned override; revision-history invariants are Task 8 scope (Open #1307). |",
+      "| de730119 | feat(cli): strix cloud \u2014 managed platform CLI | EXCLUDE_PRODUCT | Login/scans/billing CLI rejected; substrate files land unreachable. Product never dispatches `cloud`/`platform_cli`. |",
+      "| 3c767cdd | csv injection hardening (#1203) | ADOPT_SUBSTRATE | Substrate `strix/report/{state,writer}.py`; owned artifacts already have CSV formula safety (pre-existing equivalent). |",
+      "| 1f3f9b31 | fix(report): keep strix.report import-light vs warmup race | ADOPT_SUBSTRATE | Import-order hardening; complements our Protocol seam in telemetry. |",
+      "| 187f41f3 | Treat 'null'/'none' strings as absent for optional tool args | PORT_OWNED | `strix/tools/nullish.py` lands; `clean_optional` calls ported into owned `lyrashield/tools/proxy/tools.py` (list_requests/list_sitemap) and `lyrashield/tools/reporting/tool.py` (`_do_list_reports` filters). Product uses owned factory (no `_coerce_arguments` layer) so the schema-level coercion stays substrate-only. |",
+      "| f4ef8867 | Add MCP server support (#1137) | ADOPT_SUBSTRATE | `strix/tools/mcp/**`, cli_args flag; product boundary does not expose `--mcp-config` (owned CLI args). |",
+      "| 1ce43d1b | perf: heavy imports off startup path + warmup thread | ADOPT_SUBSTRATE | `strix/llm/warmup.py`, lazy imports in execution/compaction/context_budget/caido_api/pricing. |",
+      "| 9cd81e5c | Add semantic browser + Electron security skills | ADOPT_SUBSTRATE | `electron_desktop_apps`, `browser_security`, `semantic_confusion` + updates land under `strix/skills/`; `semantic_confusion.md`'s dead `load hurl`/`load hypothesis` references rewritten to plain harness guidance since those skills are excluded. |",
+      "| e8272c6a | Add HTTP differential testing tools | EXCLUDE_PRODUCT | `strix/skills/tooling/{hurl,hypothesis}.md` stay OUT: sandbox image (`containers/`) ships neither hurl nor hypothesis; an agent could not run them. Recorded as reviewed deletions in the gate allowlist. |",
+      "| 918442db | cli: render contextual CVSS vector/advisory/reasoning | ADOPT_SUBSTRATE | `strix/interface/utils.py` render helper (uses markdown-it-py). |",
+      "| 8ca0c4a9 | Fix LiteLLM cost model resolution | ADOPT_SUBSTRATE | New `strix/report/pricing.py`; owned cost accounting in `lyrashield/artifacts/usage.py` unchanged (never replaced). |",
+      "### Adopted substrate (`strix/**` \u2014 must equal upstream except allowlisted seams)",
+      "| `strix/interface/cloud/**`, `strix/interface/{platform_cli,platform_identity,completions,terminal_text,url_safety}.py` | ADOPT_SUBSTRATE files; EXCLUDE_PRODUCT wiring \u2014 unreachable from `lyrashield` entry point |",
+      "| `strix/tools/mcp/**` | ADOPT_SUBSTRATE; product CLI/factory do not wire MCP connections |",
+      "| `strix/tools/{coverage,threat_model}/**`, `strix/tools/nullish.py` | ADOPT_SUBSTRATE; product wiring is a later-task decision |",
+      "| `strix/llm/warmup.py`, `strix/report/{coverage,pricing}.py`, `strix/runtime/caido_handle.py` | ADOPT_SUBSTRATE (new modules) |",
+      "| `strix/skills/analysis/*` (counterevidence, fix_verification, severity_calibration, source_aware_discovery) | ADOPT_SUBSTRATE \u2014 curated skills per Task 7 |",
+      "| `strix/skills/cloud/azure.md`, `technologies/{electron_desktop_apps,llm_applications}.md`, `vulnerabilities/{agentic_system_security,argument_injection,browser_security,semantic_confusion}.md`, `custom/npx_confusion.md`, `reconnaissance/infrastructure_lifecycle.md`, `scan_modes/diff.md` + updates to existing skills | ADOPT_SUBSTRATE \u2014 curated skills |",
+      "| `strix/skills/tooling/{hurl,hypothesis}.md` | EXCLUDE_PRODUCT \u2014 sandbox image ships neither tool; files deleted post-apply and recorded in the gate's reviewed-deletion allowlist |",
+      "| `strix/interface/viewer/**` incl. Go TUI `internal/**`, frontend `src/**`, rebuilt `static/assets/**` | ADOPT_SUBSTRATE (substrate viewer); owned viewer in `lyrashield/interface/viewer/` is the product path |",
+      "| `strix/telemetry/**` | ADOPT_SUBSTRATE + re-applied `TelemetryReportState` Protocol seam (import-cycle fix; updated for `get_process_llm_usage`/`get_process_duration_seconds`) |",
+      "| `strix/config/loader.py` | ADOPT_SUBSTRATE + re-applied `register_settings_loader` composition seam |",
+      "| `strix/skills/__init__.py` | ADOPT_SUBSTRATE \u2014 fork's telemetry gate DROPPED (upstream no longer sends per-load beacons; set feeds the `end` beacon which stays behind `telemetry.enabled`) |",
+      "| Remaining `strix/**` modifications | ADOPT_SUBSTRATE; compat patches re-applied only where upstream lacks the fix (models.py, auth_cli.py, viewer files, agents_graph/tools.py, proxy tools/caido_api); `strix/skills/__init__.py` now matches upstream exactly (product telemetry gate removed); `semantic_confusion.md` carries a reviewed content edit dropping references to the excluded hurl/hypothesis skills |",
+      "| Deleted `strix/skills/tooling/{hurl,hypothesis}.md` | Reviewed deletions \u2014 recorded in the gate's `REVIEWED_DELETED` allowlist |",
+      "| `lyrashield/policy/models.py` | `StrixProvider` `api_key`/`base_url` endpoint binding + `_CredentialedLitellmProvider` + `_create_fallback_provider` (needed by `resolve_dedupe_model`); `routes_through_litellm`; ZAI/GLM frontier family (b438632e parity) |",
+      "| `skills/**` (top-level) | Not shipped by this fork (pre-existing); content markets the rejected strix cloud CLI |"
+    ],
+    "lyrashield/artifacts/evidence.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.core.paths import runtime_state_dir",
+      "    from strix.report.coverage import build_coverage_document as _build_substrate",
+      "    from strix.tools.coverage.tools import get_coverage_entries"
+    ],
+    "lyrashield/artifacts/quality.py": [
+      "from strix.report.coverage import agents_from_graph"
     ]
   }
 }

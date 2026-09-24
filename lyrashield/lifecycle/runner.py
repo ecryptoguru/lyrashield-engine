@@ -22,6 +22,7 @@ from openai import RateLimitError
 
 from lyrashield.agents.factory import build_strix_agent, make_child_factory
 from lyrashield.agents.prompt import render_system_prompt
+from lyrashield.artifacts import evidence as _evidence
 from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.execution import (
@@ -44,9 +45,11 @@ from lyrashield.lifecycle.inputs import (
     _sanitize_prompt_value,
     build_root_initial_input,
     build_root_task,
+    build_scan_targets,
     build_scope_context,
     make_model_settings,
     prompt_cache_options_for_model,
+    prompt_cache_routing_enabled,
 )
 from lyrashield.lifecycle.sessions import open_agent_session
 from lyrashield.policy.loader import load_settings
@@ -95,9 +98,9 @@ def _model_routing_policy(
     )
 
 
-def _stable_prompt_cache_key(role: str, material: str) -> str:
-    """Return an Azure-compatible, non-sensitive key for an exact prompt family."""
-    fingerprint = hashlib.sha256(material.encode("utf-8")).hexdigest()
+def _stable_prompt_cache_key(role: str, material: str, scan_id: str) -> str:
+    """Route repeated turns together without sharing private cache across scans."""
+    fingerprint = hashlib.sha256(f"{scan_id}\0{material}".encode()).hexdigest()
     # Azure Responses accepts at most 64 characters. The longest current role
     # ("coordinator") leaves 38 hexadecimal characters: 152 bits of routing
     # entropy, while retaining a recognizable product/version prefix.
@@ -202,6 +205,7 @@ async def run_strix_scan(
     scan_id: str | None = None,
     image: str,
     local_sources: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
     coordinator: AgentCoordinator | None = None,
     interactive: bool = False,
     max_turns: int = DEFAULT_MAX_TURNS,
@@ -277,7 +281,15 @@ async def run_strix_scan(
     coordinator.set_snapshot_path(agents_path)
 
     from lyrashield.tools.todo.tools import hydrate_todos_from_disk
+    from strix.tools.coverage.tools import hydrate_coverage_from_disk
     from strix.tools.notes.tools import hydrate_notes_from_disk
+    from strix.tools.threat_model.tools import hydrate_threat_models_from_disk
+
+    # The coverage ledger and threat-model store are module-global; hydrating
+    # every run (not only resumes) binds them to this run's state dir and
+    # clears any store a prior scan in this process left behind.
+    hydrate_coverage_from_disk(state_dir)
+    hydrate_threat_models_from_disk(state_dir)
 
     root_id: str | None = None
     if is_resume:
@@ -347,8 +359,38 @@ async def run_strix_scan(
         image=image,
         local_sources=local_sources or [],
         targets=list(scan_config.get("targets") or []),
+        # Untrusted supporting-file evidence; validated/staged upstream of
+        # this call. It contributes nothing to scope or the egress policy.
+        attachments=(
+            attachments if attachments is not None else list(scan_config.get("attachments") or [])
+        ),
     )
     logger.info("Sandbox ready for scan %s", scan_id)
+
+    source_snapshots = bundle.get("source_snapshots")
+    if source_snapshots:
+        report_state = get_global_report_state()
+        if report_state is not None:
+            # These are digests of the independent files actually uploaded,
+            # not of an earlier live worktree that might have changed.
+            report_state.run_record["source_snapshots"] = source_snapshots
+            diff_scope = report_state.run_record.get("diff_scope")
+            if isinstance(diff_scope, dict):
+                for repo in diff_scope.get("repos", []):
+                    if not isinstance(repo, dict):
+                        continue
+                    for snapshot in source_snapshots:
+                        if repo.get("workspace_subdir") == snapshot.get("workspace_subdir"):
+                            repo["snapshot_digest"] = snapshot["snapshot_digest"]
+                            repo["snapshot_digest_stage"] = "uploaded_source"
+
+    attachment_manifest = bundle.get("attachment_manifest")
+    if attachment_manifest:
+        report_state = get_global_report_state()
+        if report_state is not None:
+            # Provenance: the manifest of staged originals (name, sha256,
+            # size, declared content type) actually mounted into the sandbox.
+            report_state.run_record["attachments"] = attachment_manifest
 
     if bundle.get("default_scope_id"):
         report_state = get_global_report_state()
@@ -358,6 +400,11 @@ async def run_strix_scan(
                 "name": "authorized-targets",
                 "allowlist": bundle.get("default_scope_allowlist") or [],
             }
+    capabilities = bundle.get("sandbox_capabilities")
+    if capabilities is not None:
+        report_state = get_global_report_state()
+        if report_state is not None:
+            report_state.set_sandbox_capabilities(capabilities)
 
     sandbox_session = bundle["session"]
 
@@ -397,6 +444,12 @@ async def run_strix_scan(
         delegate_cache_options = (
             prompt_cache_options_for_model(delegate_model) if cache_enabled else None
         )
+        # Stable routing keys are decoupled from explicit cache options: when
+        # routing is enabled for an approved model, coordinator, delegates, and
+        # fallback each pin their prompt family to a stable key — with or
+        # without explicit breakpoints.
+        root_routing = cache_enabled and prompt_cache_routing_enabled(resolved_model)
+        delegate_routing = cache_enabled and prompt_cache_routing_enabled(delegate_model)
         initial_input: Any = (
             []
             if is_resume
@@ -423,8 +476,9 @@ async def run_strix_scan(
                         sort_keys=True,
                         separators=(",", ":"),
                     ),
+                    scan_id,
                 )
-                if root_cache_options
+                if root_routing
                 else None
             ),
             prompt_cache_options=root_cache_options,
@@ -450,8 +504,8 @@ async def run_strix_scan(
             request_timeout=llm_settings.timeout,
             max_output_tokens=delegate_max_output_tokens,
             prompt_cache_key=(
-                _stable_prompt_cache_key("delegates", delegate_cache_material)
-                if delegate_cache_options
+                _stable_prompt_cache_key("delegates", delegate_cache_material, scan_id)
+                if delegate_routing
                 else None
             ),
             prompt_cache_options=delegate_cache_options,
@@ -500,9 +554,16 @@ async def run_strix_scan(
                     ).hexdigest(),
                     "prompt_cache": {
                         "enabled": cache_enabled,
-                        "mode": root_cache_options["mode"] if root_cache_options else None,
+                        "routing_enabled": root_routing,
+                        "routing": "stable-prompt-v2" if root_routing else None,
+                        "mode": (
+                            "explicit"
+                            if root_cache_options
+                            else "implicit"
+                            if cache_enabled
+                            else None
+                        ),
                         "ttl": root_cache_options["ttl"] if root_cache_options else None,
-                        "routing": "stable-prompt-v2" if root_cache_options else None,
                     },
                     "model": resolved_model,
                     "reasoning_effort": llm_settings.reasoning_effort,
@@ -584,6 +645,7 @@ async def run_strix_scan(
             "parent_id": None,
             "interactive": interactive,
             "spawn_child_agent": spawn_child_agent,
+            "scan_targets": build_scan_targets(scan_config),
             "max_context_images": settings.runtime.max_context_images,
             "server_conversation": server_conversation,
         }
@@ -736,8 +798,9 @@ async def run_strix_scan(
                             sort_keys=True,
                             separators=(",", ":"),
                         ),
+                        scan_id,
                     )
-                    if delegate_cache_options
+                    if delegate_routing
                     else None
                 ),
                 prompt_cache_options=delegate_cache_options,
@@ -877,6 +940,27 @@ async def run_strix_scan(
                     close()
         with contextlib.suppress(Exception):
             await coordinator.maybe_snapshot()
+        state = artifact_state or get_global_report_state()
+        if state is not None and _evidence.record_supports_evidence_v1_1(state.run_record):
+            # Durable HTTP evidence must leave the proxy before teardown: the
+            # Caido project dies with the sandbox. A failed export records an
+            # explicit incomplete-evidence marker — never a receipt.
+            try:
+                outcome = await _evidence.export_http_exchange_evidence(
+                    bundle.get("caido_client"),
+                    state.get_run_dir(),
+                    run_record=state.run_record,
+                    findings=state.vulnerability_reports,
+                )
+            except Exception:
+                logger.exception("HTTP exchange evidence export failed")
+                outcome = {
+                    "status": "failed",
+                    "reason": "export raised before sandbox teardown",
+                }
+            state.set_evidence_export_outcome(outcome)
+            with contextlib.suppress(Exception):
+                state.save_run_data()
         if cleanup_on_exit:
             logger.info("Tearing down sandbox session for scan %s", scan_id)
             cleanup_outcome = await session_manager.cleanup(scan_id)

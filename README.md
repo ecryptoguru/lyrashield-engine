@@ -1,6 +1,6 @@
 # LyraShield Engine
 
-LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.5.3, pinned at `7cc9fa9faa0179fc7e35111102fe3d20a9028393` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only through an exact, review-gated 14-file compatibility patch described in [UPGRADES.md](UPGRADES.md).
+LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.6.2, pinned at `ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only through an exact, review-gated compatibility patch described in [UPGRADES.md](UPGRADES.md).
 
 See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
 
@@ -48,23 +48,23 @@ The engine includes a comprehensive security hardening pass (see the [Security h
 
 ## Supported execution
 
-Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, allows GPT-5.6 Terra or Luna deployments through the LiteLLM/Strix-supported providers that carry them (currently OpenAI, Azure/Azure AI, and Bedrock Mantle), supports ChatGPT subscription-backed models by default, and always disables inherited telemetry.
+Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, admits GPT-6 Sol or Luna through the validated OpenAI or Azure/Azure AI routes, and always disables inherited telemetry. Historical GPT-5.6 prices remain available only for old receipts.
 
 Requirements:
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - Docker with the reviewed, pinned sandbox image available
-- a supported OpenAI, Azure/Azure AI, or Bedrock Mantle endpoint serving a GPT-5.6 Terra or Luna deployment
+- a supported OpenAI or Azure/Azure AI endpoint serving a GPT-6 Sol or Luna deployment
 
 ```bash
 uv sync --frozen
 uv run lyrashield --version
 uv run lyrashield --help
 
-export LYRASHIELD_LLM="openai/gpt-5.6-luna"
-# Optional for Deep scans: Terra coordinates while Luna runs focused specialists.
-export LYRASHIELD_DELEGATE_LLM="openai/gpt-5.6-luna"
+export LYRASHIELD_LLM="openai/gpt-6-luna"
+# Deep scans use Sol as the root and Luna for focused specialists.
+export LYRASHIELD_DELEGATE_LLM="openai/gpt-6-luna"
 export LLM_API_KEY="<credential>"
 export LLM_API_BASE="https://<approved-endpoint>"
 # Optional token caps (see docs/advanced/configuration.mdx for behavior):
@@ -73,9 +73,9 @@ export LLM_API_BASE="https://<approved-endpoint>"
 uv run lyrashield --target ./approved-repository --scan-mode quick --non-interactive --max-budget-usd 1.20
 ```
 
-Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-5.6 agent turns use Azure's v1 Responses API so function tools remain supported; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must still identify GPT-5.6 Terra or Luna.
+Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-6 agent turns use Azure's v1 Responses API; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must identify GPT-6 Sol or Luna.
 
-Supported execution paths are GPT-5.6 Terra or Luna deployments from the LiteLLM/Strix providers that currently carry them: `openai`, `azure`, `azure_ai`, and `bedrock_mantle`, e.g. `openai/gpt-5.6-luna`, `azure/eu/gpt-5.6-terra`, `azure_ai/gpt-5.6-luna`, or `bedrock_mantle/openai.gpt-5.6-luna`. ChatGPT subscription models are also supported by default: run `lyrashield auth login chatgpt` and set `LYRASHIELD_LLM=chatgpt/<model>`. Subscription runs are tracked with `auth_mode: "subscription"` and `llm_usage.cost: 0` in `run.json`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported until LiteLLM's cost map lists `gpt-5.6` for their provider markers.
+Supported metered execution paths are `openai`, `azure`, and `azure_ai`, e.g. `openai/gpt-6-luna`, `azure/gpt-6-sol`, or `azure_ai/gpt-6-luna`. The product worker disables subscription routing; other provider markers and older GPT-5 deployments are not scan-admissible. Test the exact endpoint's reasoning, tools, cache buckets, and billable rate before opening paid admission.
 
 ### Provider capability gate
 
@@ -128,7 +128,7 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-controlled-derivative.sh
 ```
 
-The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), mypy, Bandit, and the public worker contract. It also enforces the exact reviewed `strix/**` compatibility patch: a 14-file allowlist, a +151/-57 footprint ceiling, and patch-object digest `fafe7c8e0a7f58c4c10e5619a6579880cf1457c4`. Any path or byte-level change outside that reviewed patch fails the gate.
+The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), mypy, Bandit, and the public worker contract. It also enforces the exact reviewed `strix/**` compatibility patch: a 14-file allowlist (plus two reviewed skill deletions), a +149/-258 footprint ceiling, and patch-object digest `30b8c59dc521d1fc9fceaf0d7b972c11d03a6808`. Any path or byte-level change outside that reviewed patch fails the gate.
 
 Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`, in addition to CLI/native build, sandbox smoke, and cross-repository worker contract checks. Repository-wide Pyright is an additional compatibility check; merged revision `944a84f` reports 0 errors and 0 warnings. The same revision's full pytest receipt is 1,302 passed and 1 skipped. These counts are a revision-bound snapshot; the executable gates remain the current source of truth.
 

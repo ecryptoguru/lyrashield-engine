@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import inspect
+import logging
 import os
 import re
 import threading
@@ -19,7 +20,7 @@ from agents import (
 )
 from agents.model_settings import ModelSettings
 from agents.models.fake_id import FAKE_RESPONSES_ID
-from agents.models.interface import Model
+from agents.models.interface import Model, ModelProvider
 from agents.models.multi_provider import MultiProvider
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.retry import (
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
     from agents.agent_output import AgentOutputSchemaBase
     from agents.handoffs import Handoff
     from agents.items import ModelResponse, TResponseInputItem, TResponseStreamEvent
-    from agents.models.interface import ModelProvider, ModelTracing
+    from agents.models.interface import ModelTracing
     from agents.retry import ModelRetryAdvice, ModelRetryAdviceRequest
     from agents.tool import Tool
     from agents.usage import Usage
@@ -75,6 +76,14 @@ def is_gpt56_model(model_name: str | None) -> bool:
     return re.search(r"(?:^|[/.-])gpt-5\.6-(?:terra|luna)(?:$|[/.-])", normalized) is not None
 
 
+def is_gpt6_model(model_name: str | None) -> bool:
+    """Recognize only the GPT-6 Sol/Luna deployments admitted for new scans."""
+    if not model_name:
+        return False
+    normalized = model_name.strip().lower().replace("_", "-")
+    return re.search(r"(?:^|/)gpt-6-(?:sol|luna)$", normalized) is not None
+
+
 # Providers LiteLLM's cost map lists for gpt-5.6-* deployments, plus the Azure
 # alias and the ChatGPT subscription route. Keep in sync with the LiteLLM model
 # cost map; run ``scripts/list-gpt56-providers.py`` to refresh.
@@ -87,6 +96,7 @@ _GPT56_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
         "chatgpt",
     }
 )
+_GPT6_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "azure", "azure_ai"})
 
 # Documented passthrough wrappers: exactly one may lead a route, and the
 # provider selected by routing is then the first component after it.
@@ -180,6 +190,19 @@ def is_gpt56_supported_provider(model_name: str | None) -> bool:
         # Bare OpenAI model names route to the default OpenAI provider.
         return True
     return route.provider in _GPT56_SUPPORTED_PROVIDERS
+
+
+def is_gpt6_supported_provider(model_name: str | None) -> bool:
+    """Admit only a strict GPT-6 Sol/Luna route with a supported provider."""
+    if not is_gpt6_model(model_name):
+        return False
+    try:
+        route = parse_model_route(model_name)
+    except ValueError:
+        return False
+    if route is None:
+        return False
+    return route.provider is None or route.provider in _GPT6_SUPPORTED_PROVIDERS
 
 
 def model_supports_programmatic_tool_calling(model_name: str | None) -> bool:
@@ -311,6 +334,40 @@ class _CodexResponsesModel(OpenAIResponsesModel):
                     await result
 
 
+class _AzureUsageResponsesModel(OpenAIResponsesModel):
+    """Retain raw Azure usage presence before Agents SDK zero-fills detail fields."""
+
+    @staticmethod
+    def _capture(response: Any) -> None:
+        from lyrashield.artifacts.state import get_global_report_state
+
+        state = get_global_report_state()
+        if state is not None:
+            try:
+                state.capture_provider_usage(response)
+            except Exception:  # noqa: BLE001 - telemetry must not replay a paid provider response
+                # A valid model response must never be retried because numeric
+                # telemetry extraction failed. The ledger then fails closed.
+                logging.getLogger(__name__).warning("Raw provider usage capture failed")
+
+    async def _fetch_response(self, *args: Any, stream: bool = False, **kwargs: Any) -> Any:
+        result = await super()._fetch_response(*args, stream=stream, **kwargs)  # type: ignore[call-overload]
+        if not stream:
+            self._capture(result)
+            return result
+
+        async def captured() -> AsyncIterator[Any]:
+            try:
+                async for event in result:
+                    if getattr(event, "type", None) == "response.completed":
+                        self._capture(event.response)
+                    yield event
+            finally:
+                await _CodexResponsesModel._aclose(result)
+
+        return captured()
+
+
 class _NonStreamingModel(Model):
     """Serve the SDK's streamed run loop from a single non-streaming request.
 
@@ -429,14 +486,48 @@ def _response_usage(usage: Usage | None) -> ResponseUsage | None:
     )
 
 
+class _CredentialedLitellmProvider(ModelProvider):
+    """LiteLLM route bound to one endpoint's credentials.
+
+    ``LitellmProvider`` reads them from the process-wide LiteLLM globals, which
+    belong to the main model; a secondary endpoint needs its own.
+    """
+
+    def __init__(self, api_key: str | None, base_url: str | None) -> None:
+        self._api_key = api_key
+        self._base_url = base_url
+
+    def get_model(self, model_name: str | None) -> Model:
+        from agents.extensions.models.litellm_model import LitellmModel
+        from agents.models.default_models import get_default_model
+
+        return LitellmModel(
+            model=model_name or get_default_model(),
+            api_key=self._api_key,
+            base_url=self._base_url,
+        )
+
+
 class StrixProvider(MultiProvider):
     """Route any non-OpenAI prefix through LiteLLM with the prefix preserved,
     so users type ``deepseek/deepseek-chat`` rather than
     ``litellm/deepseek/deepseek-chat``.
+
+    ``api_key``/``base_url`` bind every route this provider resolves to one
+    endpoint, for a secondary model (the dedupe judge) whose endpoint differs
+    from the main model's process-wide defaults.
     """
 
-    def __init__(self, *, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         self._settings = settings
+        self._override_api_key = api_key
+        self._override_base_url = base_url
         llm = settings.llm if settings is not None else None
         configured_models = (
             (getattr(llm, "model", None), getattr(llm, "delegate_model", None))
@@ -444,14 +535,15 @@ class StrixProvider(MultiProvider):
             else (None, None)
         )
         self._azure_responses_enabled = any(
-            _is_azure_model(model_name) and is_gpt56_model(model_name)
+            _is_azure_model(model_name)
+            and (is_gpt56_model(model_name) or is_gpt6_model(model_name))
             for model_name in configured_models
         )
 
         if self._azure_responses_enabled:
             if llm is None or not llm.api_base:
                 raise RuntimeError(
-                    "Azure GPT-5.6 requires LLM_API_BASE or an Azure endpoint variable."
+                    "Azure GPT-6 requires LLM_API_BASE or an Azure endpoint variable."
                 )
             super().__init__(
                 openai_api_key=llm.api_key,
@@ -459,7 +551,18 @@ class StrixProvider(MultiProvider):
                 openai_use_responses=True,
             )
         else:
-            super().__init__()
+            super().__init__(
+                openai_api_key=api_key,
+                openai_base_url=base_url,
+                # A custom endpoint is OpenAI-compatible, i.e. chat completions; the
+                # global default is the main model's and may say otherwise.
+                openai_use_responses=False if base_url else None,
+            )
+
+    def _create_fallback_provider(self, prefix: str) -> ModelProvider:
+        if prefix == "litellm" and (self._override_api_key or self._override_base_url):
+            return _CredentialedLitellmProvider(self._override_api_key, self._override_base_url)
+        return super()._create_fallback_provider(prefix)
 
     def _resolve_prefixed_model(
         self,
@@ -512,6 +615,16 @@ class StrixProvider(MultiProvider):
         if route is not None and route.wrapper is not None and route.provider is not None:
             routed_name = f"{route.provider}/{route.model_path}"
         model = super().get_model(routed_name)
+        if (
+            _is_azure_model(model_name)
+            and is_gpt6_model(model_name)
+            and isinstance(model, OpenAIResponsesModel)
+        ):
+            model = _AzureUsageResponsesModel(
+                model.model,
+                model._get_client(),
+                model_is_explicit=model._model_is_explicit,
+            )
         if llm.disable_streaming:
             return _NonStreamingModel(model)
         return model
@@ -560,6 +673,7 @@ FRONTIER_MODEL_FAMILIES = (
     (("deepseek",), ("deepseek-v4", "deepseek-r1", "deepseek-reasoner")),
     (("alibaba", "dashscope", "qwen"), ("qwen3.8", "qwen3.7", "qwen3-max")),
     (("moonshot", "moonshotai", "kimi"), ("kimi-k3", "kimi-k2.7", "kimi-k2.6")),
+    (("zai", "z-ai", "zai-org", "zhipuai"), ("glm-5.3", "glm-5.2")),
 )
 
 
@@ -580,7 +694,9 @@ def reset_sdk_model_defaults() -> None:
     litellm.api_base = None
     litellm.api_version = None
     litellm.headers = None
-    set_default_openai_key("", use_for_tracing=False)
+    # None (not "") so the SDK's env fallback stays live: an empty string is
+    # passed through to AsyncOpenAI as an explicit key and shadows OPENAI_API_KEY.
+    set_default_openai_key(cast("str", None), use_for_tracing=False)
     set_default_openai_api("responses")
 
 
@@ -848,7 +964,7 @@ def model_supports_reasoning(model_name: str) -> bool:
     # LyraShield validates this product-owned model family before execution.
     # LiteLLM's bundled cost map can lag a newly approved deployment, so it is
     # not authoritative for the GPT-5.6 capability contract.
-    if is_gpt56_model(name):
+    if is_gpt56_model(name) or is_gpt6_model(name):
         return True
     for prefix in ("litellm/", "any-llm/", "openai/"):
         if name.startswith(prefix):
@@ -951,6 +1067,22 @@ def is_claude_model(model_name: str) -> bool:
 def is_bedrock_route(model_name: str) -> bool:
     name = (model_name or "").strip().lower()
     return name.startswith("bedrock/") or "anthropic." in name
+
+
+def routes_through_litellm(model_name: str | None) -> bool:
+    """Whether :class:`StrixProvider` sends this model through LiteLLM.
+
+    Bare names and the ``openai/``/``any-llm/`` prefixes are served by the SDK's
+    own clients, which raise ``TypeError`` on request fields they do not know,
+    so LiteLLM-only fields must not be attached there. A bare ``claude-...``
+    name is exactly that case: an ``LLM_API_BASE`` pointing at an
+    OpenAI-compatible gateway in front of Claude.
+    """
+    name = (model_name or "").strip()
+    if not name or codex.subscription_model(name):
+        return False
+    prefix, _, rest = name.partition("/")
+    return bool(rest) and prefix.lower() not in {"openai", "any-llm"}
 
 
 def _prompt_cache_name_candidates(model_name: str) -> list[str]:

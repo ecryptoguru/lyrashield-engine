@@ -2,6 +2,7 @@
 # Controlled subprocess boundary: provenance lookup resolves Git and uses shell=False.
 import json
 import logging
+import re
 import shutil
 import subprocess  # nosec B404
 import threading
@@ -14,8 +15,15 @@ from uuid import uuid4
 
 from agents.usage import Usage
 
+from lyrashield.artifacts import evidence as _evidence
+from lyrashield.artifacts import quality as _quality
 from lyrashield.artifacts.sarif import write_sarif
-from lyrashield.artifacts.usage import LLMUsageLedger, _int_or_zero, _round_cost
+from lyrashield.artifacts.usage import (
+    LLMUsageLedger,
+    _int_or_zero,
+    _round_cost,
+    extract_provider_usage,
+)
 from lyrashield.artifacts.writer import (
     read_run_record,
     write_executive_report,
@@ -23,15 +31,30 @@ from lyrashield.artifacts.writer import (
     write_run_record,
     write_vulnerabilities,
 )
+from lyrashield.runtime.attachments import public_manifest
 from lyrashield.runtime.session_manager import CLEANUP_FAILED, CLEANUP_REMOVED
 from lyrashield.telemetry import posthog, scarf
 from lyrashield.utils.redaction import is_sensitive_key, redact_text, redact_url
 from strix.config import codex
 from strix.config.loader import load_settings
-from strix.core.paths import run_dir_for
+from strix.core.paths import run_dir_for, runtime_state_dir
 
 
 logger = logging.getLogger(__name__)
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _clean_title(title: str) -> str:
+    """Return a single-line finding title.
+
+    A title quotes text from the scanned target, so it can carry newlines, tabs or
+    other control characters. Those break every artifact that renders the title on
+    one line, such as the markdown heading, the CSV cell and the TUI list. Control
+    characters become spaces and runs of whitespace collapse to one space.
+    """
+    return " ".join(_CONTROL_CHARS.sub(" ", title).split())
+
 
 _global_report_state: Optional["ReportState"] = None
 
@@ -48,7 +71,19 @@ _ALLOWED_PHASES = frozenset({"setup", "running", "finalizing", "completed", "sto
 # given new semantics) and the MINOR component for additive, backward-compatible
 # fields. The worker's zod schema uses `.strip()`, so unknown keys are ignored —
 # additive changes are safe to ship ahead of a worker update.
-RUN_RECORD_SCHEMA_VERSION = "1.0"
+
+RUN_RECORD_SCHEMA_VERSION = _evidence.RUN_RECORD_SCHEMA_VERSION_1_0
+
+# Schema 1.1 adds per-finding evidence (counterevidence, confidence rationale,
+# structured advisory_cvss, severity_change_conditions, engine-attested
+# fix_verification, bounded http_exchange_ids, append-only revision history)
+# plus coverage.json, threat_model.json, http_exchanges.json and an inline
+# result manifest. Task-12 additions: ``scope_violations`` (bounded replay-guard
+# denial evidence) and ``scan_quality`` (per-surface observed-vs-declared
+# accounting). ``sandbox_capabilities`` — the probed backend capability record —
+# is unconditional run provenance, not part of the gated evidence surface. The
+# whole surface is gated on ``LYRASHIELD_RUN_RECORD_V1_1`` (default off) so
+# readers deploy before writers; a run keeps the version it was created with.
 
 # Fields every run.json write must carry from its first observable appearance
 # (the worker parses this contract at any point in the run, not just at the
@@ -74,10 +109,11 @@ def validate_run_record(record: dict[str, Any]) -> None:
     missing = [field for field in REQUIRED_RUN_RECORD_FIELDS if field not in record]
     if missing:
         raise RuntimeError(f"run.json contract incomplete, missing fields: {missing}")
-    if record.get("schema_version") != RUN_RECORD_SCHEMA_VERSION:
+    if record.get("schema_version") not in _evidence.SUPPORTED_RUN_RECORD_SCHEMA_VERSIONS:
         raise RuntimeError(
             f"run.json contract carries unsupported schema_version: "
-            f"{record.get('schema_version')!r} (expected {RUN_RECORD_SCHEMA_VERSION!r})"
+            f"{record.get('schema_version')!r} (expected one of "
+            f"{sorted(_evidence.SUPPORTED_RUN_RECORD_SCHEMA_VERSIONS)!r})"
         )
 
 
@@ -99,7 +135,7 @@ def initial_run_record(
     protects required fields from caller override (comment #6).
     """
     record: dict[str, Any] = {
-        "schema_version": RUN_RECORD_SCHEMA_VERSION,
+        "schema_version": _evidence.run_record_schema_version(),
         "run_id": run_name or f"run-{uuid4().hex[:8]}",
         "run_name": run_name,
         "start_time": datetime.now(UTC).isoformat(),
@@ -112,6 +148,8 @@ def initial_run_record(
         "seq": 0,
         "turn_count": 0,
     }
+    if record["schema_version"] == _evidence.RUN_RECORD_SCHEMA_VERSION_1_1:
+        record["evidence_format"] = _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
     if extra:
         # Required contract fields are immutable here: extra must not
         # overwrite them. A caller cannot forge status, schema_version,
@@ -206,12 +244,43 @@ _FINDING_TEXT_FIELDS = (
 )
 _FINDING_URL_FIELDS = ("target", "endpoint")
 
+# Schema-1.1 finding fields sanitized as free text when the record carries
+# them. A 1.0 record must not emit them at all (readers deploy first).
+_V1_1_FINDING_TEXT_FIELDS = frozenset(
+    {
+        "counterevidence",
+        "confidence_rationale",
+        "severity_change_conditions",
+        "contextual_cvss_reasoning",
+        "updated_at",
+    }
+)
+# Schema-1.1 structured fields: validated at intake, recursively sanitized
+# here so nested model-controlled strings still pass through redaction.
+_V1_1_FINDING_STRUCT_FIELDS = frozenset({"advisory_cvss", "fix_verification", "update_history"})
+_V1_1_FINDING_FIELDS = (
+    _V1_1_FINDING_TEXT_FIELDS
+    | _V1_1_FINDING_STRUCT_FIELDS
+    | frozenset(
+        {
+            "confidence",
+            "http_exchange_ids",
+            "evidence_warnings",
+            "evidence_contract_version",
+            "verification_state",
+        }
+    )
+)
+
 # Deterministic bounds for artifact fields (E4): unbounded model-controlled
 # text could exhaust disk/memory or smuggle payloads through projections.
 _MAX_TEXT_LENGTH = 10_000
 _MAX_COLLECTION_SIZE = 1_000
 _MAX_METADATA_DEPTH = 10
 _MAX_FINDING_SERIALIZED_SIZE = 1_000_000
+# Persisted scope-violation entries bound (ledger bound is lower; this caps
+# the durable list merged across saves).
+_MAX_SCOPE_VIOLATION_ENTRIES = 500
 
 
 def _truncate_text(value: str, max_length: int = _MAX_TEXT_LENGTH) -> str:
@@ -261,15 +330,25 @@ def _recursive_sanitize_unknown(value: Any, *, include_internal_paths: bool, dep
     return value
 
 
-def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) -> dict[str, Any]:
+def sanitize_finding(
+    report: dict[str, Any],
+    *,
+    include_internal_paths: bool,
+    schema_version: str = "1.0",
+) -> dict[str, Any]:
     """Return the immutable sanitized snapshot of one finding.
 
     Built once at the artifact persistence boundary; every durable/public
     projection (vulnerabilities JSON/MD/CSV, SARIF, viewer, sync) consumes
-    only this snapshot, never the raw in-memory report.
+    only this snapshot, never the raw in-memory report. Schema-1.1 evidence
+    fields are emitted only for a 1.1 record — a 1.0 run keeps its original
+    contract even if the writer flag was toggled mid-run.
     """
+    is_v1_1 = schema_version == _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
     snapshot: dict[str, Any] = {}
     for key, value in report.items():
+        if not is_v1_1 and key in _V1_1_FINDING_FIELDS:
+            continue
         if is_sensitive_key(key):
             snapshot[key] = "[SECRET]"
         elif key in _FINDING_TEXT_FIELDS and isinstance(value, str):
@@ -311,12 +390,40 @@ def sanitize_finding(report: dict[str, Any], *, include_internal_paths: bool) ->
                 )
                 for k, v in value.items()
             }
+        elif is_v1_1 and key in _V1_1_FINDING_TEXT_FIELDS and isinstance(value, str):
+            snapshot[key] = _truncate_text(
+                redact_text(value, include_internal_paths=include_internal_paths)
+            )
+        elif is_v1_1 and key == "http_exchange_ids" and isinstance(value, list):
+            # Proxy request ids are correlation references only; they are
+            # validated numeric ASCII at intake and bounded again here.
+            ids, _errors = _evidence.normalize_http_exchange_ids(value)
+            snapshot[key] = ids if isinstance(ids, list) else []
+        elif is_v1_1 and key == "update_history" and isinstance(value, list):
+            # Append-only revision history, bounded; entries are small dicts
+            # of metadata sanitized recursively like other structured fields.
+            snapshot[key] = _recursive_sanitize_unknown(
+                value[: _evidence.MAX_UPDATE_HISTORY_ENTRIES],
+                include_internal_paths=include_internal_paths,
+            )
+        elif is_v1_1 and key in _V1_1_FINDING_STRUCT_FIELDS:
+            snapshot[key] = _recursive_sanitize_unknown(
+                value, include_internal_paths=include_internal_paths
+            )
         else:
             # Unknown fields: recursively sanitize so model-controlled nested
             # metadata cannot leak secrets through the catch-all branch.
             snapshot[key] = _recursive_sanitize_unknown(
                 value, include_internal_paths=include_internal_paths
             )
+
+    if is_v1_1:
+        # Schema-1.1 contract stamps. ``verification_state`` is honest about
+        # provenance: a filed finding is agent-asserted, and nothing here —
+        # including a successful HTTP export — upgrades it to verified. An
+        # engine verification path may stamp a stronger value upstream.
+        snapshot["evidence_contract_version"] = _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
+        snapshot.setdefault("verification_state", "unverified")
 
     # E4: enforce the total serialized finding size bound as a last-line
     # defense. The per-field limits above are the primary guard; this catch
@@ -408,6 +515,16 @@ def sanitize_local_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]
     return sanitized
 
 
+def sanitize_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attachment manifest entries without host filesystem paths.
+
+    The durable run record carries each staged original's ``name``,
+    ``sha256``, ``size``, declared ``content_type``, and in-sandbox
+    ``container_path`` — never the host ``source_path``.
+    """
+    return public_manifest([a for a in attachments if isinstance(a, dict)])
+
+
 def set_global_report_state(report_state: Optional["ReportState"]) -> None:
     global _global_report_state  # noqa: PLW0603
     _global_report_state = report_state
@@ -440,6 +557,7 @@ class ReportState:
         self._raw_targets_info: list[dict[str, Any]] = []
         self._raw_local_sources: list[dict[str, Any]] = []
         self._llm_usage = LLMUsageLedger()
+        self._provider_usage_receipts: dict[str, dict[str, Any]] = {}
         auth_mode = codex.auth_mode(load_settings().llm.model)
         self._llm_usage.zero_cost = auth_mode == "subscription"
         self.run_record = initial_run_record(run_name, auth_mode=auth_mode)
@@ -461,6 +579,9 @@ class ReportState:
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
+        # Invoked with the sanitized revised snapshot after a revision has been
+        # durably persisted — the UI projection refresh point.
+        self.vulnerability_updated_callback: Callable[[dict[str, Any]], None] | None = None
 
         # Concurrency-safe web-search reservation boundary (I20): the scan's
         # count/cost limits are checked and reserved atomically, so concurrent
@@ -476,6 +597,12 @@ class ReportState:
         self.posthog_scan_ended_sent: bool = False
         self.scarf_scan_ended_sent: bool = False
         self.scan_ended_exit_reason: str | None = None
+        # How many scope-violation ledger entries have already been merged
+        # into run_record["scope_violations"]["entries"], and how much of the
+        # process-cumulative ledger overflow has already been accounted into
+        # the persisted ``dropped`` count.
+        self._scope_violations_seen = 0
+        self._scope_dropped_seen = 0
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
@@ -546,8 +673,21 @@ class ReportState:
                 cast("dict[str, Any]", r) for r in vuln_data if isinstance(r, dict)
             ]
             for r in self.vulnerability_reports:
+                # A finding written before the class was persisted still carries the
+                # metadata of its class, so name the class it always had.
+                if not r.get("finding_class"):
+                    r["finding_class"] = (
+                        "dependency_cve" if r.get("dependency_metadata") else "dynamic"
+                    )
+                title = r.get("title")
+                stale_md = False
+                if isinstance(title, str):
+                    r["title"] = _clean_title(title)
+                    stale_md = r["title"] != title
                 rid = r.get("id")
-                if isinstance(rid, str):
+                # A finding already on disk keeps its markdown, unless cleaning
+                # changed the title: the heading on disk then needs a rewrite.
+                if isinstance(rid, str) and not stale_md:
                     self._saved_vuln_ids.add(rid)
             logger.info(
                 "report state hydrated %d vulnerability report(s)",
@@ -561,6 +701,24 @@ class ReportState:
             restored_revision = persisted_report_revision or 0
             self._report_artifacts_revision = restored_revision
             self._persisted_report_artifacts_revision = restored_revision
+
+        # Same-process resume: the caido ledger may still hold entries already
+        # merged into the persisted record. Seed both offsets from the live
+        # snapshot so _sync_scope_decisions() only processes new denials —
+        # never re-appends entries or re-adds previously counted overflow.
+        try:
+            from lyrashield.tools.proxy import caido_api
+
+            snapshot = caido_api.get_scope_decisions()
+        except ImportError:
+            snapshot = None
+        if isinstance(snapshot, dict):
+            violations = snapshot.get("violations")
+            if isinstance(violations, list):
+                self._scope_violations_seen = max(self._scope_violations_seen, len(violations))
+            dropped = snapshot.get("dropped")
+            if isinstance(dropped, int) and not isinstance(dropped, bool):
+                self._scope_dropped_seen = max(self._scope_dropped_seen, dropped)
 
     def add_vulnerability_report(
         self,
@@ -585,8 +743,16 @@ class ReportState:
         code_locations: list[dict[str, Any]] | None = None,
         fix_pr_body: str | None = None,
         finding_class: str | None = None,
-        dependency_metadata: dict[str, str] | None = None,
+        dependency_metadata: dict[str, Any] | None = None,
         control_ids: list[int] | None = None,
+        counterevidence: str | None = None,
+        confidence: str | None = None,
+        confidence_rationale: str | None = None,
+        severity_change_conditions: str | None = None,
+        fix_verification: dict[str, Any] | str | None = None,
+        advisory_cvss: dict[str, Any] | float | None = None,
+        http_exchange_ids: list[str] | None = None,
+        evidence_warnings: list[str] | None = None,
         agent_id: str | None = None,
         agent_name: str | None = None,
     ) -> str:
@@ -594,7 +760,7 @@ class ReportState:
 
         report: dict[str, Any] = {
             "id": report_id,
-            "title": title.strip(),
+            "title": _clean_title(title),
             "severity": severity.lower().strip(),
             "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
         }
@@ -655,6 +821,48 @@ class ReportState:
             report["dependency_metadata"] = dependency_metadata
         if control_ids:
             report["control_ids"] = sorted(set(control_ids))
+        # Schema-1.1 evidence fields. Values arrive already normalized by the
+        # reporting tool; they are sanitized again at the persistence boundary
+        # and only emitted when the record's declared version is 1.1.
+        if counterevidence:
+            report["counterevidence"] = redact_text(
+                counterevidence.strip(), include_internal_paths=_redact_paths
+            )
+        if confidence:
+            normalized_confidence, confidence_errors = _evidence.normalize_confidence(confidence)
+            if normalized_confidence is None:
+                raise ValueError(f"confidence rejected: {'; '.join(confidence_errors)}")
+            report["confidence"] = normalized_confidence
+        if confidence_rationale:
+            report["confidence_rationale"] = redact_text(
+                confidence_rationale.strip(), include_internal_paths=_redact_paths
+            )
+        if severity_change_conditions:
+            report["severity_change_conditions"] = redact_text(
+                severity_change_conditions.strip(), include_internal_paths=_redact_paths
+            )
+        if fix_verification is not None:
+            normalized_fv, fv_errors = _evidence.normalize_fix_verification(fix_verification)
+            if normalized_fv is None:
+                raise ValueError(f"fix_verification rejected: {'; '.join(fv_errors)}")
+            normalized_fv["recorded_at"] = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+            report["fix_verification"] = normalized_fv
+        if advisory_cvss is not None:
+            normalized_adv, adv_errors = _evidence.normalize_advisory_cvss(advisory_cvss)
+            if normalized_adv is None:
+                raise ValueError(f"advisory_cvss rejected: {'; '.join(adv_errors)}")
+            report["advisory_cvss"] = normalized_adv
+        if http_exchange_ids:
+            normalized_ids, id_errors = _evidence.normalize_http_exchange_ids(http_exchange_ids)
+            if id_errors or normalized_ids is None:
+                raise ValueError(f"http_exchange_ids rejected: {'; '.join(id_errors)}")
+            report["http_exchange_ids"] = normalized_ids
+        if evidence_warnings:
+            report["evidence_warnings"] = [
+                redact_text(str(w).strip(), include_internal_paths=_redact_paths)[:500]
+                for w in evidence_warnings[:10]
+                if str(w).strip()
+            ]
         if agent_id:
             report["agent_id"] = agent_id
         if agent_name:
@@ -669,7 +877,11 @@ class ReportState:
         if self.vulnerability_found_callback:
             # E4: callback receives the sanitized snapshot, not the raw report,
             # so live CLI/TUI displays never show secrets or host paths.
-            sanitized = sanitize_finding(report, include_internal_paths=not _redact_paths)
+            sanitized = sanitize_finding(
+                report,
+                include_internal_paths=not _redact_paths,
+                schema_version=str(self.run_record.get("schema_version", "1.0")),
+            )
             self.vulnerability_found_callback(sanitized)
 
         self._set_phase("running")
@@ -687,11 +899,272 @@ class ReportState:
             )
         return report_id
 
+    def update_vulnerability_report(
+        self,
+        report_id: str,
+        fields: dict[str, Any],
+        *,
+        update_reason: str | None = None,
+        updated_by_agent_id: str | None = None,
+        updated_by_agent_name: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Apply a revision to an existing report, keeping its identity.
+
+        Invariants enforced here:
+
+        - Creation-time identity never moves: ``id``, ``timestamp``,
+          ``finding_class`` and the original author stay put.
+        - The append-only ``update_history`` gains exactly one bounded entry
+          per persisted revision; invalid updates leave prior evidence
+          untouched.
+        - Persistence precedes the in-memory change: the revised projections
+          are written to disk first, and a failed write rolls the in-memory
+          list back so the original evidence survives.
+        - Dependent fields are dropped when the field they describe is
+          superseded (severity/conclusion changes invalidate the projections
+          that restate them), and all projections regenerate in one pass.
+        - A sealed run (status ``completed``) is immutable: late revisions
+          cannot mutate evidence a report was already rendered from.
+
+        Returns the revised report dict, or ``None`` when the id is unknown or
+        nothing in ``fields`` changes it. Raises ``RuntimeError`` when the
+        revision cannot be durably persisted.
+        """
+        with self._report_artifacts_lock:
+            index = next(
+                (i for i, r in enumerate(self.vulnerability_reports) if r.get("id") == report_id),
+                None,
+            )
+            if index is None:
+                logger.warning("cannot update unknown vulnerability report %s", report_id)
+                return None
+            original = self.vulnerability_reports[index]
+
+            if not _evidence.record_supports_evidence_v1_1(self.run_record):
+                # A 1.0 record strips the evidence fields a revision adds
+                # (update_history, updated_at, ...), so revising it would lose
+                # attribution on disk. The record's version is fixed at
+                # creation; this run cannot be retroactively upgraded.
+                raise RuntimeError(
+                    f"Vulnerability report {report_id} belongs to a schema-1.0 "
+                    "record; revisions require the 1.1 writer "
+                    "(LYRASHIELD_RUN_RECORD_V1_1 at scan start)."
+                )
+            if self.run_record.get("status") == "completed":
+                raise RuntimeError(
+                    f"Vulnerability report {report_id} belongs to a sealed "
+                    "(completed) run; the report is immutable."
+                )
+
+            changed: dict[str, Any] = {}
+            for key, raw_value in fields.items():
+                if key not in _evidence.UPDATABLE_REPORT_FIELDS or raw_value is None:
+                    continue
+                value = raw_value
+                if isinstance(value, str):
+                    value = _clean_title(value) if key == "title" else value.strip()
+                    if key in {"severity", "confidence", "fix_effort"}:
+                        value = value.lower()
+                    if not value:
+                        continue
+                if key == "fix_verification":
+                    normalized_fv, fv_errors = _evidence.normalize_fix_verification(value)
+                    if normalized_fv is None:
+                        raise ValueError(f"fix_verification rejected: {'; '.join(fv_errors)}")
+                    normalized_fv["recorded_at"] = datetime.now(UTC).strftime(
+                        "%Y-%m-%d %H:%M:%S UTC"
+                    )
+                    value = normalized_fv
+                elif key == "advisory_cvss":
+                    normalized_adv, adv_errors = _evidence.normalize_advisory_cvss(value)
+                    if normalized_adv is None:
+                        raise ValueError(f"advisory_cvss rejected: {'; '.join(adv_errors)}")
+                    value = normalized_adv
+                elif key == "http_exchange_ids":
+                    normalized_ids, id_errors = _evidence.normalize_http_exchange_ids(value)
+                    if id_errors or normalized_ids is None:
+                        raise ValueError(f"http_exchange_ids rejected: {'; '.join(id_errors)}")
+                    value = normalized_ids
+                if original.get(key) == value:
+                    continue
+                changed[key] = value
+
+            superseded = {
+                dependent
+                for primary, dependents in _evidence.DEPENDENT_REPORT_FIELDS.items()
+                if primary in changed
+                for dependent in dependents
+                if dependent not in changed and original.get(dependent) not in (None, "", [], {})
+            }
+
+            if not changed and not superseded:
+                logger.info("update for %s carried no new content; keeping it as is", report_id)
+                return None
+
+            raw_history = original.get("update_history")
+            history: list[dict[str, Any]] = (
+                [e for e in raw_history if isinstance(e, dict)]
+                if isinstance(raw_history, list)
+                else []
+            )
+            if len(history) >= _evidence.MAX_UPDATE_HISTORY_ENTRIES:
+                raise RuntimeError(
+                    f"Vulnerability report {report_id} reached the revision "
+                    f"history bound ({_evidence.MAX_UPDATE_HISTORY_ENTRIES}); "
+                    "further revisions would drop attribution. File a new "
+                    "finding instead of rewriting this one."
+                )
+
+            entry: dict[str, Any] = {
+                "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "fields": sorted(changed),
+            }
+            if superseded:
+                entry["dropped_fields"] = sorted(superseded)
+            if update_reason and update_reason.strip():
+                entry["reason"] = update_reason.strip()[: _evidence.MAX_UPDATE_REASON_CHARS]
+            if updated_by_agent_id:
+                entry["agent_id"] = updated_by_agent_id
+            if updated_by_agent_name:
+                entry["agent_name"] = updated_by_agent_name
+            for key in ("severity", "cvss", "confidence"):
+                if key in changed and original.get(key) is not None:
+                    entry[f"previous_{key}"] = original[key]
+            history.append(entry)
+
+            revised = {**original, **changed}
+            for dependent in superseded:
+                revised.pop(dependent, None)
+            revised["update_history"] = history
+            revised["updated_at"] = entry["timestamp"]
+
+            violations = _evidence.validate_revised_finding(revised, original)
+            if violations:
+                raise RuntimeError(
+                    f"Vulnerability report {report_id} revision violates "
+                    f"creation-time invariants: {'; '.join(violations)}. "
+                    "Original evidence unchanged."
+                )
+
+            # Persist the revised projections BEFORE the in-memory report is
+            # replaced, so a failed write leaves the original evidence
+            # untouched. The markdown is re-rendered in the same pass (the id
+            # is discarded from the saved set first) so on-disk evidence can
+            # never carry the superseded statement next to the new verdict.
+            candidate = list(self.vulnerability_reports)
+            candidate[index] = revised
+            saved_ids = set(self._saved_vuln_ids)
+            saved_ids.discard(report_id)
+            try:
+                self._write_report_projections(candidate, saved_ids)
+            except (OSError, RuntimeError):
+                logger.exception(
+                    "revision of %s failed to persist; original evidence kept",
+                    report_id,
+                )
+                raise
+
+            self.vulnerability_reports[index] = revised
+            self._saved_vuln_ids = saved_ids
+            self._report_artifacts_revision += 1
+            persisted = self.save_run_data()
+            if not persisted:
+                # run.json could not be written even though the finding
+                # projections were. The evidence itself is durable; roll back
+                # the in-memory swap so a later save retries the full record.
+                self.vulnerability_reports[index] = original
+                self._report_artifacts_revision -= 1
+                raise RuntimeError(
+                    f"Vulnerability report {report_id} revision could not be "
+                    "recorded in run.json; rolled back."
+                )
+
+            logger.info(
+                "Updated vulnerability report %s (%s)",
+                report_id,
+                ", ".join(entry["fields"]) or "no field replaced",
+            )
+            if self.vulnerability_updated_callback:
+                sanitized = sanitize_finding(
+                    revised,
+                    include_internal_paths=not self._is_whitebox,
+                    schema_version=str(self.run_record.get("schema_version", "1.0")),
+                )
+                self.vulnerability_updated_callback(sanitized)
+            return revised
+
+    def set_sandbox_capabilities(self, capabilities: dict[str, Any]) -> None:
+        """Record the probed sandbox capability set as run provenance.
+
+        The record comes from the post-start capability probe — only
+        capabilities the backend verifiably delivered are marked
+        ``supported``; ``unprobed`` entries carry named preflight
+        degradations so a missing guarantee is never silent.
+        """
+        if isinstance(capabilities, dict):
+            self.run_record["sandbox_capabilities"] = capabilities
+
+    def _sync_scope_decisions(self) -> dict[str, int]:
+        """Merge new replay-guard denials into the run record (bounded).
+
+        Violations arrive from the process-local ledger in
+        ``lyrashield.tools.proxy.caido_api`` — every denied request the
+        replay guard saw. The persisted list is capped; overflow is counted
+        in ``dropped`` so the record stays honest about truncation. Returns
+        the per-host admitted-request counts for quality accounting.
+        """
+        from lyrashield.tools.proxy import caido_api
+
+        snapshot = caido_api.get_scope_decisions()
+        violations = snapshot["violations"]
+        new_entries = violations[self._scope_violations_seen :]
+        self._scope_violations_seen = len(violations)
+
+        persisted = self.run_record.get("scope_violations")
+        existing: list[dict[str, Any]] = []
+        # snapshot["dropped"] is process-cumulative; add only the new overflow
+        # so repeated saves cannot inflate the persisted count.
+        ledger_dropped = int(snapshot["dropped"])
+        dropped = ledger_dropped - self._scope_dropped_seen
+        self._scope_dropped_seen = ledger_dropped
+        if isinstance(persisted, dict):
+            raw_entries = persisted.get("entries")
+            if isinstance(raw_entries, list):
+                existing = [e for e in raw_entries if isinstance(e, dict)]
+            dropped += int(persisted.get("dropped") or 0)
+
+        keep = _MAX_SCOPE_VIOLATION_ENTRIES - len(existing)
+        if len(new_entries) > keep:
+            dropped += len(new_entries) - max(0, keep)
+            new_entries = new_entries[: max(0, keep)]
+        existing.extend(new_entries)
+        self.run_record["scope_violations"] = {
+            "entries": existing,
+            "dropped": dropped,
+            "total": len(existing) + dropped,
+        }
+        return cast("dict[str, int]", snapshot["admitted_hosts"])
+
+    def set_evidence_export_outcome(self, outcome: dict[str, Any]) -> None:
+        """Record the HTTP exchange evidence export result on the run record.
+
+        ``outcome`` is the status dict from
+        :func:`lyrashield.artifacts.evidence.export_http_exchange_evidence` —
+        ``exported``/``partial``/``skipped``/``failed``. It is evidence-status
+        metadata only: a failed or partial export is an explicit
+        incomplete-evidence marker, never a verification receipt.
+        """
+        self.run_record["evidence_export"] = dict(outcome)
+
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
         # E4: return sanitized snapshots so dedupe and other consumers never
         # see raw secrets or host paths from the in-memory reports.
         return [
-            sanitize_finding(report, include_internal_paths=not self._is_whitebox)
+            sanitize_finding(
+                report,
+                include_internal_paths=not self._is_whitebox,
+                schema_version=str(self.run_record.get("schema_version", "1.0")),
+            )
             for report in self.vulnerability_reports
         ]
 
@@ -702,6 +1175,7 @@ class ReportState:
         usage: Usage | None,
         agent_name: str | None = None,
         model: str | None = None,
+        response_id: str | None = None,
     ) -> None:
         """Record SDK-native token usage for one completed model run/cycle."""
         self._llm_usage.record(
@@ -709,10 +1183,22 @@ class ReportState:
             agent_name=agent_name,
             model=model,
             usage=usage,
+            provider_receipt=self._provider_usage_receipts.pop(response_id, None)
+            if response_id
+            else None,
         )
         self._turn_count += 1
         self._set_phase("running")
         self.save_run_data()
+
+    def capture_provider_usage(self, response: Any) -> None:
+        """Capture raw numeric buckets before the SDK fills absent fields with zero."""
+        receipt = extract_provider_usage(response)
+        if receipt is not None:
+            self._provider_usage_receipts[receipt["response_id"]] = receipt
+
+    def provider_usage_receipt(self, response_id: str | None) -> dict[str, Any] | None:
+        return self._provider_usage_receipts.get(response_id) if response_id else None
 
     def record_observed_llm_cost(
         self,
@@ -894,8 +1380,11 @@ class ReportState:
                 "diff_scope": config.get("diff_scope", {"active": False}),
                 "non_interactive": bool(config.get("non_interactive", False)),
                 "local_sources": sanitize_local_sources(config.get("local_sources", [])),
+                "attachments": sanitize_attachments(config.get("attachments", [])),
                 "scope_mode": config.get("scope_mode", "auto"),
                 "diff_base": config.get("diff_base"),
+                "diff_head": config.get("diff_head"),
+                "repository_revision": config.get("repository_revision"),
             }
         )
         self._set_phase("running")
@@ -1014,6 +1503,71 @@ class ReportState:
 {str(scan_results.get("recommendations", "")).strip()}
 """
 
+    def _write_report_projections(
+        self,
+        reports: list[dict[str, Any]],
+        saved_vuln_ids: set[str],
+    ) -> bool:
+        """Write the finding projections (JSON/CSV/MD + SARIF) for ``reports``.
+
+        The vulnerabilities write is required — its failure raises so callers
+        that must roll back (finding revisions) can. SARIF is best-effort:
+        its failure is logged and returns ``False`` without raising.
+        """
+        run_dir = self.get_run_dir()
+        include_internal_paths = not self._is_whitebox
+        schema_version = str(self.run_record.get("schema_version", "1.0"))
+        # One immutable sanitized snapshot feeds every durable/public
+        # projection; the raw in-memory reports never reach disk.
+        snapshot = [
+            sanitize_finding(
+                report,
+                include_internal_paths=include_internal_paths,
+                schema_version=schema_version,
+            )
+            for report in reports
+        ]
+        write_vulnerabilities(run_dir, snapshot, saved_vuln_ids)
+        try:
+            write_sarif(
+                run_dir,
+                snapshot,
+                tool_version=_strix_version(),
+                repository_context=self._sarif_repository_context(),
+            )
+        except Exception:
+            logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
+            return False
+        return True
+
+    def _write_evidence_artifacts(self, run_dir: Path) -> bool:
+        """Write the schema-1.1 companion artifacts (coverage, threat model).
+
+        Both are bounded and best-effort: failures are logged and reported as
+        ``False`` so the persisted revision stays honest, but they never block
+        the required receipt.
+        """
+        persisted = True
+        try:
+            coverage = _evidence.build_coverage_document(
+                run_record=self.run_record,
+                agent_graph=_read_agent_graph(runtime_state_dir(run_dir)),
+                vulnerability_reports=self.vulnerability_reports,
+                exit_reason=self.scan_ended_exit_reason,
+            )
+            _evidence.write_coverage_artifact(run_dir, coverage)
+        except Exception:
+            persisted = False
+            logger.exception("coverage.json write failed (non-fatal)")
+        try:
+            threat_model = _evidence.build_threat_model_document(run_dir, self.run_record)
+            if threat_model is not None:
+                _evidence.write_threat_model_artifact(run_dir, threat_model)
+        except Exception:
+            persisted = False
+            logger.exception("threat_model.json write failed (non-fatal)")
+        return persisted
+
     def _save_artifacts(self) -> bool:
         """Write scan artifacts under ``run_dir``.
 
@@ -1026,20 +1580,14 @@ class ReportState:
         run_dir = self.get_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        evidence_v1_1 = _evidence.record_supports_evidence_v1_1(self.run_record)
+
         report_artifacts_revision = self._report_artifacts_revision
         write_report_artifacts = (
             self._persisted_report_artifacts_revision != report_artifacts_revision
         )
         report_artifacts_persisted = not write_report_artifacts
         if write_report_artifacts:
-            # One immutable sanitized snapshot feeds every durable/public
-            # projection; the raw in-memory reports never reach disk.
-            include_internal_paths = not self._is_whitebox
-            snapshot = [
-                sanitize_finding(report, include_internal_paths=include_internal_paths)
-                for report in self.vulnerability_reports
-            ]
-
             # Each artifact is isolated so a failure in one cannot skip the others;
             # run.json is the billing/cost receipt and is written last.
             optional_artifacts_persisted = True
@@ -1054,27 +1602,60 @@ class ReportState:
             # write this artifact after a content change, including for a valid
             # zero-finding result. Failure makes the whole save fail.
             try:
-                write_vulnerabilities(run_dir, snapshot, self._saved_vuln_ids)
+                projections_persisted = self._write_report_projections(
+                    self.vulnerability_reports, self._saved_vuln_ids
+                )
             except (OSError, RuntimeError):
                 logger.exception("Vulnerabilities artifact write failed (required)")
                 self.receipt_persisted = False
                 self.run_record["receipt_persisted"] = False
                 return False
-
-            # SARIF is an integration artifact; it must not hide a successful core
-            # receipt when an optional formatter has a problem.
-            try:
-                write_sarif(
-                    run_dir,
-                    snapshot,
-                    tool_version=_strix_version(),
-                    repository_context=self._sarif_repository_context(),
-                )
-            except Exception:
+            if not projections_persisted:
                 optional_artifacts_persisted = False
-                logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
             report_artifacts_persisted = optional_artifacts_persisted
 
+        if evidence_v1_1:
+            # Coverage and the threat model change independently of the
+            # finding projections (agents record coverage entries without
+            # touching findings), so they refresh on every save.
+            if not self._write_evidence_artifacts(run_dir):
+                report_artifacts_persisted = False
+            # Replay-guard denials and the honest quality ledger are derived
+            # from observed activity only — unexercised surfaces stay
+            # unassessed, never smoothed into a coverage number.
+            admitted_hosts: dict[str, int] = {}
+            try:
+                admitted_hosts = self._sync_scope_decisions()
+            except Exception:
+                logger.exception("scope_violations sync failed (non-fatal)")
+            try:
+                recorded = self.run_record.get("scope_violations")
+                recorded = recorded if isinstance(recorded, dict) else {}
+                self.run_record["scan_quality"] = _quality.build_scan_quality(
+                    run_record=self.run_record,
+                    agent_graph=_read_agent_graph(runtime_state_dir(run_dir)),
+                    coverage_entries=_coverage_ledger_entries(),
+                    vulnerability_reports=self.vulnerability_reports,
+                    scope_decisions={
+                        "violations": recorded.get("entries") or [],
+                        "dropped": recorded.get("dropped") or 0,
+                        "admitted_hosts": admitted_hosts,
+                    },
+                )
+            except Exception:
+                report_artifacts_persisted = False
+                logger.exception("scan_quality build failed (non-fatal)")
+            # The result manifest binds every emitted artifact to this record
+            # by checksum — the immutable link the worker verifies against.
+            try:
+                self.run_record["result_manifest"] = _evidence.build_result_manifest(run_dir)
+            except Exception:
+                logger.exception("result manifest build failed (non-fatal)")
+
+        persisted_report_revision = self._persisted_report_artifacts_revision
+        if report_artifacts_persisted:
+            persisted_report_revision = report_artifacts_revision
+        self.run_record["report_artifacts_revision"] = persisted_report_revision
         persisted_report_revision = self._persisted_report_artifacts_revision
         if report_artifacts_persisted:
             persisted_report_revision = report_artifacts_revision
@@ -1198,6 +1779,20 @@ class ReportState:
     def _hydrate_llm_usage(self, raw_usage: Any) -> None:
         self._llm_usage.hydrate(raw_usage)
         self._sync_llm_usage_record()
+
+
+def _read_agent_graph(state_dir: Path) -> dict[str, Any]:
+    """Lazy wrapper so the substrate coverage module loads only on demand."""
+    from strix.report.coverage import read_agent_graph
+
+    return read_agent_graph(state_dir)
+
+
+def _coverage_ledger_entries() -> list[dict[str, Any]]:
+    """Lazy wrapper for the model-declared coverage ledger store."""
+    from strix.tools.coverage.tools import get_coverage_entries
+
+    return cast("list[dict[str, Any]]", get_coverage_entries())
 
 
 def _as_dict(obj: Any) -> dict[str, Any] | None:
