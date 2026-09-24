@@ -178,8 +178,6 @@ async def test_runtime_deadline_salvages_instead_of_failing() -> None:
     report_state.final_scan_result = None
 
     async def _never_finishes(*_args: object, **_kwargs: object) -> None:
-        import asyncio
-
         await asyncio.sleep(5)
 
     with (
