@@ -274,8 +274,10 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
         f"- detectors: {manifest['detectors']}",
         f"- engine revision: {manifest.get('engineRevision') or 'n/a'}",
         f"- recall: {summary['recall']} ({summary['detectedCases']}/{summary['totalCases']})",
-        "- unmatched vulnerable-fixture findings (not false positives): "
-        f"{summary['unmatchedFindings']}",
+        (
+            "- unmatched vulnerable-fixture findings (not false positives): "
+            f"{summary['unmatchedFindings']}"
+        ),
         f"- clean-fixture findings: {summary['cleanFindings']}",
         f"- duplicate rate: {summary['duplicateRate']}",
         f"- engine stability: {stability if stability is not None else 'n/a (single/det)'}",

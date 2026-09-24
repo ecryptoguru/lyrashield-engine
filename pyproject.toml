@@ -330,7 +330,7 @@ ignore = [
 "lyrashield/policy/models.py" = ["PLC0415"]
 "lyrashield/lifecycle/*.py" = ["PLR0912", "PLR0915", "PLC0415", "RUF100"]
 "lyrashield/runtime/*.py" = ["BLE001", "TC002", "TC003"]
-"strix/core/**/*.py" = ["RUF100"]
+"strix/core/**/*.py" = ["RUF100", "ISC004"]
 "strix/runtime/**/*.py" = ["RUF100"]
 "strix/llm/**/*.py" = ["RUF100"]
 "lyrashield/policy/codex.py" = ["PLC0415"]
@@ -351,7 +351,7 @@ ignore = [
 "strix/tools/thinking/tool.py" = ["TC002"]
 "strix/tools/proxy/tools.py" = ["TC002", "PLR0911"]
 "strix/tools/agents_graph/tools.py" = ["TC002"]
-"strix/agents/factory.py" = ["TC002"]
+"strix/agents/factory.py" = ["TC002", "RUF100"]
 # Entry point: ``Path`` is used at runtime by the typing of the
 # session_manager call; importing under TYPE_CHECKING would defer
 # resolution past where mypy needs it.
@@ -370,7 +370,10 @@ ignore = [
 "strix/config/codex.py" = ["PLC0415"]
 # Interface utility branches per scope-mode / target-type combination;
 # splitting would obscure the decision tree without simplifying it.
-"strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415", "RUF100"]
+"strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415", "RUF100", "ISC004"]
+"strix/interface/update_check.py" = ["RUF100"]
+"strix/telemetry/posthog.py" = ["RUF100"]
+"strix/telemetry/scarf.py" = ["RUF100"]
 # CLI / TUI / main keep extensive lazy imports + broad exception
 # swallows for resilience around terminal-rendering errors.
 "strix/interface/cli.py" = ["BLE001", "PLC0415"]
@@ -413,6 +416,8 @@ known-third-party = ["pydantic"]
 max-args = 8
 
 [tool.ruff.format]
+# Keep security payload examples byte-preserved; Ruff 0.16 formats Markdown fences.
+exclude = ["*.md"]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
