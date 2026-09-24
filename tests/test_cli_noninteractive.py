@@ -133,3 +133,104 @@ def test_non_interactive_unhandled_failure_exits_without_a_traceback() -> None:
 
 def test_interactive_unhandled_failure_remains_raisable() -> None:
     assert main_module._exit_noninteractive_failure(non_interactive=False) is None
+
+
+@pytest.mark.parametrize(
+    ("record", "findings", "expected"),
+    [
+        ({"status": "stopped", "terminal_reason": "runtime_deadline"}, [], 5),
+        (
+            {"status": "stopped", "terminal_reason": "runtime_deadline"},
+            [{"id": "finding-1"}],
+            2,
+        ),
+        ({"status": "stopped", "terminal_reason": "engine_stopped"}, [], 5),
+    ],
+)
+def test_runtime_deadline_exit_code_matches_the_partial_contract(
+    record: dict[str, str], findings: list[dict[str, str]], expected: int
+) -> None:
+    report_state = SimpleNamespace(run_record=record, vulnerability_reports=findings)
+    assert main_module._non_interactive_exit_code(report_state) == expected
+
+
+@pytest.mark.asyncio
+async def test_runtime_deadline_salvages_instead_of_failing() -> None:
+    """The hard deadline records runtime_deadline and does not raise out."""
+    args = SimpleNamespace(
+        run_name="scan-deadline",
+        targets_info=[{"original": "example.test"}],
+        instruction=None,
+        diff_scope={"active": False},
+        local_sources=[],
+        scope_mode="auto",
+        diff_base=None,
+        user_explicit_instruction=None,
+        scan_mode="quick",
+        non_interactive=True,
+        interactive=False,
+        max_budget_usd=1.0,
+        # A tiny allowance: the run body never finishes before the deadline.
+        runtime_budget_seconds=0.01,
+    )
+    report_state = MagicMock()
+    report_state.final_scan_result = None
+
+    async def _never_finishes(*_args: object, **_kwargs: object) -> None:
+        import asyncio
+
+        await asyncio.sleep(5)
+
+    with (
+        patch.object(cli, "ReportState", return_value=report_state),
+        patch.object(cli, "set_global_report_state"),
+        patch.object(cli, "_resolve_sandbox_image", return_value="sandbox@sha256:test"),
+        patch.object(cli, "run_strix_scan", new=_never_finishes),
+        patch.object(cli.session_manager, "cleanup", new=AsyncMock(return_value="removed")),
+        patch.object(cli, "Live", side_effect=AssertionError("Live must not be created")),
+        patch.object(cli.atexit, "register"),
+        patch.object(cli.signal, "signal"),
+    ):
+        await cli.run_cli(args)
+
+    report_state.set_terminal_reason.assert_called_once_with("runtime_deadline")
+
+
+@pytest.mark.asyncio
+async def test_a_non_deadline_failure_still_propagates() -> None:
+    """A genuine error must not be swallowed by the deadline handler."""
+    args = SimpleNamespace(
+        run_name="scan-error",
+        targets_info=[{"original": "example.test"}],
+        instruction=None,
+        diff_scope={"active": False},
+        local_sources=[],
+        scope_mode="auto",
+        diff_base=None,
+        user_explicit_instruction=None,
+        scan_mode="quick",
+        non_interactive=True,
+        interactive=False,
+        max_budget_usd=1.0,
+        runtime_budget_seconds=100.0,
+    )
+    report_state = MagicMock()
+    report_state.final_scan_result = None
+
+    async def _raises(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("engine blew up")
+
+    with (
+        patch.object(cli, "ReportState", return_value=report_state),
+        patch.object(cli, "set_global_report_state"),
+        patch.object(cli, "_resolve_sandbox_image", return_value="sandbox@sha256:test"),
+        patch.object(cli, "run_strix_scan", new=_raises),
+        patch.object(cli.session_manager, "cleanup", new=AsyncMock(return_value="removed")),
+        patch.object(cli, "Live", side_effect=AssertionError("Live must not be created")),
+        patch.object(cli.atexit, "register"),
+        patch.object(cli.signal, "signal"),
+        pytest.raises(RuntimeError, match="engine blew up"),
+    ):
+        await cli.run_cli(args)
+
+    report_state.set_terminal_reason.assert_not_called()

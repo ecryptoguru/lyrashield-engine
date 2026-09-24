@@ -257,6 +257,14 @@ async def run_cli(args: Any) -> None:
             try:
                 async with asyncio.timeout(deadline.remaining_seconds()):
                     await run
+            except TimeoutError:
+                # The hard runtime deadline fired. Salvage rather than fail:
+                # record the reason so the worker can keep the findings already
+                # filed and report a truthful bounded result. The lifecycle
+                # hooks raise this same error type from a model start past the
+                # deadline, so the handler covers both paths.
+                report_state.set_terminal_reason("runtime_deadline")
+                logger.warning("Scan runtime deadline reached; salvaging partial results")
             finally:
                 wrap_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
