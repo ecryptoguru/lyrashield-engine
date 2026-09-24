@@ -103,8 +103,11 @@ _PROMPT_CACHE_ROUTING_ENV = "LYRASHIELD_PROMPT_CACHE_ROUTING"
 def prompt_cache_routing_enabled(model_name: str | None) -> bool:
     """Return whether to emit stable ``prompt_cache_key`` routing keys.
 
-    This is off by default regardless of model; turn it on by setting
-    ``LYRASHIELD_PROMPT_CACHE_ROUTING=1`` for an approved GPT-5.6 deployment.
+    The standalone engine default is OFF. The LyraShield product worker enables
+    it by default (``LYRASHIELD_PROMPT_CACHE_ROUTING=1``) for the admitted GPT-6
+    deployments, and an operator can turn it off again with
+    ``LYRASHIELD_PROMPT_CACHE_ROUTING=0``. Turn it on for a GPT-6 deployment
+    only after a provider smoke scan confirms that deployment honors the key.
     Independent of ``LYRASHIELD_PROMPT_CACHE_EXPLICIT``.
     """
     value = os.environ.get(_PROMPT_CACHE_ROUTING_ENV, "").strip().lower()

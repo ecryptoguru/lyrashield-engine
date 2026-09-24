@@ -5,10 +5,13 @@
 `run.json.prompt_cache` is a bounded execution receipt for the cache posture
 actually passed to the SDK. `enabled: false` now records `mode: null`, never
 the misleading implicit mode. The existing runner contract matrix serializes
-the coordinator, delegate, and fallback `ModelSettings` through the SDK and
-asserts the cache key/options fields for every cache, routing, and explicit-mode
-combination. `LYRASHIELD_PROMPT_CACHE_EXPLICIT` and the new routing key flag
-remain opt-in; neither changes the default implicit-cache posture.
+the coordinator, delegate and fallback `ModelSettings` through the SDK and
+asserts the cache key/options fields for every cache, routing and explicit-mode
+combination. `LYRASHIELD_PROMPT_CACHE_EXPLICIT` remains opt-in. The routing key
+flag is off by default in the standalone engine and on by default in the
+LyraShield product worker for the admitted GPT-6 deployments, where an operator
+can turn it off with `LYRASHIELD_PROMPT_CACHE_ROUTING=0`. Neither flag changes
+the default implicit-cache posture.
 
 ## Viewer ownership documentation correction (2026-09-19)
 

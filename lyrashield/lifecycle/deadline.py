@@ -12,6 +12,17 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+class RunDeadlineExceededError(Exception):
+    """Raised by the lifecycle when a model start is attempted past the deadline.
+
+    Distinct from the built-in ``TimeoutError`` on purpose: an internal
+    ``TimeoutError`` (an ``asyncio.wait_for``, a provider or tool timeout that
+    escapes) must not be mistaken for the runtime deadline. Callers salvage
+    only on this type or on the ``asyncio.timeout`` context having actually
+    expired.
+    """
+
+
 @dataclass(frozen=True)
 class RunDeadline:
     hard_at: float

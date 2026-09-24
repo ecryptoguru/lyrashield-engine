@@ -6,7 +6,7 @@ description: "Environment variables and config file for LyraShield Engine"
 Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and admits GPT-6 Sol or Luna deployments from OpenAI or Azure/Azure AI.
 
 <Warning>
-Only approved GPT-6 Sol or Luna API deployments are accepted as metered scan routes. The current allow-list is OpenAI and Azure/Azure AI. The production worker disables subscription routing. Older GPT-5 deployments and other provider markers are not admitted to new scans; their historical rate definitions remain for receipt interpretation.
+Only approved GPT-6 Sol or Luna API deployments are accepted as metered scan routes. The current allow-list is OpenAI and Azure/Azure AI; the GPT-6 provider allowlist (`is_gpt6_supported_provider` / `_reject_unsupported_models`) is the gate that refuses everything else, including `chatgpt/` subscription routes. `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION` still defaults to enabled for the standalone engine, so the allowlist — not that flag — is what keeps a subscription model out of a product scan. Older GPT-5 deployments and other provider markers are not admitted to new scans; their historical rate definitions remain for receipt interpretation.
 
 Parallel Search may be used as an optional `web_search` tool when explicitly enabled with `LYRASHIELD_WEB_SEARCH_ENABLED=1` and `PARALLEL_API_KEY` or `LYRASHIELD_WEB_SEARCH_API_KEY`. It is not a model route and never replaces the GPT-6 main model.
 
@@ -85,10 +85,13 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
 </ParamField>
 
 <ParamField path="LYRASHIELD_PROMPT_CACHE_ROUTING" default="false" type="boolean">
-  Opt in to stable, scan-isolated GPT-6 `prompt_cache_key` routing keys for the coordinator,
-  delegate, and fallback prompt families. It is independent of explicit
-  breakpoints and does not turn caching on when `LYRASHIELD_PROMPT_CACHE=false`.
-  Enable only after a provider smoke scan confirms the exact deployment honors
+  Emit stable, scan-isolated GPT-6 `prompt_cache_key` routing keys for the coordinator,
+  delegate and fallback prompt families. The standalone engine default is off.
+  The LyraShield product worker turns it on by default for the admitted GPT-6
+  deployments and an operator can set `LYRASHIELD_PROMPT_CACHE_ROUTING=0` to
+  turn it off. It is independent of explicit breakpoints and does not turn
+  caching on when `LYRASHIELD_PROMPT_CACHE=false`. Enable it for a GPT-6
+  deployment only after a provider smoke scan confirms that deployment honors
   the key.
 </ParamField>
 
