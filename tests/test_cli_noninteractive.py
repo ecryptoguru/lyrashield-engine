@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from lyrashield.interface import cli
+from lyrashield.lifecycle.deadline import RunDeadlineExceeded
 
 
 main_module = import_module("lyrashield.interface.main")
@@ -233,6 +234,51 @@ async def test_a_non_deadline_failure_still_propagates() -> None:
         await cli.run_cli(args)
 
     report_state.set_terminal_reason.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_lifecycle_deadline_refusal_is_salvaged() -> None:
+    """RunDeadlineExceeded is the dedicated deadline signal and must salvage.
+
+    The lifecycle raises this type from ``on_llm_start`` when a model start is
+    attempted past the deadline. It is distinguishable from an internal
+    TimeoutError, so it salvages without waiting for the asyncio context to
+    expire.
+    """
+    args = SimpleNamespace(
+        run_name="scan-lifecycle-deadline",
+        targets_info=[{"original": "example.test"}],
+        instruction=None,
+        diff_scope={"active": False},
+        local_sources=[],
+        scope_mode="auto",
+        diff_base=None,
+        user_explicit_instruction=None,
+        scan_mode="quick",
+        non_interactive=True,
+        interactive=False,
+        max_budget_usd=1.0,
+        runtime_budget_seconds=100.0,
+    )
+    report_state = MagicMock()
+    report_state.final_scan_result = None
+
+    async def _deadline_refusal(*_args: object, **_kwargs: object) -> None:
+        raise RunDeadlineExceeded("scan runtime deadline reached")
+
+    with (
+        patch.object(cli, "ReportState", return_value=report_state),
+        patch.object(cli, "set_global_report_state"),
+        patch.object(cli, "_resolve_sandbox_image", return_value="sandbox@sha256:test"),
+        patch.object(cli, "run_strix_scan", new=_deadline_refusal),
+        patch.object(cli.session_manager, "cleanup", new=AsyncMock(return_value="removed")),
+        patch.object(cli, "Live", side_effect=AssertionError("Live must not be created")),
+        patch.object(cli.atexit, "register"),
+        patch.object(cli.signal, "signal"),
+    ):
+        await cli.run_cli(args)
+
+    report_state.set_terminal_reason.assert_called_once_with("runtime_deadline")
 
 
 @pytest.mark.asyncio

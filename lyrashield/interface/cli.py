@@ -17,7 +17,7 @@ from rich.text import Text
 
 from lyrashield.artifacts.state import ReportState, set_global_report_state
 from lyrashield.lifecycle.agents import AgentCoordinator
-from lyrashield.lifecycle.deadline import RunDeadline
+from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceeded
 from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
 from lyrashield.lifecycle.runner import run_strix_scan
 from lyrashield.runtime import session_manager
@@ -254,21 +254,22 @@ async def run_cli(args: Any) -> None:
                         )
 
             wrap_task = asyncio.create_task(notify_wrap())
+            scan_timeout = asyncio.timeout(deadline.remaining_seconds())
             try:
-                async with asyncio.timeout(deadline.remaining_seconds()):
+                async with scan_timeout:
                     await run
-            except TimeoutError:
-                # Only the deadline itself is salvageable. A TimeoutError from
-                # inside the run while time remains (an internal wait_for, a
-                # provider or tool timeout that escaped) is a real failure and
-                # must not be relabeled as a bounded partial result.
-                if deadline.remaining_seconds() > 1.0:
+            except (TimeoutError, RunDeadlineExceeded) as exc:
+                # Only the deadline itself is salvageable. Two cases reach here:
+                # the asyncio timeout context actually expired, or the lifecycle
+                # refused a model start past the deadline (RunDeadlineExceeded).
+                # An internal TimeoutError that escaped the run while the
+                # context had NOT expired is a real failure and must not be
+                # relabelled as a bounded partial result.
+                if not (scan_timeout.expired() or isinstance(exc, RunDeadlineExceeded)):
                     raise
                 # The hard runtime deadline fired. Record the reason so the
                 # worker can keep the findings already filed and report a
-                # truthful bounded result. The lifecycle hooks raise this same
-                # error type from a model start past the deadline, so the
-                # handler covers both paths.
+                # truthful bounded result.
                 report_state.set_terminal_reason("runtime_deadline")
                 logger.warning("Scan runtime deadline reached; salvaging partial results")
             finally:

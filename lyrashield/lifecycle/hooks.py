@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.lifecycle import RunHooks
 
 from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.lifecycle.deadline import RunDeadlineExceeded
 from lyrashield.tools.output_store import _take_prefix, _take_suffix
 
 
@@ -834,7 +835,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         deadline = getattr(coordinator, "run_deadline", None)
         if deadline is not None:
             if deadline.remaining_seconds() <= 0:
-                raise TimeoutError("scan runtime deadline reached")
+                raise RunDeadlineExceeded("scan runtime deadline reached")
             if deadline.wrapping_up() and agent_id not in self._deadline_notified:
                 self._deadline_notified.add(agent_id)
                 input_items.append(

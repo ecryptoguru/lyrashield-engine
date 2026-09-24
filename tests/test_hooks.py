@@ -12,7 +12,7 @@ from agents.exceptions import MaxTurnsExceeded
 
 import lyrashield.lifecycle.hooks as hooks_mod
 from lyrashield.lifecycle.agents import AgentCoordinator
-from lyrashield.lifecycle.deadline import RunDeadline
+from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceeded
 from lyrashield.lifecycle.hooks import (
     BudgetExceededError,
     BudgetPausedError,
@@ -626,7 +626,7 @@ async def test_hook_warns_once_then_refuses_provider_calls_after_deadline() -> N
     await hooks.on_llm_start(context, _agent(), None, second)
     assert second == []
     now[0] = 100
-    with pytest.raises(TimeoutError, match="runtime deadline"):
+    with pytest.raises(RunDeadlineExceeded, match="runtime deadline"):
         await hooks.on_llm_start(context, _agent(), None, [])
 
 
