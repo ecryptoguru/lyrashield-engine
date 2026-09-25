@@ -12,7 +12,7 @@ retains the upstream attribution documented in `NOTICE`.
 
 | Module | Contents |
 | --- | --- |
-| `lyrashield/policy/` | GPT-6 model acceptance (the provider allowlist that refuses subscription routes), reasoning policy, `LYRASHIELD_*` env aliases, provider-contract probing |
+| `lyrashield/policy/` | GPT-6 model acceptance (standalone ChatGPT subscription is configurable; the production worker disables it), reasoning policy, `LYRASHIELD_*` env aliases, provider-contract probing |
 | `lyrashield/lifecycle/` | Non-interactive agent loop, execution, budget hooks, context compaction, prompt sanitization, cancellation, sessions |
 | `lyrashield/runtime/` | Sandbox session, Docker client, Caido bootstrap, local-dir staging |
 | `lyrashield/agents/` | Product agent factory, programmatic tool calling, output-store binding, redaction, system-prompt renderer |

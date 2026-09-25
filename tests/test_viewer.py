@@ -48,6 +48,14 @@ def _make_run(base: Path, name: str, *, status: str, end_time: str | None) -> Pa
     return run_dir
 
 
+def test_corrupt_findings_are_not_reported_as_empty(tmp_path: Path) -> None:
+    run_dir = _make_run(tmp_path, "corrupt", status="completed", end_time="2026-09-25T00:00:00Z")
+    assert read_vulnerabilities(run_dir) == []
+    (run_dir / "vulnerabilities.json").write_text("{broken", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        read_vulnerabilities(run_dir)
+
+
 def test_latest_run_dir_none_when_no_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     assert latest_run_dir() is None

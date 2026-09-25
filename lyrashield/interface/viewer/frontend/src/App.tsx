@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   AlertCircle,
@@ -13,7 +13,6 @@ import { getSeverityDot } from "@/lib/vulnerability-utils";
 import VulnerabilityDetail from "@/components/vulnerability/VulnerabilityDetail";
 import { ContentSection } from "@/components/vulnerability/ContentSection";
 import { IssueSeveritySummary } from "@/components/IssueSeveritySummary";
-import AgentGraph from "@/components/live/AgentGraph";
 import { buildGraphAgents } from "@/components/live/AgentTranscript";
 import AgentDetailModal from "@/components/live/AgentDetailModal";
 import { ScanPromptComposer } from "@/components/live/ScanPromptComposer";
@@ -45,11 +44,13 @@ const TRUST_BANNER =
 
 const SEVERITY_ORDER: VulnerabilitySeverity[] = ["critical", "high", "medium", "low"];
 const POLL_MS = 500;
+const AgentGraph = lazy(() => import("@/components/live/AgentGraph"));
 
 export default function App() {
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [run, setRun] = useState<LoadedRun | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [forgetError, setForgetError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<View>("overview");
@@ -93,26 +94,31 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let loading = false;
     finishedRef.current = false;
 
-    const schedule = () => {
-      timer = setTimeout(tick, POLL_MS);
+    const schedule = (delay = POLL_MS) => {
+      timer = setTimeout(tick, document.visibilityState === "hidden" ? 5000 : delay);
     };
 
     const tick = async () => {
-      if (cancelled) return;
+      if (cancelled || loading) return;
+      loading = true;
       try {
         const { summary, raw, finished } = await fetchRunSummary(activeRun);
         if (cancelled) return;
         if (finished && !finishedRef.current) {
-          finishedRef.current = true;
           const full = await fetchAll(activeRun);
-          if (!cancelled) setRun(full);
+          if (!cancelled) {
+            setRun(full);
+            setError(null);
+            finishedRef.current = true;
+          }
           return; // stop polling
         }
         const [transcript, vulnerabilities] = await Promise.all([
           fetchTranscript(activeRun).catch(() => ({ agents: [], events: [] })),
-          fetchVulnerabilities(summary.runId, activeRun).catch(() => [] as Vulnerability[]),
+          fetchVulnerabilities(summary.runId, activeRun),
         ]);
         if (cancelled) return;
         setRun((prev) => ({
@@ -123,19 +129,31 @@ export default function App() {
           vulnerabilities,
           reportMarkdown: prev?.reportMarkdown ?? null,
         }));
+        setError(null);
         schedule();
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : "Could not load run data.");
-        schedule();
+        schedule(5000);
+      } finally {
+        loading = false;
       }
     };
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && !finishedRef.current && !loading) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(tick, 0);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
 
     (async () => {
       try {
         const full = await fetchAll(activeRun);
         if (cancelled) return;
         setRun(full);
+        setError(null);
         if (full.finished) {
           finishedRef.current = true;
         } else {
@@ -144,15 +162,16 @@ export default function App() {
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : "Could not load run data.");
-        schedule();
+        schedule(5000);
       }
     })();
 
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [activeRun]);
+  }, [activeRun, retryCount]);
 
   const counts = useMemo(
     () => (run ? severityCounts(run.vulnerabilities) : null),
@@ -272,10 +291,11 @@ export default function App() {
               <p className="text-sm text-red-300">{forgetError}</p>
             </div>
           )}
-          {error && !run && view !== "history" && view !== "email" && (
-            <div className="rounded-lg px-4 py-3 flex gap-3 items-start border border-red-500/30 bg-red-500/5">
+          {error && view !== "history" && view !== "email" && (
+            <div role="alert" className="rounded-lg px-4 py-3 flex gap-3 items-start border border-red-500/30 bg-red-500/5">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-400" aria-hidden="true" />
               <p className="text-sm text-red-300">{error}</p>
+              <button type="button" className="text-sm underline text-red-200" onClick={() => setRetryCount((n) => n + 1)}>Retry</button>
             </div>
           )}
 
@@ -352,6 +372,7 @@ export default function App() {
                 <FindingsList
                   vulnerabilities={run.vulnerabilities}
                   finished={run.finished}
+                  unavailable={error !== null}
                   onSelect={(id) => setSelectedId(id)}
                 />
               )}
@@ -484,10 +505,12 @@ function Meta({ label }: { label: string }) {
 function FindingsList({
   vulnerabilities,
   finished,
+  unavailable,
   onSelect,
 }: {
   vulnerabilities: Vulnerability[];
   finished: boolean;
+  unavailable: boolean;
   onSelect: (id: string) => void;
 }) {
   const sorted = [...vulnerabilities].sort(
@@ -497,7 +520,7 @@ function FindingsList({
     return (
       <div className="space-y-4">
         <div className="rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-8 text-center text-sm text-[#888]">
-          {finished ? "No findings in this run." : "No findings yet. The pentest is still running…"}
+          {unavailable ? "Findings are temporarily unavailable. Retry to confirm the result." : finished ? "No findings in this run." : "No findings yet. The pentest is still running…"}
         </div>
       </div>
     );
@@ -692,14 +715,16 @@ function AgentsTab({ run, canSteer }: { run: LoadedRun; canSteer: boolean }) {
           Click an agent to open its full transcript.
         </p>
         <div className="h-[480px] rounded-lg border border-[#1a1a1a] overflow-hidden">
-          <AgentGraph
-            agents={graphAgents}
-            selectedAgentId={selectedId}
-            onSelectAgent={(id) => setSelectedId(id)}
-            eventsLoaded
-            eventsEmpty={graphAgents.size === 0}
-            scanCompleted={run.finished}
-          />
+          <Suspense fallback={<div role="status" className="p-5 text-sm text-[#aaa]">Loading agent graph…</div>}>
+            <AgentGraph
+              agents={graphAgents}
+              selectedAgentId={selectedId}
+              onSelectAgent={(id) => setSelectedId(id)}
+              eventsLoaded
+              eventsEmpty={graphAgents.size === 0}
+              scanCompleted={run.finished}
+            />
+          </Suspense>
         </div>
       </div>
 

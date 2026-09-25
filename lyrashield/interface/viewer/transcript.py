@@ -84,8 +84,13 @@ def primary_target(record: dict[str, Any]) -> str | None:
 
 def read_vulnerabilities(run_dir: Path) -> list[Any]:
     """The ``vulnerabilities.json`` list (empty until a scan writes it)."""
-    data = _load_json(run_dir / "vulnerabilities.json", default=[])
-    return data if isinstance(data, list) else []
+    path = run_dir / "vulnerabilities.json"
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise TypeError(f"{path} is not a findings list")
+    return data
 
 
 def read_report_markdown(run_dir: Path) -> str:

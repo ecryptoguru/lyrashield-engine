@@ -84,6 +84,18 @@ jobs:
       - name: Verify source and policy gates
         run: scripts/verify-controlled-derivative.sh
 
+      - name: Verify owned viewer source and committed build
+        working-directory: lyrashield/interface/viewer/frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+          git diff --exit-code -- ../static
+          if [ -n "$(git ls-files --others --exclude-standard ../static)" ]; then
+            echo "::error::owned viewer build produced untracked static assets"
+            exit 1
+          fi
+
       - name: Verify customer branding
         run: python scripts/verify-customer-branding.py
 
