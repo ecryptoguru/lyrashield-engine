@@ -51,9 +51,9 @@ async def test_run_agent_loop_rejects_model_override_mismatch(
 
     with pytest.raises(RuntimeError, match="model routing mismatch"):
         await execution.run_agent_loop(
-            agent=types.SimpleNamespace(model="azure_ai/gpt-5.6-luna"),
+            agent=types.SimpleNamespace(model="azure_ai/gpt-6-luna"),
             initial_input=[],
-            run_config=types.SimpleNamespace(model="azure_ai/gpt-5.6-terra"),
+            run_config=types.SimpleNamespace(model="azure_ai/gpt-6-sol"),
             context={"agent_id": "root", "parent_id": None},
             max_turns=1,
             coordinator=coordinator,

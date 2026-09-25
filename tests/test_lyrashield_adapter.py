@@ -28,6 +28,15 @@ def _isolated_product_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STRIX_TELEMETRY", raising=False)
     monkeypatch.delenv("LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION", raising=False)
     monkeypatch.delenv("STRIX_ALLOW_CHATGPT_SUBSCRIPTION", raising=False)
+    for name in (
+        "STRIX_LLM",
+        "STRIX_DELEGATE_LLM",
+        "STRIX_DEDUPE_MODEL",
+        "LYRASHIELD_LLM",
+        "LYRASHIELD_DELEGATE_LLM",
+        "LYRASHIELD_DEDUPE_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.mark.parametrize(
@@ -102,6 +111,8 @@ def test_main_delegates_non_version_arguments(monkeypatch: pytest.MonkeyPatch) -
         nonlocal called
         called = True
 
+    # Isolate from the developer's local .env, which may name any deployment.
+    monkeypatch.setattr(cli, "load_dotenv", None)
     monkeypatch.setattr(cli, "_run_upstream", fake_upstream_main)
     monkeypatch.setattr(cli.sys, "argv", ["lyrashield", "--non-interactive"])
     cli.main()
@@ -117,7 +128,7 @@ def test_prepare_environment_disables_update_check() -> None:
 @pytest.mark.parametrize("name", ["STRIX_LLM", "STRIX_DELEGATE_LLM", "STRIX_DEDUPE_MODEL"])
 def test_prepare_environment_rejects_subscription_models_when_disabled(name: str) -> None:
     env: MutableMapping[str, str] = {
-        name: "chatgpt/gpt-5.6-luna",
+        name: "chatgpt/gpt-6-luna",
         "LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION": "0",
     }
     with pytest.raises(SystemExit, match="ChatGPT subscription"):
@@ -126,15 +137,23 @@ def test_prepare_environment_rejects_subscription_models_when_disabled(name: str
 
 def test_prepare_environment_rejects_subscription_model_via_product_alias_when_disabled() -> None:
     env: MutableMapping[str, str] = {
-        "LYRASHIELD_LLM": "ChatGPT/gpt-5.6-terra",
+        "LYRASHIELD_LLM": "ChatGPT/gpt-6-sol",
         "LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION": "0",
     }
     with pytest.raises(SystemExit, match="ChatGPT subscription"):
         cli.prepare_environment(env)
 
 
-def test_prepare_environment_rejects_chatgpt_even_when_subscription_enabled() -> None:
-    env: MutableMapping[str, str] = {"LYRASHIELD_LLM": "chatgpt/gpt-5.6-terra"}
+def test_prepare_environment_accepts_chatgpt_gpt6_when_subscription_enabled() -> None:
+    """The subscription route is admitted for the main model when enabled."""
+    env: MutableMapping[str, str] = {"LYRASHIELD_LLM": "chatgpt/gpt-6-sol"}
+    assert cli.prepare_environment(env)["STRIX_LLM"] == "chatgpt/gpt-6-sol"
+
+
+@pytest.mark.parametrize("model", ["chatgpt/gpt-5.6-luna", "chatgpt/gpt-4o"])
+def test_prepare_environment_rejects_non_gpt6_subscription_models(model: str) -> None:
+    """Subscription routing does not widen the model family: still GPT-6 only."""
+    env: MutableMapping[str, str] = {"LYRASHIELD_LLM": model}
     with pytest.raises(SystemExit, match="not an approved GPT-6"):
         cli.prepare_environment(env)
 
@@ -155,13 +174,13 @@ def test_prepare_environment_accepts_supported_gpt6_providers(model: str) -> Non
 @pytest.mark.parametrize(
     "model",
     [
-        "openrouter/gpt-5.6-luna",
-        "bedrock/gpt-5.6-terra",
-        "vertex_ai/gpt-5.6-luna",
-        "novita/gpt-5.6-luna",
+        "openrouter/gpt-6-luna",
+        "bedrock/gpt-6-sol",
+        "vertex_ai/gpt-6-luna",
+        "novita/gpt-6-luna",
     ],
 )
-def test_prepare_environment_rejects_unsupported_gpt56_providers(model: str) -> None:
+def test_prepare_environment_rejects_unsupported_gpt6_providers(model: str) -> None:
     env: MutableMapping[str, str] = {"LYRASHIELD_LLM": model}
     with pytest.raises(SystemExit, match="not an approved GPT-6"):
         cli.prepare_environment(env)
@@ -195,7 +214,7 @@ def test_config_file_can_use_subscription_model(
     strix_main = importlib.import_module("lyrashield.interface.main")
 
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-5.6-luna"}}))
+    config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-6-luna"}}))
 
     monkeypatch.setenv(PRODUCT_BOUNDARY_ENV_VAR, "1")
     monkeypatch.setattr(strix_main.codex, "is_authenticated", lambda: True)
@@ -232,16 +251,16 @@ def test_config_file_can_use_supported_gpt6_provider(
 @pytest.mark.parametrize(
     "model",
     [
-        "openrouter/gpt-5.6-luna",
-        "bedrock/gpt-5.6-terra",
-        "vertex_ai/gpt-5.6-luna",
-        "novita/gpt-5.6-luna",
+        "openrouter/gpt-6-luna",
+        "bedrock/gpt-6-sol",
+        "vertex_ai/gpt-6-luna",
+        "novita/gpt-6-luna",
     ],
 )
-def test_config_file_rejects_unsupported_gpt56_provider(
+def test_config_file_rejects_unsupported_gpt6_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model: str
 ) -> None:
-    """`--config` rejects a GPT-5.6 model from an unsupported provider."""
+    """`--config` rejects a GPT-6 model from an unsupported provider."""
     monkeypatch.setattr(loader, "_override", None, raising=False)
     monkeypatch.setattr(loader, "_cached", None, raising=False)
 
@@ -268,12 +287,32 @@ def test_config_file_rejects_subscription_model_when_disabled(
     strix_main = importlib.import_module("lyrashield.interface.main")
 
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-5.6-luna"}}))
+    config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-6-luna"}}))
 
     monkeypatch.setenv(PRODUCT_BOUNDARY_ENV_VAR, "1")
     monkeypatch.setenv("LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION", "0")
     # Signed in, so upstream's subscription path would happily proceed; only the
     # product-boundary gate should reject this.
+    monkeypatch.setattr(strix_main.codex, "is_authenticated", lambda: True)
+    apply_config_override(config)
+    with pytest.raises(SystemExit) as excinfo:
+        strix_main.validate_environment()
+    assert excinfo.value.code == 1
+
+
+def test_config_file_rejects_non_gpt6_subscription_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--config` cannot sneak a non-GPT-6 model through the subscription route."""
+    monkeypatch.setattr(loader, "_override", None, raising=False)
+    monkeypatch.setattr(loader, "_cached", None, raising=False)
+
+    strix_main = importlib.import_module("lyrashield.interface.main")
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-4o"}}))
+
+    monkeypatch.setenv(PRODUCT_BOUNDARY_ENV_VAR, "1")
     monkeypatch.setattr(strix_main.codex, "is_authenticated", lambda: True)
     apply_config_override(config)
     with pytest.raises(SystemExit) as excinfo:
@@ -291,7 +330,7 @@ def test_config_subscription_model_rejected_when_disabled(
     strix_main = importlib.import_module("lyrashield.interface.main")
 
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-5.6-luna"}}))
+    config.write_text(json.dumps({"env": {"STRIX_LLM": "chatgpt/gpt-6-luna"}}))
 
     monkeypatch.delenv(PRODUCT_BOUNDARY_ENV_VAR, raising=False)
     monkeypatch.setenv("LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION", "0")

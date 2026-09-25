@@ -17,7 +17,7 @@ See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the owne
 
 This repository contains both LyraShield commits and imported Strix history. Its top-level commit dates alone are therefore not a fair measure of LyraShield-authored Build Week work. The submission-wide source of truth is the application repository's pre-event baseline [`72ba1e2`](https://github.com/ecryptoguru/lyrashield-ai/commit/72ba1e2a54fdedf81989325031c781f41d14dec6), authored before **July 13, 2026, 9:00 AM PT (16:00 UTC)**, and its explicit [`72ba1e2..HEAD` comparison](https://github.com/ecryptoguru/lyrashield-ai/compare/72ba1e2a54fdedf81989325031c781f41d14dec6...main).
 
-Before the event, LyraShield had already established the controlled-derivative boundary, compatibility adapter, upstream verification, and packaging hygiene. During Build Week, the engine-side work included containerized-worker sandbox reachability, review-gated immutable upstream imports, public worker-contract verification, context compaction, GPT-5.6 execution/evidence hardening, terminal receipt preservation, and bounded Luna specialist routing. Inspect LyraShield-only engine history without conflating imported upstream commits:
+Before the event, LyraShield had already established the controlled-derivative boundary, compatibility adapter, upstream verification, and packaging hygiene. During Build Week, the engine-side work included containerized-worker sandbox reachability, review-gated immutable upstream imports, public worker-contract verification, context compaction, GPT execution/evidence hardening, terminal receipt preservation, and bounded Luna specialist routing. Inspect LyraShield-only engine history without conflating imported upstream commits:
 
 ```bash
 git log upstream/main..main --since='2026-07-13T16:00:00Z' --date=iso-strict --oneline
@@ -27,7 +27,7 @@ git log upstream/main..main --since='2026-07-13T16:00:00Z' --date=iso-strict --o
 
 LyraShield owns:
 
-- GPT-5.6 Terra and Luna model acceptance and reasoning policy;
+- GPT-6 Sol and Luna model acceptance and reasoning policy;
 - context compaction, output/agent limits, and concurrent pre-request spend reservations;
 - non-interactive lifecycle, cancellation, cleanup, telemetry-off defaults, and target-safe errors;
 - deterministic finding identity, structured control/evidence metadata, and bounded artifacts;
@@ -48,7 +48,7 @@ The engine includes a comprehensive security hardening pass (see the [Security h
 
 ## Supported execution
 
-Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, admits GPT-6 Sol or Luna through the validated OpenAI or Azure/Azure AI routes, and always disables inherited telemetry. Historical GPT-5.6 prices remain available only for old receipts.
+Production uses the `lyrashield` entry point. It applies `LYRASHIELD_*` compatibility aliases, admits GPT-6 Sol or Luna through the validated OpenAI or Azure/Azure AI routes, and always disables inherited telemetry.
 
 Requirements:
 
@@ -75,7 +75,7 @@ uv run lyrashield --target ./approved-repository --scan-mode quick --non-interac
 
 Azure-compatible deployments may use `AZURE_AI_*` or `AZURE_OPENAI_*` credentials and endpoints; see [the configuration reference](docs/advanced/configuration.mdx). GPT-6 agent turns use Azure's v1 Responses API; resource and project endpoints are normalized to their `/openai/v1/` base. Deployment names must identify GPT-6 Sol or Luna.
 
-Supported metered execution paths are `openai`, `azure`, and `azure_ai`, e.g. `openai/gpt-6-luna`, `azure/gpt-6-sol`, or `azure_ai/gpt-6-luna`. The product worker disables subscription routing; other provider markers and older GPT-5 deployments are not scan-admissible. Test the exact endpoint's reasoning, tools, cache buckets, and billable rate before opening paid admission.
+Supported metered execution paths are `openai`, `azure`, and `azure_ai`, e.g. `openai/gpt-6-luna`, `azure/gpt-6-sol`, or `azure_ai/gpt-6-luna`. A standalone run may also route its main model through an authenticated ChatGPT subscription (`chatgpt/gpt-6-luna` or `chatgpt/gpt-6-sol` after `lyrashield auth login chatgpt`); subscription runs record zero metered token cost, delegates and dedupe still require a metered route, and `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` disables the path — as the production worker does. Other provider markers and older GPT-5 deployments are not scan-admissible. Test the exact endpoint's reasoning, tools, cache buckets, and billable rate before opening paid admission.
 
 ### Provider capability gate
 
@@ -110,7 +110,7 @@ Each non-interactive run writes bounded machine-readable artifacts under `strix_
 
 `vulnerabilities.csv` is a spreadsheet presentation export for the supported Excel for Mac workflow. It uses a UTF-8 BOM, renders cell control characters as visible escapes, and prefixes formula-like cells with a zero-width text marker. That marker is part of the CSV data: programmatic consumers requiring canonical values must use `vulnerabilities.json` or SARIF. Other spreadsheet applications and import settings are not covered by this compatibility claim.
 
-Deep scans use a deterministic two-tier route: the Terra/medium root owns coordination and cross-file judgment, while Luna/high child specialists handle focused tasks with smaller output reservations. Only the root can create or stop specialists, so child work cannot fan out recursively. Child agents start with a focused task and system-owned scope instead of copying the full parent conversation unless the coordinator explicitly requests inherited context. Stable role-specific cache keys improve repeated-prefix reuse, and per-request usage receipts retain the actual model plus cache-read/cache-write buckets so mixed-model spend can be reconciled against the rate card.
+Deep scans use a deterministic two-tier route: the Sol/medium root owns coordination and cross-file judgment, while Luna/high child specialists handle focused tasks with smaller output reservations. Only the root can create or stop specialists, so child work cannot fan out recursively. Child agents start with a focused task and system-owned scope instead of copying the full parent conversation unless the coordinator explicitly requests inherited context. Stable role-specific cache keys improve repeated-prefix reuse, and per-request usage receipts retain the actual model plus cache-read/cache-write buckets so mixed-model spend can be reconciled against the rate card.
 
 The TypeScript worker treats all engine output as untrusted. It schema-validates these artifacts, never persists raw stdout/stderr, and does not allow model confidence to become independent verification proof. Existing artifact keys are compatibility-sensitive; coordinate changes with the worker contract tests in `lyrashield-ai`.
 
@@ -118,7 +118,7 @@ The TypeScript worker treats all engine output as untrusted. It schema-validates
 
 This repository supplies the reviewed runtime and public worker contract; it does not update production worker VMs. The LyraShield AI repository verifies the worker image built from an exact engine commit, records its immutable digest and OCI app/engine revision labels, and an operator explicitly promotes that digest to the dedicated VM. The VM never follows `latest` or another mutable tag. Each promotion reconciles the configured and running digest, both labels, Docker health, and application scan readiness while retaining the prior digest for rollback.
 
-When the root model (Terra) hits any `ModelBehaviorError`, the engine falls back to the delegate model (Luna) rather than failing the scan immediately. If no separate delegate is configured, or if the delegate also fails, partial findings are salvaged with an `engine_stopped` (or `content_filter_stopped` for content-filter errors) terminal reason recorded in `run.json`. The exit code is 2 when findings are present and 5 when none were collected. Azure's transient `response.failed` status (without content-filter context) is retried with backoff rather than failing the scan.
+When the root model (Sol) hits any `ModelBehaviorError`, the engine falls back to the delegate model (Luna) rather than failing the scan immediately. If no separate delegate is configured, or if the delegate also fails, partial findings are salvaged with an `engine_stopped` (or `content_filter_stopped` for content-filter errors) terminal reason recorded in `run.json`. The exit code is 2 when findings are present and 5 when none were collected. Azure's transient `response.failed` status (without content-filter context) is retried with backoff rather than failing the scan.
 
 ## Verification
 
@@ -132,7 +132,7 @@ The repository is maintained as a controlled derivative (not a thin fork). The g
 
 Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`, in addition to CLI/native build, sandbox smoke, and cross-repository worker contract checks. Repository-wide Pyright is an additional compatibility check; merged revision `944a84f` reports 0 errors and 0 warnings. The same revision's full pytest receipt is 1,302 passed and 1 skipped. These counts are a revision-bound snapshot; the executable gates remain the current source of truth.
 
-Budget enforcement now falls back to LiteLLM's `model_cost` table and then to conservative default rates for non-GPT-5.6 models, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-5.6 Terra/Luna deployments before scan start.
+Budget enforcement now falls back to LiteLLM's `model_cost` table and then to conservative default rates for models outside the GPT-6 rate card, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-6 Sol/Luna deployments before scan start.
 
 These checks prove implementation compatibility, not detection accuracy. The inherited Strix v0.4 XBEN result is historical upstream evidence only. LyraShield must establish result quality with its own versioned evaluation corpus before making accuracy, coverage, or comparative claims; see [benchmarks/README.md](benchmarks/README.md).
 

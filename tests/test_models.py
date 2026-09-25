@@ -15,8 +15,8 @@ from lyrashield.policy.models import (
     StrixProvider,
     _azure_responses_base_url,
     _AzureUsageResponsesModel,
-    is_gpt56_model,
-    is_gpt56_supported_provider,
+    is_gpt6_model,
+    is_gpt6_supported_provider,
     is_recommended_or_frontier_model,
     parse_model_route,
     request_timeout_extra_args,
@@ -34,16 +34,16 @@ def test_recommended_models_are_accepted(model_name: str) -> None:
 @pytest.mark.parametrize(
     "model_name",
     [
-        "openai/gpt-5.6-luna",
-        "azure/eu/gpt-5.6-terra",
-        "azure_ai/gpt-5.6-luna",
-        "bedrock_mantle/openai.gpt-5.6-luna",
-        "chatgpt/gpt-5.6-luna",
+        "openai/gpt-6-luna",
+        "azure/eu/gpt-6-sol",
+        "azure_ai/gpt-6-luna",
+        "chatgpt/gpt-6-luna",
+        "gpt-6-sol",
     ],
 )
-def test_gpt56_supported_providers_are_accepted(model_name: str) -> None:
-    assert is_gpt56_model(model_name)
-    assert is_gpt56_supported_provider(model_name)
+def test_gpt6_supported_providers_are_accepted(model_name: str) -> None:
+    assert is_gpt6_model(model_name)
+    assert is_gpt6_supported_provider(model_name)
     assert is_recommended_or_frontier_model(model_name)
 
 
@@ -71,17 +71,16 @@ def test_recommended_models_are_matched_case_insensitively() -> None:
 @pytest.mark.parametrize(
     "model_name",
     [
-        "gpt-5.6-luna",
-        "azure_ai/gpt-5.6-terra",
-        "openai/gpt-5.6-terra",
-        "prod-gpt-5.6-luna",
-        "azure/eu/gpt-5.6-luna",
-        "bedrock_mantle/openai.gpt-5.6-luna",
+        "gpt-6-luna",
+        "azure_ai/gpt-6-sol",
+        "openai/gpt-6-sol",
+        "azure/eu/gpt-6-luna",
+        "chatgpt/gpt-6-luna",
     ],
 )
-def test_gpt56_deployment_names_are_accepted(model_name: str) -> None:
-    assert is_gpt56_model(model_name)
-    assert is_gpt56_supported_provider(model_name)
+def test_gpt6_deployment_names_are_accepted(model_name: str) -> None:
+    assert is_gpt6_model(model_name)
+    assert is_gpt6_supported_provider(model_name)
 
 
 @pytest.mark.parametrize(
@@ -90,17 +89,22 @@ def test_gpt56_deployment_names_are_accepted(model_name: str) -> None:
         None,
         "",
         "gpt-5.5",
-        "gpt-5.60",
-        "gpt-5.6fake",
-        # Sol was retired from the supported set. It must be rejected here at
-        # startup, because budget enforcement no longer carries a Sol rate and
-        # would otherwise raise mid-scan.
-        "gpt-5.6-sol",
-        "openai/gpt-5.6-sol",
+        "gpt-6",
+        "gpt-60",
+        "gpt-6fake",
+        # The GPT-5.6 tiers were retired from the supported set. They must be
+        # rejected here at startup rather than reaching budget enforcement and
+        # failing mid-scan.
+        "gpt-5.6-luna",
+        "openai/gpt-5.6-terra",
+        "prod-gpt-6-luna",
+        "bedrock_mantle/openai.gpt-6-luna",
+        "chatgpt/gpt-4o",
     ],
 )
-def test_non_gpt56_deployment_names_are_rejected(model_name: str | None) -> None:
-    assert not is_gpt56_model(model_name)
+def test_non_gpt6_deployment_names_are_rejected(model_name: str | None) -> None:
+    assert not is_gpt6_model(model_name)
+    assert not is_gpt6_supported_provider(model_name)
 
 
 @pytest.mark.parametrize(
@@ -124,20 +128,20 @@ def test_azure_responses_base_url(api_base: str, expected: str) -> None:
     assert _azure_responses_base_url(api_base) == expected
 
 
-def test_azure_gpt56_routes_through_responses_with_stripped_deployment_name() -> None:
+def test_azure_gpt6_routes_through_responses_with_stripped_deployment_name() -> None:
     settings = Settings(
         llm=LlmSettings(
-            model="azure_ai/gpt-5.6-luna",
-            delegate_model="azure_ai/gpt-5.6-luna",
+            model="azure_ai/gpt-6-luna",
+            delegate_model="azure_ai/gpt-6-luna",
             api_key="test-key",
             api_base="https://example.services.ai.azure.com",
         )
     )
 
-    model = StrixProvider(settings=settings).get_model("azure_ai/gpt-5.6-luna")
+    model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
 
     assert isinstance(model, OpenAIResponsesModel)
-    assert model.model == "gpt-5.6-luna"
+    assert model.model == "gpt-6-luna"
     assert str(model._client.base_url) == "https://example.services.ai.azure.com/openai/v1/"
 
 
@@ -185,23 +189,23 @@ def test_azure_multi_segment_name_uses_final_deployment() -> None:
     """``azure/<region>/<deployment>`` must resolve to just the deployment slug."""
     settings = Settings(
         llm=LlmSettings(
-            model="azure/eu/gpt-5.6-terra",
+            model="azure/eu/gpt-6-sol",
             api_key="test-key",
             api_base="https://example.openai.azure.com",
         )
     )
 
-    model = StrixProvider(settings=settings).get_model("azure/eu/gpt-5.6-terra")
+    model = StrixProvider(settings=settings).get_model("azure/eu/gpt-6-sol")
 
     assert isinstance(model, OpenAIResponsesModel)
-    assert model.model == "gpt-5.6-terra"
+    assert model.model == "gpt-6-sol"
     assert str(model._client.base_url) == "https://example.openai.azure.com/openai/v1/"
 
 
-def test_azure_gpt56_route_fails_closed_without_endpoint() -> None:
+def test_azure_gpt6_route_fails_closed_without_endpoint() -> None:
     settings = Settings(
         llm=LlmSettings(
-            model="azure_ai/gpt-5.6-luna",
+            model="azure_ai/gpt-6-luna",
             api_key="test-key",
         )
     )
@@ -210,39 +214,42 @@ def test_azure_gpt56_route_fails_closed_without_endpoint() -> None:
         StrixProvider(settings=settings)
 
 
-def test_azure_gpt56_keeps_json_tools_without_programmatic_opt_in() -> None:
+def test_azure_gpt6_keeps_json_tools_without_programmatic_opt_in() -> None:
     settings = Settings(
         llm=LlmSettings(
-            model="azure_ai/gpt-5.6-terra",
+            model="azure_ai/gpt-6-sol",
             api_base="https://example.services.ai.azure.com",
         )
     )
 
-    assert uses_chat_completions_tool_schema("azure_ai/gpt-5.6-terra", settings)
+    assert uses_chat_completions_tool_schema("azure_ai/gpt-6-sol", settings)
 
 
-def test_azure_gpt56_uses_responses_tools_when_programmatic_is_opted_in(
+def test_azure_gpt6_uses_responses_tools_when_programmatic_is_opted_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "1")
     settings = Settings(
         llm=LlmSettings(
-            model="azure_ai/gpt-5.6-terra",
+            model="azure_ai/gpt-6-sol",
             api_base="https://example.services.ai.azure.com",
         )
     )
 
-    assert not uses_chat_completions_tool_schema("azure_ai/gpt-5.6-terra", settings)
+    assert not uses_chat_completions_tool_schema("azure_ai/gpt-6-sol", settings)
 
 
 @pytest.mark.parametrize(
     "model_name",
     [
-        "gpt-5.5",
-        "chatgpt/gpt-5.4",
-        "litellm/openai/gpt-5.4-pro",
-        "azure_ai/gpt-5.5-pro",
-        "bedrock_mantle/openai.gpt-5.5",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "openai/gpt-6-sol",
+        "chatgpt/gpt-6-luna",
+        "azure/gpt-6-luna",
+        "azure_ai/gpt-6-sol",
+        "litellm/openai/gpt-6-luna",
+        "bedrock_mantle/openai.gpt-6-luna",
         "anthropic/claude-opus-5",
         "anthropic/claude-opus-4-8",
         "anthropic.claude-opus-4-8",
@@ -288,10 +295,13 @@ def test_frontier_model_families_are_accepted(model_name: str) -> None:
         "custom-provider/claude-opus-4-local",
         "xai/grok-4.5",
         "openrouter/x-ai/grok-4",
-        "openrouter/gpt-5.6-luna",
-        "bedrock/gpt-5.6-terra",
-        "vertex_ai/gpt-5.6-luna",
-        "novita/gpt-5.6-luna",
+        "openrouter/gpt-6-luna",
+        "bedrock/gpt-6-sol",
+        "vertex_ai/gpt-6-luna",
+        "novita/gpt-6-luna",
+        "chatgpt/gpt-4o",
+        "litellm/openai/gpt-5.4-pro",
+        "azure_ai/gpt-5.5-pro",
         "mistral/mistral-medium-3-5",
         "mistral/magistral-medium-latest",
         "zai/glm-4.7",
@@ -306,15 +316,15 @@ def test_non_frontier_models_are_rejected(model_name: str) -> None:
 @pytest.mark.parametrize(
     "model_name",
     [
-        "openrouter/gpt-5.6-luna",
-        "bedrock/gpt-5.6-terra",
-        "vertex_ai/gpt-5.6-luna",
-        "novita/gpt-5.6-luna",
+        "openrouter/gpt-6-luna",
+        "bedrock/gpt-6-sol",
+        "vertex_ai/gpt-6-luna",
+        "novita/gpt-6-luna",
     ],
 )
-def test_gpt56_unsupported_providers_are_rejected(model_name: str) -> None:
-    assert is_gpt56_model(model_name)
-    assert not is_gpt56_supported_provider(model_name)
+def test_gpt6_unsupported_providers_are_rejected(model_name: str) -> None:
+    assert is_gpt6_model(model_name)
+    assert not is_gpt6_supported_provider(model_name)
 
 
 @pytest.mark.parametrize(
@@ -322,18 +332,18 @@ def test_gpt56_unsupported_providers_are_rejected(model_name: str) -> None:
     [
         # Structural rejects: nested/repeated wrappers and empty components can
         # never reach routing, which parses through the same grammar.
-        "litellm/litellm/azure/gpt-5.6-luna",
-        "any-llm/litellm/azure/gpt-5.6-luna",
-        "azure//gpt-5.6-luna",
+        "litellm/litellm/azure/gpt-6-luna",
+        "any-llm/litellm/azure/gpt-6-luna",
+        "azure//gpt-6-luna",
         "azure/",
-        "/gpt-5.6-luna",
+        "/gpt-6-luna",
         "litellm/",
     ],
 )
 def test_structurally_invalid_route_forms_are_rejected(model_name: str) -> None:
     with pytest.raises(ValueError, match="model route"):
         parse_model_route(model_name)
-    assert not is_gpt56_supported_provider(model_name)
+    assert not is_gpt6_supported_provider(model_name)
 
 
 @pytest.mark.parametrize(
@@ -341,17 +351,17 @@ def test_structurally_invalid_route_forms_are_rejected(model_name: str) -> None:
     [
         # Permitted provider appearing only later in the string is a different,
         # unapproved route (C6): routing selects the first component.
-        "evil/azure/gpt-5.6-luna",
-        "evil.azure/gpt-5.6-luna",
-        "evil/openai/gpt-5.6-terra",
-        "not-chatgpt/chatgpt/gpt-5.6-luna",
-        "litellm/evil/azure/gpt-5.6-luna",
+        "evil/azure/gpt-6-luna",
+        "evil.azure/gpt-6-luna",
+        "evil/openai/gpt-6-sol",
+        "not-chatgpt/chatgpt/gpt-6-luna",
+        "litellm/evil/azure/gpt-6-luna",
     ],
 )
 def test_late_permitted_provider_does_not_admit_route(model_name: str) -> None:
-    assert is_gpt56_model(model_name)
+    assert is_gpt6_model(model_name)
     assert parse_model_route(model_name) is not None
-    assert not is_gpt56_supported_provider(model_name)
+    assert not is_gpt6_supported_provider(model_name)
 
 
 def test_model_path_preserves_original_case_for_azure_deployments() -> None:
@@ -370,25 +380,23 @@ def test_admission_checks_exactly_the_provider_routing_selects() -> None:
     """For every accepted fixture, the admitted provider equals the leading
     component routing will select (wrapper stripped, bare means OpenAI)."""
     accepted = [
-        "gpt-5.6-luna",
-        "prod-gpt-5.6-luna",
-        "openai/gpt-5.6-luna",
-        "azure/eu/gpt-5.6-terra",
-        "azure_ai/gpt-5.6-luna",
-        "bedrock_mantle/openai.gpt-5.6-luna",
-        "chatgpt/gpt-5.6-luna",
-        "litellm/azure/gpt-5.6-luna",
+        "gpt-6-luna",
+        "openai/gpt-6-luna",
+        "azure/eu/gpt-6-sol",
+        "azure_ai/gpt-6-luna",
+        "chatgpt/gpt-6-luna",
+        "litellm/azure/gpt-6-luna",
     ]
     for model_name in accepted:
         route = parse_model_route(model_name)
         assert route is not None, model_name
-        assert is_gpt56_supported_provider(model_name), model_name
+        assert is_gpt6_supported_provider(model_name), model_name
         selected = route.provider or "openai"
-        assert selected in {"openai", "azure", "azure_ai", "bedrock_mantle", "chatgpt"}, model_name
+        assert selected in {"openai", "azure", "azure_ai", "chatgpt"}, model_name
 
 
 def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPatch) -> None:
-    """E2: for every accepted GPT-5.6 fixture, StrixProvider.get_model must
+    """E2: for every accepted GPT-6 fixture, StrixProvider.get_model must
     route through the same provider admission selected. This spies on the
     actual SDK seam (super().get_model) and asserts the routed name equals
     the canonical ``{provider}/{model_path}`` form admission parsed — no
@@ -400,18 +408,18 @@ def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(codex, "subscription_model", lambda _name: None)
 
     accepted = [
-        ("gpt-5.6-luna", "openai"),
-        ("openai/gpt-5.6-luna", "openai"),
-        ("azure/eu/gpt-5.6-terra", "azure"),
-        ("azure_ai/gpt-5.6-luna", "azure_ai"),
-        ("bedrock_mantle/openai.gpt-5.6-luna", "bedrock_mantle"),
-        ("litellm/azure/gpt-5.6-luna", "azure"),
+        ("gpt-6-luna", "openai"),
+        ("openai/gpt-6-luna", "openai"),
+        ("azure/eu/gpt-6-sol", "azure"),
+        ("azure_ai/gpt-6-luna", "azure_ai"),
+        ("chatgpt/gpt-6-luna", "chatgpt"),
+        ("litellm/azure/gpt-6-luna", "azure"),
     ]
 
     for model_name, expected_provider in accepted:
         route = parse_model_route(model_name)
         assert route is not None, model_name
-        assert is_gpt56_supported_provider(model_name), model_name
+        assert is_gpt6_supported_provider(model_name), model_name
         assert (route.provider or "openai") == expected_provider, model_name
 
         provider = StrixProvider()
@@ -457,18 +465,18 @@ def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPa
 def test_parse_model_route_documented_forms() -> None:
     assert parse_model_route(None) is None
     assert parse_model_route("   ") is None
-    bare = parse_model_route("gpt-5.6-luna")
-    assert (bare.wrapper, bare.provider, bare.model_path) == (None, None, "gpt-5.6-luna")
+    bare = parse_model_route("gpt-6-luna")
+    assert (bare.wrapper, bare.provider, bare.model_path) == (None, None, "gpt-6-luna")
     wrapped = parse_model_route("litellm/deepseek/deepseek-chat")
     assert (wrapped.wrapper, wrapped.provider, wrapped.model_path) == (
         "litellm",
         "deepseek",
         "deepseek-chat",
     )
-    azure = parse_model_route("azure/eu/gpt-5.6-terra")
-    assert (azure.provider, azure.model_path) == ("azure", "eu/gpt-5.6-terra")
-    bedrock = parse_model_route("bedrock_mantle/openai.gpt-5.6-luna")
-    assert (bedrock.provider, bedrock.model_path) == ("bedrock_mantle", "openai.gpt-5.6-luna")
+    azure = parse_model_route("azure/eu/gpt-6-sol")
+    assert (azure.provider, azure.model_path) == ("azure", "eu/gpt-6-sol")
+    bedrock = parse_model_route("bedrock_mantle/openai.gpt-6-luna")
+    assert (bedrock.provider, bedrock.model_path) == ("bedrock_mantle", "openai.gpt-6-luna")
 
 
 @pytest.mark.parametrize(

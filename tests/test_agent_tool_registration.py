@@ -275,7 +275,7 @@ def test_opposite_policy_agents_own_distinct_tool_instances(
     )
     monkeypatch.setenv("LYRASHIELD_PROGRAMMATIC_TOOL_CALLING", "1")
 
-    programmatic_agent = factory.build_strix_agent(is_root=True, model="openai/gpt-5.6-luna")
+    programmatic_agent = factory.build_strix_agent(is_root=True, model="openai/gpt-6-luna")
     programmatic_tool = next(t for t in programmatic_agent.tools if t.name == "web_search")
     assert programmatic_tool.allowed_callers is factory._PROGRAMMATIC_ALLOWED_CALLERS
 

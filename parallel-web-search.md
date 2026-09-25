@@ -11,7 +11,7 @@ User chose: inline agent tool, Parallel Search `turbo` default, accuracy-first r
 
 ## Goals
 - Add a `web_search` tool backed by Parallel Search API (`/v1/search`).
-- Keep main LLM as GPT-5.6 Terra/Luna; Parallel is only a research tool.
+- Keep main LLM as GPT-6 Sol/Luna; Parallel is only a research tool.
 - Minimize data leakage via redaction, query shaping, and audit logging.
 - Provide good UX in viewer + TUI and good DX via env vars + type-safe settings.
 

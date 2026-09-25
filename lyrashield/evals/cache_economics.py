@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lyrashield.artifacts.usage import (
-    estimate_gpt56_request_cost_usd,
-    gpt56_usd_per_million,
+    estimate_request_cost_usd,
+    metered_usd_per_million,
 )
 
 
@@ -170,7 +170,7 @@ def _parse_entry(index: int, raw: Any) -> _PricedEntry | str:
     model = raw.get("model")
     if not isinstance(model, str) or not model.strip():
         return f"{prefix}:model_missing"
-    rate = gpt56_usd_per_million(model)
+    rate = metered_usd_per_million(model)
     if rate is None:
         return f"{prefix}:model_unpriced"
     input_tokens = _counter(raw.get("input_tokens"))
@@ -212,7 +212,7 @@ def _entry_cost(
     cached_tokens: float | None = None,
     cache_write_tokens: float | None = None,
 ) -> float:
-    cost = estimate_gpt56_request_cost_usd(
+    cost = estimate_request_cost_usd(
         entry.model,
         input_tokens=entry.input_tokens if input_tokens is None else input_tokens,
         cached_input_tokens=entry.cached_tokens if cached_tokens is None else cached_tokens,

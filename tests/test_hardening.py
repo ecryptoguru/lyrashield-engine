@@ -84,7 +84,7 @@ def test_invalid_delegate_model_exits_before_sandbox_setup(
 ) -> None:
     settings = SimpleNamespace(
         llm=SimpleNamespace(
-            model="openai/gpt-5.6-terra",
+            model="openai/gpt-6-sol",
             delegate_model="openai/gpt-4o",
             api_key="configured",
             api_base="configured",

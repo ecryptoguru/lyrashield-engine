@@ -54,7 +54,7 @@ def test_mixed_model_cache_economics_reconciles() -> None:
         "llm_usage": {
             "request_usage_entries": [
                 {
-                    "model": "azure/gpt-5.6-luna",
+                    "model": "azure/gpt-6-luna",
                     "input_tokens": 1_000_000,
                     "output_tokens": 10_000,
                     "input_tokens_details": {
@@ -63,7 +63,7 @@ def test_mixed_model_cache_economics_reconciles() -> None:
                     },
                 },
                 {
-                    "model": "azure/gpt-5.6-terra",
+                    "model": "azure/gpt-6-sol",
                     "input_tokens": 100_000,
                     "output_tokens": 1_000,
                     "input_tokens_details": {
@@ -91,7 +91,7 @@ def test_mixed_model_cost_is_priced_per_model() -> None:
         "llm_usage": {
             "request_usage_entries": [
                 {
-                    "model": "azure/gpt-5.6-luna",
+                    "model": "azure/gpt-6-luna",
                     "input_tokens": 1_000_000,
                     "output_tokens": 10_000,
                     "input_tokens_details": {
@@ -100,7 +100,7 @@ def test_mixed_model_cost_is_priced_per_model() -> None:
                     },
                 },
                 {
-                    "model": "azure/gpt-5.6-terra",
+                    "model": "azure/gpt-6-sol",
                     "input_tokens": 100_000,
                     "output_tokens": 1_000,
                     "input_tokens_details": {
@@ -115,26 +115,26 @@ def test_mixed_model_cost_is_priced_per_model() -> None:
     report = analyze_cache_economics(run)
 
     # Luna input 1M > 272k -> long-context: 2x input, 1.5x output:
-    # (300k*0.2 + 600k*0.02 + 100k*0.25)*2 + 10k*1.2*1.5 = 0.212
-    # Terra standard tier: 25k*2 + 50k*0.2 + 25k*2.5 + 1k*12 = 0.1345
-    assert report.estimated_cost_usd == 0.3465
-    assert report.to_dict()["estimated_cost_usd"] == 0.3465
+    # (300k*0.1 + 600k*0.01 + 100k*0.125)*2 + 10k*0.5*1.5 = 0.1045
+    # Sol standard tier: 25k*2 + 50k*0.2 + 25k*2.5 + 1k*10 = 0.1325
+    assert report.estimated_cost_usd == 0.237
+    assert report.to_dict()["estimated_cost_usd"] == 0.237
 
 
 def test_long_context_entry_uses_tier_multipliers() -> None:
     run = {
         "llm_usage": {
             "request_usage_entries": [
-                _entry("azure/gpt-5.6-luna", 300_000, 1_000),
+                _entry("azure/gpt-6-luna", 300_000, 1_000),
             ]
         }
     }
 
     report = analyze_cache_economics(run)
 
-    # input > 272k: 2x input, 1.5x output -> 300k*0.2*2 + 1k*1.2*1.5
+    # input > 272k: 2x input, 1.5x output -> 300k*0.1*2 + 1k*0.5*1.5
     assert report.complete is True
-    assert report.estimated_cost_usd == 0.1218
+    assert report.estimated_cost_usd == 0.06075
 
 
 def test_input_reduction_reprices_a_request_that_moves_below_long_context_tier(
@@ -146,7 +146,7 @@ def test_input_reduction_reprices_a_request_that_moves_below_long_context_tier(
             {
                 "llm_usage": {
                     "request_usage_entries": [
-                        _entry("azure/gpt-5.6-luna", 300_000, 1_000),
+                        _entry("azure/gpt-6-luna", 300_000, 1_000),
                     ]
                 }
             }
@@ -158,8 +158,8 @@ def test_input_reduction_reprices_a_request_that_moves_below_long_context_tier(
 
     payload = json.loads(capsys.readouterr().out)
     scenario = next(s for s in payload["scenarios"] if s["name"] == "input_reduction")
-    assert scenario["estimated_cost_usd"] == 0.0552
-    assert scenario["estimated_savings_usd"] == 0.0666
+    assert scenario["estimated_cost_usd"] == 0.0275
+    assert scenario["estimated_savings_usd"] == 0.03325
 
 
 def test_declared_request_count_mismatch_marks_report_incomplete() -> None:
@@ -167,7 +167,7 @@ def test_declared_request_count_mismatch_marks_report_incomplete() -> None:
         {
             "llm_usage": {
                 "requests": 2,
-                "request_usage_entries": [_entry("azure/gpt-5.6-luna", 100, 10)],
+                "request_usage_entries": [_entry("azure/gpt-6-luna", 100, 10)],
             }
         }
     )
@@ -183,7 +183,7 @@ def test_outer_usage_totals_must_match_request_receipts() -> None:
             "llm_usage": {
                 "input_tokens": 101,
                 "output_tokens": 10,
-                "request_usage_entries": [_entry("azure/gpt-5.6-luna", 100, 10)],
+                "request_usage_entries": [_entry("azure/gpt-6-luna", 100, 10)],
             }
         }
     )
@@ -198,7 +198,7 @@ def test_outer_total_tokens_must_match_request_receipts() -> None:
         {
             "llm_usage": {
                 "total_tokens": 111,
-                "request_usage_entries": [_entry("azure/gpt-5.6-luna", 100, 10)],
+                "request_usage_entries": [_entry("azure/gpt-6-luna", 100, 10)],
             }
         }
     )
@@ -248,7 +248,7 @@ def test_negative_or_non_integer_counters_mark_report_incomplete(counter: Any) -
     run = {
         "llm_usage": {
             "request_usage_entries": [
-                _entry("azure/gpt-5.6-luna", counter, 10),
+                _entry("azure/gpt-6-luna", counter, 10),
             ]
         }
     }
@@ -264,7 +264,7 @@ def test_cache_tokens_exceeding_input_mark_report_incomplete() -> None:
     run = {
         "llm_usage": {
             "request_usage_entries": [
-                _entry("azure/gpt-5.6-luna", 100, 10, cached=80, cache_write=30),
+                _entry("azure/gpt-6-luna", 100, 10, cached=80, cache_write=30),
             ]
         }
     }
@@ -292,7 +292,7 @@ def test_unknown_model_cannot_be_priced() -> None:
 
 
 def test_missing_input_details_mark_report_incomplete() -> None:
-    entry = _entry("azure/gpt-5.6-luna", 100, 10)
+    entry = _entry("azure/gpt-6-luna", 100, 10)
     del entry["input_tokens_details"]
 
     report = analyze_cache_economics({"llm_usage": {"request_usage_entries": [entry]}})
@@ -305,8 +305,8 @@ def test_one_invalid_entry_marks_whole_report_incomplete() -> None:
     run = {
         "llm_usage": {
             "request_usage_entries": [
-                _entry("azure/gpt-5.6-luna", 100, 10),
-                _entry("azure/gpt-5.6-luna", 100, 10, cached=90, cache_write=20),
+                _entry("azure/gpt-6-luna", 100, 10),
+                _entry("azure/gpt-6-luna", 100, 10, cached=90, cache_write=20),
             ]
         }
     }
@@ -329,7 +329,7 @@ def test_cache_conversion_scenario_is_hypothetical(
             {
                 "llm_usage": {
                     "request_usage_entries": [
-                        _entry("azure/gpt-5.6-luna", 1_000, 0, cache_write=100),
+                        _entry("azure/gpt-6-luna", 1_000, 0, cache_write=100),
                     ]
                 }
             }
@@ -343,7 +343,7 @@ def test_cache_conversion_scenario_is_hypothetical(
     payload = json.loads(capsys.readouterr().out)
     scenario = next(s for s in payload["scenarios"] if s["name"] == "cache_conversion")
     assert scenario["kind"] == "hypothetical"
-    assert scenario["estimated_savings_usd"] == 0.000018
+    assert scenario["estimated_savings_usd"] == 0.000009
     assert set(payload) == REPORT_KEYS
 
 
@@ -356,7 +356,7 @@ def test_cli_exit_2_for_incomplete_input(
             {
                 "llm_usage": {
                     "request_usage_entries": [
-                        _entry("azure/gpt-5.6-luna", -5, 10),
+                        _entry("azure/gpt-6-luna", -5, 10),
                     ]
                 }
             }
@@ -383,7 +383,7 @@ def test_cli_never_echoes_unknown_run_record_fields(
 ) -> None:
     run = {
         "llm_usage": {
-            "request_usage_entries": [_entry("azure/gpt-5.6-luna", 100, 10)],
+            "request_usage_entries": [_entry("azure/gpt-6-luna", 100, 10)],
         }
     }
     run["prompt_text"] = "secret-prompt-content"

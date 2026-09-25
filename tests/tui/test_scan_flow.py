@@ -48,7 +48,7 @@ def test_build_env_applies_byok() -> None:
 def test_build_env_chatgpt() -> None:
     cfg = ByokConfig(provider=Provider.CHATGPT_OAUTH, chatgpt=ChatGptConfig(enabled=True))
     env = build_env(cfg, {})
-    assert env["LYRASHIELD_LLM"] == "chatgpt/gpt-5.6"
+    assert env["LYRASHIELD_LLM"] == "chatgpt/gpt-6-luna"
 
 
 def test_run_scan_no_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

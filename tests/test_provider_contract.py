@@ -28,7 +28,7 @@ class _FakeModel:
 def _settings() -> Settings:
     return Settings(
         llm=LlmSettings(
-            model="azure_ai/gpt-5.6-terra",
+            model="azure_ai/gpt-6-sol",
             api_base="https://example.services.ai.azure.com",
             api_key="test-key",
             timeout=5,

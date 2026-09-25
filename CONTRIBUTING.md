@@ -1,6 +1,6 @@
 # Contributing to LyraShield Engine
 
-LyraShield Engine is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.5.3, pinned at upstream base `7cc9fa9faa0179fc7e35111102fe3d20a9028393` and modified under Apache-2.0. See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger. This guide covers changes to the engine itself; the [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai) owns product UX, worker, evidence state, and reporting.
+LyraShield Engine is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.6.2, pinned at upstream base `ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2` and modified under Apache-2.0. See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger. This guide covers changes to the engine itself; the [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai) owns product UX, worker, evidence state, and reporting.
 
 ## Development setup
 
@@ -28,15 +28,15 @@ LyraShield Engine is a controlled derivative of [Strix](https://github.com/usest
    uv run pre-commit install
    ```
 
-3. **Configure an approved GPT-5.6 Terra or Luna endpoint**
+3. **Configure an approved GPT-6 Sol or Luna endpoint**
 
    ```bash
-   export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+   export LYRASHIELD_LLM="openai/gpt-6-luna"
    export LLM_API_KEY="<credential>"
    export LLM_API_BASE="https://<approved-endpoint>"
    ```
 
-   Metered scans accept GPT-5.6 Terra and Luna deployments from the supported provider allowlist. Authenticated `chatgpt/*` subscription runs are also supported by default and can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`. See the [configuration reference](docs/advanced/configuration.mdx) for the exact routes and accounting behavior.
+   Metered scans accept GPT-6 Sol and Luna deployments from the supported provider allowlist. Authenticated `chatgpt/gpt-6-*` subscription runs are also supported by default for the main model (`lyrashield auth login chatgpt`) and can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`. See the [configuration reference](docs/advanced/configuration.mdx) for the exact routes and accounting behavior.
 
 4. **Create the deny-by-default sandbox network (Docker scans only)**
 
@@ -70,7 +70,7 @@ LyraShield Engine is a controlled derivative of [Strix](https://github.com/usest
 
 Preserve the reviewed boundary between LyraShield-owned product behavior and the retained upstream substrate.
 
-**LyraShield owns:** GPT-5.6 Terra/Luna acceptance and reasoning policy; context compaction, output/agent limits, and concurrent pre-request spend reservations; non-interactive lifecycle, cancellation, cleanup, telemetry-off defaults, and target-safe errors; deterministic finding identity, structured control/evidence metadata, and bounded artifacts; the worker-facing `run.json` and `vulnerabilities.json` contract; the local viewer under `lyrashield/interface/viewer/**`, including its frontend source and committed static assets.
+**LyraShield owns:** GPT-6 Sol/Luna acceptance and reasoning policy; context compaction, output/agent limits, and concurrent pre-request spend reservations; non-interactive lifecycle, cancellation, cleanup, telemetry-off defaults, and target-safe errors; deterministic finding identity, structured control/evidence metadata, and bounded artifacts; the worker-facing `run.json` and `vulnerabilities.json` contract; the local viewer under `lyrashield/interface/viewer/**`, including its frontend source and committed static assets.
 
 **Retained upstream substrate:** generic sandbox/session mechanics, security tools, agent-SDK integration, and the vulnerability skill library.
 
@@ -95,7 +95,7 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
    git diff --check
    ```
 
-   That script executes exactly: `uv sync --frozen --extra viewer` (so the PDF/viewer tests actually run), `ruff check .`, `ruff format --check .`, the full `pytest` suite with `-W error::pydantic.PydanticDeprecatedSince211`, `mypy strix lyrashield_adapter lyrashield`, and `bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q`. It also diffs `strix/**` against the pinned v1.5.3 base and fails on an unlisted path, footprint growth beyond the reviewed +151/-57 lines, or any change to the pinned complete-patch digest.
+   That script executes exactly: `uv sync --frozen --extra viewer` (so the PDF/viewer tests actually run), `ruff check .`, `ruff format --check .`, the full `pytest` suite with `-W error::pydantic.PydanticDeprecatedSince211`, `mypy strix lyrashield_adapter lyrashield`, and `bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q`. It also diffs `strix/**` against the pinned v1.6.2 base and fails on an unlisted path, footprint growth beyond the reviewed +149/-258 lines, or any change to the pinned complete-patch digest.
 
    The following are **separate gates** this script does not run — do not claim a local green gate covers them:
 
@@ -154,7 +154,7 @@ When reporting bugs, include:
 
 - Python version and OS
 - LyraShield Engine version (`uv run lyrashield --version`)
-- The approved GPT-5.6 deployment and reasoning effort
+- The approved GPT-6 deployment and reasoning effort
 - Full error traceback
 - Steps to reproduce
 - Expected vs actual behavior
@@ -164,7 +164,7 @@ Never include real credentials, target secrets, customer data, or unapproved pro
 ## Constraints
 
 <Warning>
-Do not add providers or models outside GPT-5.6 Terra and Luna; re-enable telemetry; weaken budget reservations; persist raw model output; or make confidence equivalent to verification.
+Do not add providers or models outside GPT-6 Sol and Luna; re-enable telemetry; weaken budget reservations; persist raw model output; or make confidence equivalent to verification.
 </Warning>
 
 Artifact schema changes (`run.json`, `vulnerabilities.json`) require coordinated worker compatibility testing against `ecryptoguru/lyrashield-ai`.

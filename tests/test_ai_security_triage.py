@@ -42,9 +42,7 @@ def _input(*, candidates: int = 1) -> service.TriageInput:
 
 @pytest.mark.asyncio
 async def test_disabled_triage_is_additive_and_redacted() -> None:
-    artifact = await service.run_triage(
-        _input(), model_route="azure_ai/gpt-5.6-luna", enabled=False
-    )
+    artifact = await service.run_triage(_input(), model_route="azure_ai/gpt-6-luna", enabled=False)
 
     assert artifact["status"] == "DISABLED"
     assert artifact["terminalReason"] == "TRIAGE_DISABLED"
@@ -69,7 +67,7 @@ async def test_triage_accepts_only_structured_additive_overlay(
 
     monkeypatch.setattr(service, "_request_judgement", fake_request)
     artifact = await service.run_triage(
-        _input(), model_route="azure_ai/gpt-5.6-luna", enabled=True, model=SimpleNamespace()
+        _input(), model_route="azure_ai/gpt-6-luna", enabled=True, model=SimpleNamespace()
     )
 
     assert artifact["status"] == "COMPLETED"
@@ -95,7 +93,7 @@ async def test_budget_stop_never_changes_deterministic_input(
 
     monkeypatch.setattr(service, "_request_judgement", exhausted)
     artifact = await service.run_triage(
-        _input(), model_route="azure_ai/gpt-5.6-luna", enabled=True, model=SimpleNamespace()
+        _input(), model_route="azure_ai/gpt-6-luna", enabled=True, model=SimpleNamespace()
     )
 
     assert artifact["status"] == "BUDGET_STOPPED"
@@ -126,7 +124,7 @@ async def test_triage_never_exceeds_two_simultaneous_calls(monkeypatch: pytest.M
     monkeypatch.setattr(service, "_request_judgement", bounded)
     artifact = await service.run_triage(
         _input(candidates=3),
-        model_route="azure_ai/gpt-5.6-luna",
+        model_route="azure_ai/gpt-6-luna",
         enabled=True,
         model=SimpleNamespace(),
     )
@@ -192,8 +190,8 @@ def test_cache_key_includes_all_prompt_context() -> None:
     second.candidates[0].control_id = "AI-02"
 
     assert service.triage_cache_key(
-        first, model_route="azure_ai/gpt-5.6-luna"
-    ) != service.triage_cache_key(second, model_route="azure_ai/gpt-5.6-luna")
+        first, model_route="azure_ai/gpt-6-luna"
+    ) != service.triage_cache_key(second, model_route="azure_ai/gpt-6-luna")
 
 
 @pytest.mark.asyncio
@@ -208,7 +206,7 @@ async def test_input_limit_prevents_provider_requests(monkeypatch: pytest.Monkey
     monkeypatch.setattr(service, "_request_judgement", fake_request)
     artifact = await service.run_triage(
         _input(),
-        model_route="azure_ai/gpt-5.6-luna",
+        model_route="azure_ai/gpt-6-luna",
         enabled=True,
         limits=service.TriageLimits(max_input_tokens=1),
         model=SimpleNamespace(),
@@ -238,7 +236,7 @@ async def test_failure_cancels_and_awaits_sibling_requests(monkeypatch: pytest.M
     monkeypatch.setattr(service, "_request_judgement", fake_request)
     artifact = await service.run_triage(
         _input(candidates=2),
-        model_route="azure_ai/gpt-5.6-luna",
+        model_route="azure_ai/gpt-6-luna",
         enabled=True,
         model=SimpleNamespace(),
     )
@@ -255,7 +253,7 @@ async def test_invalid_triage_output_keeps_returned_usage(monkeypatch: pytest.Mo
     monkeypatch.setattr(service, "_extract_text", lambda _response: '{"disposition":"bad"}')
     artifact = await service.run_triage(
         _input(),
-        model_route="azure_ai/gpt-5.6-luna",
+        model_route="azure_ai/gpt-6-luna",
         enabled=True,
         model=SimpleNamespace(get_response=fake_response),
     )
@@ -294,7 +292,7 @@ async def test_checkpoint_preserves_usage_when_sibling_is_cancelled(
     task = asyncio.create_task(
         service.run_triage(
             _input(candidates=2),
-            model_route="azure_ai/gpt-5.6-luna",
+            model_route="azure_ai/gpt-6-luna",
             enabled=True,
             model=SimpleNamespace(),
             checkpoint=lambda artifact: service.write_artifact(checkpoint_path, artifact),

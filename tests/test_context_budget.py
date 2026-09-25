@@ -33,8 +33,8 @@ def test_context_window_chatgpt_prefix_skips_provider_auth(
 
     monkeypatch.setattr("litellm.get_model_info", _model_info)
     try:
-        assert context_budget.context_window("chatgpt/gpt-5.6-luna") == 1_050_000
-        assert calls == ["gpt-5.6-luna"]
+        assert context_budget.context_window("chatgpt/gpt-6-luna") == 1_050_000
+        assert calls == ["gpt-6-luna"]
     finally:
         context_budget._model_info.cache_clear()
 

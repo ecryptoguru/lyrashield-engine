@@ -69,6 +69,7 @@ from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     configure_sdk_model_defaults,
+    is_gpt6_model,
     is_gpt6_supported_provider,
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
@@ -113,13 +114,11 @@ logger = logging.getLogger(__name__)
 def _reject_resolved_subscription_models(settings: Settings, console: Console) -> None:
     """Reject subscription-backed models that reached settings via `--config`.
 
-    The product entry point (`lyrashield_adapter.cli`) rejects `chatgpt/` models
-    at the environment level, but `--config` is applied afterwards. A
-    subscription route bypasses the Terra/Luna gate and zeroes the metered cost
-    ledger, so the worker would bill nothing for a real scan.
-
-    When ``LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION`` is set, the main LLM may use
-    a ChatGPT subscription; delegate and dedupe models must still be Terra/Luna.
+    The product entry point (`lyrashield_adapter.cli`) admits `chatgpt/gpt-6-*`
+    models at the environment level only for the main model, but `--config` is
+    applied afterwards. A subscription route records zero metered cost, so it
+    stays confined to ``STRIX_LLM`` — delegate and dedupe models must use a
+    metered GPT-6 API route.
     """
     configured = {
         "STRIX_LLM": settings.llm.model,
@@ -161,6 +160,13 @@ def validate_environment() -> None:
                 "subscription, which is not supported for LyraShield scans.[/] "
                 "Set LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=1 or configure a GPT-6 "
                 "Sol or Luna API deployment instead."
+            )
+            sys.exit(1)
+        if not is_gpt6_model(settings.llm.model):
+            console.print(
+                f"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or "
+                "Luna deployment.[/] Subscription scans require a "
+                "chatgpt/gpt-6-sol or chatgpt/gpt-6-luna route."
             )
             sys.exit(1)
         if not codex.is_authenticated():
@@ -375,7 +381,7 @@ def _subscription_error_hint(exc: BaseException) -> str | None:
     if "not supported when using codex with a chatgpt account" in joined:
         return (
             "This model isn't available on your ChatGPT subscription. "
-            "Set STRIX_LLM to a model your plan includes (e.g. chatgpt/gpt-5.4)."
+            "Set STRIX_LLM to a model your plan includes (e.g. chatgpt/gpt-6-luna)."
         )
     if (
         "error code: 401" in joined
@@ -1474,8 +1480,8 @@ def main() -> None:
         return
 
     # `lyrashield auth …` manages model-subscription sign-in and exits; it needs no
-    # target, Docker, or scan setup. LyraShield disables this by default, but
-    # enables it when `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION` is set.
+    # target, Docker, or scan setup. It is enabled unless the operator sets
+    # `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`.
     if len(sys.argv) > 1 and sys.argv[1] == "auth":
         if is_lyrashield_product() and not is_chatgpt_subscription_allowed():
             Console().print(

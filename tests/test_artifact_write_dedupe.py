@@ -46,7 +46,7 @@ def test_usage_only_save_does_not_rewrite_unchanged_report_artifacts(
     state.record_sdk_usage(
         agent_id="agent-1",
         usage=Usage(requests=1, input_tokens=10, output_tokens=2, total_tokens=12),
-        model="azure_ai/gpt-5.6-luna",
+        model="azure_ai/gpt-6-luna",
     )
 
     assert vulnerability_writes == 1
@@ -100,7 +100,7 @@ def test_usage_only_resume_does_not_rewrite_report_artifacts(
     resumed.record_sdk_usage(
         agent_id="agent-1",
         usage=Usage(requests=1, input_tokens=10, output_tokens=2, total_tokens=12),
-        model="azure_ai/gpt-5.6-luna",
+        model="azure_ai/gpt-6-luna",
     )
 
     assert vulnerability_writes == 0

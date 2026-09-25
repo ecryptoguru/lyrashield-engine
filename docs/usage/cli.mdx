@@ -3,7 +3,7 @@ title: "CLI Reference"
 description: "Command-line options for the LyraShield Engine entry point"
 ---
 
-The production entry point is `lyrashield`, provided by the `lyrashield_adapter` package. The adapter forces telemetry off, disables the upstream self-update check, supports the authenticated `chatgpt/<model>` subscription route by default, and re-validates configuration after `--config` is applied. The bare upstream `strix` executable is not shipped in this distribution.
+The production entry point is `lyrashield`, provided by the `lyrashield_adapter` package. The adapter forces telemetry off, disables the upstream self-update check, supports the authenticated `chatgpt/gpt-6-*` subscription route by default, and re-validates configuration after `--config` is applied. The bare upstream `strix` executable is not shipped in this distribution.
 
 ## Basic usage
 
@@ -28,7 +28,7 @@ Leave `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` unset unless the programmatic-tool-
 
 ### `auth`
 
-ChatGPT subscription sign-in helper. It exits without target, Docker, or scan setup. Authenticate with `lyrashield auth login chatgpt`, then configure the supported `chatgpt/<model>` main-model route. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` only when subscription auth must be disabled.
+ChatGPT subscription sign-in helper. It exits without target, Docker, or scan setup. Authenticate with `lyrashield auth login chatgpt`, then configure a `chatgpt/gpt-6-luna` or `chatgpt/gpt-6-sol` main-model route (delegate and dedupe models must use a metered route). Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` only when subscription auth must be disabled.
 
 ### `view`
 
@@ -118,7 +118,7 @@ Serves the prebuilt local viewer SPA. Source lives in `lyrashield/interface/view
   **Limitations**
 
   - The check fires *after* a response is returned, so the final spend can slightly overshoot the limit by any calls already in flight when the threshold is crossed (most relevant with several child agents running concurrently).
-  - Cost is a best-effort estimate derived from token usage and model pricing. Budget enforcement falls back to LiteLLM's `model_cost` table and then to conservative default rates for non-GPT-5.6 models, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-5.6 Terra/Luna deployments before scan start.
+  - Cost is a best-effort estimate derived from token usage and model pricing. Budget enforcement falls back to LiteLLM's `model_cost` table and then to conservative default rates for models outside the GPT-6 rate card, so validation does not crash if an internal path references an unlisted model. The LyraShield product entry point still rejects non-GPT-6 Sol/Luna deployments before scan start.
   - For LiteLLM-routed models, streaming success callbacks capture provider-reported cost. Message content remains excluded, but third-party LiteLLM callbacks configured in the same process can receive other streaming metadata such as model names, request IDs, and token counts.
 </ParamField>
 
@@ -181,6 +181,9 @@ uv run lyrashield --resume prior-run-name -n
 |------|---------|
 | 0 | Scan completed successfully (interactive mode always exits `0`; in headless mode, `0` means no vulnerabilities were found) |
 | 1 | A fatal error occurred before or during the scan (e.g. missing environment variables, Docker unavailable, invalid config file, diff-scope resolution failure, or an unhandled error) |
-| 2 | Vulnerabilities found (headless mode only) |
+| 2 | Vulnerabilities found, including a partial scan (`content_filter_stopped`, `engine_stopped`, or `runtime_deadline`) that collected findings before stopping (headless mode only) |
+| 3 | Scan stopped because the configured budget cap was exceeded (headless mode only) |
+| 4 | Scan stopped after sustained provider rate limiting (headless mode only) |
+| 5 | Scan ended without a completed report and no findings were collected — also covers a partial scan with no findings (headless mode only) |
 
 The TypeScript worker treats all engine output as untrusted and schema-validates the bounded artifacts; exit codes are implementation signals, not verification proof.

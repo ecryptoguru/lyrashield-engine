@@ -9,7 +9,7 @@ from lyrashield.tui.byok_config import (
     LAUNCH_PROVIDERS,
     PROFILE_FALLBACK,
     PROFILE_LUNA,
-    PROFILE_TERRA,
+    PROFILE_SOL,
     SCAN_MODES,
     AzureConfig,
     ByokConfig,
@@ -55,9 +55,9 @@ def test_engine_mode_mapping() -> None:
 
 
 def test_chatgpt_config_to_env() -> None:
-    cfg = ChatGptConfig(enabled=True, model="chatgpt/gpt-5.6")
+    cfg = ChatGptConfig(enabled=True, model="chatgpt/gpt-6-luna")
     env = cfg.to_env()
-    assert env == {"LYRASHIELD_LLM": "chatgpt/gpt-5.6"}
+    assert env == {"LYRASHIELD_LLM": "chatgpt/gpt-6-luna"}
     assert ChatGptConfig(enabled=False).to_env() == {}
 
 
@@ -92,7 +92,7 @@ def test_apply_env_merges_provider_vars(monkeypatch: pytest.MonkeyPatch) -> None
 def test_model_profile_defaults() -> None:
     p = ModelProfile()
     assert p.name == PROFILE_FALLBACK
-    assert PROFILE_LUNA != PROFILE_TERRA != PROFILE_FALLBACK
+    assert PROFILE_LUNA != PROFILE_SOL != PROFILE_FALLBACK
 
 
 def test_save_load_config_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,7 +114,7 @@ def test_save_load_config_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
         azure=AzureConfig(
             api_key="secret-key", endpoint="https://x.openai.azure.com", deployment="dep"
         ),
-        profiles={"DEEP": ModelProfile(name=PROFILE_LUNA, model="gpt-5.6-luna")},
+        profiles={"DEEP": ModelProfile(name=PROFILE_LUNA, model="gpt-6-luna")},
     )
     save_config(cfg)
 

@@ -31,9 +31,10 @@ except ImportError:
 
 
 # ``chatgpt/<model>`` routes inference through a ChatGPT subscription
-# (``strix/config/codex.py``), which bypasses the Sol/Luna deployment gate and
-# records the run with zero metered cost. LyraShield scans are metered per token,
-# so the product entry point refuses subscription-backed models outright.
+# (``lyrashield/policy/codex.py``) and records the run with zero metered cost.
+# It is admitted only for the main model (delegates and dedupe must use a
+# metered GPT-6 API route) and can be disabled outright with
+# ``LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0``.
 _SUBSCRIPTION_PREFIX = "chatgpt/"
 
 
@@ -146,7 +147,7 @@ def _reject_unsupported_models(env: MutableMapping[str, str]) -> None:
         if not is_gpt6_supported_provider(value):
             raise SystemExit(
                 f"{name}={value} is not an approved GPT-6 Sol/Luna deployment "
-                "from openai, azure, or azure_ai."
+                "from openai, azure, azure_ai, or chatgpt."
             )
 
 

@@ -83,12 +83,12 @@ def test_parse_redirect_input(value: str, expected: tuple[str | None, str | None
 @pytest.mark.parametrize(
     ("model", "expected"),
     [
-        ("chatgpt/gpt-5.4", "gpt-5.4"),
+        ("chatgpt/gpt-6-luna", "gpt-6-luna"),
         ("ChatGPT/GPT-5.5", "GPT-5.5"),
-        ("  chatgpt/gpt-5.4  ", "gpt-5.4"),
-        ("openai/gpt-5.4", None),  # metered API path
+        ("  chatgpt/gpt-6-luna  ", "gpt-6-luna"),
+        ("openai/gpt-6-luna", None),  # metered API path
         ("anthropic/claude-opus-4-8", None),
-        ("gpt-5.4", None),
+        ("gpt-6-luna", None),
         ("chatgpt/", None),
         ("", None),
         (None, None),
@@ -99,29 +99,29 @@ def test_subscription_model(model: str | None, expected: str | None) -> None:
 
 
 def test_auth_mode() -> None:
-    assert codex.auth_mode("chatgpt/gpt-5.4") == "subscription"
-    assert codex.auth_mode("openai/gpt-5.4") == "api_key"
+    assert codex.auth_mode("chatgpt/gpt-6-luna") == "subscription"
+    assert codex.auth_mode("openai/gpt-6-luna") == "api_key"
     assert codex.auth_mode("anthropic/claude-opus-4-8") == "api_key"
     assert codex.auth_mode(None) == "api_key"
 
 
 def test_is_content_guardrail_error() -> None:
-    # The backend's real wording (from a live gpt-5.6-sol block).
+    # The backend's real wording (from a live gpt-6-sol block).
     raw = RuntimeError(
         "This content was flagged for possible cybersecurity risk. If this seems "
         "wrong, try rephrasing. To get authorized, join the Trusted Access for Cyber program."
     )
     assert codex.is_content_guardrail_error(raw) is True
     # The already-typed error is recognized regardless of its message wording.
-    assert codex.is_content_guardrail_error(codex.CodexContentGuardrailError("gpt-5.6-sol")) is True
+    assert codex.is_content_guardrail_error(codex.CodexContentGuardrailError("gpt-6-sol")) is True
     # Unrelated errors are not misclassified.
     assert codex.is_content_guardrail_error(RuntimeError("rate limit exceeded")) is False
 
 
 def test_content_guardrail_error_message() -> None:
-    err = codex.CodexContentGuardrailError("gpt-5.6-sol")
-    assert err.model == "gpt-5.6-sol"
-    assert "gpt-5.6-sol" in str(err)
+    err = codex.CodexContentGuardrailError("gpt-6-sol")
+    assert err.model == "gpt-6-sol"
+    assert "gpt-6-sol" in str(err)
     assert "STRIX_LLM" in str(err)
 
 

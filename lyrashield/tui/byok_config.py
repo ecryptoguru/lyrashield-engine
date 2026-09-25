@@ -13,7 +13,7 @@ Friendly setup that maps onto the engine's existing routing. Launch providers:
 Local/self-hosted models are hidden from the launch surface and marked
 "experimental / coming soon" — they are never a launch claim.
 
-A per-scan-mode model profile (LUNA/TERRA/fallback) is persisted locally and
+A per-scan-mode model profile (LUNA/SOL/fallback) is persisted locally and
 applied when the TUI shells into the engine CLI.
 """
 
@@ -40,9 +40,9 @@ KEYCHAIN_SERVICE = "LyraShield-Local"
 KEYCHAIN_CHATGPT_TOKEN = "chatgpt-oauth-token"
 KEYCHAIN_AZURE_KEY = "azure-openai-api-key"
 
-# Model profile names mirror the engine's LUNA/TERRA deployment naming.
+# Model profile names mirror the engine's LUNA/SOL deployment naming.
 PROFILE_LUNA = "luna"
-PROFILE_TERRA = "terra"
+PROFILE_SOL = "sol"
 PROFILE_FALLBACK = "fallback"
 
 
@@ -98,7 +98,7 @@ class ChatGptConfig:
     """
 
     enabled: bool = False
-    model: str = "chatgpt/gpt-5.6"
+    model: str = "chatgpt/gpt-6-luna"
 
     def to_env(self) -> dict[str, str]:
         if not self.enabled:
@@ -108,10 +108,10 @@ class ChatGptConfig:
 
 @dataclass
 class ModelProfile:
-    """Per-scan-mode model profile (LUNA/TERRA/fallback)."""
+    """Per-scan-mode model profile (LUNA/SOL/fallback)."""
 
     name: str = PROFILE_FALLBACK
-    # The engine model string (e.g. ``gpt-5.6-luna``, ``azure/<dep>``).
+    # The engine model string (e.g. ``gpt-6-luna``, ``azure/<dep>``).
     model: str = ""
 
 
@@ -213,7 +213,7 @@ def load_config() -> ByokConfig:
     provider = Provider(blob.get("provider", Provider.CHATGPT_OAUTH.value))
     chatgpt = ChatGptConfig(
         enabled=bool(blob.get("chatgpt", {}).get("enabled", False)),
-        model=blob.get("chatgpt", {}).get("model", "chatgpt/gpt-5.6"),
+        model=blob.get("chatgpt", {}).get("model", "chatgpt/gpt-6-luna"),
     )
     azure_blob = blob.get("azure", {})
     azure = AzureConfig(

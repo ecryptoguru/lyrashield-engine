@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from agents.models.openai_responses import OpenAIResponsesModel
 
-from lyrashield.artifacts.usage import estimate_gpt56_request_cost_usd
+from lyrashield.artifacts.usage import estimate_request_cost_usd
 from lyrashield.lifecycle.hooks import _model_rate_card, _reservation_input_rate
 from lyrashield.lifecycle.inputs import prompt_cache_options_for_model, prompt_cache_routing_enabled
 from lyrashield.policy.models import StrixProvider, is_gpt6_supported_provider
@@ -14,7 +14,15 @@ from lyrashield_adapter.cli import prepare_environment
 
 
 @pytest.mark.parametrize(
-    "model", ["azure_ai/gpt-6-luna", "azure_ai/gpt-6-sol", "azure/gpt-6-sol", "openai/gpt-6-luna"]
+    "model",
+    [
+        "azure_ai/gpt-6-luna",
+        "azure_ai/gpt-6-sol",
+        "azure/gpt-6-sol",
+        "openai/gpt-6-luna",
+        "chatgpt/gpt-6-luna",
+        "chatgpt/gpt-6-sol",
+    ],
 )
 def test_gpt6_admitted(model: str) -> None:
     assert is_gpt6_supported_provider(model)
@@ -28,6 +36,9 @@ def test_gpt6_admitted(model: str) -> None:
         "gpt-5-nano",
         "evil/azure_ai/gpt-6-sol",
         "azure_ai/gpt-6-sol.evil",
+        "chatgpt/gpt-5.6-luna",
+        "chatgpt/gpt-4o",
+        "bedrock_mantle/openai.gpt-6-luna",
     ],
 )
 def test_old_and_untrusted_routes_rejected(model: str) -> None:
@@ -60,7 +71,7 @@ def test_gpt6_explicit_cache_and_read_write_rates(monkeypatch: pytest.MonkeyPatc
     assert _model_rate_card("azure_ai/gpt-6-sol") == (2.0, 0.2, 2.5, 10.0)
     assert _model_rate_card("azure_ai/gpt-6-luna") == (0.1, 0.01, 0.125, 0.5)
     assert _reservation_input_rate("azure_ai/gpt-6-luna") == 0.125
-    assert estimate_gpt56_request_cost_usd(
+    assert estimate_request_cost_usd(
         "azure_ai/gpt-6-luna",
         input_tokens=10_000,
         cached_input_tokens=2_000,
