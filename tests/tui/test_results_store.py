@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
+import stat
 
 import pytest
 
 from lyrashield.tui.results_store import (
     FindingRecord,
+    ResultsStoreKeyError,
     ResultsStore,
     RunRecord,
     new_run_id,
@@ -84,6 +87,15 @@ def test_store_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert findings[0].payload["description"] == "User input concatenated into SQL."
 
 
+def test_default_store_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from lyrashield.tui import results_store
+
+    monkeypatch.setattr(results_store, "DEFAULT_STORE_PATH", tmp_path / "local" / "results.db")
+    store = ResultsStore()
+    assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+
+
 def test_store_payload_is_encrypted_on_disk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -149,3 +161,113 @@ def test_new_run_id_is_unique() -> None:
     b = new_run_id()
     assert a != b
     assert a.startswith("local-")
+
+
+def test_unavailable_keychain_rejects_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("lyrashield.tui.results_store.keyring_get", lambda *_: None)
+    monkeypatch.setattr("lyrashield.tui.results_store.keyring_set", lambda *_: False)
+    store = ResultsStore(path=tmp_path / "results.db")
+    with pytest.raises(ResultsStoreKeyError):
+        store.save_run(RunRecord("r1", "target", "QUICK", "azure", 1, "completed", {"x": 1}))
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT count(*) FROM runs").fetchone()[0] == 0
+
+
+def test_unverified_new_key_rejects_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("lyrashield.tui.results_store.keyring_get", lambda *_: None)
+    monkeypatch.setattr("lyrashield.tui.results_store.keyring_set", lambda *_: True)
+    store = ResultsStore(path=tmp_path / "results.db")
+    with pytest.raises(ResultsStoreKeyError, match="verified"):
+        store.save_run(RunRecord("r1", "target", "QUICK", "azure", 1, "completed", {}))
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT count(*) FROM runs").fetchone()[0] == 0
+
+
+def test_keychain_read_error_preserves_existing_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _make_store(tmp_path, monkeypatch)
+    store.save_run(RunRecord("r1", "target", "QUICK", "azure", 1, "completed", {"x": 1}))
+
+    def unavailable(*_args: object) -> str:
+        raise ResultsStoreKeyError("Local keychain is unavailable")
+
+    monkeypatch.setattr("lyrashield.tui.results_store.keyring_get", unavailable)
+    with pytest.raises(ResultsStoreKeyError, match="unavailable"):
+        store.get_run("r1")
+    with pytest.raises(ResultsStoreKeyError, match="unavailable"):
+        store.save_run(RunRecord("r2", "target", "QUICK", "azure", 2, "completed", {}))
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
+
+
+def test_missing_key_cannot_replace_existing_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _make_store(tmp_path, monkeypatch)
+    store.save_run(RunRecord("r1", "target", "QUICK", "azure", 1, "completed", {"x": 1}))
+    monkeypatch.setattr("lyrashield.tui.results_store.keyring_get", lambda *_: None)
+    with pytest.raises(ResultsStoreKeyError):
+        store.get_run("r1")
+    with pytest.raises(ResultsStoreKeyError):
+        store.save_run(RunRecord("r2", "target", "QUICK", "azure", 2, "completed", {}))
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
+
+
+def test_findings_with_same_id_stay_in_their_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _make_store(tmp_path, monkeypatch)
+    for run_id in ("r1", "r2"):
+        store.save_run(RunRecord(run_id, "target", "QUICK", "azure", 1, "completed", {}))
+        store.save_finding(FindingRecord("vuln-0001", run_id, "HIGH", run_id, {}))
+    assert [item.title for item in store.list_findings("r1")] == ["r1"]
+    assert [item.title for item in store.list_findings("r2")] == ["r2"]
+
+
+def test_scan_import_rolls_back_on_invalid_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _make_store(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="different run"):
+        store.save_scan(
+            RunRecord("r1", "target", "QUICK", "azure", 1, "completed", {}),
+            [FindingRecord("f1", "other", "HIGH", "wrong", {})],
+        )
+    assert store.get_run("r1") is None
+
+
+def test_legacy_finding_schema_migrates_without_reencrypting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key()
+    monkeypatch.setattr("lyrashield.tui.results_store.keyring_get", lambda *_: key.decode())
+    path = tmp_path / "legacy.db"
+    payload = Fernet(key).encrypt(b'{"description":"saved evidence"}').decode()
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE runs (run_id TEXT PRIMARY KEY, target TEXT NOT NULL, "
+            "scan_mode TEXT NOT NULL, provider TEXT NOT NULL, created_at INTEGER NOT NULL, "
+            "status TEXT NOT NULL, encrypted_payload TEXT NOT NULL);"
+            "CREATE TABLE findings (finding_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, "
+            "severity TEXT NOT NULL, title TEXT NOT NULL, encrypted_payload TEXT NOT NULL);"
+        )
+        conn.execute(
+            "INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("r1", "target", "QUICK", "azure", 1, "completed", payload),
+        )
+        conn.execute(
+            "INSERT INTO findings VALUES (?, ?, ?, ?, ?)",
+            ("vuln-0001", "r1", "HIGH", "saved", payload),
+        )
+    store = ResultsStore(path=path)
+    assert store.list_findings("r1")[0].payload == {"description": "saved evidence"}
+    store.save_run(RunRecord("r2", "target", "QUICK", "azure", 2, "completed", {}))
+    store.save_finding(FindingRecord("vuln-0001", "r2", "LOW", "new", {}))
+    assert len(store.list_findings("r1")) == 1
+    assert len(ResultsStore(path=path).list_findings("r2")) == 1
