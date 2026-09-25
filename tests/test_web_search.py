@@ -356,7 +356,7 @@ async def test_web_search_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_reserve_web_search_call_enforces_budget() -> None:
     """Reserve and release should respect max_budget_usd."""
-    hooks = ReportUsageHooks(model="openai/gpt-5.6-luna", max_budget_usd=0.001)
+    hooks = ReportUsageHooks(model="openai/gpt-6-luna", max_budget_usd=0.001)
     key = "test:ws"
     await hooks.reserve_web_search_call(key=key, estimated_cost=0.001)
 

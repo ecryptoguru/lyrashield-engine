@@ -21,13 +21,14 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 
 BENCH_ROOT = Path(__file__).resolve().parent
 LINE_TOLERANCE = 3
 
 
-def load_findings(path: Path) -> list[dict]:
+def load_findings(path: Path) -> list[dict[str, Any]]:
     return [
         json.loads(line)
         for line in path.read_text(encoding="utf-8").splitlines()
@@ -35,12 +36,14 @@ def load_findings(path: Path) -> list[dict]:
     ]
 
 
-def derive_marker_line(case: dict, corpus_dir: Path, cache: dict[str, int | None]) -> int | None:
+def derive_marker_line(
+    case: dict[str, Any], corpus_dir: Path, cache: dict[str, int | None]
+) -> int | None:
     """A case without an explicit markerLine locates itself by its `CASE:<id>`
     comment in the vulnerable fixture — without it, any finding on the file
     would match every case that shares the file."""
     if case.get("markerLine") is not None:
-        return case["markerLine"]
+        return int(case["markerLine"])
     case_id = case["id"]
     if case_id not in cache:
         fixture = corpus_dir / case["vulnerable"]
@@ -55,7 +58,10 @@ def derive_marker_line(case: dict, corpus_dir: Path, cache: dict[str, int | None
 
 
 def case_matches(
-    case: dict, finding: dict, corpus_dir: Path, marker_cache: dict[str, int | None]
+    case: dict[str, Any],
+    finding: dict[str, Any],
+    corpus_dir: Path,
+    marker_cache: dict[str, int | None],
 ) -> bool:
     file_name = case.get("matchFile") or Path(case["vulnerable"]).name
     finding_file = finding.get("file") or ""
@@ -76,7 +82,9 @@ def case_matches(
     return marker is not None or bool(line_exempt and prefixes)
 
 
-def engine_stability(manifest: dict, detected: dict) -> float | None:
+def engine_stability(
+    manifest: dict[str, Any], detected: dict[str, list[dict[str, Any]]]
+) -> float | None:
     # Include every declared engine run, including runs with no detections.
     engine_runs = [
         r
@@ -86,7 +94,7 @@ def engine_stability(manifest: dict, detected: dict) -> float | None:
     indices = {r.get("runIndex", 0) for r in engine_runs}
     stability = None
     if len(indices) > 1:
-        per_run_hits = {index: set() for index in indices}
+        per_run_hits: dict[int, set[str]] = {index: set() for index in indices}
         for case_id, hits in detected.items():
             for finding in hits:
                 if finding.get("scanner") != "engine":
@@ -103,7 +111,7 @@ def engine_stability(manifest: dict, detected: dict) -> float | None:
     return stability
 
 
-def run_set_complete(manifest: dict, corpus: dict) -> bool:
+def run_set_complete(manifest: dict[str, Any], corpus: dict[str, Any]) -> bool:
     detectors = (
         {"engine", "deterministic"} if manifest["detectors"] == "all" else {manifest["detectors"]}
     )
@@ -122,7 +130,9 @@ def run_set_complete(manifest: dict, corpus: dict) -> bool:
     return actual == expected and len(actual) == len(manifest["runs"])
 
 
-def corpus_matches_receipt(manifest: dict, corpus: dict, corpus_dir: Path) -> bool:
+def corpus_matches_receipt(
+    manifest: dict[str, Any], corpus: dict[str, Any], corpus_dir: Path
+) -> bool:
     if (
         manifest.get("corpus") != corpus["name"]
         or manifest.get("corpusRevision") != corpus["revision"]
@@ -140,14 +150,14 @@ def corpus_matches_receipt(manifest: dict, corpus: dict, corpus_dir: Path) -> bo
     )
 
 
-def score(results_dir: Path, corpus_dir: Path) -> dict:
+def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
     corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
     findings = load_findings(results_dir / "findings.jsonl")
     manifest = json.loads((results_dir / "run-manifest.json").read_text(encoding="utf-8"))
 
-    detected: dict[str, list[dict]] = defaultdict(list)
-    clean_fps: list[dict] = []
-    unmatched: list[dict] = []
+    detected: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    clean_fps: list[dict[str, Any]] = []
+    unmatched: list[dict[str, Any]] = []
     marker_cache: dict[str, int | None] = {}
     discovery_receipts = [f for f in findings if f.get("scanner") == "__discovery__"]
 
@@ -177,7 +187,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
         if not matched:
             unmatched.append(finding)
 
-    per_class: dict[str, dict] = {}
+    per_class: dict[str, dict[str, Any]] = {}
     classes = {c["class"] for c in corpus["pairs"]}
     for cls in sorted(classes):
         cases = [c for c in corpus["pairs"] if c["class"] == cls]
@@ -191,9 +201,9 @@ def score(results_dir: Path, corpus_dir: Path) -> dict:
     stability = engine_stability(manifest, detected)
 
     duplicate_count = 0
-    for hits in detected.values():
-        per_execution: dict[tuple, int] = defaultdict(int)
-        for finding in hits:
+    for finding_list in detected.values():
+        per_execution: dict[tuple[object, object], int] = defaultdict(int)
+        for finding in finding_list:
             per_execution[(finding.get("scanId"), finding.get("scanner"))] += 1
         duplicate_count += sum(max(0, count - 1) for count in per_execution.values())
     failures = [r for r in manifest["runs"] if r.get("returncode") != 0 or r.get("errors")]

@@ -179,12 +179,12 @@ async def _drain(gen: AsyncIterator[Any]) -> list[Any]:
 @pytest.mark.asyncio
 async def test_guarded_converts_guardrail_error() -> None:
     # A mid-stream backend rejection becomes a typed, model-tagged error.
-    model = _CodexResponsesModel(model="gpt-5.6-sol", openai_client=_client("http://x/backend-api"))
+    model = _CodexResponsesModel(model="gpt-6-sol", openai_client=_client("http://x/backend-api"))
     guardrail = RuntimeError("This content was flagged for possible cybersecurity risk.")
     stream = _TrackingStream(["a", "b"], guardrail)
     with pytest.raises(codex.CodexContentGuardrailError) as exc_info:
         await _drain(model._guarded(stream))
-    assert exc_info.value.model == "gpt-5.6-sol"
+    assert exc_info.value.model == "gpt-6-sol"
     assert stream.closed is True  # underlying stream is released
 
 
@@ -201,7 +201,7 @@ async def test_guarded_passes_through_other_errors() -> None:
 
 @pytest.mark.asyncio
 async def test_guarded_yields_all_events_when_clean() -> None:
-    model = _CodexResponsesModel(model="gpt-5.4", openai_client=_client("http://x/backend-api"))
+    model = _CodexResponsesModel(model="gpt-6-luna", openai_client=_client("http://x/backend-api"))
     stream = _TrackingStream(["a", "b", "c"], None)
     assert await _drain(model._guarded(stream)) == ["a", "b", "c"]
     assert stream.closed is True
@@ -213,7 +213,7 @@ async def test_codex_model_self_enforces_backend_requirements(backend_url: str) 
     # requirements (stream, store=false, encrypted reasoning) and the configured
     # reasoning effort itself.
     model = _CodexResponsesModel(
-        model="gpt-5.4", openai_client=_client(backend_url), reasoning_effort="high"
+        model="gpt-6-luna", openai_client=_client(backend_url), reasoning_effort="high"
     )
     kwargs = _call_kwargs()
     kwargs["model_settings"] = ModelSettings()  # nothing special from the caller

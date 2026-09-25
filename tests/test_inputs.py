@@ -53,14 +53,14 @@ def test_child_initial_input_single_message_with_history() -> None:
     assert "Audit the login flow." in content
 
 
-def test_child_initial_input_marks_the_stable_prefix_for_explicit_gpt56_cache(
+def test_child_initial_input_marks_the_stable_prefix_for_explicit_gpt6_cache(
     monkeypatch: Any,
 ) -> None:
     monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
 
     result = child_initial_input(
         **_child_kwargs([{"role": "assistant", "content": "previous work"}]),
-        model_name="azure_ai/gpt-5.6-luna",
+        model_name="azure_ai/gpt-6-luna",
     )
 
     content = result[0]["content"]
@@ -70,51 +70,51 @@ def test_child_initial_input_marks_the_stable_prefix_for_explicit_gpt56_cache(
     assert "Audit the login flow." in content[1]["text"]
 
 
-def test_gpt56_routing_only_preserves_implicit_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gpt6_routing_only_preserves_implicit_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
     monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
 
-    assert prompt_cache_routing_enabled("azure/gpt-5.6-luna") is True
-    assert prompt_cache_options_for_model("azure/gpt-5.6-luna") is None
+    assert prompt_cache_routing_enabled("azure/gpt-6-luna") is True
+    assert prompt_cache_options_for_model("azure/gpt-6-luna") is None
     assert isinstance(
         build_root_initial_input(
             {"targets": [{"type": "REPOSITORY", "value": "owner/repo"}]},
-            "azure/gpt-5.6-luna",
+            "azure/gpt-6-luna",
         ),
         str,
     )
 
 
-def test_gpt56_routing_only_keeps_child_input_flat(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gpt6_routing_only_keeps_child_input_flat(monkeypatch: pytest.MonkeyPatch) -> None:
     # Routing alone must not split the delegate message: content breakpoints
     # belong to the explicit mode only.
     monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
     monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
 
-    result = child_initial_input(**_child_kwargs([]), model_name="azure_ai/gpt-5.6-luna")
+    result = child_initial_input(**_child_kwargs([]), model_name="azure_ai/gpt-6-luna")
 
     assert isinstance(result[0]["content"], str)
 
 
-def test_gpt56_routing_and_explicit_are_independent_flags(
+def test_gpt6_routing_and_explicit_are_independent_flags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
     monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", "1")
 
-    assert prompt_cache_routing_enabled("azure_ai/gpt-5.6-luna") is True
-    assert prompt_cache_options_for_model("azure_ai/gpt-5.6-luna") == {
+    assert prompt_cache_routing_enabled("azure_ai/gpt-6-luna") is True
+    assert prompt_cache_options_for_model("azure_ai/gpt-6-luna") == {
         "mode": "explicit",
         "ttl": "30m",
     }
 
 
 @pytest.mark.parametrize("request_phase", ["normal", "resume", "post_compaction"])
-def test_gpt56_cache_settings_serialize_at_sdk_boundary(request_phase: str) -> None:
+def test_gpt6_cache_settings_serialize_at_sdk_boundary(request_phase: str) -> None:
     """Every request phase reuses these SDK settings, not a hand-built payload."""
     settings = make_model_settings(
         None,
-        model_name="azure_ai/gpt-5.6-luna",
+        model_name="azure_ai/gpt-6-luna",
         prompt_cache_key=f"lyrashield:v2:coordinator:{request_phase}",
         prompt_cache_options={"mode": "explicit", "ttl": "30m"},
     )
@@ -129,7 +129,7 @@ def test_gpt56_cache_settings_serialize_at_sdk_boundary(request_phase: str) -> N
     "model_name",
     ["openai/gpt-4o", "anthropic/claude-sonnet-4-5", "azure_ai/gpt-5.5-luna", None],
 )
-def test_unsupported_models_get_no_gpt56_cache_features(
+def test_unsupported_models_get_no_gpt6_cache_features(
     model_name: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -236,9 +236,9 @@ def test_prompt_cache_kept_for_non_bedrock_claude_even_if_unmapped(monkeypatch: 
 
 def test_max_reasoning_effort_sent_as_raw_body_field() -> None:
     # "max" is absent from the OpenAI SDK's Reasoning enum, so it has to ride
-    # along as a raw body field to reach an approved GPT-5.6 deployment even
+    # along as a raw body field to reach an approved GPT-6 deployment even
     # when LiteLLM's bundled metadata predates that model family.
-    settings = make_model_settings("max", model_name="azure_ai/gpt-5.6-terra", request_timeout=30)
+    settings = make_model_settings("max", model_name="azure_ai/gpt-6-sol", request_timeout=30)
     assert settings.reasoning is None
     assert settings.extra_args == {"timeout": 30}
     assert settings.extra_body == {"reasoning_effort": "max"}

@@ -346,7 +346,7 @@ async def _summarize(
     # Reserve against the scan budget before this out-of-band model call.
     # Compaction queries the model directly (not through an agent run), so the
     # reservation hooks never see it. Without this the tokens vanish entirely for
-    # GPT-5.6 (the LiteLLM cost callback early-returns) and a scan near its cap
+    # GPT-6 (the LiteLLM cost callback early-returns) and a scan near its cap
     # can overshoot by up to a full context-window input per compaction per agent.
     # Mirrors the dedupe pattern in artifacts/dedupe.py.
     from lyrashield.lifecycle.hooks import (

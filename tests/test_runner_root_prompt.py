@@ -206,11 +206,11 @@ def _has_cache_breakpoint(initial_input: Any) -> bool:
     return False
 
 
-def _gpt56_llm_settings(*, prompt_cache: bool = True) -> types.SimpleNamespace:
+def _gpt6_llm_settings(*, prompt_cache: bool = True) -> types.SimpleNamespace:
     return types.SimpleNamespace(
         llm=types.SimpleNamespace(
-            model="azure_ai/gpt-5.6-terra",
-            delegate_model="azure_ai/gpt-5.6-luna",
+            model="azure_ai/gpt-6-sol",
+            delegate_model="azure_ai/gpt-6-luna",
             reasoning_effort="medium",
             delegate_reasoning_effort="high",
             force_required_tool_choice=False,
@@ -258,7 +258,7 @@ async def test_prompt_cache_policy_matrix_across_construction_paths(
     monkeypatch.setattr(
         runner,
         "load_settings",
-        lambda: _gpt56_llm_settings(prompt_cache=cache_enabled),
+        lambda: _gpt6_llm_settings(prompt_cache=cache_enabled),
     )
 
     settings_calls: list[dict[str, Any]] = []
@@ -353,7 +353,7 @@ async def test_stable_prompt_cache_keys_exclude_scan_material(
     _patch_engine_scaffold(monkeypatch, tmp_path, scope_context)
     monkeypatch.setenv("LYRASHIELD_PROMPT_CACHE_ROUTING", "1")
     monkeypatch.delenv("LYRASHIELD_PROMPT_CACHE_EXPLICIT", raising=False)
-    monkeypatch.setattr(runner, "load_settings", _gpt56_llm_settings)
+    monkeypatch.setattr(runner, "load_settings", _gpt6_llm_settings)
 
     settings_calls: list[dict[str, Any]] = []
 
@@ -440,8 +440,8 @@ async def test_delegate_run_uses_delegate_model_config(
         "load_settings",
         lambda: types.SimpleNamespace(
             llm=types.SimpleNamespace(
-                model="azure_ai/gpt-5.6-terra",
-                delegate_model="azure_ai/gpt-5.6-luna",
+                model="azure_ai/gpt-6-sol",
+                delegate_model="azure_ai/gpt-6-luna",
                 reasoning_effort="medium",
                 delegate_reasoning_effort="high",
                 force_required_tool_choice=False,
@@ -488,7 +488,7 @@ async def test_delegate_run_uses_delegate_model_config(
 
     assert len(child_calls) == 1
     child_run_config = child_calls[0]["run_config"]
-    assert child_run_config.model == "azure_ai/gpt-5.6-luna"
+    assert child_run_config.model == "azure_ai/gpt-6-luna"
     assert child_run_config.model_settings.max_tokens == 4_096
 
 
@@ -572,11 +572,11 @@ def test_sanitize_prompt_value_truncates_long_input() -> None:
 
 def test_model_routing_policy_records_the_resolved_route() -> None:
     assert runner._model_routing_policy(
-        "azure_ai/gpt-5.6-luna",
+        "azure_ai/gpt-6-luna",
         "medium",
-        "azure_ai/gpt-5.6-luna",
+        "azure_ai/gpt-6-luna",
         "medium",
-    ) == ("coordinator=azure_ai/gpt-5.6-luna@medium;delegate=azure_ai/gpt-5.6-luna@medium;v=1")
+    ) == ("coordinator=azure_ai/gpt-6-luna@medium;delegate=azure_ai/gpt-6-luna@medium;v=1")
 
 
 @pytest.mark.asyncio

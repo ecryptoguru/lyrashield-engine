@@ -60,7 +60,7 @@ def _luna_model_route() -> str:
     settings = load_settings()
     configured = (settings.llm.delegate_model, settings.llm.model)
     for route in configured:
-        if route and route.strip().lower().endswith("gpt-5.6-luna"):
+        if route and route.strip().lower().endswith("gpt-6-luna"):
             return route.strip()
     return os.environ.get("LYRASHIELD_LUNA_LLM", "").strip() or "unconfigured"
 

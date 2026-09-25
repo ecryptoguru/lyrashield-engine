@@ -1878,10 +1878,10 @@ def litellm_cost_callback(
     kwargs_dict = _as_dict(kwargs)
     model = kwargs_dict.get("model") if kwargs_dict is not None else None
     if isinstance(model, str) and model.strip().lower().split("/")[-1] in {
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
+        "gpt-6-sol",
+        "gpt-6-luna",
     }:
-        # Azure's LiteLLM response_cost can be stale for GPT-5.6. The usage
+        # Azure's LiteLLM response_cost can be stale for GPT-6. The usage
         # ledger prices the provider token receipt with the pinned rate card.
         return
     cost: float | None = None

@@ -123,7 +123,7 @@ def test_response_failed_with_filter_context_is_not_transient() -> None:
 
 
 def test_is_content_filter_error_detects_guardrail() -> None:
-    guardrail = codex.CodexContentGuardrailError("gpt-5.6-terra")
+    guardrail = codex.CodexContentGuardrailError("gpt-6-sol")
     assert execution._is_content_filter_error(guardrail) is True
 
 

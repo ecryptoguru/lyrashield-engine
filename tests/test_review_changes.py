@@ -921,7 +921,7 @@ def _stub_main_env(monkeypatch: pytest.MonkeyPatch, run_cli: Any) -> dict[str, M
         cli_main,
         "load_settings",
         lambda: SimpleNamespace(
-            llm=SimpleNamespace(model="openai/gpt-5.6-terra"),
+            llm=SimpleNamespace(model="openai/gpt-6-sol"),
             runtime=SimpleNamespace(max_local_copy_mb=1024, backend="docker", image="img"),
         ),
     )

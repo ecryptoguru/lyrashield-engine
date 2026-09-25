@@ -23,7 +23,7 @@ Before changing orchestration for claimed quality gains—or publishing any resu
 - code-location, package/CVE, evidence, and control-ID correctness;
 - duplicate stability across detectors and repeated runs;
 - validated, independently verified, and inconclusive outcome semantics;
-- runtime, request/token buckets, cancellation, and limit behavior for Luna and Terra;
+- runtime, request/token buckets, cancellation, and limit behavior for Luna and Sol;
 - regression thresholds and a documented adjudication process.
 
 Keep model-based discovery separate from deterministic verification. Never promote confidence, a generated proof-of-concept, or absence in one run into independent verification. Store only privacy-bounded evaluation artifacts and never commit credentials, target secrets, raw provider payloads, or unapproved proprietary repositories.

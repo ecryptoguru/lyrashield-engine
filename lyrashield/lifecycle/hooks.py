@@ -41,23 +41,23 @@ _COMPACTION_NOTICE = {
     ),
 }
 _COMPACTED_ITEM_MAX_BYTES = 64_000
-_GPT56_LONG_CONTEXT_TOKENS = 272_000
+_LONG_CONTEXT_TOKENS = 272_000
 
 # System-trusted tag for budget/turn warnings injected into the conversation.
 # The system prompt instructs the model to treat messages prefixed with this
 # tag as system-verified and to ignore any similar-looking content from
 # user or peer messages.
 _SYSTEM_NOTICE_TAG = "[SYSTEM-NOTICE]"
-# Canonical GPT-5.6 rate card (input, cached, cache-write, output) and the
+# Canonical GPT-6 rate card (input, cached, cache-write, output) and the
 # long-context threshold, imported from the pricing ledger so admission,
 # reservation, and final pricing share one source of truth (I8).
 from lyrashield.artifacts.usage import (  # noqa: E402
-    _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS,
+    _LONG_CONTEXT_THRESHOLD_TOKENS,
     _METERED_USD_PER_MILLION,
 )
 
 
-_GPT56_LONG_CONTEXT_TOKENS = _GPT56_LONG_CONTEXT_THRESHOLD_TOKENS
+_LONG_CONTEXT_TOKENS = _LONG_CONTEXT_THRESHOLD_TOKENS
 
 # Conservative defaults for models not explicitly priced. We deliberately
 # overestimate so budget enforcement errs on the side of protecting the
@@ -86,7 +86,7 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
     ``max_input_tokens`` is a ceiling that compaction keeps requests under, not a
     hard reject. Unset preserves the module defaults exactly.
 
-    The effective trigger is clamped strictly below the GPT-5.6 long-context
+    The effective trigger is clamped strictly below the GPT-6 long-context
     boundary: compaction exists to keep requests out of 2x input billing, so a
     ceiling above that boundary would defeat the very cost protection this knob is
     meant to provide. Clamping is logged rather than applied silently.
@@ -94,7 +94,7 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
     if max_input_tokens is None:
         return MODEL_INPUT_COMPACTION_TRIGGER_TOKENS, MODEL_INPUT_COMPACTION_TARGET_TOKENS
 
-    ceiling = _GPT56_LONG_CONTEXT_TOKENS - _LONG_CONTEXT_SAFETY_MARGIN_TOKENS
+    ceiling = _LONG_CONTEXT_TOKENS - _LONG_CONTEXT_SAFETY_MARGIN_TOKENS
     trigger = max_input_tokens
     if trigger > ceiling:
         logger.warning(
@@ -102,7 +102,7 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
             "clamping to %s to keep requests below the %s-token 2x billing boundary",
             max_input_tokens,
             ceiling,
-            _GPT56_LONG_CONTEXT_TOKENS,
+            _LONG_CONTEXT_TOKENS,
         )
         trigger = ceiling
 
@@ -117,7 +117,7 @@ def resolve_compaction_thresholds(max_input_tokens: int | None) -> tuple[int, in
 def _model_rate_card(model: str) -> tuple[float, float, float, float]:
     """(input, cached, cache_write, output) dollars per 1M tokens for a model.
 
-    LyraShield's admitted tiers and historical GPT-5.6 tiers use the rate card shared with final
+    LyraShield's admitted GPT-6 tiers use the rate card shared with final
     pricing; other models fall back to the LiteLLM cost map, then to
     conservative defaults that overestimate so budget enforcement errs on
     the side of protecting the cap.
@@ -131,7 +131,7 @@ def _model_rate_card(model: str) -> tuple[float, float, float, float]:
 
 @functools.cache
 def _fallback_model_rate_card(model: str) -> tuple[float, float, float, float]:
-    """Fallback (input, cached, cache_write, output) rates for non-GPT-5.6 models."""
+    """Fallback (input, cached, cache_write, output) rates for non-rate-card models."""
     cost_info = _lookup_litellm_cost(model)
     rates: tuple[float, float, float, float] | None = None
     if cost_info is not None:
@@ -183,7 +183,7 @@ def _reservation_input_rate(model: str) -> float:
     """Input-side rate for reservations: the most expensive input bucket.
 
     A reservation is taken before the provider reports which input tokens
-    were cache writes (priced above plain input for GPT-5.6 Terra), so the
+    were cache writes (priced above plain input for GPT-6 Sol), so the
     reserved amount must assume the worst bucket (I8: reserved >= final).
     """
     input_rate, _cached, cache_write_rate, _output = _model_rate_card(model)
@@ -245,7 +245,7 @@ def _cache_write_tokens_from_entry(entry: Any) -> int:
 
     ``-1`` signals "the entry carries no cache-write detail", which makes the
     upper bound price ALL input tokens at the worst input bucket — a cache
-    write is billed above plain input for GPT-5.6 Terra.
+    write is billed above plain input for GPT-6 Sol.
     """
     details = _usage_value(entry, "input_tokens_details")
     if not details:
@@ -278,7 +278,7 @@ def _usage_cost_upper_bound(model: str, usage: Any) -> float:
         cached_tokens = min(_cached_tokens_from_entry(entry), input_tokens)
         cache_write_tokens = _cache_write_tokens_from_entry(entry)
         output_tokens = max(0, int(_usage_value(entry, "output_tokens") or 0))
-        multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_TOKENS else 1.0
+        multiplier = 2.0 if input_tokens > _LONG_CONTEXT_TOKENS else 1.0
         output_multiplier = 1.5 if multiplier > 1 else 1.0
         if cache_write_tokens < 0:
             # Unknown bucket split: assume the worst input bucket for all
@@ -639,11 +639,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             return
         # Reserve against the worst input bucket: the provider has not yet
         # reported which tokens will be cache writes (billed above plain
-        # input for GPT-5.6 Terra), so the reservation must be an upper
+        # input for GPT-6 Sol), so the reservation must be an upper
         # bound of the final cost for identical usage (I8).
         input_rate = _reservation_input_rate(model)
         output_rate = _model_rate_card(model)[3]
-        multiplier = 2.0 if input_tokens > _GPT56_LONG_CONTEXT_TOKENS else 1.0
+        multiplier = 2.0 if input_tokens > _LONG_CONTEXT_TOKENS else 1.0
         reservation = (
             input_tokens * input_rate * multiplier
             + max_output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
@@ -877,7 +877,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             # reserved amount is an upper bound of the final cost (I8).
             input_rate = _reservation_input_rate(model)
             output_rate = _model_rate_card(model)[3]
-            multiplier = 2.0 if after > _GPT56_LONG_CONTEXT_TOKENS else 1.0
+            multiplier = 2.0 if after > _LONG_CONTEXT_TOKENS else 1.0
             reservation = (
                 after * input_rate * multiplier
                 + self._agent_max_output_tokens(agent)

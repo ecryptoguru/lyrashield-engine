@@ -1,15 +1,15 @@
 ---
 title: "OpenAI-compatible"
-description: "Configure an approved GPT-5.6 endpoint"
+description: "Configure an approved GPT-6 endpoint"
 ---
 
 ```bash
-export LYRASHIELD_LLM="openai/gpt-5.6-luna"
+export LYRASHIELD_LLM="openai/gpt-6-luna"
 export LLM_API_KEY="<credential>"
 export LLM_API_BASE="https://<approved-endpoint>"
 ```
 
-`LLM_API_BASE` may be omitted when the approved client default is correct. A compatible API shape is not sufficient by itself: the model/deployment name must identify GPT-5.6 Terra or Luna. ChatGPT subscription models use the separately authenticated `chatgpt/<model>` route, not this API-credential route.
+`LLM_API_BASE` may be omitted when the approved client default is correct. A compatible API shape is not sufficient by itself: the model/deployment name must identify GPT-6 Sol or Luna. ChatGPT subscription models use the separately authenticated `chatgpt/gpt-6-*` route, not this API-credential route.
 
 Use `LYRASHIELD_REASONING_EFFORT` only for operator-controlled local execution. The application worker owns reasoning selection in production.
 

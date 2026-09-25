@@ -13,7 +13,7 @@ from agents.usage import Usage
 
 from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.state import ReportState, set_global_report_state
-from lyrashield.artifacts.usage import LLMUsageLedger, _estimate_gpt56_cost
+from lyrashield.artifacts.usage import LLMUsageLedger, _estimate_metered_cost
 from lyrashield.lifecycle.hooks import (
     ReportUsageHooks,
     _reservation_input_rate,
@@ -52,9 +52,7 @@ def _usage_without_details(input_tokens: int, output_tokens: int) -> dict[str, i
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
 
-@pytest.mark.parametrize(
-    "model", ["openai/gpt-5.6-terra", "openai/gpt-5.6-luna", "azure/eu/gpt-5.6-terra"]
-)
+@pytest.mark.parametrize("model", ["openai/gpt-6-sol", "openai/gpt-6-luna", "azure/eu/gpt-6-sol"])
 @pytest.mark.parametrize("seed", range(20))
 def test_upper_bound_never_below_final_cost_with_details(model: str, seed: int) -> None:
     rng = random.Random(seed)  # noqa: S311 - test data, not crypto
@@ -66,12 +64,12 @@ def test_upper_bound_never_below_final_cost_with_details(model: str, seed: int) 
         cached=cached,
         cache_write=cache_write,
     )
-    final = _estimate_gpt56_cost(usage, model) or 0.0
+    final = _estimate_metered_cost(usage, model) or 0.0
     bound = _usage_cost_upper_bound(model, usage)
     assert bound >= final - 1e-12, (model, seed, bound, final)
 
 
-@pytest.mark.parametrize("model", ["openai/gpt-5.6-terra", "openai/gpt-5.6-luna"])
+@pytest.mark.parametrize("model", ["openai/gpt-6-sol", "openai/gpt-6-luna"])
 @pytest.mark.parametrize("seed", range(20))
 def test_upper_bound_never_below_final_cost_without_details(model: str, seed: int) -> None:
     """Entries without cache detail still reserve at the worst input bucket."""
@@ -86,7 +84,7 @@ def test_upper_bound_never_below_final_cost_without_details(model: str, seed: in
         cache_write=cache_write,
     )
     no_details = _usage_without_details(final_usage.input_tokens, final_usage.output_tokens)
-    final = _estimate_gpt56_cost(final_usage, model) or 0.0
+    final = _estimate_metered_cost(final_usage, model) or 0.0
     bound = _usage_cost_upper_bound(model, no_details)
     assert bound >= final - 1e-12, (model, seed, bound, final)
 
@@ -95,22 +93,22 @@ def test_long_context_upper_bound_covers_multipliers() -> None:
     usage = _usage_with_details(
         input_tokens=300_000, output_tokens=8_000, cached=100_000, cache_write=50_000
     )
-    final = _estimate_gpt56_cost(usage, "openai/gpt-5.6-terra") or 0.0
-    assert _usage_cost_upper_bound("openai/gpt-5.6-terra", usage) >= final - 1e-12
+    final = _estimate_metered_cost(usage, "openai/gpt-6-sol") or 0.0
+    assert _usage_cost_upper_bound("openai/gpt-6-sol", usage) >= final - 1e-12
 
 
 def test_reservation_input_rate_is_worst_input_bucket() -> None:
-    assert _reservation_input_rate("openai/gpt-5.6-terra") == 2.5  # cache-write > input
-    assert _reservation_input_rate("openai/gpt-5.6-luna") == 0.25
+    assert _reservation_input_rate("openai/gpt-6-sol") == 2.5  # cache-write > input
+    assert _reservation_input_rate("openai/gpt-6-luna") == 0.125
 
 
 @pytest.mark.asyncio
 async def test_out_of_band_reservation_is_upper_bound() -> None:
-    hooks = ReportUsageHooks(model="openai/gpt-5.6-terra", max_budget_usd=10.0)
+    hooks = ReportUsageHooks(model="openai/gpt-6-sol", max_budget_usd=10.0)
     input_tokens, max_output = 100_000, 8_000
     await hooks.reserve_out_of_band_request(
         key="dedupe:1",
-        model="openai/gpt-5.6-terra",
+        model="openai/gpt-6-sol",
         input_tokens=input_tokens,
         max_output_tokens=max_output,
     )
@@ -122,7 +120,7 @@ async def test_out_of_band_reservation_is_upper_bound() -> None:
         cached=0,
         cache_write=input_tokens,
     )
-    worst_final = _estimate_gpt56_cost(worst, "openai/gpt-5.6-terra") or 0.0
+    worst_final = _estimate_metered_cost(worst, "openai/gpt-6-sol") or 0.0
     reserved = hooks._reservations["dedupe:1"]
     assert reserved >= worst_final - 1e-12
 
@@ -139,7 +137,7 @@ def test_subscription_receipt_retains_paid_search_and_reconciles_total(
     state._llm_usage.record(
         agent_id="root",
         usage=_usage_with_details(1_000, 2_000, cached=0, cache_write=0),
-        model="chatgpt/gpt-5.6-luna",
+        model="chatgpt/gpt-6-luna",
     )
     state.record_web_search_cost(0.03, query="cve lookup", mode="turbo")
 
@@ -320,7 +318,7 @@ async def test_timeout_releases_active_hooks_reservation(
             raise httpx.TimeoutException("request timed out")
 
     monkeypatch.setattr(httpx, "AsyncClient", _TimeoutClient)
-    hooks = ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=5.0)
+    hooks = ReportUsageHooks(model="gpt-6-luna", max_budget_usd=5.0)
     monkeypatch.setattr("lyrashield.lifecycle.hooks.get_active_hooks", lambda: hooks)
     args = {"query": "timeout with hooks"}
     parsed = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
@@ -353,7 +351,7 @@ async def test_success_commits_hooks_reservation_exactly_once(
             return _Resp()
 
     monkeypatch.setattr(httpx, "AsyncClient", _OkClient)
-    hooks = ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=5.0)
+    hooks = ReportUsageHooks(model="gpt-6-luna", max_budget_usd=5.0)
     monkeypatch.setattr("lyrashield.lifecycle.hooks.get_active_hooks", lambda: hooks)
     args = {"query": "success exactly once"}
     # Compute the expected per-call cost from the same settings the tool uses
@@ -377,7 +375,7 @@ async def test_success_commits_hooks_reservation_exactly_once(
 async def test_duplicate_hooks_release_is_noop() -> None:
     """E5: calling release_web_search_call twice for the same key must not
     double-commit the cost — duplicate finalization is a no-op."""
-    hooks = ReportUsageHooks(model="gpt-5.6-luna", max_budget_usd=5.0)
+    hooks = ReportUsageHooks(model="gpt-6-luna", max_budget_usd=5.0)
     await hooks.reserve_web_search_call(key="dup-key", estimated_cost=0.1)
     await hooks.release_web_search_call(key="dup-key", actual_cost=0.1)
     cost_after_first = hooks._committed_cost_floor

@@ -65,7 +65,7 @@
       "selection stays with ``STRIX_LLM``. A ``chatgpt/<model>`` STRIX_LLM runs on the",
       "from strix.config import load_settings",
       "        console.print(f\"  Runs use the subscription (STRIX_LLM=[bold]{settings.llm.model}[/]).\")",
-      "            \"  [yellow]Note:[/] set [cyan]STRIX_LLM[/] to e.g. [cyan]chatgpt/gpt-5.4[/] \"",
+      "            \"  [yellow]Note:[/] set [cyan]STRIX_LLM[/] to e.g. [cyan]chatgpt/gpt-6-luna[/] \"",
       "    text.append(\"STRIX_LLM\", style=\"bold white\")",
       "    \"\"\"Return an ``<img>`` for the Strix logo as an inline data URI, or \"\".",
       "    \"Strix\" wordmark."
@@ -115,10 +115,10 @@
       "                error_text.append(\"STRIX_LLM / LYRASHIELD_LLM\", style=\"bold cyan\")",
       "                elif var in {\"STRIX_REASONING_EFFORT\", \"LYRASHIELD_REASONING_EFFORT\"}:",
       "                        \"STRIX_REASONING_EFFORT / LYRASHIELD_REASONING_EFFORT\",",
-      "            \"export STRIX_LLM='openai/gpt-5.6-luna'  # or LYRASHIELD_LLM\\n\",",
+      "            \"export STRIX_LLM='openai/gpt-6-luna'  # or LYRASHIELD_LLM\\n\",",
       "                elif var in {\"STRIX_REASONING_EFFORT\", \"LYRASHIELD_REASONING_EFFORT\"}:",
       "                        \"export STRIX_REASONING_EFFORT='high'  # or LYRASHIELD_REASONING_EFFORT\\n\",",
-      "            \"Set STRIX_LLM to a model your plan includes (e.g. chatgpt/gpt-5.4).\"",
+      "            \"Set STRIX_LLM to a model your plan includes (e.g. chatgpt/gpt-6-luna).\"",
       "        model = StrixProvider(settings=settings).get_model(raw_model)",
       "            deduper = StrixProvider(settings=settings).get_model(dedupe_model)",
       "        help=\"Path to a custom config file (JSON) to use instead of ~/.strix/cli-config.json\",",
@@ -129,7 +129,9 @@
       "        repo_base = (Path(tempfile.gettempdir()) / \"strix_repos\").resolve()",
       "    \"\"\"Pull the configured sandbox image, optionally verifying ``STRIX_IMAGE_DIGEST``.",
       "    If ``STRIX_IMAGE_DIGEST`` is set, the pulled image's ``RepoDigests`` must",
-      "    expected_digest = os.environ.get(\"STRIX_IMAGE_DIGEST\", \"\").strip()"
+      "    expected_digest = os.environ.get(\"STRIX_IMAGE_DIGEST\", \"\").strip()",
+      "    stays confined to ``STRIX_LLM`` \u2014 delegate and dedupe models must use a",
+      "                f\"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or \""
     ],
     "lyrashield/interface/update_check.py": [
       "\"\"\"Update notifications and self-update for the strix CLI.",
@@ -600,7 +602,6 @@
       "  Alias of `STRIX_MAX_CONTEXT_IMAGES`.",
       "  Alias of `STRIX_SERVER_CONVERSATION`.",
       "  Alias of `STRIX_WEB_SEARCH_ENABLED`.",
-      "  Controls `chatgpt/<model>` subscription-backed scans. Enabled by default; set to `0`/`false`/`no` to disable. When enabled, `lyrashield auth login chatgpt` is available and the scan is recorded with `auth_mode: \"subscription\"` and `llm_usage.cost: 0`. Also accepted: `STRIX_ALLOW_CHATGPT_SUBSCRIPTION`.",
       "  Docker image to use for the sandbox container. Alias of `STRIX_IMAGE`. In",
       "  Enable automatic history compaction. Alias of `STRIX_CONTEXT_AUTO_COMPACT`.",
       "  Enable implicit prompt caching. Defaults to on. Alias of `STRIX_PROMPT_CACHE`.",
@@ -635,8 +636,6 @@
       "<ParamField path=\"LYRASHIELD_IMAGE\" default=\"strix-sandbox:dev\" type=\"string\">",
       "<ParamField path=\"STRIX_POSTHOG_API_KEY\" type=\"string\">",
       "<ParamField path=\"STRIX_SCARF_ENDPOINT\" type=\"string\">",
-      "Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and only allows GPT-5.6 Terra or Luna deployments from LiteLLM/Strix-supported providers that currently carry them (OpenAI, Azure/Azure AI, and Bedrock Mantle).",
-      "Only approved GPT-5.6 Terra or Luna deployments from supported LiteLLM/Strix providers are accepted as the main model. The current allow-list is OpenAI, Azure/Azure AI, and Bedrock Mantle. ChatGPT subscription-backed models are supported by default; run `lyrashield auth login chatgpt` and use `chatgpt/<model>` for `LYRASHIELD_LLM`. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable subscription auth. OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, and local/self-hosted endpoints remain unsupported as LLM endpoints until LiteLLM's cost map lists `gpt-5.6` for their provider markers.",
       "The engine stores configuration in `~/.strix/cli-config.json`. Specify a custom config file with `--config`:",
       "| `STRIX_IMAGE_DIGEST`                         | unset   | Optional 64-character SHA-256 digest to verify after `pull_docker_image` completes (for example, `sha256:abc123\u2026`). If the local image digest does not contain this value, the image is re-pulled before verification fails. |",
       "| `STRIX_SANDBOX_ALLOW_HOST_GATEWAY`           | unset   | Opt-in `host.docker.internal` access. Do not enable unless an explicitly authorized local workflow requires it.                                                                                                              |",
@@ -645,7 +644,8 @@
       "| `STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES`  | unset   | Set to `1`/`true`/`yes` to add `NET_ADMIN`/`NET_RAW`; otherwise both remain omitted.                                                                                                                                         |",
       "| `STRIX_SANDBOX_MEM_LIMIT`                    | `2g`    | Container memory cap. Opt-out token restores docker's unbounded default.                                                                                                                                                    |",
       "| `STRIX_SANDBOX_PIDS_LIMIT`                   | `512`   | Process-count cap (fork-bomb bound).                                                                                                                                                                                          |",
-      "| `STRIX_SANDBOX_SHM_SIZE`                     | `512m`  | `/dev/shm` size (docker's 64m default OOMs Chromium/headless tools).                                                                                                                                                          |"
+      "| `STRIX_SANDBOX_SHM_SIZE`                     | `512m`  | `/dev/shm` size (docker's 64m default OOMs Chromium/headless tools).                                                                                                                                                          |",
+      "  Controls `chatgpt/gpt-6-*` subscription-backed scans for the main model. Enabled by default; set to `0`/`false`/`no` to disable. When enabled, `lyrashield auth login chatgpt` is available and the scan is recorded with `auth_mode: \"subscription\"` and `llm_usage.cost: 0` (ancillary charges such as paid web search remain metered). Also accepted: `STRIX_ALLOW_CHATGPT_SUBSCRIPTION`."
     ],
     "docs/advanced/skills.mdx": [
       "- Do not modify `strix/skills/**` directly; add or override skills in `lyrashield/skills/` instead.",
@@ -703,7 +703,7 @@
       "  Path to a custom config file (JSON) to use instead of `~/.strix/cli-config.json`. Configuration is re-validated after this file is applied because `LYRASHIELD_PRODUCT_BOUNDARY` is set by the adapter.",
       "  Resume a prior scan by its run name (the dir under `./strix_runs/`). Picks up the root + every non-terminal subagent's full LLM history and agent topology. Skips fresh run-name generation. Cannot be combined with `--run-name` or any of `--target` / `--target-list` / `--mount` (the prior target list is reused).",
       "  The engine copies local `--target` directories into the sandbox one file at a time, which stalls on very large trees. When a local target exceeds the copy limit (see `STRIX_MAX_LOCAL_COPY_MB` / `LYRASHIELD_MAX_LOCAL_COPY_MB`, default 1024 MB) the run exits early and asks you to re-run with `--mount`.",
-      "The production entry point is `lyrashield`, provided by the `lyrashield_adapter` package. The adapter forces telemetry off, disables the upstream self-update check, supports the authenticated `chatgpt/<model>` subscription route by default, and re-validates configuration after `--config` is applied. The bare upstream `strix` executable is not shipped in this distribution."
+      "The production entry point is `lyrashield`, provided by the `lyrashield_adapter` package. The adapter forces telemetry off, disables the upstream self-update check, supports the authenticated `chatgpt/gpt-6-*` subscription route by default, and re-validates configuration after `--config` is applied. The bare upstream `strix` executable is not shipped in this distribution."
     ],
     "lyrashield/skills/custom/live_target_testing.md": [
       "(`STRIX_TARGET_RELAY=1` in the environment). The relay enforces the authorized"
@@ -759,6 +759,9 @@
     ],
     "lyrashield/artifacts/quality.py": [
       "from strix.report.coverage import agents_from_graph"
+    ],
+    "docs/llm-providers/overview.mdx": [
+      "Subscription notes: the `chatgpt/` route is enabled by default in the standalone engine (`LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` disables it), restricted to `STRIX_LLM`/`LYRASHIELD_LLM` \u2014 delegate and dedupe models must use a metered OpenAI or Azure/Azure AI route \u2014 and records `auth_mode: \"subscription\"` with `llm_usage.cost: 0`. The production worker disables subscription routing."
     ]
   }
 }

@@ -18,7 +18,6 @@ from lyrashield.policy.models import (
     is_bedrock_route,
     is_claude_model,
     is_gpt6_model,
-    is_gpt56_model,
     is_known_openai_bare_model,
     model_supports_reasoning,
     request_timeout_extra_args,
@@ -82,7 +81,7 @@ def _prompt_cache_explicit_enabled(model_name: str | None) -> bool:
     env = os.environ.get(_PROMPT_CACHE_EXPLICIT_ENV, "").strip().lower()
     if env in ("0", "false", "no"):
         return False
-    return env in ("1", "true", "yes") and (is_gpt56_model(model_name) or is_gpt6_model(model_name))
+    return env in ("1", "true", "yes") and is_gpt6_model(model_name)
 
 
 def prompt_cache_options_for_model(model_name: str | None) -> PromptCacheOptions | None:
@@ -111,9 +110,7 @@ def prompt_cache_routing_enabled(model_name: str | None) -> bool:
     Independent of ``LYRASHIELD_PROMPT_CACHE_EXPLICIT``.
     """
     value = os.environ.get(_PROMPT_CACHE_ROUTING_ENV, "").strip().lower()
-    return value in ("1", "true", "yes") and (
-        is_gpt56_model(model_name) or is_gpt6_model(model_name)
-    )
+    return value in ("1", "true", "yes") and is_gpt6_model(model_name)
 
 
 def _accepts_required_tool_choice(model_name: str | None) -> bool:
@@ -128,9 +125,10 @@ def _accepts_required_tool_choice(model_name: str | None) -> bool:
 def _supports_parallel_tool_calls_setting(model_name: str | None) -> bool:
     """Return whether the routed provider accepts ``parallel_tool_calls``.
 
-    The Azure AI GPT-5.6 Chat Completions route rejects the parameter itself,
-    including the value ``false``, with HTTP 400. Omitting it keeps the request
-    compatible; LyraShield's turn, agent, concurrency, and spend limits remain
+    The Azure AI Chat Completions route rejected the parameter itself for the
+    previous model family, including the value ``false``, with HTTP 400. The
+    same omission is kept for GPT-6 until the provider contract proves
+    acceptance; LyraShield's turn, agent, concurrency, and spend limits remain
     enforced independently of this provider hint.
     """
     name = (model_name or "").strip().lower()
@@ -138,7 +136,7 @@ def _supports_parallel_tool_calls_setting(model_name: str | None) -> bool:
         if name.startswith(prefix):
             name = name[len(prefix) :]
             break
-    return not name.startswith("azure_ai/gpt-5.6-")
+    return not name.startswith("azure_ai/gpt-6-")
 
 
 def _as_str_dict(value: Any) -> dict[str, Any]:

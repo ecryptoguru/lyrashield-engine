@@ -41,12 +41,12 @@ async def test_direct_triage_has_one_native_transport_retry_owner(status: int) -
         api_key="offline-test",
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(rate_limited)),
     ) as client:
-        model = OpenAIResponsesModel("gpt-5.6-luna", openai_client=client)
+        model = OpenAIResponsesModel("gpt-6-luna", openai_client=client)
         with pytest.raises(APIStatusError):
             await _request_judgement(
                 model=model,
-                model_route="openai/gpt-5.6-luna",
-                model_settings=make_model_settings("medium", model_name="openai/gpt-5.6-luna"),
+                model_route="openai/gpt-6-luna",
+                model_settings=make_model_settings("medium", model_name="openai/gpt-6-luna"),
                 prompt="offline test",
                 limits=TriageLimits(),
             )
@@ -107,7 +107,7 @@ def test_timeout_error_is_retried() -> None:
 def test_content_guardrail_error_is_not_retried() -> None:
     # A guardrail block is status-less, so it would match the statusless policy;
     # the guard must keep it from being retried (retrying never clears it).
-    guardrail = codex.CodexContentGuardrailError("gpt-5.6-sol")
+    guardrail = codex.CodexContentGuardrailError("gpt-6-sol")
     assert _retries(ModelRetryNormalizedError(status_code=None), guardrail) is False
     # A raw provider error carrying the backend's wording is excluded too.
     raw = RuntimeError("This content was flagged for possible cybersecurity risk.")

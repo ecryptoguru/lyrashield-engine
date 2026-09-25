@@ -305,7 +305,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
             receipt=receipt,
             llm_usage=ledger.to_record(),
         )
-    if not model_route.lower().endswith("gpt-5.6-luna"):
+    if not model_route.lower().endswith("gpt-6-luna"):
         return _terminal_artifact(
             status="FAILED",
             reason="LUNA_ROUTE_REQUIRED",

@@ -161,7 +161,7 @@ class LlmSettings(BaseSettings):
     )
     # Ceiling that history compaction keeps a request's input under. This is NOT
     # a hard reject: exceeding it compacts older history rather than failing the
-    # request. Clamped below the GPT-5.6 long-context boundary, above which input
+    # request. Clamped below the GPT-6 long-context boundary, above which input
     # is billed at 2x — the clamp is what stops this knob from raising cost.
     max_input_tokens: int | None = Field(
         default=None,

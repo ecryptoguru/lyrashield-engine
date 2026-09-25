@@ -24,7 +24,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
 BENCH_ROOT = Path(__file__).resolve().parent
@@ -37,7 +37,7 @@ PRODUCT_REPO = Path(
 ).resolve()
 
 
-def source_state(repo: Path) -> dict:
+def source_state(repo: Path) -> dict[str, Any]:
     """Bind results to the checkout revision and its tracked working diff."""
     revision = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
@@ -58,11 +58,14 @@ def source_state(repo: Path) -> dict:
     }
 
 
-def load_corpus(corpus_dir: Path) -> dict:
-    return json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
+def load_corpus(corpus_dir: Path) -> dict[str, Any]:
+    corpus: dict[str, Any] = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
+    return corpus
 
 
-def materialize_fixture(corpus_dir: Path, case: dict, variant: str = "vulnerable") -> Path:
+def materialize_fixture(
+    corpus_dir: Path, case: dict[str, Any], variant: str = "vulnerable"
+) -> Path:
     """Copy the case's selected projection into a temp repo dir."""
     repo_dir = Path(tempfile.mkdtemp(prefix=f"bench-{case['id']}-"))
     src = corpus_dir / case[variant]
@@ -71,7 +74,9 @@ def materialize_fixture(corpus_dir: Path, case: dict, variant: str = "vulnerable
     return repo_dir
 
 
-def run_deterministic(corpus_dir: Path, case: dict, out, variant: str = "vulnerable") -> dict:
+def run_deterministic(
+    corpus_dir: Path, case: dict[str, Any], out: TextIO, variant: str = "vulnerable"
+) -> dict[str, Any]:
     repo_dir = materialize_fixture(corpus_dir, case, variant)
     scan_id = f"{case['id']}-{variant}-det"
     cmd = [
@@ -193,8 +198,12 @@ def engine_run_receipt(repo_dir: Path, scan_id: str) -> dict[str, Any] | None:
 
 
 def run_engine(
-    corpus_dir: Path, case: dict, out, run_index: int, variant: str = "vulnerable"
-) -> dict:
+    corpus_dir: Path,
+    case: dict[str, Any],
+    out: TextIO,
+    run_index: int,
+    variant: str = "vulnerable",
+) -> dict[str, Any]:
     """Engine run through the engine CLI — gated by --engine-approve."""
     repo_dir = materialize_fixture(corpus_dir, case, variant)
     scan_id = f"{case['id']}-{variant}-engine-{run_index}"

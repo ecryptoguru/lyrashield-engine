@@ -72,14 +72,14 @@ def test_dedupe_without_credentials_uses_default_provider() -> None:
     assert model.api_key is None  # type: ignore[attr-defined]
 
 
-def test_dedupe_omits_parallel_tool_setting_for_azure_gpt56() -> None:
-    """Azure GPT-5.6 rejects ``parallel_tool_calls`` even when false."""
-    settings = _dedupe_model_settings(DedupeSettings(), "azure_ai/gpt-5.6-luna", 300)
+def test_dedupe_omits_parallel_tool_setting_for_azure_gpt6() -> None:
+    """Azure GPT-6 rejects ``parallel_tool_calls`` even when false."""
+    settings = _dedupe_model_settings(DedupeSettings(), "azure_ai/gpt-6-luna", 300)
     assert settings.parallel_tool_calls is None
 
 
 def test_dedupe_settings_cap_matches_reserved_output() -> None:
-    settings = _dedupe_model_settings(DedupeSettings(), "azure_ai/gpt-5.6-luna", 300)
+    settings = _dedupe_model_settings(DedupeSettings(), "azure_ai/gpt-6-luna", 300)
     assert settings.max_tokens == _DEDUPE_MAX_OUTPUT_TOKENS
 
 
@@ -233,7 +233,7 @@ async def test_dedupe_call_reserves_and_releases_against_the_scan_budget() -> No
     try:
         response = await dedupe_module._request_dedupe_judgement(
             model=SimpleNamespace(get_response=_fake_get_response),
-            model_name="gpt-5.6-luna",
+            model_name="gpt-6-luna",
             model_settings=cast("Any", None),
             user_msg="compare",
         )
@@ -343,7 +343,7 @@ async def test_dedupe_releases_its_reservation_when_the_request_fails() -> None:
         with pytest.raises(RuntimeError, match="provider exploded"):
             await dedupe_module._request_dedupe_judgement(
                 model=SimpleNamespace(get_response=_boom),
-                model_name="gpt-5.6-luna",
+                model_name="gpt-6-luna",
                 model_settings=cast("Any", None),
                 user_msg="compare",
             )
@@ -363,7 +363,7 @@ async def test_dedupe_works_without_active_hooks() -> None:
 
     response = await dedupe_module._request_dedupe_judgement(
         model=SimpleNamespace(get_response=_fake_get_response),
-        model_name="gpt-5.6-luna",
+        model_name="gpt-6-luna",
         model_settings=cast("Any", None),
         user_msg="compare",
     )

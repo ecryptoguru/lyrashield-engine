@@ -1,5 +1,29 @@
 # LyraShield ownership and upstream-import ledger
 
+## GPT-6-only boundary and subscription main-model route (2026-09-25)
+
+The GPT-5.6 model family is fully retired from owned code, tests, and docs.
+`is_gpt56_model` / `is_gpt56_supported_provider`, the GPT-5.6 rate entries in
+`lyrashield/artifacts/usage.py`, and `scripts/list-gpt56-providers.py` are
+removed; metered pricing symbols are renamed (`_METERED_USD_PER_MILLION`,
+`_metered_rate`, `metered_usd_per_million`, `estimate_request_cost_usd`,
+`_estimate_metered_cost`, `_LONG_CONTEXT_THRESHOLD_TOKENS`). The 272k long-context surcharge (2x input
+and cache rates, 1.5x output) matches OpenAI's published GPT-6 pricing rule.
+GPT-6 usage without a validated provider receipt is now priced from the SDK
+usage buckets (missing cache buckets count as zero) instead of recording no
+cost; `accounting_complete` still flags the missing receipt.
+
+`chatgpt` is admitted as a provider for `chatgpt/gpt-6-sol` and
+`chatgpt/gpt-6-luna` on the main model only — the subscription path no longer
+exits the model-family check, so a `chatgpt/` route must still name a GPT-6
+Sol or Luna deployment (now also enforced after `--config` merges).
+Delegates and dedupe still require a metered `openai`, `azure`, or `azure_ai`
+route, subscription runs keep recording `auth_mode: "subscription"` and zero
+metered cost, and `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` disables the path
+entirely (the production worker's posture). BYOK profile naming moves from
+`terra` to `sol` (`PROFILE_SOL`); `ChatGptConfig` defaults to
+`chatgpt/gpt-6-luna`.
+
 ## Prompt-cache routing contract (2026-09-22)
 
 `run.json.prompt_cache` is a bounded execution receipt for the cache posture
@@ -267,21 +291,20 @@ owns that behavior in `lyrashield/**` and `lyrashield_adapter/**`, while
 ## LyraShield-owned contract
 
 All product-critical behavior lives in `lyrashield/**` and
-`lyrashield_adapter/**`. The retained `strix/**` substrate is upstream v1.5.3
+`lyrashield_adapter/**`. The retained `strix/**` substrate is upstream v1.6.2
 plus the exact review-gated compatibility patch documented above.
 
-- GPT-5.6 Terra and Luna acceptance (Sol retired in PR #22); only
-  LiteLLM/Strix-supported providers whose cost map lists `gpt-5.6-*` are allowed
-  (currently OpenAI, Azure/Azure AI, and Bedrock Mantle); OpenAI/Azure remain
-  the primary reference paths; ChatGPT-subscription model path is allowed by
-  default and can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`;
-  no OpenRouter, Bedrock (non-Mantle), Vertex, Novita, Perplexity, Parallel, or
-  local/self-hosted endpoint as the main model at the product boundary. Model
-  policy lives in `lyrashield/policy/models.py`; settings in
-  `lyrashield/policy/settings.py`.
+- GPT-6 Sol and Luna acceptance only; metered routes are admitted from
+  OpenAI and Azure/Azure AI; the authenticated ChatGPT-subscription route is
+  admitted for the main model (`chatgpt/gpt-6-sol` / `chatgpt/gpt-6-luna`) and
+  can be disabled with `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0`; delegate and
+  dedupe models must use a metered route; no OpenRouter, Bedrock, Vertex,
+  Novita, Perplexity, Parallel, or local/self-hosted endpoint is admitted at
+  the product boundary. Model policy lives in `lyrashield/policy/models.py`;
+  settings in `lyrashield/policy/settings.py`.
 - Parallel Search is available as an optional, redacted `web_search` agent tool
   when `LYRASHIELD_WEB_SEARCH_ENABLED=1` and a Parallel API key is configured.
-  It is not an LLM endpoint and does not replace GPT-5.6 Terra/Luna. The tool
+  It is not an LLM endpoint and does not replace the GPT-6 main model. The tool
   lives in `lyrashield/tools/web_search/tool.py`.
 - Context compaction, bounded output and agent count, and concurrent
   pre-request spend reservations. Lifecycle and hooks live in
@@ -314,15 +337,15 @@ owned in the product tree and has no upstream equivalent to reconcile with.
   accepts additional skill directories via `register_skill_dir` (an upstream
   v1.5.3 feature used to load `lyrashield/skills/`).
 - `lyrashield_adapter`: compatibility adapter for LyraShield invocation. It
-  forces telemetry off, disables the upstream update check, and supports
-  `chatgpt/` subscription-backed models by default (which bypass the Terra/Luna
-  gate and zero out metered cost accounting). Set
-  `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to disable the subscription path.
-  Subscription runs are recorded with `auth_mode: "subscription"` and
-  `llm_usage.cost: 0` in `run.json`. It also sets `LYRASHIELD_PRODUCT_BOUNDARY`,
-  which `validate_environment` uses to re-check the resolved model after
-  `--config` is applied; the bare upstream `strix` CLI does not set it and keeps
-  upstream subscription support.
+  forces telemetry off, disables the upstream update check, and admits
+  `chatgpt/gpt-6-*` subscription routes for the main model by default (the
+  subscription path zeroes metered cost accounting; delegates and dedupe must
+  still use metered routes). Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` to
+  disable the subscription path. Subscription runs are recorded with
+  `auth_mode: "subscription"` and `llm_usage.cost: 0` in `run.json`. It also
+  sets `LYRASHIELD_PRODUCT_BOUNDARY`, which `validate_environment` uses to
+  re-check the resolved model after `--config` is applied; the bare upstream
+  `strix` CLI does not set it and keeps upstream subscription support.
 - Out-of-band budget reservations: metered calls made outside the agent run
   loop (report deduplication) reserve against `max_budget_usd` through
   `ReportUsageHooks.reserve_out_of_band_request`, registered per scan via
@@ -353,19 +376,29 @@ owned in the product tree and has no upstream equivalent to reconcile with.
 
 ## Current upstream base
 
+`ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2` (upstream `v1.6.2`, reset on
+2026-09-19; see the "Upgrade to v1.6.2 product-outside-strix" section above for
+the import ledger and the recomputed allowlist, footprint, and patch digest).
+
+This is a subtree replacement, not a history merge: this fork's history is a
+squashed sync with no shared merge base, so `git merge` reports spurious
+add/add conflicts on files both sides created independently. All product
+behavior lives in `lyrashield/**` and `lyrashield_adapter/**`; `strix/**` may
+only change within the reviewed patch captured by
+`.lyrashield-upstream-base` and the gate's exact patch-object digest.
+
+## Prior upstream base (v1.5.3, 2026-08-11)
+
 `7cc9fa9faa0179fc7e35111102fe3d20a9028393` (upstream `v1.5.3`, reset on
 2026-08-11).
 
-This is a subtree replacement with upstream v1.5.3, not a history merge:
-this fork's history is a squashed sync with no shared merge base, so
-`git merge` reports spurious add/add conflicts on files both sides created
-independently. All product behavior has been moved out of `strix/**` into
-`lyrashield/**` and `lyrashield_adapter/**`; only the two generic seams
-documented in the "Upgrade to v1.5.3 product-outside-strix" section remain
-modified. The `strix/**` files that previously carried product behavior
-(e.g., `strix/core/hooks.py`, `strix/core/inputs.py`, `strix/config/settings.py`)
-were restored to upstream content and any prior product claims about them are
-superseded by the product-outside-strix migration.
+This was a subtree replacement with upstream v1.5.3, not a history merge.
+At that migration all product behavior had been moved out of `strix/**` into
+`lyrashield/**` and `lyrashield_adapter/**`; the `strix/**` files that
+previously carried product behavior (e.g., `strix/core/hooks.py`,
+`strix/core/inputs.py`, `strix/config/settings.py`) were restored to upstream
+content and any prior product claims about them are superseded by the
+product-outside-strix migration and later imports.
 
 ## Prior upstream base (v1.4.1, 2026-08-02)
 
