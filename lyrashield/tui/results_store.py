@@ -252,6 +252,7 @@ class ResultsStore:
                     payload,
                 ),
             )
+            conn.execute("DELETE FROM findings WHERE run_id = ?", (run.run_id,))
             for finding in findings:
                 if finding.run_id != run.run_id:
                     raise ValueError("Finding belongs to a different run")

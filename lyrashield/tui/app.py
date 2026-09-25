@@ -316,10 +316,14 @@ class LyraShieldLocalApp(App[None]):
             self.query_one("#cancel", Button).disabled = True
 
     def _render_findings(self, run_id: str) -> None:
-        findings = self.store.list_findings(run_id)
         view = self.query_one("#findings", Static)
+        try:
+            findings = self.store.list_findings(run_id)
+            run = self.store.get_run(run_id) if not findings else None
+        except ResultsStoreKeyError as exc:
+            view.update(f"[red]Findings unavailable: {exc}[/]")
+            return
         if not findings:
-            run = self.store.get_run(run_id)
             view.update(
                 "No findings recorded."
                 if run and run.status == "completed"
@@ -332,13 +336,13 @@ class LyraShieldLocalApp(App[None]):
         view.update("\n".join(lines))
 
     def _export(self, kind: str) -> None:
-        runs = self.store.list_runs()
-        if not runs:
-            self.query_one("#progress", Static).update("[red]No runs to export.[/]")
-            return
-        run_id = runs[0].run_id
-        dest_dir = Path.home() / ".lyrashield" / "local" / "exports"
         try:
+            runs = self.store.list_runs()
+            if not runs:
+                self.query_one("#progress", Static).update("[red]No runs to export.[/]")
+                return
+            run_id = runs[0].run_id
+            dest_dir = Path.home() / ".lyrashield" / "local" / "exports"
             if kind == "sarif":
                 dest = dest_dir / f"{run_id}.sarif"
                 export_sarif(run_id, self.store, dest)

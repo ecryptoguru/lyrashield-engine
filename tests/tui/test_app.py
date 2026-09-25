@@ -10,7 +10,7 @@ from textual.widgets import Input, Select, Static
 
 from lyrashield.tui.app import LyraShieldLocalApp
 from lyrashield.tui.byok_config import ByokConfig, ChatGptConfig, Provider
-from lyrashield.tui.results_store import ResultsStore
+from lyrashield.tui.results_store import ResultsStore, ResultsStoreKeyError
 from lyrashield.tui.scan_flow import ScanResult
 
 
@@ -75,5 +75,32 @@ def test_setup_requires_auth_and_azure_fields(
             assert saved == [Provider.AZURE_OPENAI]
             assert app.config.is_configured()
             await pilot.pause()
+
+    asyncio.run(exercise())
+
+
+def test_results_key_failures_show_in_findings_and_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ResultsStore(tmp_path / "results.db")
+    app = LyraShieldLocalApp(ByokConfig(), store)
+
+    def key_error(*_args: object) -> None:
+        raise ResultsStoreKeyError("Local keychain is unavailable")
+
+    async def exercise() -> None:
+        async with app.run_test(size=(80, 24)):
+            monkeypatch.setattr(store, "list_findings", key_error)
+            app._render_findings("r1")
+            assert "Findings unavailable" in str(app.query_one("#findings", Static).render())
+
+            monkeypatch.setattr(store, "list_findings", lambda _run_id: [])
+            monkeypatch.setattr(store, "get_run", key_error)
+            app._render_findings("r1")
+            assert "Findings unavailable" in str(app.query_one("#findings", Static).render())
+
+            monkeypatch.setattr(store, "list_runs", key_error)
+            app._export("sarif")
+            assert "Export failed" in str(app.query_one("#progress", Static).render())
 
     asyncio.run(exercise())

@@ -240,6 +240,29 @@ def test_scan_import_rolls_back_on_invalid_finding(
     assert store.get_run("r1") is None
 
 
+def test_scan_import_replaces_entire_findings_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _make_store(tmp_path, monkeypatch)
+    run = RunRecord("r1", "target", "QUICK", "azure", 1, "completed", {})
+    store.save_scan(
+        run,
+        [
+            FindingRecord("f1", "r1", "HIGH", "old", {}),
+            FindingRecord("f2", "r1", "LOW", "stale", {}),
+        ],
+    )
+    store.save_scan(run, [FindingRecord("f1", "r1", "MEDIUM", "new", {})])
+    assert [(f.finding_id, f.title) for f in store.list_findings("r1")] == [("f1", "new")]
+
+    with pytest.raises(ValueError, match="different run"):
+        store.save_scan(run, [FindingRecord("f3", "other", "HIGH", "wrong", {})])
+    assert [(f.finding_id, f.title) for f in store.list_findings("r1")] == [("f1", "new")]
+
+    store.save_scan(RunRecord("r1", "target", "QUICK", "azure", 2, "incomplete", {}), [])
+    assert store.list_findings("r1") == []
+
+
 def test_legacy_finding_schema_migrates_without_reencrypting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
