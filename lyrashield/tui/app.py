@@ -13,8 +13,8 @@ A Textual-based terminal UI that shells into the existing engine CLI. Flows:
 6. export SARIF/report
 
 No engine thin-fork expansion — the TUI shells into the existing adapter.
-Credentials live in the OS keychain, never plaintext. Results persist in the
-local encrypted SQLite store. No benchmark/coverage claims, no money-back
+Azure credentials live in the OS keychain; ChatGPT OAuth uses the engine's
+owner-only auth store. Results persist in the local encrypted SQLite store. No benchmark/coverage claims, no money-back
 language, no upstream-engine naming.
 """
 
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -41,9 +42,10 @@ from lyrashield.tui.byok_config import (
     load_config,
     provider_label,
     save_config,
+    validate_chatgpt_credential,
 )
 from lyrashield.tui.doctor import format_report, run_doctor
-from lyrashield.tui.results_store import ResultsStore
+from lyrashield.tui.results_store import ResultsStore, ResultsStoreKeyError
 from lyrashield.tui.scan_flow import ScanRequest, export_report, export_sarif, run_scan
 
 
@@ -86,8 +88,15 @@ class LyraShieldLocalApp(App[None]):
 
     def __init__(self, config: ByokConfig | None = None, store: ResultsStore | None = None) -> None:
         super().__init__()
-        self.config = config or load_config()
+        self._startup_error = ""
+        try:
+            self.config = config if config is not None else load_config()
+        except ResultsStoreKeyError:
+            self.config = ByokConfig()
+            self._startup_error = "Local keychain is unavailable; BYOK setup cannot be loaded."
         self.store = store or ResultsStore()
+        self._scan_task: asyncio.Task[None] | None = None
+        self._doctor_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -119,9 +128,17 @@ class LyraShieldLocalApp(App[None]):
                 value=self.config.provider.value,
                 id="provider",
             ),
+            Static("ChatGPT: sign in with `lyrashield auth login chatgpt` before saving."),
+            Input(placeholder="https://your-resource.openai.azure.com", id="azure-endpoint"),
+            Input(placeholder="Azure deployment name", id="azure-deployment"),
+            Input(
+                placeholder="Azure API key (leave blank to keep saved key)",
+                password=True,
+                id="azure-key",
+            ),
             Static("Local / self-hosted models: experimental / coming", classes="hidden"),
             Button("Save BYOK setup", id="save-byok"),
-            Static("", id="byok-status"),
+            Static(self._startup_error, id="byok-status"),
             classes="panel",
             id="setup",
         )
@@ -131,6 +148,7 @@ class LyraShieldLocalApp(App[None]):
             Static("4. Run scan", classes="panel"),
             Horizontal(
                 Button("Run scan", id="run", variant="success"),
+                Button("Cancel", id="cancel", disabled=True),
                 Button("Doctor", id="doctor", variant="default"),
                 id="run-buttons",
             ),
@@ -138,7 +156,7 @@ class LyraShieldLocalApp(App[None]):
             Input(placeholder="e.g. 5.0", id="max-budget"),
             VerticalScroll(Static("", id="progress"), id="progress-scroll"),
             classes="panel",
-            id="run",
+            id="run-panel",
         )
 
     def _results_panel(self) -> Vertical:
@@ -167,17 +185,41 @@ class LyraShieldLocalApp(App[None]):
     # ---- handlers -------------------------------------------------------
 
     @on(Button.Pressed, "#save-byok")
-    def _on_save_byok(self, _event: Button.Pressed) -> None:
+    async def _on_save_byok(self, _event: Button.Pressed) -> None:
         select = self.query_one("#provider", Select)
         value = str(select.value)
         try:
             self.config.provider = Provider(value)
         except ValueError:
-            self.config.provider = Provider.CHATGPT_OAUTH
-        save_config(self.config)
-        self.query_one("#byok-status", Static).update(
-            f"BYOK setup saved: {provider_label(self.config.provider)}",
-        )
+            self.query_one("#byok-status", Static).update("[red]Select a supported provider.[/]")
+            return
+        status = self.query_one("#byok-status", Static)
+        if self.config.provider == Provider.CHATGPT_OAUTH:
+            status.update("Checking ChatGPT sign-in…")
+            self.config.chatgpt.enabled = await asyncio.to_thread(validate_chatgpt_credential)
+            if not self.config.chatgpt.enabled:
+                status.update("[red]Sign in first: `lyrashield auth login chatgpt`[/]")
+                return
+        else:
+            self.config.azure.endpoint = (
+                self.query_one("#azure-endpoint", Input).value.strip() or self.config.azure.endpoint
+            )
+            self.config.azure.deployment = (
+                self.query_one("#azure-deployment", Input).value.strip()
+                or self.config.azure.deployment
+            )
+            self.config.azure.api_key = (
+                self.query_one("#azure-key", Input).value.strip() or self.config.azure.api_key
+            )
+            if not self.config.azure.is_complete():
+                status.update("[red]Enter an Azure endpoint, deployment and API key.[/]")
+                return
+        try:
+            save_config(self.config)
+        except Exception as exc:  # noqa: BLE001
+            status.update(f"[red]BYOK setup could not be saved: {exc}[/]")
+            return
+        status.update(f"BYOK setup saved: {provider_label(self.config.provider)}")
 
     @on(Button.Pressed, "#doctor")
     def _on_doctor(self, _event: Button.Pressed) -> None:
@@ -186,6 +228,11 @@ class LyraShieldLocalApp(App[None]):
     @on(Button.Pressed, "#run")
     def _on_run(self, _event: Button.Pressed) -> None:
         self._run_scan()
+
+    @on(Button.Pressed, "#cancel")
+    def _on_cancel(self, _event: Button.Pressed) -> None:
+        if self._scan_task and not self._scan_task.done():
+            self._scan_task.cancel()
 
     @on(Button.Pressed, "#export-sarif")
     def _on_export_sarif(self, _event: Button.Pressed) -> None:
@@ -198,19 +245,46 @@ class LyraShieldLocalApp(App[None]):
     # ---- internals ------------------------------------------------------
 
     def _run_doctor(self) -> None:
-        report = run_doctor(self.config, skip_smoke=True)
-        self.query_one("#progress", Static).update(format_report(report))
+        if self._doctor_task and not self._doctor_task.done():
+            return
+
+        async def check() -> None:
+            report = await asyncio.to_thread(run_doctor, self.config, skip_smoke=True)
+            self.query_one("#progress", Static).update(format_report(report))
+
+        self._doctor_task = asyncio.create_task(check())
 
     def _run_scan(self) -> None:
+        if self._scan_task and not self._scan_task.done():
+            return
+        if not self.config.is_configured():
+            self.query_one("#progress", Static).update(
+                "[red]Complete BYOK setup before scanning.[/]"
+            )
+            return
         target = self.query_one("#target", Input).value.strip()
         if not target:
             self.query_one("#progress", Static).update("[red]Enter a target first.[/]")
             return
         mode = str(self.query_one("#scan-mode", Select).value)
         budget_str = self.query_one("#max-budget", Input).value.strip()
-        budget = float(budget_str) if budget_str else None
+        try:
+            budget = float(budget_str) if budget_str else None
+        except ValueError:
+            budget = None
+            invalid_budget = True
+        else:
+            invalid_budget = budget is not None and (not math.isfinite(budget) or budget <= 0)
+        if invalid_budget:
+            self.query_one("#progress", Static).update(
+                "[red]Budget must be a positive finite number.[/]"
+            )
+            self.query_one("#max-budget", Input).focus()
+            return
         req = ScanRequest(target=target, scan_mode=mode, max_budget_usd=budget)
         self.query_one("#progress", Static).update("[cyan]Starting scan…[/]")
+        self.query_one("#run", Button).disabled = True
+        self.query_one("#cancel", Button).disabled = False
         self._scan_task = asyncio.create_task(self._scan_async(req))
 
     async def _scan_async(self, req: ScanRequest) -> None:
@@ -221,6 +295,9 @@ class LyraShieldLocalApp(App[None]):
 
         try:
             result = await run_scan(req, self.config, self.store, on_progress=on_progress)
+        except asyncio.CancelledError:
+            progress.update("[yellow]Scan cancelled. Check engine receipt for cleanup status.[/]")
+            return
         except FileNotFoundError:
             progress.update("[red]`lyrashield` CLI not found. Install the engine.[/]")
             return
@@ -228,15 +305,26 @@ class LyraShieldLocalApp(App[None]):
             progress.update(f"[red]Scan failed: {exc}[/]")
             return
 
-        status = "completed" if result.returncode == 0 else f"exit {result.returncode}"
-        progress.update(f"[green]Scan {status} in {result.elapsed_s:.1f}s[/]")
-        self._render_findings(result.run_id)
+        else:
+            color = "green" if result.status == "completed" else "yellow"
+            progress.update(
+                f"[{color}]Scan {result.status} (exit {result.returncode}) in {result.elapsed_s:.1f}s[/]"
+            )
+            self._render_findings(result.run_id)
+        finally:
+            self.query_one("#run", Button).disabled = False
+            self.query_one("#cancel", Button).disabled = True
 
     def _render_findings(self, run_id: str) -> None:
         findings = self.store.list_findings(run_id)
         view = self.query_one("#findings", Static)
         if not findings:
-            view.update("Scan complete. No findings ingested yet — see the engine report.")
+            run = self.store.get_run(run_id)
+            view.update(
+                "No findings recorded."
+                if run and run.status == "completed"
+                else "Scan incomplete; findings may be unavailable."
+            )
             return
         lines = [f"Run {run_id} — {len(findings)} finding(s):", ""]
         for f in findings:
@@ -250,13 +338,23 @@ class LyraShieldLocalApp(App[None]):
             return
         run_id = runs[0].run_id
         dest_dir = Path.home() / ".lyrashield" / "local" / "exports"
-        if kind == "sarif":
-            dest = dest_dir / f"{run_id}.sarif"
-            export_sarif(run_id, self.store, dest)
-        else:
-            dest = dest_dir / f"{run_id}.md"
-            export_report(run_id, self.store, dest)
+        try:
+            if kind == "sarif":
+                dest = dest_dir / f"{run_id}.sarif"
+                export_sarif(run_id, self.store, dest)
+            else:
+                dest = dest_dir / f"{run_id}.md"
+                export_report(run_id, self.store, dest)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.query_one("#progress", Static).update(f"[red]Export failed: {exc}[/]")
+            return
         self.query_one("#progress", Static).update(f"[green]Exported {kind} to {dest}[/]")
+
+    def on_unmount(self) -> None:
+        if self._scan_task and not self._scan_task.done():
+            self._scan_task.cancel()
+        if self._doctor_task and not self._doctor_task.done():
+            self._doctor_task.cancel()
 
 
 def run_tui() -> None:

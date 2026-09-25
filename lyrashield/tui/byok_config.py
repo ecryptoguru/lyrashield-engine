@@ -3,8 +3,8 @@
 
 Friendly setup that maps onto the engine's existing routing. Launch providers:
 
-* **ChatGPT subscription OAuth** — token stored in the OS keychain via the
-  ``keyring`` library (never a plaintext file). Routed through the engine's
+* **ChatGPT subscription OAuth** — token stored by the engine in an owner-only
+  local JSON auth store. Routed through the engine's
   Codex/ChatGPT subscription path (``chatgpt/<model>``).
 * **Azure OpenAI** — ``AZURE_OPENAI_API_KEY`` / ``AZURE_OPENAI_ENDPOINT`` /
   ``AZURE_OPENAI_API_VERSION``. The API key is stored in the OS keychain and
@@ -71,7 +71,7 @@ class AzureConfig:
     deployment: str = ""
 
     def is_complete(self) -> bool:
-        return bool(self.api_key and self.endpoint)
+        return bool(self.api_key and self.endpoint and self.deployment)
 
     def to_env(self) -> dict[str, str]:
         """Return env vars the engine CLI expects for Azure OpenAI."""
@@ -91,7 +91,7 @@ class AzureConfig:
 class ChatGptConfig:
     """ChatGPT subscription OAuth configuration.
 
-    The access token is stored in the OS keychain. The engine's existing
+    The access token is stored in the engine's owner-only auth store. Its existing
     ``lyrashield auth login chatgpt`` flow performs the OAuth dance; this
     config records that the provider is selected and which model profile to
     route through the subscription.
@@ -177,8 +177,10 @@ CONFIG_KEY = "byok-config-v1"
 def save_config(config: ByokConfig) -> None:
     """Persist non-secret BYOK config. Secrets go to the keychain."""
     # Store the Azure API key in the keychain, not in the config blob.
-    if config.azure.api_key:
-        keyring_set(KEYCHAIN_SERVICE, KEYCHAIN_AZURE_KEY, config.azure.api_key)
+    if config.azure.api_key and not keyring_set(
+        KEYCHAIN_SERVICE, KEYCHAIN_AZURE_KEY, config.azure.api_key
+    ):
+        raise RuntimeError("Azure API key could not be saved to the keychain")
     # ChatGPT token is managed by the engine's own auth flow; we only record
     # that the provider is enabled.
     blob: dict[str, Any] = {
@@ -196,7 +198,8 @@ def save_config(config: ByokConfig) -> None:
             mode: {"name": p.name, "model": p.model} for mode, p in config.profiles.items()
         },
     }
-    keyring_set(KEYCHAIN_SERVICE, CONFIG_KEY, _json_dumps(blob))
+    if not keyring_set(KEYCHAIN_SERVICE, CONFIG_KEY, _json_dumps(blob)):
+        raise RuntimeError("BYOK setup could not be saved to the keychain")
 
 
 def load_config() -> ByokConfig:
@@ -319,9 +322,7 @@ def provider_label(provider: Provider) -> str:
         return "ChatGPT subscription (OAuth)"
     if provider == Provider.AZURE_OPENAI:
         return "Azure OpenAI"
-    if provider == Provider.LOCAL_SELF_HOSTED:
-        return "Local / self-hosted (experimental / coming)"
-    return provider.value
+    return "Local / self-hosted (experimental / coming)"
 
 
 def is_launch_provider(provider: Provider) -> bool:

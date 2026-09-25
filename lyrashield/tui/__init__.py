@@ -13,8 +13,8 @@ A desktop-friendly terminal UI that shells into the existing engine CLI
 * view findings + fix suggestions
 * export SARIF/report
 
-Credentials live in the OS keychain (never plaintext). Results persist in a
-local SQLite store encrypted at rest.
+Azure credentials live in the OS keychain. ChatGPT OAuth uses the engine's
+owner-only local auth store. Results persist in a local SQLite store encrypted at rest.
 """
 
 from lyrashield.tui.app import LyraShieldLocalApp, run_tui
