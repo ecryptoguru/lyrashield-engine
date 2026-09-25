@@ -86,6 +86,8 @@ def read_vulnerabilities(run_dir: Path) -> list[Any]:
     """The ``vulnerabilities.json`` list (empty until a scan writes it)."""
     path = run_dir / "vulnerabilities.json"
     if not path.exists():
+        if read_run_summary(run_dir).get("finished"):
+            raise FileNotFoundError(f"Completed run has no findings artifact: {path}")
         return []
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):

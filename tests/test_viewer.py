@@ -39,6 +39,8 @@ def _make_run(base: Path, name: str, *, status: str, end_time: str | None) -> Pa
     state_dir.mkdir(parents=True)
     record = {"run_name": name, "status": status, "end_time": end_time}
     (run_dir / "run.json").write_text(json.dumps(record), encoding="utf-8")
+    if status == "completed":
+        (run_dir / "vulnerabilities.json").write_text("[]", encoding="utf-8")
     agents = {
         "statuses": {"root": "completed", "child": "running"},
         "names": {"root": "strix", "child": "recon"},
@@ -50,7 +52,9 @@ def _make_run(base: Path, name: str, *, status: str, end_time: str | None) -> Pa
 
 def test_corrupt_findings_are_not_reported_as_empty(tmp_path: Path) -> None:
     run_dir = _make_run(tmp_path, "corrupt", status="completed", end_time="2026-09-25T00:00:00Z")
-    assert read_vulnerabilities(run_dir) == []
+    (run_dir / "vulnerabilities.json").unlink()
+    with pytest.raises(FileNotFoundError):
+        read_vulnerabilities(run_dir)
     (run_dir / "vulnerabilities.json").write_text("{broken", encoding="utf-8")
     with pytest.raises(json.JSONDecodeError):
         read_vulnerabilities(run_dir)
