@@ -97,7 +97,7 @@ export async function fetchTranscript(runName?: string | null): Promise<Transcri
 export async function fetchAll(runName?: string | null): Promise<LoadedRun> {
   const { summary, raw, finished } = await fetchRunSummary(runName);
   const [vulnerabilities, reportMarkdown, transcript] = await Promise.all([
-    fetchVulnerabilities(summary.runId, runName).catch(() => [] as Vulnerability[]),
+    fetchVulnerabilities(summary.runId, runName),
     fetchReportMarkdown(runName).catch(() => null),
     fetchTranscript(runName).catch(() => ({ agents: [], events: [] }) as Transcript),
   ]);

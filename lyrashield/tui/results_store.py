@@ -1,11 +1,10 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 """Local SQLite results store for LyraShield Local, encrypted at rest.
 
-Findings and reports persist locally — no cloud required. The SQLite database
-is encrypted at rest via app-level envelope encryption: a data-encryption key
-(DEK) wraps each row's payload, and the DEK itself is stored in the OS
-keychain via the ``keyring`` library. This avoids a hard SQLCipher build
-dependency while still keeping the database unreadable without the keychain.
+Findings and reports persist locally — no cloud required. Row payloads are
+encrypted with a data-encryption key (DEK) stored in the OS keychain via
+``keyring``. Searchable metadata columns (target, title, severity, status)
+remain in SQLite, so the default store directory and database are owner-only.
 
 The store never contains raw BYOK credentials — only scan results and report
 artifacts. Secrets stay in the keychain via ``byok_config``.
@@ -23,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 
 if TYPE_CHECKING:
@@ -31,6 +30,10 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+class ResultsStoreKeyError(RuntimeError):
+    """Local results cannot be safely read or encrypted with the current keychain."""
 
 
 KEYCHAIN_SERVICE = "LyraShield-Local"
@@ -66,13 +69,13 @@ def keyring_set(service: str, key: str, value: str) -> bool:
 
 
 def keyring_get(service: str, key: str) -> str | None:
-    """Retrieve a secret from the OS keychain, or ``None`` if absent/unavailable."""
+    """Retrieve a secret, distinguishing an absent item from backend failure."""
     try:
         import keyring  # noqa: PLC0415
 
         return keyring.get_password(service, key)
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception as exc:  # noqa: BLE001
+        raise ResultsStoreKeyError("Local keychain is unavailable") from exc
 
 
 def keyring_delete(service: str, key: str) -> bool:
@@ -90,26 +93,37 @@ def keyring_delete(service: str, key: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _get_or_create_dek() -> bytes:
+def _get_or_create_dek(*, allow_create: bool = False) -> bytes:
     """Return the Fernet DEK from the keychain, creating it if absent."""
     dek = keyring_get(KEYCHAIN_SERVICE, KEYCHAIN_DEK)
     if dek:
         return dek.encode()
+    if not allow_create:
+        raise ResultsStoreKeyError("Local results encryption key is missing")
     dek = Fernet.generate_key().decode()
-    keyring_set(KEYCHAIN_SERVICE, KEYCHAIN_DEK, dek)
+    if not keyring_set(KEYCHAIN_SERVICE, KEYCHAIN_DEK, dek):
+        raise ResultsStoreKeyError("Local results encryption key could not be saved")
+    if keyring_get(KEYCHAIN_SERVICE, KEYCHAIN_DEK) != dek:
+        raise ResultsStoreKeyError("Local results encryption key could not be verified")
     return dek.encode()
 
 
-def _fernet() -> Fernet:
-    return Fernet(_get_or_create_dek())
+def _fernet(*, allow_create: bool = False) -> Fernet:
+    try:
+        return Fernet(_get_or_create_dek(allow_create=allow_create))
+    except ValueError as exc:
+        raise ResultsStoreKeyError("Local results encryption key is invalid") from exc
 
 
-def _encrypt(plaintext: str) -> str:
-    return _fernet().encrypt(plaintext.encode()).decode()
+def _encrypt(plaintext: str, *, allow_create: bool = False) -> str:
+    return _fernet(allow_create=allow_create).encrypt(plaintext.encode()).decode()
 
 
 def _decrypt(ciphertext: str) -> str:
-    return _fernet().decrypt(ciphertext.encode()).decode()
+    try:
+        return _fernet().decrypt(ciphertext.encode()).decode()
+    except InvalidToken as exc:
+        raise ResultsStoreKeyError("Local results cannot be decrypted with this key") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -128,11 +142,12 @@ CREATE TABLE IF NOT EXISTS runs (
     encrypted_payload TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS findings (
-    finding_id TEXT PRIMARY KEY,
+    finding_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     severity TEXT NOT NULL,
     title TEXT NOT NULL,
     encrypted_payload TEXT NOT NULL,
+    PRIMARY KEY (run_id, finding_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id);
@@ -164,7 +179,12 @@ class ResultsStore:
 
     def __init__(self, path: Path | str | None = None) -> None:
         self.path = Path(path) if path else DEFAULT_STORE_PATH
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if path is None:
+            self.path.parent.chmod(0o700)
+            fd = os.open(self.path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            os.close(fd)
+            self.path.chmod(0o600)
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
@@ -174,11 +194,50 @@ class ResultsStore:
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            primary_key = [
+                row[1]
+                for row in sorted(
+                    conn.execute("PRAGMA table_info(findings)"), key=lambda row: row[5]
+                )
+                if row[5]
+            ]
+            if primary_key != ["run_id", "finding_id"]:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "CREATE TABLE findings_new (finding_id TEXT NOT NULL, run_id TEXT NOT NULL, "
+                    "severity TEXT NOT NULL, title TEXT NOT NULL, encrypted_payload TEXT NOT NULL, "
+                    "PRIMARY KEY (run_id, finding_id), "
+                    "FOREIGN KEY (run_id) REFERENCES runs(run_id))"
+                )
+                conn.execute(
+                    "INSERT INTO findings_new "
+                    "(finding_id, run_id, severity, title, encrypted_payload) "
+                    "SELECT finding_id, run_id, severity, title, encrypted_payload FROM findings"
+                )
+                conn.execute("DROP TABLE findings")
+                conn.execute("ALTER TABLE findings_new RENAME TO findings")
+                conn.execute("CREATE INDEX idx_findings_run ON findings(run_id)")
+                conn.execute("PRAGMA user_version = 2")
             conn.commit()
 
+    @staticmethod
+    def _has_encrypted_rows(conn: sqlite3.Connection) -> bool:
+        return bool(
+            conn.execute("SELECT 1 FROM runs LIMIT 1").fetchone()
+            or conn.execute("SELECT 1 FROM findings LIMIT 1").fetchone()
+        )
+
     def save_run(self, run: RunRecord) -> None:
-        payload = _encrypt(json.dumps(run.payload, separators=(",", ":")))
+        self.save_scan(run, [])
+
+    def save_scan(self, run: RunRecord, findings: list[FindingRecord]) -> None:
+        """Commit a run and its imported findings as one encrypted snapshot."""
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cipher = _fernet(allow_create=not self._has_encrypted_rows(conn))
+            payload = cipher.encrypt(
+                json.dumps(run.payload, separators=(",", ":")).encode()
+            ).decode()
             conn.execute(
                 "INSERT OR REPLACE INTO runs "
                 "(run_id, target, scan_mode, provider, created_at, status, encrypted_payload) "
@@ -193,6 +252,25 @@ class ResultsStore:
                     payload,
                 ),
             )
+            conn.execute("DELETE FROM findings WHERE run_id = ?", (run.run_id,))
+            for finding in findings:
+                if finding.run_id != run.run_id:
+                    raise ValueError("Finding belongs to a different run")
+                encrypted = cipher.encrypt(
+                    json.dumps(finding.payload, separators=(",", ":")).encode()
+                ).decode()
+                conn.execute(
+                    "INSERT OR REPLACE INTO findings "
+                    "(finding_id, run_id, severity, title, encrypted_payload) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        finding.finding_id,
+                        finding.run_id,
+                        finding.severity,
+                        finding.title,
+                        encrypted,
+                    ),
+                )
             conn.commit()
 
     def update_run_status(self, run_id: str, status: str) -> None:
@@ -204,8 +282,12 @@ class ResultsStore:
             conn.commit()
 
     def save_finding(self, finding: FindingRecord) -> None:
-        payload = _encrypt(json.dumps(finding.payload, separators=(",", ":")))
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            payload = _encrypt(
+                json.dumps(finding.payload, separators=(",", ":")),
+                allow_create=not self._has_encrypted_rows(conn),
+            )
             conn.execute(
                 "INSERT OR REPLACE INTO findings "
                 "(finding_id, run_id, severity, title, encrypted_payload) "
@@ -258,11 +340,7 @@ class ResultsStore:
     @staticmethod
     def _row_to_run(row: tuple[Any, ...]) -> RunRecord:
         run_id, target, scan_mode, provider, created_at, status, encrypted = row
-        payload: dict[str, Any] = {}
-        try:
-            payload = json.loads(_decrypt(encrypted))
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to decrypt run payload for %s", run_id)
+        payload: dict[str, Any] = json.loads(_decrypt(encrypted))
         return RunRecord(
             run_id=run_id,
             target=target,
@@ -276,11 +354,7 @@ class ResultsStore:
     @staticmethod
     def _row_to_finding(row: tuple[Any, ...]) -> FindingRecord:
         finding_id, run_id, severity, title, encrypted = row
-        payload: dict[str, Any] = {}
-        try:
-            payload = json.loads(_decrypt(encrypted))
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to decrypt finding payload for %s", finding_id)
+        payload: dict[str, Any] = json.loads(_decrypt(encrypted))
         return FindingRecord(
             finding_id=finding_id,
             run_id=run_id,

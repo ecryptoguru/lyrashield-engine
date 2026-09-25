@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import time
 from typing import TYPE_CHECKING, Any
 from unittest import mock
@@ -33,6 +34,30 @@ def _tmp_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "home" / ".strix" / "subscription-auth.json"
     monkeypatch.setattr(codex, "AUTH_PATH", path)
     return path
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits and symlinks")
+def test_auth_store_is_private_before_write_and_ignores_predictable_symlink(
+    _tmp_store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("unchanged")
+    _tmp_store.parent.mkdir(parents=True)
+    _tmp_store.with_suffix(".json.tmp").symlink_to(sentinel)
+    original = json.dumps
+    observed: list[int] = []
+
+    def inspect_write(*args: Any, **kwargs: Any) -> str:
+        candidates = list(_tmp_store.parent.glob(f".{_tmp_store.name}.*"))
+        assert len(candidates) == 1
+        observed.append(candidates[0].stat().st_mode & 0o777)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(codex.json, "dumps", inspect_write)
+    codex.save_record({"type": "oauth", "access": "synthetic"})
+    assert observed == [0o600]
+    assert _tmp_store.stat().st_mode & 0o777 == 0o600
+    assert sentinel.read_text() == "unchanged"
 
 
 def test_pkce_challenge_matches_verifier_and_is_unpadded() -> None:

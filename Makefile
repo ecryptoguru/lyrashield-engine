@@ -79,8 +79,8 @@ clean:
 
 viewer:
 	@echo "🖥️  Building the local-viewer SPA..."
-	cd strix/interface/viewer/frontend && npm ci && npm run build
-	@echo "✅ Viewer built to strix/interface/viewer/static/ (commit the changes)."
+	cd lyrashield/interface/viewer/frontend && npm ci && npm run typecheck && npm run build
+	@echo "✅ Viewer built to lyrashield/interface/viewer/static/ (commit the changes)."
 
 dev: format lint type-check
 

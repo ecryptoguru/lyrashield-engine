@@ -13,16 +13,21 @@ is no Cloud-style depth gating and no agent-minute metering in Local mode.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import shutil
+import signal
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lyrashield.artifacts.sarif import _sarif_level
-from lyrashield.tui.byok_config import ByokConfig, engine_mode_for
+from lyrashield.artifacts.state import validate_run_record
+from lyrashield.tui.byok_config import ByokConfig, Provider, engine_mode_for
 from lyrashield.tui.results_store import FindingRecord, ResultsStore, new_run_id
+from strix.core.paths import run_dir_for
 
 
 if TYPE_CHECKING:
@@ -34,6 +39,34 @@ logger = logging.getLogger(__name__)
 
 # Engine CLI binary name. Resolved from PATH; never a hardcoded absolute path.
 ENGINE_CLI = "lyrashield"
+
+_INHERITED_MODEL_CONNECTION_VARS = (
+    "STRIX_LLM",
+    "LYRASHIELD_LLM",
+    "STRIX_DELEGATE_LLM",
+    "LYRASHIELD_DELEGATE_LLM",
+    "STRIX_DEDUPE_MODEL",
+    "LYRASHIELD_DEDUPE_MODEL",
+    "LLM_API_KEY",
+    "LLM_API_BASE",
+    "LLM_API_VERSION",
+    "OPENAI_API_KEY",
+    "OPENAI_API_BASE",
+    "OPENAI_BASE_URL",
+    "LITELLM_BASE_URL",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_OPENAI_API_BASE",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_AI_API_KEY",
+    "AZURE_AI_API_BASE",
+    "AZURE_API_BASE",
+    "AZURE_AI_API_BASE",
+    "AZURE_API_VERSION",
+    "AZURE_AI_API_VERSION",
+    "DEDUPE_LLM_API_KEY",
+    "DEDUPE_LLM_API_BASE",
+)
 
 
 @dataclass
@@ -63,6 +96,8 @@ class ScanResult:
     elapsed_s: float
     run_dir: Path | None = None
     findings: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "incomplete"
+    terminal_reason: str | None = None
 
 
 def build_argv(req: ScanRequest, config: ByokConfig) -> list[str]:
@@ -86,23 +121,63 @@ def build_argv(req: ScanRequest, config: ByokConfig) -> list[str]:
 def build_env(config: ByokConfig, base_env: Mapping[str, str] | None = None) -> dict[str, str]:
     """Build the env for the engine CLI subprocess from BYOK config."""
     env = dict(base_env) if base_env is not None else dict(os.environ)
+    for name in _INHERITED_MODEL_CONNECTION_VARS:
+        env.pop(name, None)
     env.update(config.to_env())
+    if config.provider == Provider.AZURE_OPENAI:
+        env["LLM_API_KEY"] = config.azure.api_key
+        env["LLM_API_BASE"] = config.azure.endpoint
+        env["LLM_API_VERSION"] = config.azure.api_version
     return env
 
 
-async def _stream(proc: asyncio.subprocess.Process, stream_name: str) -> tuple[str, list[str]]:
+async def _stream(
+    proc: asyncio.subprocess.Process, stream_name: str, start: float, on_progress: Any | None
+) -> str:
     stream = proc.stdout if stream_name == "stdout" else proc.stderr
-    lines: list[str] = []
-    chunks: list[str] = []
+    tail = b""
+    pending = b""
     assert stream is not None
     while True:
-        line_bytes = await stream.readline()
-        if not line_bytes:
+        chunk = await stream.read(4096)
+        if not chunk:
             break
-        line = line_bytes.decode(errors="replace").rstrip()
-        lines.append(line)
-        chunks.append(line + "\n")
-    return "".join(chunks), lines
+        tail = (tail + chunk)[-4000:]
+        pending += chunk
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", 1)
+            if on_progress is not None:
+                await _maybe_call(
+                    on_progress,
+                    ScanProgress(
+                        stream_name, line[-4000:].decode(errors="replace"), time.monotonic() - start
+                    ),
+                )
+        if len(pending) > 4000:
+            pending = pending[-4000:]
+    if pending and on_progress is not None:
+        await _maybe_call(
+            on_progress,
+            ScanProgress(stream_name, pending.decode(errors="replace"), time.monotonic() - start),
+        )
+    return tail.decode(errors="replace")
+
+
+async def _stop_child(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        await proc.wait()
+        return
+    try:
+        proc.send_signal(signal.SIGINT)
+        await asyncio.wait_for(proc.wait(), timeout=3)
+    except (TimeoutError, ProcessLookupError):
+        if proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
 
 
 async def run_scan(
@@ -117,9 +192,10 @@ async def run_scan(
     ``on_progress`` is an optional async callable invoked with each
     ``ScanProgress`` event. Results are persisted to ``store`` if provided.
     """
-    argv = build_argv(req, config)
-    env = build_env(config, base_env)
     run_id = req.run_name or new_run_id()
+    argv = build_argv(replace(req, run_name=run_id), config)
+    env = build_env(config, base_env)
+    launch_cwd = Path.cwd().resolve()
     start = time.monotonic()
 
     proc = await asyncio.create_subprocess_exec(
@@ -129,36 +205,30 @@ async def run_scan(
         env=env,
     )
 
-    # Stream both pipes concurrently.
-    async def _pipe(name: str) -> tuple[str, list[str]]:
-        return await _stream(proc, name)
-
-    stdout_task = asyncio.create_task(_pipe("stdout"))
-    stderr_task = asyncio.create_task(_pipe("stderr"))
-
-    # If a progress callback is supplied, poll running lines while the process
-    # runs. The full line buffers are awaited above; the progress callback
-    # receives lines as they're read by awaiting the tasks in a loop.
-    if on_progress is not None:
-        # Simplest correct approach: await tasks then emit all lines. A
-        # real-time streaming variant would read char-by-char; for the TUI we
-        # emit the captured lines with elapsed timestamps.
-        pass
-
-    stdout, stdout_lines = await stdout_task
-    stderr, stderr_lines = await stderr_task
-    returncode = await proc.wait()
+    readers = [
+        asyncio.create_task(_stream(proc, name, start, on_progress))
+        for name in ("stdout", "stderr")
+    ]
+    try:
+        stdout, stderr = await asyncio.gather(*readers)
+        returncode = await proc.wait()
+    except BaseException:
+        await asyncio.shield(_stop_child(proc))
+        for reader in readers:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+        raise
     elapsed = time.monotonic() - start
-
-    if on_progress is not None:
-        for line in stdout_lines:
-            await _maybe_call(
-                on_progress, ScanProgress(stream="stdout", line=line, elapsed_s=elapsed)
-            )
-        for line in stderr_lines:
-            await _maybe_call(
-                on_progress, ScanProgress(stream="stderr", line=line, elapsed_s=elapsed)
-            )
+    run_dir = run_dir_for(run_id, cwd=launch_cwd)
+    receipt = _read_receipt(run_dir, run_id)
+    status = _scan_status(receipt, returncode)
+    try:
+        findings = _read_findings(run_dir) if receipt is not None else []
+    except (OSError, ValueError, TypeError):
+        findings = []
+        status = "incomplete"
+    if status == "completed" and not (run_dir / "vulnerabilities.json").is_file():
+        status = "incomplete"
 
     result = ScanResult(
         run_id=run_id,
@@ -166,6 +236,10 @@ async def run_scan(
         stdout=stdout,
         stderr=stderr,
         elapsed_s=elapsed,
+        run_dir=run_dir if receipt is not None else None,
+        findings=findings,
+        status=status,
+        terminal_reason=receipt.get("terminal_reason") if receipt else None,
     )
 
     if store is not None:
@@ -189,7 +263,6 @@ def _persist_run(
     """Persist the run + any parseable findings into the encrypted store."""
     from lyrashield.tui.results_store import RunRecord  # noqa: PLC0415
 
-    status = "completed" if result.returncode == 0 else "failed"
     payload: dict[str, Any] = {
         "returncode": result.returncode,
         "elapsed_s": result.elapsed_s,
@@ -198,32 +271,71 @@ def _persist_run(
         "scan_mode": req.scan_mode,
         "target": req.target,
         "provider": config.provider.value,
+        "run_dir": str(result.run_dir) if result.run_dir else None,
+        "terminal_reason": result.terminal_reason,
     }
-    store.save_run(
+    findings = [
+        FindingRecord(
+            finding_id=str(finding.get("id") or f"vuln-{index + 1}"),
+            run_id=result.run_id,
+            severity=str(finding.get("severity") or "UNKNOWN").upper(),
+            title=str(finding.get("title") or "Untitled finding"),
+            payload=finding,
+        )
+        for index, finding in enumerate(result.findings)
+    ]
+    store.save_scan(
         RunRecord(
             run_id=result.run_id,
             target=req.target,
             scan_mode=req.scan_mode,
             provider=config.provider.value,
             created_at=int(time.time()),
-            status=status,
+            status=result.status,
             payload=payload,
-        )
+        ),
+        findings,
     )
 
-    # Parse SARIF findings if a report path is known. The engine writes
-    # artifacts under its run dir; the TUI does not assume a fixed location,
-    # so findings ingestion is best-effort.
-    for finding in _parse_sarif_findings(result):
-        store.save_finding(finding)
+
+def _read_receipt(run_dir: Path, run_id: str) -> dict[str, Any] | None:
+    try:
+        record = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (
+        not isinstance(record, dict)
+        or record.get("run_name") != run_id
+        or record.get("run_id") != run_id
+    ):
+        return None
+    try:
+        validate_run_record(record)
+    except RuntimeError:
+        return None
+    return record
 
 
-def _parse_sarif_findings(result: ScanResult) -> list[FindingRecord]:
-    """Best-effort SARIF parse from stdout. The engine CLI emits report paths."""
-    # The engine writes SARIF to its run dir; the TUI does not re-implement
-    # report discovery. This is a forward-compat hook for the desktop shell,
-    # which knows the run dir. Return empty for now.
-    return []
+def _scan_status(receipt: dict[str, Any] | None, returncode: int) -> str:
+    if receipt is None:
+        return "incomplete"
+    if receipt.get("receipt_persisted") is False:
+        return "incomplete"
+    if receipt.get("status") == "completed" and returncode in (0, 2):
+        return "completed"
+    if receipt.get("terminal_reason") == "no_change" and returncode == 0:
+        return "no_change"
+    return "partial" if receipt.get("status") in ("running", "stopped") else "failed"
+
+
+def _read_findings(run_dir: Path) -> list[dict[str, Any]]:
+    path = run_dir / "vulnerabilities.json"
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+        raise ValueError("Canonical findings artifact is invalid")
+    return data
 
 
 def export_sarif(run_id: str, store: ResultsStore, dest: Path) -> Path:
@@ -234,7 +346,14 @@ def export_sarif(run_id: str, store: ResultsStore, dest: Path) -> Path:
     if run is None:
         msg = f"Run {run_id} not found in local store"
         raise KeyError(msg)
-    import json  # noqa: PLC0415
+    run_dir = run.payload.get("run_dir")
+    if run_dir:
+        source = Path(run_dir) / "findings.sarif"
+        if source.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, dest)
+            return dest
+        raise FileNotFoundError(f"Canonical SARIF is unavailable for run {run_id}")
 
     sarif = {
         "version": "2.1.0",
@@ -270,6 +389,14 @@ def export_report(run_id: str, store: ResultsStore, dest: Path) -> Path:
     if run is None:
         msg = f"Run {run_id} not found in local store"
         raise KeyError(msg)
+    run_dir = run.payload.get("run_dir")
+    if run_dir:
+        source = Path(run_dir) / "penetration_test_report.md"
+        if source.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, dest)
+            return dest
+        raise FileNotFoundError(f"Canonical report is unavailable for run {run_id}")
     findings = store.list_findings(run_id)
     lines = [
         f"# LyraShield Local — Scan Report",

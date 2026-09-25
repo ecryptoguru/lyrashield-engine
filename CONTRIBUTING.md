@@ -115,7 +115,7 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
 
 ## Dependency updates
 
-Use `uv sync --frozen` for normal development. LiteLLM is a direct, exactly pinned dependency because LyraShield imports its routing, cost, cache, and provider-validation APIs; change that pin only in a focused upgrade with the full controlled-derivative and worker-contract gates. `certifi` is a transitive public CA bundle used by the HTTP stack and should not be promoted to a direct dependency unless LyraShield imports it. Review both `pyproject.toml` and `uv.lock` diffs, including hashes and newly introduced packages, in every dependency PR.
+Use `uv sync --frozen` for normal development. LiteLLM is a direct `~=1.90` dependency resolved to an exact version in `uv.lock` because LyraShield imports its routing, cost, cache, and provider-validation APIs; change that constraint only in a focused upgrade with the full controlled-derivative and worker-contract gates. `certifi` is a transitive public CA bundle used by the HTTP stack and should not be promoted to a direct dependency unless LyraShield imports it. Review both `pyproject.toml` and `uv.lock` diffs, including hashes and newly introduced packages, in every dependency PR.
 
 ## Pull request guidelines
 

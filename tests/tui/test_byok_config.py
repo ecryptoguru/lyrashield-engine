@@ -76,7 +76,7 @@ def test_byok_config_is_configured() -> None:
     assert chatgpt.is_configured()
     azure = ByokConfig(
         provider=Provider.AZURE_OPENAI,
-        azure=AzureConfig(api_key="k", endpoint="https://x.openai.azure.com"),
+        azure=AzureConfig(api_key="k", endpoint="https://x.openai.azure.com", deployment="dep"),
     )
     assert azure.is_configured()
     assert not ByokConfig(provider=Provider.LOCAL_SELF_HOSTED).is_configured()
@@ -129,6 +129,13 @@ def test_save_load_config_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     assert loaded.azure.endpoint == "https://x.openai.azure.com"
     assert loaded.azure.deployment == "dep"
     assert loaded.profiles["DEEP"].name == PROFILE_LUNA
+
+
+def test_save_config_rejects_failed_keychain_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_set", lambda *_: False)
+    config = ByokConfig(provider=Provider.AZURE_OPENAI, azure=AzureConfig(api_key="synthetic"))
+    with pytest.raises(RuntimeError, match="keychain"):
+        save_config(config)
 
 
 def test_validate_azure_credential_incomplete() -> None:

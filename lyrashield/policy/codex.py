@@ -16,7 +16,9 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import secrets
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -78,13 +80,23 @@ def _read_store() -> dict[str, Any]:
 
 def _write_store(data: dict[str, Any]) -> None:
     AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = AUTH_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    with contextlib.suppress(OSError):
-        tmp.chmod(0o600)
-    tmp.replace(AUTH_PATH)
-    with contextlib.suppress(OSError):
-        AUTH_PATH.chmod(0o600)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=AUTH_PATH.parent,
+            prefix=f".{AUTH_PATH.name}.",
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(json.dumps(data, indent=2))
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        tmp_path.replace(AUTH_PATH)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def read_record() -> dict[str, Any] | None:
