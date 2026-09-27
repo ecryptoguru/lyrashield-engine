@@ -34,7 +34,9 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
         'image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"'
         in content
     )
-    assert 'docker run --rm "${platform_args[@]}" "$image"' in smoke
+    assert "docker_args=(--rm)" in smoke
+    assert 'docker_args+=(--platform "$platform")' in smoke
+    assert 'docker run "${docker_args[@]}" "$image"' in smoke
     assert "docker buildx imagetools create" in content
     assert "RELEASE_TAG: ${{ github.ref_name }}" in content
     assert 'for tag in "$RELEASE_TAG" "${{ github.sha }}"' in content

@@ -3,12 +3,12 @@ set -euo pipefail
 
 image=${1:?usage: smoke-sandbox.sh <image> [platform]}
 platform=${2:-}
-platform_args=()
+docker_args=(--rm)
 if [[ -n "$platform" ]]; then
-  platform_args=(--platform "$platform")
+  docker_args+=(--platform "$platform")
 fi
 
-docker run --rm "${platform_args[@]}" "$image" sh -lc '
+docker run "${docker_args[@]}" "$image" sh -lc '
   test "$(id -u)" != "0" &&
   test "$(pwd)" = "/workspace" &&
   test -f /app/certs/ca.p12 &&
