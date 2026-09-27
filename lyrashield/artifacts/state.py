@@ -558,8 +558,10 @@ class ReportState:
         self._raw_local_sources: list[dict[str, Any]] = []
         self._llm_usage = LLMUsageLedger()
         self._provider_usage_receipts: dict[str, dict[str, Any]] = {}
-        auth_mode = codex.auth_mode(load_settings().llm.model)
-        self._llm_usage.zero_cost = auth_mode == "subscription"
+        configured_model = load_settings().llm.model
+        auth_mode = codex.auth_mode(configured_model)
+        if auth_mode == "subscription":
+            self._llm_usage.set_zero_cost_model(configured_model)
         self.run_record = initial_run_record(run_name, auth_mode=auth_mode)
         # initial_run_record generated the run_id; adopt it on the instance.
         self.run_id = str(self.run_record["run_id"])

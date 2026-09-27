@@ -153,6 +153,36 @@ def validate_environment() -> None:
     # cannot bypass the product boundary.
     _reject_resolved_subscription_models(settings, console)
 
+    if not settings.llm.model:
+        missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
+    elif (
+        (
+            not codex.subscription_model(settings.llm.model)
+            and not is_gpt6_supported_provider(settings.llm.model)
+        )
+        or (
+            settings.llm.delegate_model
+            and not is_gpt6_supported_provider(settings.llm.delegate_model)
+        )
+        or (settings.dedupe.model and not is_gpt6_supported_provider(settings.dedupe.model))
+    ):
+        error_text = Text(
+            "LyraShield scans require a GPT-6 Sol or Luna deployment from a supported provider",
+            style="bold red",
+        )
+        console.print("\n")
+        console.print(
+            Panel(
+                error_text,
+                title="[bold white]LYRASHIELD",
+                title_align="left",
+                border_style="red",
+                padding=(1, 2),
+            ),
+        )
+        console.print()
+        sys.exit(1)
+
     if codex.subscription_model(settings.llm.model):
         if not settings.product.allow_chatgpt_subscription:
             console.print(
@@ -177,33 +207,6 @@ def validate_environment() -> None:
             sys.exit(1)
         logger.info("Environment OK (ChatGPT subscription)")
         return
-
-    if not settings.llm.model:
-        missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
-    elif (
-        not is_gpt6_supported_provider(settings.llm.model)
-        or (
-            settings.llm.delegate_model
-            and not is_gpt6_supported_provider(settings.llm.delegate_model)
-        )
-        or (settings.dedupe.model and not is_gpt6_supported_provider(settings.dedupe.model))
-    ):
-        error_text = Text(
-            "LyraShield scans require a GPT-6 Sol or Luna deployment from a supported provider",
-            style="bold red",
-        )
-        console.print("\n")
-        console.print(
-            Panel(
-                error_text,
-                title="[bold white]LYRASHIELD",
-                title_align="left",
-                border_style="red",
-                padding=(1, 2),
-            ),
-        )
-        console.print()
-        sys.exit(1)
 
     if not settings.llm.api_key:
         missing_optional_vars.append("LLM_API_KEY")

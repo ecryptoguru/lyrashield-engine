@@ -214,9 +214,14 @@ def load_config() -> ByokConfig:
         return ByokConfig()
 
     provider = Provider(blob.get("provider", Provider.CHATGPT_OAUTH.value))
+    chatgpt_model = blob.get("chatgpt", {}).get("model", "chatgpt/gpt-6-luna")
+    if isinstance(chatgpt_model, str):
+        normalized_model = chatgpt_model.strip().lower()
+        if normalized_model == "chatgpt/gpt-5.6" or normalized_model.startswith("chatgpt/gpt-5.6-"):
+            chatgpt_model = "chatgpt/gpt-6-luna"
     chatgpt = ChatGptConfig(
         enabled=bool(blob.get("chatgpt", {}).get("enabled", False)),
-        model=blob.get("chatgpt", {}).get("model", "chatgpt/gpt-6-luna"),
+        model=chatgpt_model,
     )
     azure_blob = blob.get("azure", {})
     azure = AzureConfig(
