@@ -21,12 +21,12 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
         'test "$(pwd)" = "/workspace"',
         "test -f /app/certs/ca.p12",
         "test ! -S /var/run/docker.sock",
-        'test ! -w /etc',
+        "test ! -w /etc",
         "caido-cli --version",
         "getcap /usr/lib/nmap/nmap",
         "nmap -sn 127.0.0.1",
-        'import caido_api',
-        '200|400',
+        "import caido_api",
+        "200|400",
     ):
         assert invariant in smoke
     assert "candidate-${{ github.sha }}" in content
