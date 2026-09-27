@@ -59,10 +59,10 @@ def keyring_set(service: str, key: str, value: str) -> bool:
     decide whether to degrade gracefully. Never writes a plaintext file.
     """
     try:
-        import keyring  # noqa: PLC0415
+        import keyring
 
         keyring.set_password(service, key, value)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("keyring backend unavailable; secret not stored")
         return False
     return True
@@ -71,10 +71,10 @@ def keyring_set(service: str, key: str, value: str) -> bool:
 def keyring_get(service: str, key: str) -> str | None:
     """Retrieve a secret, distinguishing an absent item from backend failure."""
     try:
-        import keyring  # noqa: PLC0415
+        import keyring
 
         return keyring.get_password(service, key)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise ResultsStoreKeyError("Local keychain is unavailable") from exc
 
 

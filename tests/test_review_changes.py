@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess  # nosec B404
+import subprocess
 import sys
 from importlib import import_module
 from pathlib import Path
@@ -55,7 +55,7 @@ SHA64 = "ab" * 32
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603  # nosec B603
+    return subprocess.run(  # noqa: S603
         ["git", "-C", str(repo), *args],  # noqa: S607
         capture_output=True,
         text=True,
@@ -67,7 +67,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def _init_repo(path: Path) -> Path:
     repo = path / "repo"
     repo.mkdir()
-    subprocess.run(  # noqa: S603  # nosec B603
+    subprocess.run(  # noqa: S603
         ["git", "init", "-b", "main", str(repo)],  # noqa: S607
         check=True,
         capture_output=True,
@@ -704,7 +704,7 @@ def test_shallow_repo_is_named_preflight_failure(tmp_path: Path) -> None:
     (repo / "a.py").write_text("x\n", encoding="utf-8")
     _commit_all(repo, "one")
     shallow = tmp_path / "shallow"
-    subprocess.run(  # noqa: S603  # nosec B603
+    subprocess.run(  # noqa: S603
         ["git", "clone", "--depth", "1", f"file://{repo}", str(shallow)],  # noqa: S607
         check=True,
         capture_output=True,
@@ -861,7 +861,7 @@ def test_auto_mode_without_head_still_skips_unsuitable_repo(tmp_path: Path) -> N
     (repo / "a.py").write_text("x\n", encoding="utf-8")
     _commit_all(repo, "one")
     shallow = tmp_path / "shallow"
-    subprocess.run(  # noqa: S603  # nosec B603
+    subprocess.run(  # noqa: S603
         ["git", "clone", "--depth", "1", f"file://{repo}", str(shallow)],  # noqa: S607
         check=True,
         capture_output=True,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-import subprocess  # nosec B404
+import subprocess
 import sys
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch

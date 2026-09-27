@@ -14,20 +14,15 @@ upstream behaviors the engine's frozen environment relies on:
   validation is never disabled here.
 """
 
-import importlib
 import ssl
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from anyio._core import _sockets, _subprocesses
+from anyio.streams import tls as _tls
 
-
-pytest.importorskip("anyio", reason="patched dependency under test")
-
-_sockets = importlib.import_module("anyio._core._sockets")
-_subprocesses = importlib.import_module("anyio._core._subprocesses")
-_tls = importlib.import_module("anyio.streams.tls")
 
 linux_only = pytest.mark.skipif(
     sys.platform != "linux",

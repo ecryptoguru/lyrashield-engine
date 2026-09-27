@@ -30,10 +30,10 @@ Product modules register themselves through generic seams in the retained
 
 - `strix.skills.register_skill_dir` — loads `lyrashield/skills/` alongside
   inherited `strix/skills/`.
-- `strix.agents.factory.register_tool_override` — replaces upstream base tools
-  with product implementations from `lyrashield/tools/`.
-- `strix.agents.factory.register_model_policy` — registers the product
-  GPT-6 model-acceptance policy from `lyrashield/policy/models.py`.
+- `lyrashield.agents.overrides.register_tool_override_loader` — replaces
+  upstream base tools with product implementations from `lyrashield/tools/`.
+- `lyrashield.agents.overrides.register_model_policy_loader` — registers
+  product GPT-6 model acceptance from `lyrashield/policy/models.py`.
 - `strix.config.loader.register_settings_loader` — registers
   `lyrashield/policy/loader.py` as the product settings loader.
 - `strix.agents.prompt.FileSystemLoader` — searches registered skill

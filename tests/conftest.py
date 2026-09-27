@@ -70,8 +70,8 @@ def _isolate_mcp_config(
 ) -> None:
     """Keep the suite from reading a real MCP config.
 
-    Upstream parity fixture: ``run_strix_scan`` connects the MCP servers listed
-    in ``~/.strix/mcp-servers.json``. Point the loader at a path that does not
+    ``run_strix_scan`` connects the MCP servers listed in
+    ``~/.strix/mcp-servers.json``. Point the loader at a path that does not
     exist so it resolves to "no connections". Tests that exercise the loader
     itself set their own ``STRIX_MCP_CONFIG`` after this runs.
     """
@@ -86,11 +86,4 @@ def _plain_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make Rich output identical on every machine (upstream parity fixture)."""
     monkeypatch.setenv("TERM", "dumb")
     for name in ("COLORTERM", "FORCE_COLOR", "NO_COLOR", "TTY_COMPATIBLE"):
-        monkeypatch.delenv(name, raising=False)
-
-
-@pytest.fixture(autouse=True)
-def _isolate_wallet_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep a developer's real mppx wallet out of substrate top-up tests."""
-    for name in ("MPPX_ACCOUNT", "MPPX_STRIPE_SECRET_KEY", "MPPX_STRIPE_PAYMENT_METHOD"):
         monkeypatch.delenv(name, raising=False)

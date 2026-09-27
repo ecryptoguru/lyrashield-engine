@@ -30,7 +30,7 @@ def test_write_read_roundtrip() -> None:
     assert auth.read_auth() is None
     assert auth.is_verified() is False
 
-    auth.write_auth(email="user@example.com", token="tok-123", verified_at=_iso(timedelta(days=30)))  # nosec B106
+    auth.write_auth(email="user@example.com", token="tok-123", verified_at=_iso(timedelta(days=30)))
 
     record = auth.read_auth()
     assert record is not None
@@ -45,23 +45,23 @@ def test_write_read_roundtrip() -> None:
 
 def test_is_verified_enforces_expiry() -> None:
     # An expired record still reads back, but no longer unlocks history.
-    auth.write_auth(email="a@b.com", token="t", verified_at=_iso(timedelta(hours=-1)))  # nosec B106
+    auth.write_auth(email="a@b.com", token="t", verified_at=_iso(timedelta(hours=-1)))
     assert auth.read_auth() is not None
     assert auth.is_verified() is False
 
     # A future expiry unlocks it.
-    auth.write_auth(email="a@b.com", token="t", verified_at=_iso(timedelta(hours=1)))  # nosec B106
+    auth.write_auth(email="a@b.com", token="t", verified_at=_iso(timedelta(hours=1)))
     assert auth.is_verified() is True
 
 
 def test_is_verified_fails_closed_when_expiry_absent_or_unparseable() -> None:
     # No/blank expiry: fail closed rather than unlocking history forever.
-    auth.write_auth(email="a@b.com", token="t", verified_at="")  # nosec B106
+    auth.write_auth(email="a@b.com", token="t", verified_at="")
     assert auth.read_auth() is not None
     assert auth.is_verified() is False
 
     # Garbage expiry likewise requires re-verification.
-    auth.write_auth(email="a@b.com", token="t", verified_at="not-a-date")  # nosec B106
+    auth.write_auth(email="a@b.com", token="t", verified_at="not-a-date")
     assert auth.is_verified() is False
 
 
@@ -71,9 +71,9 @@ def test_is_verified_accepts_epoch_expiry() -> None:
     past = (datetime.now(UTC) - timedelta(hours=1)).timestamp()
 
     # As a numeric string (how write_auth persists it).
-    auth.write_auth(email="a@b.com", token="t", verified_at=str(future))  # nosec B106
+    auth.write_auth(email="a@b.com", token="t", verified_at=str(future))
     assert auth.is_verified() is True
-    auth.write_auth(email="a@b.com", token="t", verified_at=str(past))  # nosec B106
+    auth.write_auth(email="a@b.com", token="t", verified_at=str(past))
     assert auth.is_verified() is False
 
     # As a raw JSON number, if a record is written that way.
@@ -85,7 +85,7 @@ def test_is_verified_accepts_epoch_expiry() -> None:
 
 
 def test_write_auth_is_0600() -> None:
-    auth.write_auth(email="a@b.com", token="t", verified_at="")  # nosec B106
+    auth.write_auth(email="a@b.com", token="t", verified_at="")
     mode = stat.S_IMODE(auth.AUTH_PATH.stat().st_mode)
     assert mode == 0o600
 

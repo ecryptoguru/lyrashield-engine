@@ -35,7 +35,7 @@ def _tool(name: str) -> FunctionTool:
 
 
 @pytest.fixture(autouse=True)
-def _reset_registry() -> object:  # pyright: ignore[reportUnusedFunction]
+def _reset_registry() -> object:
     saved = list(factory._EXTRA_TOOLS)
     factory._EXTRA_TOOLS.clear()
     try:
@@ -45,7 +45,7 @@ def _reset_registry() -> object:  # pyright: ignore[reportUnusedFunction]
 
 
 @pytest.fixture(autouse=True)
-def _reset_tool_overrides() -> object:  # pyright: ignore[reportUnusedFunction]
+def _reset_tool_overrides() -> object:
     saved = dict(factory._TOOL_OVERRIDES)
     factory._TOOL_OVERRIDES.clear()
     try:
@@ -55,7 +55,7 @@ def _reset_tool_overrides() -> object:  # pyright: ignore[reportUnusedFunction]
 
 
 @pytest.fixture(autouse=True)
-def _reset_deferred_overrides() -> object:  # pyright: ignore[reportUnusedFunction]
+def _reset_deferred_overrides() -> object:
     deferred_overrides._tool_override_loaders.clear()
     deferred_overrides._model_policy_loaders.clear()
     yield

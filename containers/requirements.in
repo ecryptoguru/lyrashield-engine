@@ -1,0 +1,19 @@
+arjun==2.2.7
+bandit==1.8.6
+beautifulsoup4==4.15.0
+caido-sdk-client==0.3.0
+cprint==1.2.2
+cryptography==50.0.0
+dirsearch==0.4.3.post1
+httpx==0.28.1
+lxml==6.1.2
+pycryptodomex==3.23.0
+pyjwt==2.13.0
+ratelimit==2.2.1
+requests==2.34.2
+semgrep==1.136.0
+setuptools==80.10.2
+termcolor==3.3.0
+wafw00f==2.4.2
+# Direct sandbox tools at the versions in python-requirements.txt.
+# The existing transitive pins stay fixed until the DE-20 security refresh.

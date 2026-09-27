@@ -178,7 +178,7 @@ def _reservation_input_rate(model: str) -> float:
 
 def _lookup_litellm_cost(model: str) -> dict[str, Any] | None:
     """Look up a LiteLLM model_cost entry using common alias normalisations."""
-    import litellm  # noqa: PLC0415
+    import litellm
 
     model_cost = cast("dict[str, Any]", getattr(litellm, "model_cost", {}))
 
@@ -371,7 +371,7 @@ def _estimate_input_tokens(
     agent: Any,
 ) -> int:
     """Conservative local estimate for bounded context and reservations."""
-    import litellm  # noqa: PLC0415
+    import litellm
 
     payload = json.dumps(
         {

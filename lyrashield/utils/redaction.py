@@ -11,9 +11,9 @@ import re
 from urllib.parse import unquote, urlparse, urlunparse
 
 
-_SECRET_PLACEHOLDER = "[SECRET]"  # noqa: S105  # nosec B105
+_SECRET_PLACEHOLDER = "[SECRET]"  # noqa: S105
 _PII_PLACEHOLDER = "[PII]"
-_TOKEN_PLACEHOLDER = "[TOKEN]"  # noqa: S105  # nosec B105
+_TOKEN_PLACEHOLDER = "[TOKEN]"  # noqa: S105
 _JWT_PLACEHOLDER = "[JWT]"
 _AWS_KEY_PLACEHOLDER = "[AWS_KEY]"
 _PRIVATE_KEY_PLACEHOLDER = "[PRIVATE_KEY]"

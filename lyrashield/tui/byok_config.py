@@ -209,7 +209,7 @@ def load_config() -> ByokConfig:
         return ByokConfig()
     try:
         blob = _json_loads(raw)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("BYOK config blob unreadable; returning defaults")
         return ByokConfig()
 
@@ -251,17 +251,17 @@ def load_config() -> ByokConfig:
 
 def validate_chatgpt_credential() -> bool:
     """Validate the ChatGPT OAuth token by shelling into ``auth status``."""
-    import subprocess  # noqa: PLC0415
+    import subprocess
 
     try:
-        result = subprocess.run(  # noqa: S603
-            ["lyrashield", "auth", "status"],  # noqa: S607
+        result = subprocess.run(
+            ["lyrashield", "auth", "status"],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
     return result.returncode == 0
 
@@ -271,15 +271,15 @@ def validate_azure_credential(azure: AzureConfig) -> bool:
     if not azure.is_complete():
         return False
     try:
-        import requests  # noqa: PLC0415
+        import requests
 
         url = f"{azure.endpoint.rstrip('/')}/openai/models?api-version={azure.api_version}"
-        resp = requests.get(  # noqa: S113
+        resp = requests.get(
             url,
             headers={"api-key": azure.api_key},
             timeout=15,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
     return resp.status_code == 200
 
@@ -306,13 +306,13 @@ def apply_env(config: ByokConfig, env: dict[str, str] | None = None) -> dict[str
 
 
 def _json_dumps(obj: Any) -> str:
-    import json  # noqa: PLC0415
+    import json
 
     return json.dumps(obj, separators=(",", ":"))
 
 
 def _json_loads(raw: str) -> dict[str, Any]:
-    import json  # noqa: PLC0415
+    import json
 
     loaded = json.loads(raw)
     if not isinstance(loaded, dict):

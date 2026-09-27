@@ -111,14 +111,14 @@ def _probe_tcp_host(host: str, timeout: float = 2.0) -> bool:
 def _docker_version_handshake(env: Mapping[str, str]) -> str | None:
     """Issue a minimal Docker API version handshake. Returns the version or None."""
     try:
-        import docker  # noqa: PLC0415
+        import docker
 
         client = docker.from_env(environment=dict(env))
         info = client.version()
         client.close()
         ver = info.get("Version") if isinstance(info, dict) else None
         return str(ver) if ver else "unknown"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -250,12 +250,12 @@ def run_smoke_scan(timeout_s: float = 10.0) -> CheckResult:
     (the engine's own repo root if available) and caps the wall-clock at
     ``timeout_s``. This is a connectivity check, not a real scan.
     """
-    import subprocess  # noqa: PLC0415
+    import subprocess
 
     target = str(Path(__file__).resolve().parents[2])
     try:
-        proc = subprocess.run(  # noqa: S603
-            [  # noqa: S607
+        proc = subprocess.run(
+            [
                 "lyrashield",
                 "--target",
                 target,
@@ -283,7 +283,7 @@ def run_smoke_scan(timeout_s: float = 10.0) -> CheckResult:
             detail="`lyrashield` CLI not found on PATH.",
             remediation="Install the engine: `pipx install lyrashield-engine`.",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return CheckResult(
             name="smoke-scan",
             ok=False,

@@ -216,7 +216,7 @@ class LyraShieldLocalApp(App[None]):
                 return
         try:
             save_config(self.config)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             status.update(f"[red]BYOK setup could not be saved: {exc}[/]")
             return
         status.update(f"BYOK setup saved: {provider_label(self.config.provider)}")
@@ -301,7 +301,7 @@ class LyraShieldLocalApp(App[None]):
         except FileNotFoundError:
             progress.update("[red]`lyrashield` CLI not found. Install the engine.[/]")
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             progress.update(f"[red]Scan failed: {exc}[/]")
             return
 
