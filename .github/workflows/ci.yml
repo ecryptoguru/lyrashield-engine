@@ -88,6 +88,7 @@ jobs:
         working-directory: lyrashield/interface/viewer/frontend
         run: |
           npm ci
+          node --test tests/run-details-cost.test.mjs
           npm run typecheck
           npm run build
           git diff --exit-code -- ../static
