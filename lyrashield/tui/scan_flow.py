@@ -261,7 +261,7 @@ def _persist_run(
     result: ScanResult,
 ) -> None:
     """Persist the run + any parseable findings into the encrypted store."""
-    from lyrashield.tui.results_store import RunRecord  # noqa: PLC0415
+    from lyrashield.tui.results_store import RunRecord
 
     payload: dict[str, Any] = {
         "returncode": result.returncode,

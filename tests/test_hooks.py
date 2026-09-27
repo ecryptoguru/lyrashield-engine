@@ -38,7 +38,7 @@ class _CountingCounter:
 
 
 @pytest.fixture
-def _clear_estimate_cache() -> object:  # pyright: ignore[reportUnusedFunction]
+def _clear_estimate_cache() -> object:
     hooks_mod._estimate_cache.clear()
     yield
     hooks_mod._estimate_cache.clear()

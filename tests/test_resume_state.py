@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
-import subprocess  # nosec B404
+import subprocess
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +17,7 @@ main_module = importlib.import_module("lyrashield.interface.main")
 
 
 def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(  # noqa: S603  # nosec B603
+    result = subprocess.run(  # noqa: S603
         ["git", "-C", str(repo), *args],  # noqa: S607
         capture_output=True,
         text=True,
@@ -30,7 +30,7 @@ def _git(repo: Path, *args: str) -> str:
 def _git_clone(path: Path) -> str:
     """Create a fixture clone under the cache root and return its HEAD."""
     path.mkdir(parents=True)
-    subprocess.run(  # noqa: S603  # nosec B603
+    subprocess.run(  # noqa: S603
         ["git", "init", "-b", "main", str(path)],  # noqa: S607
         check=True,
         capture_output=True,

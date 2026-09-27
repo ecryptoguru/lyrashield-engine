@@ -9,20 +9,14 @@ repos:
       - id: ruff-format
         name: ruff-format
 
-  # MyPy for static type checking
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.17.1
+  # Use the locked project environment, matching CI's strict type gate.
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies: [
-          types-requests,
-          types-python-dateutil,
-          pydantic,
-          fastapi,
-          pytest,
-          "openai-agents[litellm]==0.14.6",
-        ]
-        args: [--install-types, --non-interactive]
+        name: mypy
+        entry: uv run mypy strix lyrashield_adapter lyrashield
+        language: system
+        pass_filenames: false
 
   # Built-in hooks for basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks

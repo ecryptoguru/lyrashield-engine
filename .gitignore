@@ -5,6 +5,8 @@ strix/interface/viewer/frontend/node_modules/
 strix/interface/viewer/frontend/.vite/
 
 # Python
+.coverage
+.coverage.*
 __pycache__/
 *.py[cod]
 *$py.class

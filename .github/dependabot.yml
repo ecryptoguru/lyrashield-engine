@@ -15,5 +15,6 @@ updates:
           - "opentelemetry-*"
     ignore:
       - dependency-name: charset-normalizer
+        # dirsearch 0.4.3.post1 requires the older major; revisit with DE-20.
         update-types:
           - version-update:semver-major

@@ -7,6 +7,7 @@ from typing import Any
 
 import litellm
 import pytest
+from litellm.integrations import anthropic_cache_control_hook
 
 from lyrashield.lifecycle.inputs import (
     build_root_initial_input,
@@ -247,8 +248,7 @@ def test_max_reasoning_effort_sent_as_raw_body_field() -> None:
 def test_conversation_tail_breakpoint_moves_with_appended_transcript() -> None:
     # LiteLLM must place the index=-1 cache_control on the last message however
     # long the transcript grows.
-    hook_mod = pytest.importorskip("litellm.integrations.anthropic_cache_control_hook")
-    apply = hook_mod.AnthropicCacheControlHook._apply_message_injections
+    apply = anthropic_cache_control_hook.AnthropicCacheControlHook._apply_message_injections
     points = _cache_points("bedrock/global.anthropic.claude-opus-4-8")
     msg_points = [p for p in points if p.get("location") == "message"]
 

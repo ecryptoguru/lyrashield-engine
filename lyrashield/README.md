@@ -16,7 +16,7 @@ retains the upstream attribution documented in `NOTICE`.
 | `lyrashield/lifecycle/` | Non-interactive agent loop, execution, budget hooks, context compaction, prompt sanitization, cancellation, sessions |
 | `lyrashield/runtime/` | Sandbox session, Docker client, Caido bootstrap, local-dir staging |
 | `lyrashield/agents/` | Product agent factory, programmatic tool calling, output-store binding, redaction, system-prompt renderer |
-| `lyrashield/interface/` | Product CLI, auth CLI, provider-contract CLI, TUI, viewer SPA, update check |
+| `lyrashield/interface/` | Product CLI, auth CLI, provider-contract CLI, TUI, viewer SPA |
 | `lyrashield/artifacts/` | Report state, dedupe, SARIF, writer, usage accounting — the `run.json` / `vulnerabilities.json` contract |
 | `lyrashield/telemetry/` | Lazy-key PostHog/Scarf clients with forced-off production defaults |
 | `lyrashield/utils/` | Mode-aware path and secret redaction |
@@ -30,10 +30,10 @@ Product modules register themselves through generic seams in the retained
 
 - `strix.skills.register_skill_dir` — loads `lyrashield/skills/` alongside
   inherited `strix/skills/`.
-- `strix.agents.factory.register_tool_override` — replaces upstream base tools
-  with product implementations from `lyrashield/tools/`.
-- `strix.agents.factory.register_model_policy` — registers the product
-  GPT-6 model-acceptance policy from `lyrashield/policy/models.py`.
+- `lyrashield.agents.overrides.register_tool_override_loader` — replaces
+  upstream base tools with product implementations from `lyrashield/tools/`.
+- `lyrashield.agents.overrides.register_model_policy_loader` — registers
+  product GPT-6 model acceptance from `lyrashield/policy/models.py`.
 - `strix.config.loader.register_settings_loader` — registers
   `lyrashield/policy/loader.py` as the product settings loader.
 - `strix.agents.prompt.FileSystemLoader` — searches registered skill

@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import shutil
-import subprocess  # nosec B404
+import subprocess
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -202,7 +202,7 @@ def _git_head(repo_path: str) -> tuple[str | None, str | None]:
     def _run(args: list[str]) -> str | None:
         try:
             # Controlled subprocess boundary: Git path is resolved and shell is disabled.
-            result = subprocess.run(  # noqa: S603  # nosec B603
+            result = subprocess.run(  # noqa: S603
                 [git_executable, "-C", str(path), *args],
                 capture_output=True,
                 text=True,

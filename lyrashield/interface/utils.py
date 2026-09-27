@@ -10,7 +10,7 @@ import re
 import secrets
 import shutil
 import stat
-import subprocess  # nosec B404
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -638,7 +638,7 @@ def _run_git_command(
     repo_path: Path, args: list[str], check: bool = True, timeout: float = 5
 ) -> subprocess.CompletedProcess[str]:
     # Controlled subprocess boundary: Git path is resolved and shell is disabled.
-    return subprocess.run(  # noqa: S603  # nosec B603
+    return subprocess.run(  # noqa: S603
         [_git_executable(), "-C", str(repo_path), *args],
         capture_output=True,
         text=True,
@@ -651,7 +651,7 @@ def _run_git_command_raw(
     repo_path: Path, args: list[str], check: bool = True
 ) -> subprocess.CompletedProcess[bytes]:
     # Controlled subprocess boundary: Git path is resolved and shell is disabled.
-    return subprocess.run(  # noqa: S603  # nosec B603
+    return subprocess.run(  # noqa: S603
         [_git_executable(), "-C", str(repo_path), *args],
         capture_output=True,
         check=check,
@@ -2131,7 +2131,7 @@ def clone_repository(
             elif branch:
                 clone_args.extend(["--branch", branch, "--single-branch"])
             clone_args.extend(["--", repo_url, str(clone_path)])
-            subprocess.run(  # noqa: S603  # nosec B603
+            subprocess.run(  # noqa: S603
                 clone_args,
                 capture_output=True,
                 text=True,

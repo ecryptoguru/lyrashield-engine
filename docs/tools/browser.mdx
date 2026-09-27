@@ -1,9 +1,9 @@
 ---
 title: "Browser"
-description: "Playwright-powered Chrome for web application testing"
+description: "Chromium browser automation through the agent-browser CLI"
 ---
 
-The upstream-derived sandbox provides a Playwright-controlled headless Chrome browser for authorized dynamic analysis.
+The sandbox provides the `agent-browser` CLI to drive Chromium for authorized dynamic analysis. The agent invokes it through `exec_command`; browser traffic passes through Caido.
 
 <Warning>
 The LyraShield production worker sends repository targets only to this engine. Application URL targets use a separate pinned deterministic scanner; browser-tool availability does not change that boundary.

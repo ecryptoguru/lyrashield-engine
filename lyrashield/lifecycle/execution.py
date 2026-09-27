@@ -14,7 +14,7 @@ import litellm
 from agents import Model, RunConfig, Runner
 from agents.exceptions import AgentsException, MaxTurnsExceeded, UserError
 from agents.sandbox.errors import ExecTransportError
-from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
+from docker import errors as docker_errors
 from httpx import TransportError
 from openai import (
     APIConnectionError,
@@ -743,7 +743,7 @@ async def _run_cycle_parked(
         return None
 
 
-async def _run_cycle(  # noqa: PLR0915
+async def _run_cycle(
     agent: Any,
     coordinator: AgentCoordinator,
     agent_id: str,
