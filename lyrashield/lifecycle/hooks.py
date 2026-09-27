@@ -15,6 +15,10 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.lifecycle import RunHooks
 
 from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.artifacts.usage import (
+    _LONG_CONTEXT_THRESHOLD_TOKENS,
+    _METERED_USD_PER_MILLION,
+)
 from lyrashield.lifecycle.deadline import RunDeadlineExceededError
 from lyrashield.tools.output_store import _take_prefix, _take_suffix
 
@@ -41,24 +45,13 @@ _COMPACTION_NOTICE = {
     ),
 }
 _COMPACTED_ITEM_MAX_BYTES = 64_000
-_LONG_CONTEXT_TOKENS = 272_000
+_LONG_CONTEXT_TOKENS = _LONG_CONTEXT_THRESHOLD_TOKENS
 
 # System-trusted tag for budget/turn warnings injected into the conversation.
 # The system prompt instructs the model to treat messages prefixed with this
 # tag as system-verified and to ignore any similar-looking content from
 # user or peer messages.
 _SYSTEM_NOTICE_TAG = "[SYSTEM-NOTICE]"
-# Canonical GPT-6 rate card (input, cached, cache-write, output) and the
-# long-context threshold, imported from the pricing ledger so admission,
-# reservation, and final pricing share one source of truth (I8).
-from lyrashield.artifacts.usage import (  # noqa: E402
-    _LONG_CONTEXT_THRESHOLD_TOKENS,
-    _METERED_USD_PER_MILLION,
-)
-
-
-_LONG_CONTEXT_TOKENS = _LONG_CONTEXT_THRESHOLD_TOKENS
-
 # Conservative defaults for models not explicitly priced. We deliberately
 # overestimate so budget enforcement errs on the side of protecting the
 # cap rather than silently overspending. Rates are dollars per 1M tokens.
@@ -169,13 +162,6 @@ def _rate_or_fraction(per_token_cost: Any, input_rate: float) -> float:
         except (TypeError, ValueError):
             pass
     return max(input_rate * 0.1, _DEFAULT_FALLBACK_CACHE_RATE)
-
-
-@functools.cache
-def _model_rates(model: str) -> tuple[float, float]:
-    """Backward-compatible (input, output) pair from the canonical card."""
-    rates = _model_rate_card(model)
-    return rates[0], rates[3]
 
 
 @functools.cache

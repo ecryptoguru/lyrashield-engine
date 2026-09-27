@@ -16,7 +16,7 @@ retains the upstream attribution documented in `NOTICE`.
 | `lyrashield/lifecycle/` | Non-interactive agent loop, execution, budget hooks, context compaction, prompt sanitization, cancellation, sessions |
 | `lyrashield/runtime/` | Sandbox session, Docker client, Caido bootstrap, local-dir staging |
 | `lyrashield/agents/` | Product agent factory, programmatic tool calling, output-store binding, redaction, system-prompt renderer |
-| `lyrashield/interface/` | Product CLI, auth CLI, provider-contract CLI, TUI, viewer SPA, update check |
+| `lyrashield/interface/` | Product CLI, auth CLI, provider-contract CLI, TUI, viewer SPA |
 | `lyrashield/artifacts/` | Report state, dedupe, SARIF, writer, usage accounting — the `run.json` / `vulnerabilities.json` contract |
 | `lyrashield/telemetry/` | Lazy-key PostHog/Scarf clients with forced-off production defaults |
 | `lyrashield/utils/` | Mode-aware path and secret redaction |

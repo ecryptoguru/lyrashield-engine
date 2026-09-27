@@ -17,7 +17,6 @@ _METERED_USD_PER_MILLION: dict[str, tuple[float, float, float, float]] = {
     "gpt-6-sol": (2.0, 0.2, 2.5, 10.0),
     "gpt-6-luna": (0.1, 0.01, 0.125, 0.5),
 }
-_GPT6_USD_PER_MILLION = _METERED_USD_PER_MILLION
 # Boundary above which the request is billed at 2x input/cache rates and 1.5x
 # output for the full request (OpenAI GPT-6 long-context pricing, >272K input).
 _LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
@@ -104,7 +103,7 @@ class LLMUsageLedger:
         if usage is None or not _usage_has_activity(usage):
             return False
 
-        is_gpt6 = _normalized_model_key(model) in _GPT6_USD_PER_MILLION
+        is_gpt6 = _normalized_model_key(model) in _METERED_USD_PER_MILLION
         if is_gpt6:
             self._gpt6_seen = True
             response_id = provider_receipt.get("response_id") if provider_receipt else None
@@ -223,7 +222,7 @@ class LLMUsageLedger:
             record.pop("request_usage_entries", None)
         if self._gpt6_seen:
             gpt6_receipts = sum(
-                _normalized_model_key(entry.get("model")) in _GPT6_USD_PER_MILLION
+                _normalized_model_key(entry.get("model")) in _METERED_USD_PER_MILLION
                 for entry in self._request_usage_entries
             )
             record["accounting_complete"] = self._gpt6_accounting_complete and (
@@ -347,7 +346,7 @@ class LLMUsageLedger:
         }
         self._gpt6_seen = (
             any(
-                _normalized_model_key(entry.get("model")) in _GPT6_USD_PER_MILLION
+                _normalized_model_key(entry.get("model")) in _METERED_USD_PER_MILLION
                 for entry in self._request_usage_entries
             )
             or "accounting_complete" in raw_usage
