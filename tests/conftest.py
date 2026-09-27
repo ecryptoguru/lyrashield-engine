@@ -65,6 +65,23 @@ def _clear_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_mcp_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Keep the suite from reading a real MCP config.
+
+    ``run_strix_scan`` connects the MCP servers listed in
+    ``~/.strix/mcp-servers.json``. Point the loader at a path that does not
+    exist so it resolves to "no connections". Tests that exercise the loader
+    itself set their own ``STRIX_MCP_CONFIG`` after this runs.
+    """
+    missing = tmp_path_factory.mktemp("mcp-isolation") / "no-servers.json"
+    monkeypatch.setenv("STRIX_MCP_CONFIG", str(missing))
+    monkeypatch.delenv("STRIX_MCP_ONLY", raising=False)
+    monkeypatch.delenv("STRIX_MCP_EXCLUDE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _plain_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make Rich output identical on every machine (upstream parity fixture)."""
     monkeypatch.setenv("TERM", "dumb")
