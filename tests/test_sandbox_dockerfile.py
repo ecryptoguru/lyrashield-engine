@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -27,6 +28,11 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
     assert "FROM kalilinux/kali-rolling@sha256:" in content
     assert "ARG KALI_APT_SUITE=kali-last-snapshot" in content
     assert "ARG KALI_APT_INRELEASE_SHA256=" in content
+    kali_index_pins = re.findall(
+        r"^ARG KALI_APT_INRELEASE_SHA256=([0-9a-f]{64})$", content, flags=re.MULTILINE
+    )
+    assert len(kali_index_pins) == 2
+    assert kali_index_pins[0] == kali_index_pins[1]
     assert "Pin-Priority: 1001" in content
     assert "apt-get full-upgrade -y --allow-downgrades" in content
     assert "archive.kali.org/kali" in content
