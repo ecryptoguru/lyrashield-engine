@@ -299,8 +299,8 @@ class LLMUsageLedger:
             priced = self._agent_costs.get(agent_id)
             shared = residual_shares.get(agent_id, 0.0)
             if priced is None and agent_id in self._zero_cost_agents:
-                agent_cost: float | None = 0.0
-                cost_basis = "per_agent_priced"
+                agent_cost: float | None = shared
+                cost_basis = "pro_rata" if shared > 0.0 else "per_agent_priced"
             elif priced is not None:
                 agent_cost = priced + shared
                 cost_basis = "per_agent_priced" if shared == 0.0 else "pro_rata"

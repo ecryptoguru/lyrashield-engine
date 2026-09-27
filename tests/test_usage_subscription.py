@@ -36,6 +36,20 @@ def test_subscription_model_keeps_tokens_but_reports_no_cost() -> None:
     assert ledger.total_cost == 0.0
 
 
+def test_subscription_agent_receives_unattributed_shared_cost() -> None:
+    ledger = LLMUsageLedger()
+    ledger.record(agent_id="subscription", usage=_usage(), model="chatgpt/gpt-6-luna")
+    ledger.record_observed_cost(0.25)
+
+    record = ledger.to_record()
+    agent = record["agents"][0]
+
+    assert record["cost"] == 0.25
+    assert record["cost_basis"] == "pro_rata"
+    assert agent["cost"] == 0.25
+    assert agent["cost_basis"] == "pro_rata"
+
+
 def test_subscription_model_ignores_observed_cost() -> None:
     ledger = LLMUsageLedger()
     ledger.record_observed_cost(4.20, model="chatgpt/gpt-6-luna")

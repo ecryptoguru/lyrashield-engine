@@ -69,7 +69,6 @@ from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     configure_sdk_model_defaults,
-    is_gpt6_model,
     is_gpt6_supported_provider,
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
@@ -192,7 +191,8 @@ def validate_environment() -> None:
                 "Sol or Luna API deployment instead."
             )
             sys.exit(1)
-        if not is_gpt6_model(settings.llm.model):
+        normalized_subscription_route = (settings.llm.model or "").strip().lower().replace("_", "-")
+        if normalized_subscription_route not in {"chatgpt/gpt-6-sol", "chatgpt/gpt-6-luna"}:
             console.print(
                 f"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or "
                 "Luna deployment.[/] Subscription scans require a "

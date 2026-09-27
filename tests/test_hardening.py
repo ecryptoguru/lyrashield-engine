@@ -134,6 +134,30 @@ def test_subscription_main_validates_helper_models_before_return(
     assert "require a GPT-6 Sol or Luna deployment" in capsys.readouterr().out
 
 
+def test_subscription_main_rejects_nested_gpt6_route(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace(
+        llm=SimpleNamespace(
+            model="chatgpt/other/gpt-6-luna",
+            delegate_model=None,
+            api_key=None,
+            api_base=None,
+        ),
+        dedupe=SimpleNamespace(model=""),
+        product=SimpleNamespace(allow_chatgpt_subscription=True),
+    )
+    monkeypatch.setattr(main_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(main_module.codex, "is_authenticated", lambda: True)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.validate_environment()
+
+    assert exc_info.value.code == 1
+    assert "is not a GPT-6 Sol or Luna deployment" in capsys.readouterr().out
+
+
 def test_subscription_main_accepts_paid_gpt6_delegate(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = SimpleNamespace(
         llm=SimpleNamespace(
