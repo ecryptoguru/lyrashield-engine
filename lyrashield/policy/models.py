@@ -713,7 +713,7 @@ def _mirror_api_key_to_provider_env(model_name: str | None, api_key: str) -> Non
     try:
         report = cast(
             "dict[str, Any]",
-            litellm.validate_environment(model=name.lower()),  # pyright: ignore[reportUnknownMemberType]
+            litellm.validate_environment(model=name.lower()),
         )
     except Exception:  # noqa: BLE001
         return

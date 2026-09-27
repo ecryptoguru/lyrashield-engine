@@ -516,10 +516,6 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
     }
 
 
-def load_input(path: Path) -> TriageInput:
-    return TriageInput.model_validate_json(path.read_text(encoding="utf-8"))
-
-
 def write_artifact(path: Path, artifact: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")

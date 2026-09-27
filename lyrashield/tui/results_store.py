@@ -59,10 +59,10 @@ def keyring_set(service: str, key: str, value: str) -> bool:
     decide whether to degrade gracefully. Never writes a plaintext file.
     """
     try:
-        import keyring  # noqa: PLC0415
+        import keyring
 
         keyring.set_password(service, key, value)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("keyring backend unavailable; secret not stored")
         return False
     return True
@@ -71,21 +71,11 @@ def keyring_set(service: str, key: str, value: str) -> bool:
 def keyring_get(service: str, key: str) -> str | None:
     """Retrieve a secret, distinguishing an absent item from backend failure."""
     try:
-        import keyring  # noqa: PLC0415
+        import keyring
 
         return keyring.get_password(service, key)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise ResultsStoreKeyError("Local keychain is unavailable") from exc
-
-
-def keyring_delete(service: str, key: str) -> bool:
-    try:
-        import keyring  # noqa: PLC0415
-
-        keyring.delete_password(service, key)
-    except Exception:  # noqa: BLE001
-        return False
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -367,10 +357,3 @@ class ResultsStore:
 def new_run_id() -> str:
     """Generate a stable, unique run id for the local store."""
     return f"local-{int(time.time())}-{secrets.token_hex(4)}"
-
-
-def store_path_from_env(env: dict[str, str] | None = None) -> Path:
-    """Resolve the store path from env, falling back to the default."""
-    e = env if env is not None else os.environ
-    p = e.get("LYRASHIELD_LOCAL_STORE_PATH")
-    return Path(p) if p else DEFAULT_STORE_PATH

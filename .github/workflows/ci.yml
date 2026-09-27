@@ -88,6 +88,7 @@ jobs:
         working-directory: lyrashield/interface/viewer/frontend
         run: |
           npm ci
+          node --test tests/run-details-cost.test.mjs
           npm run typecheck
           npm run build
           git diff --exit-code -- ../static
@@ -162,26 +163,7 @@ jobs:
             .
 
       - name: Smoke sandbox image
-        run: |
-          docker run --rm lyrashield-sandbox:ci sh -lc '
-            test "$(id -u)" != "0" &&
-            test "$(pwd)" = "/workspace" &&
-            test -f /app/certs/ca.p12 &&
-            test ! -S /var/run/docker.sock &&
-            test "$VIRTUAL_ENV" = "/app/.venv" &&
-            test "$HTTP_PROXY" = "http://127.0.0.1:48080" &&
-            ! sudo -n true 2>/dev/null &&
-            test ! -w /etc &&
-            test ! -w /usr/local/bin &&
-            caido-cli --version &&
-            command -v nmap >/dev/null &&
-            getcap /usr/lib/nmap/nmap | grep -q "cap_net_raw" &&
-            nmap --version >/dev/null 2>&1 &&
-            nmap -sn 127.0.0.1 >/dev/null &&
-            /app/.venv/bin/python -c "import caido_api" &&
-            status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
-            case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
-          '
+        run: bash scripts/smoke-sandbox.sh lyrashield-sandbox:ci
 
       - name: Relay grant isolation (built image)
         run: |
@@ -250,12 +232,3 @@ jobs:
                    curl --fail -sS -m 5 -o /dev/null http://203.0.113.10/ &&
               echo "network deny probes passed"
           '
-
-      - name: Upload image diagnostics
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: docker-smoke-diagnostics-${{ github.run_id }}
-          path: containers/Dockerfile
-          if-no-files-found: ignore
-          retention-days: 7

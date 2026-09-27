@@ -9,6 +9,8 @@ from typing import Any, cast
 
 from agents.usage import Usage, deserialize_usage, serialize_usage
 
+from lyrashield.policy import codex
+
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,6 @@ _METERED_USD_PER_MILLION: dict[str, tuple[float, float, float, float]] = {
     "gpt-6-sol": (2.0, 0.2, 2.5, 10.0),
     "gpt-6-luna": (0.1, 0.01, 0.125, 0.5),
 }
-_GPT6_USD_PER_MILLION = _METERED_USD_PER_MILLION
 # Boundary above which the request is billed at 2x input/cache rates and 1.5x
 # output for the full request (OpenAI GPT-6 long-context pricing, >272K input).
 _LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
@@ -73,6 +74,9 @@ class LLMUsageLedger:
         self._recorded_response_ids: set[str] = set()
         self._total_cost = 0.0
         self._has_cost = False
+        self._subscription_seen = False
+        self._zero_cost_models: set[str] = set()
+        self._zero_cost_agents: set[str] = set()
         # Per-agent cost accumulated at record() time from the model rate card.
         # Token-share pro-rata is only a fallback for cost that cannot be
         # attributed to one agent (e.g. provider-reported callback cost).
@@ -83,14 +87,25 @@ class LLMUsageLedger:
         # Response ids already counted via record_observed_cost (callback
         # double-fire protection).
         self._observed_response_ids: set[str] = set()
-        # When True, tokens are still tracked but cost stays $0 — the run is on a
-        # model subscription, so there is no metered per-token charge to report.
-        self.zero_cost = False
         # Ancillary provider charges (web search, etc.) classified by category.
         # These are NOT covered by a model subscription: subscription zero-cost
         # applies only to covered model-token categories, so ancillary charges
         # stay metered and reach the reconciled total.
         self._ancillary_costs: dict[str, float] = {}
+
+    def set_zero_cost_model(self, model: str | None) -> None:
+        model_key = _normalized_model_route(model)
+        if model_key:
+            self._zero_cost_models.add(model_key)
+            self._subscription_seen = True
+
+    def _is_zero_cost_model(self, model: str | None) -> bool:
+        model_key = _normalized_model_route(model)
+        if codex.subscription_model(model) is not None and model_key:
+            self._zero_cost_models.add(model_key)
+        is_zero_cost = model_key in self._zero_cost_models
+        self._subscription_seen = self._subscription_seen or is_zero_cost
+        return is_zero_cost
 
     def record(
         self,
@@ -104,7 +119,8 @@ class LLMUsageLedger:
         if usage is None or not _usage_has_activity(usage):
             return False
 
-        is_gpt6 = _normalized_model_key(model) in _GPT6_USD_PER_MILLION
+        is_subscription = self._is_zero_cost_model(model)
+        is_gpt6 = _normalized_model_key(model) in _METERED_USD_PER_MILLION
         if is_gpt6:
             self._gpt6_seen = True
             response_id = provider_receipt.get("response_id") if provider_receipt else None
@@ -121,6 +137,10 @@ class LLMUsageLedger:
                 self._recorded_response_ids.add(response_id)
 
         normalized_agent_id = str(agent_id or "unknown")
+        if is_subscription:
+            self._zero_cost_agents.add(normalized_agent_id)
+        else:
+            self._zero_cost_agents.discard(normalized_agent_id)
         self._total_usage.add(usage)
         self._agent_usage.setdefault(normalized_agent_id, Usage()).add(usage)
         if is_gpt6 and provider_receipt is not None and usage.requests == 1:
@@ -134,7 +154,7 @@ class LLMUsageLedger:
         if model:
             metadata["model"] = model
 
-        if not self.zero_cost and _normalized_model_key(model) not in self._observed_cost_models:
+        if not is_subscription and _normalized_model_key(model) not in self._observed_cost_models:
             estimated = (
                 estimate_request_cost_usd(
                     model,
@@ -166,7 +186,8 @@ class LLMUsageLedger:
         model: str | None = None,
         response_id: str | None = None,
     ) -> None:
-        if self.zero_cost or _metered_rate(model) is not None:
+        is_subscription = self._is_zero_cost_model(model)
+        if is_subscription or _metered_rate(model) is not None:
             return
         if response_id is not None:
             if response_id in self._observed_response_ids:
@@ -187,7 +208,7 @@ class LLMUsageLedger:
         """Record a metered ancillary charge (e.g. paid web search).
 
         Ancillary charges are outside the model-subscription coverage, so
-        they are recorded regardless of ``zero_cost`` and included in the
+        they are recorded regardless of model-token pricing and included in the
         reconciled total alongside (possibly zero) model-token cost.
         """
         try:
@@ -223,7 +244,7 @@ class LLMUsageLedger:
             record.pop("request_usage_entries", None)
         if self._gpt6_seen:
             gpt6_receipts = sum(
-                _normalized_model_key(entry.get("model")) in _GPT6_USD_PER_MILLION
+                _normalized_model_key(entry.get("model")) in _METERED_USD_PER_MILLION
                 for entry in self._request_usage_entries
             )
             record["accounting_complete"] = self._gpt6_accounting_complete and (
@@ -231,9 +252,9 @@ class LLMUsageLedger:
             )
         ancillary_total = sum(self._ancillary_costs.values())
         reconciled = self._total_cost + ancillary_total
-        if self._has_cost or self.zero_cost or ancillary_total > 0:
+        if self._has_cost or self._subscription_seen or ancillary_total > 0:
             record["cost"] = _round_cost(reconciled)
-        if self.zero_cost:
+        if self._subscription_seen:
             record["subscription"] = True
         if ancillary_total > 0:
             # Subscription zero-cost covers model tokens only; ancillary
@@ -253,7 +274,12 @@ class LLMUsageLedger:
         share_recipients: list[str] = []
         if residual > 0 and self._agent_usage:
             fallback = [aid for aid in self._agent_usage if aid not in self._agent_costs]
-            share_recipients = fallback or list(self._agent_usage)
+            fallback = [aid for aid in fallback if aid not in self._zero_cost_agents]
+            share_recipients = (
+                fallback
+                or [aid for aid in self._agent_usage if aid not in self._zero_cost_agents]
+                or list(self._agent_usage)
+            )
             share_tokens = sum(agent_tokens[aid] for aid in share_recipients)
             if share_tokens > 0:
                 residual_shares = {
@@ -272,8 +298,11 @@ class LLMUsageLedger:
             metadata = self._agent_metadata.get(agent_id, {})
             priced = self._agent_costs.get(agent_id)
             shared = residual_shares.get(agent_id, 0.0)
-            if priced is not None:
-                agent_cost: float | None = priced + shared
+            if priced is None and agent_id in self._zero_cost_agents:
+                agent_cost: float | None = shared
+                cost_basis = "pro_rata" if shared > 0.0 else "per_agent_priced"
+            elif priced is not None:
+                agent_cost = priced + shared
                 cost_basis = "per_agent_priced" if shared == 0.0 else "pro_rata"
             else:
                 agent_cost = shared if self._has_cost else None
@@ -295,7 +324,7 @@ class LLMUsageLedger:
             agents.append(agent_record)
 
         record["agents"] = agents
-        if (self._has_cost or self.zero_cost) and agents:
+        if (self._has_cost or self._subscription_seen) and agents:
             record["cost_basis"] = "per_agent_priced" if all_priced else "pro_rata"
         return record
 
@@ -309,7 +338,9 @@ class LLMUsageLedger:
         self._recorded_response_ids.clear()
         self._total_cost = 0.0
         self._has_cost = False
+        self._subscription_seen = bool(self._zero_cost_models)
         self._agent_costs.clear()
+        self._zero_cost_agents.clear()
         self._observed_cost_models.clear()
         self._observed_response_ids.clear()
         self._ancillary_costs.clear()
@@ -317,6 +348,7 @@ class LLMUsageLedger:
         if not isinstance(raw_usage, dict):
             return
         raw_usage = cast("dict[str, Any]", raw_usage)
+        self._subscription_seen = self._subscription_seen or raw_usage.get("subscription") is True
 
         raw_ancillary = raw_usage.get("ancillary_costs")
         if isinstance(raw_ancillary, dict):
@@ -347,7 +379,7 @@ class LLMUsageLedger:
         }
         self._gpt6_seen = (
             any(
-                _normalized_model_key(entry.get("model")) in _GPT6_USD_PER_MILLION
+                _normalized_model_key(entry.get("model")) in _METERED_USD_PER_MILLION
                 for entry in self._request_usage_entries
             )
             or "accounting_complete" in raw_usage
@@ -377,6 +409,8 @@ class LLMUsageLedger:
                 if isinstance(model, str) and model:
                     metadata["model"] = model
                 self._agent_metadata[agent_id] = metadata
+                if self._is_zero_cost_model(model):
+                    self._zero_cost_agents.add(agent_id)
 
                 # Restore per-agent priced costs so a resumed run keeps exact
                 # attribution instead of falling back to token-share pro-rata.
@@ -390,6 +424,12 @@ def _normalized_model_key(model: str | None) -> str | None:
     if not model:
         return None
     return model.strip().lower().split("/")[-1] or None
+
+
+def _normalized_model_route(model: str | None) -> str | None:
+    if not model:
+        return None
+    return model.strip().lower() or None
 
 
 def _resolve_total_tokens(usage: Usage) -> int:

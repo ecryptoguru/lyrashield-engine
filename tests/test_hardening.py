@@ -101,6 +101,80 @@ def test_invalid_delegate_model_exits_before_sandbox_setup(
     assert "require a GPT-6 Sol or Luna deployment" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    ("delegate_model", "dedupe_model"),
+    [
+        ("unsupported/gpt-6-luna", ""),
+        (None, "unsupported/gpt-6-luna"),
+    ],
+)
+def test_subscription_main_validates_helper_models_before_return(
+    delegate_model: str | None,
+    dedupe_model: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace(
+        llm=SimpleNamespace(
+            model="chatgpt/gpt-6-luna",
+            delegate_model=delegate_model,
+            api_key=None,
+            api_base=None,
+        ),
+        dedupe=SimpleNamespace(model=dedupe_model),
+        product=SimpleNamespace(allow_chatgpt_subscription=True),
+    )
+    monkeypatch.setattr(main_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(main_module.codex, "is_authenticated", lambda: True)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.validate_environment()
+
+    assert exc_info.value.code == 1
+    assert "require a GPT-6 Sol or Luna deployment" in capsys.readouterr().out
+
+
+def test_subscription_main_rejects_nested_gpt6_route(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace(
+        llm=SimpleNamespace(
+            model="chatgpt/other/gpt-6-luna",
+            delegate_model=None,
+            api_key=None,
+            api_base=None,
+        ),
+        dedupe=SimpleNamespace(model=""),
+        product=SimpleNamespace(allow_chatgpt_subscription=True),
+    )
+    monkeypatch.setattr(main_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(main_module.codex, "is_authenticated", lambda: True)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.validate_environment()
+
+    assert exc_info.value.code == 1
+    assert "is not a GPT-6 Sol or Luna deployment" in capsys.readouterr().out
+
+
+def test_subscription_main_accepts_paid_gpt6_delegate(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace(
+        llm=SimpleNamespace(
+            model="chatgpt/gpt-6-luna",
+            delegate_model="openai/gpt-6-luna",
+            api_key=None,
+            api_base=None,
+        ),
+        dedupe=SimpleNamespace(model=""),
+        product=SimpleNamespace(allow_chatgpt_subscription=True),
+    )
+    monkeypatch.setattr(main_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(main_module.codex, "is_authenticated", lambda: True)
+
+    main_module.validate_environment()
+
+
 def test_docker_client_has_no_shared_bind_mount_default() -> None:
     assert "strix_bind_mounts" not in StrixDockerSandboxClient.__dict__
 

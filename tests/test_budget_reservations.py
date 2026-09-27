@@ -133,7 +133,7 @@ def test_subscription_receipt_retains_paid_search_and_reconciles_total(
 ) -> None:
     monkeypatch.setattr(state_module, "run_dir_for", lambda _n: tmp_path)
     state = ReportState(run_name="sub-search")
-    state._llm_usage.zero_cost = True
+    state._llm_usage.set_zero_cost_model("chatgpt/gpt-6-luna")
     state._llm_usage.record(
         agent_id="root",
         usage=_usage_with_details(1_000, 2_000, cached=0, cache_write=0),
@@ -155,12 +155,11 @@ def test_subscription_hydrate_does_not_double_count_search(
 ) -> None:
     monkeypatch.setattr(state_module, "run_dir_for", lambda _n: tmp_path)
     state = ReportState(run_name="sub-hydrate")
-    state._llm_usage.zero_cost = True
+    state._llm_usage.set_zero_cost_model("chatgpt/gpt-6-luna")
     state.record_web_search_cost(0.03, query="q", mode="turbo")
     record = state._llm_usage.to_record()
 
     resumed = LLMUsageLedger()
-    resumed.zero_cost = True
     resumed.hydrate(record)
     assert resumed.total_cost == pytest.approx(0.03)
     assert resumed.to_record()["cost"] == pytest.approx(0.03)

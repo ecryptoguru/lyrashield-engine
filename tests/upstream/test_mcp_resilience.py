@@ -19,7 +19,7 @@ from strix.tools.mcp import session as mcp_session
 from strix.tools.mcp.failures import FailureInfo, HttpStatusRecorder, classify
 
 
-_test_mcp_client = importlib.import_module("tests.test_mcp_client")
+_test_mcp_client = importlib.import_module("tests.upstream.test_mcp_client")
 FakeMCPServer: Any = _test_mcp_client.FakeMCPServer
 _mcp_tool: Any = _test_mcp_client._mcp_tool
 
@@ -133,7 +133,7 @@ def _config(name: str, **kwargs: Any) -> McpConnectionConfig:
     return McpConnectionConfig(
         name=name,
         url="https://provider.example/mcp",
-        auth=BearerAuth(token="secret-token"),  # noqa: S106  # nosec B106
+        auth=BearerAuth(token="secret-token"),  # noqa: S106
         **kwargs,
     )
 

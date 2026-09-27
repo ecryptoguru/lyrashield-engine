@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
 
 _SCAN_ID: ContextVar[str | None] = ContextVar("strix_scan_id", default=None)
-_AGENT_ID: ContextVar[str | None] = ContextVar("strix_agent_id", default=None)
 
 
 def set_scan_id(scan_id: str) -> None:
@@ -26,20 +25,10 @@ def set_scan_id(scan_id: str) -> None:
     _SCAN_ID.set(scan_id)
 
 
-def set_agent_id(agent_id: str | None) -> None:
-    """Set or clear the agent_id seen on every log record from this point.
-
-    ``None`` clears (renders as ``-`` in the log line). Mutations are
-    isolated to the current asyncio task and tasks created from it after
-    the call.
-    """
-    _AGENT_ID.set(agent_id)
-
-
 class _StrixContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.scan_id = _SCAN_ID.get() or "-"
-        record.agent_id = _AGENT_ID.get() or "-"
+        record.agent_id = "-"
         return True
 
 

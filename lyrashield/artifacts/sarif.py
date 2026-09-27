@@ -347,21 +347,6 @@ def write_sarif(
     return out
 
 
-# ``build_sarif_document`` is a convenience alias for callers that prefer a
-# name mirroring ``write_sarif_report``.
-def build_sarif_document(
-    reports: list[dict[str, Any]],
-    *,
-    tool_version: str | None = None,
-    repository_context: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return build_sarif_report(
-        reports,
-        tool_version=tool_version,
-        repository_context=repository_context,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Repository provenance
 # ---------------------------------------------------------------------------

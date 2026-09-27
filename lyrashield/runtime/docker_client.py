@@ -37,7 +37,7 @@ from typing import Any, cast
 
 from agents.sandbox.errors import ExposedPortUnavailableError
 from agents.sandbox.manifest import Manifest
-from agents.sandbox.sandboxes.docker import (  # pyright: ignore[reportPrivateImportUsage]
+from agents.sandbox.sandboxes.docker import (
     DockerSandboxClient,
     DockerSandboxSession,
     _build_docker_volume_mounts,
@@ -47,11 +47,11 @@ from agents.sandbox.sandboxes.docker import (  # pyright: ignore[reportPrivateIm
 )
 from agents.sandbox.session.sandbox_session import SandboxSession
 from agents.sandbox.types import ExposedPortEndpoint
-from docker import errors as docker_errors  # pyright: ignore[reportMissingTypeStubs]
-from docker.models.containers import Container  # pyright: ignore[reportMissingTypeStubs]
-from docker.types import LogConfig  # pyright: ignore[reportMissingTypeStubs]
-from docker.types import Mount as DockerSDKMount  # pyright: ignore[reportMissingTypeStubs]
-from docker.utils import parse_repository_tag  # pyright: ignore[reportMissingTypeStubs]
+from docker import errors as docker_errors
+from docker.models.containers import Container
+from docker.types import LogConfig
+from docker.types import Mount as DockerSDKMount
+from docker.utils import parse_repository_tag
 from requests.exceptions import RequestException
 
 

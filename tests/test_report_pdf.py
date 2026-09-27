@@ -103,7 +103,7 @@ def test_wrong_password_is_rejected(tmp_path: Path) -> None:
     run_dir = _make_run(tmp_path)
     encrypted = encrypt_pdf(generate_report_pdf(run_dir), "correct-horse-battery")
     with pytest.raises(WrongPasswordError):
-        PdfReader(BytesIO(encrypted), password="not-the-password")  # nosec B106
+        PdfReader(BytesIO(encrypted), password="not-the-password")
 
 
 def test_build_encrypted_report(tmp_path: Path) -> None:

@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from lyrashield.tui.byok_config import (
+    CONFIG_KEY,
     LAUNCH_PROVIDERS,
     PROFILE_FALLBACK,
     PROFILE_LUNA,
@@ -129,6 +132,30 @@ def test_save_load_config_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     assert loaded.azure.endpoint == "https://x.openai.azure.com"
     assert loaded.azure.deployment == "dep"
     assert loaded.profiles["DEEP"].name == PROFILE_LUNA
+
+
+@pytest.mark.parametrize(
+    "legacy_model",
+    ["chatgpt/gpt-5.6", "chatgpt/gpt-5.6-luna", "chatgpt/gpt-5.6-terra"],
+)
+def test_load_config_migrates_legacy_chatgpt_model(
+    legacy_model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_blob = json.dumps(
+        {
+            "provider": Provider.CHATGPT_OAUTH.value,
+            "chatgpt": {"enabled": True, "model": legacy_model},
+        }
+    )
+    monkeypatch.setattr(
+        "lyrashield.tui.byok_config.keyring_get",
+        lambda _service, key: config_blob if key == CONFIG_KEY else None,
+    )
+
+    loaded = load_config()
+
+    assert loaded.chatgpt.model == "chatgpt/gpt-6-luna"
+    assert loaded.to_env()["LYRASHIELD_LLM"] == "chatgpt/gpt-6-luna"
 
 
 def test_save_config_rejects_failed_keychain_write(monkeypatch: pytest.MonkeyPatch) -> None:

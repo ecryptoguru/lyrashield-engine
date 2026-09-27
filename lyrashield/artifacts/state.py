@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import shutil
-import subprocess  # nosec B404
+import subprocess
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -19,6 +19,7 @@ from lyrashield.artifacts import evidence as _evidence
 from lyrashield.artifacts import quality as _quality
 from lyrashield.artifacts.sarif import write_sarif
 from lyrashield.artifacts.usage import (
+    _METERED_USD_PER_MILLION,
     LLMUsageLedger,
     _int_or_zero,
     _round_cost,
@@ -202,7 +203,7 @@ def _git_head(repo_path: str) -> tuple[str | None, str | None]:
     def _run(args: list[str]) -> str | None:
         try:
             # Controlled subprocess boundary: Git path is resolved and shell is disabled.
-            result = subprocess.run(  # noqa: S603  # nosec B603
+            result = subprocess.run(  # noqa: S603
                 [git_executable, "-C", str(path), *args],
                 capture_output=True,
                 text=True,
@@ -558,8 +559,10 @@ class ReportState:
         self._raw_local_sources: list[dict[str, Any]] = []
         self._llm_usage = LLMUsageLedger()
         self._provider_usage_receipts: dict[str, dict[str, Any]] = {}
-        auth_mode = codex.auth_mode(load_settings().llm.model)
-        self._llm_usage.zero_cost = auth_mode == "subscription"
+        configured_model = load_settings().llm.model
+        auth_mode = codex.auth_mode(configured_model)
+        if auth_mode == "subscription":
+            self._llm_usage.set_zero_cost_model(configured_model)
         self.run_record = initial_run_record(run_name, auth_mode=auth_mode)
         # initial_run_record generated the run_id; adopt it on the instance.
         self.run_id = str(self.run_record["run_id"])
@@ -1877,10 +1880,7 @@ def litellm_cost_callback(
     """LiteLLM ``success_callback`` adapter; forwards observed cost to the active scan."""
     kwargs_dict = _as_dict(kwargs)
     model = kwargs_dict.get("model") if kwargs_dict is not None else None
-    if isinstance(model, str) and model.strip().lower().split("/")[-1] in {
-        "gpt-6-sol",
-        "gpt-6-luna",
-    }:
+    if isinstance(model, str) and model.strip().lower().split("/")[-1] in _METERED_USD_PER_MILLION:
         # Azure's LiteLLM response_cost can be stale for GPT-6. The usage
         # ledger prices the provider token receipt with the pinned rate card.
         return

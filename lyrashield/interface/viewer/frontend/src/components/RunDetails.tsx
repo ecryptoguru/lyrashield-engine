@@ -38,6 +38,12 @@ function fmtDuration(seconds: number | null): string {
   if (m) return `${m}m ${s}s`;
   return `${s}s`;
 }
+function fmtCost(amount: number): string {
+  if (amount > 0 && amount < 0.01) {
+    return `$${amount.toFixed(10).replace(/0+$/, "").replace(/\.$/, "")}`;
+  }
+  return `$${amount.toFixed(2)}`;
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -90,9 +96,11 @@ export function RunDetails({
   const usage = rec(raw.llm_usage);
   const hasUsage = Object.keys(usage).length > 0;
   const agents = arr(usage.agents).map(rec);
-  const models = Array.from(
-    new Set(agents.map((a) => str(a.model)).filter((m): m is string => !!m))
-  );
+  const agentModels = agents.map((a) => str(a.model)).filter((m): m is string => !!m);
+  const requestModels = arr(usage.request_usage_entries)
+    .map((entry) => str(rec(entry).model))
+    .filter((m): m is string => !!m);
+  const models = Array.from(new Set([...requestModels, ...agentModels]));
   const requests = num(usage.requests);
   const inputTokens = num(usage.input_tokens);
   const cached = num(rec(arr(usage.input_tokens_details)[0]).cached_tokens);
@@ -101,6 +109,21 @@ export function RunDetails({
   const totalTokens = num(usage.total_tokens);
   const cost = num(usage.cost);
   const subscription = str(raw.auth_mode) === "subscription";
+  const hasMeteredModel = models.some((model) => !model.startsWith("chatgpt/"));
+  const displayedModels =
+    subscription &&
+    hasMeteredModel &&
+    !models.some((model) => model.startsWith("chatgpt/"))
+      ? ["ChatGPT subscription route (model not reported)", ...models]
+      : models;
+  const hasAncillaryCost = Object.values(rec(usage.ancillary_costs)).some(
+    (amount) => typeof amount === "number" && amount > 0
+  );
+  const mixedCostLabel = hasMeteredModel
+    ? "subscription + metered"
+    : hasAncillaryCost
+      ? "subscription + ancillary"
+      : "subscription + additional charges";
 
   const sub = (n: number, word: string) => (
     <span className="text-[#666]"> ({formatNumber(n)} {word})</span>
@@ -175,7 +198,7 @@ export function RunDetails({
           </h3>
           {hasUsage ? (
             <dl className="space-y-2.5 tabular-nums">
-              <Field label="Model">{models.length ? models.join(", ") : "n/a"}</Field>
+              <Field label="Model">{displayedModels.length ? displayedModels.join(", ") : "n/a"}</Field>
               {subscription && (
                 <Field label="Provider">
                   <span className="inline-flex items-center gap-1.5">
@@ -200,13 +223,18 @@ export function RunDetails({
                 </Field>
               )}
               {totalTokens != null && <Field label="Total tokens">{formatNumber(totalTokens)}</Field>}
-              {subscription ? (
+              {subscription && (cost == null || cost === 0) ? (
                 <Field label="Cost">
                   <span className="text-[#22c55e]">$0.00</span>
                   <span className="text-[#666]"> (subscription)</span>
                 </Field>
               ) : (
-                cost != null && <Field label="Cost">${cost.toFixed(2)}</Field>
+                cost != null && (
+                  <Field label="Cost">
+                    {fmtCost(cost)}
+                    {subscription && <span className="text-[#666]"> ({mixedCostLabel})</span>}
+                  </Field>
+                )
               )}
               {agents.length > 0 && <Field label="Agents">{formatNumber(agents.length)}</Field>}
             </dl>

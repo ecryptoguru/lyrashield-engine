@@ -209,14 +209,19 @@ def load_config() -> ByokConfig:
         return ByokConfig()
     try:
         blob = _json_loads(raw)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("BYOK config blob unreadable; returning defaults")
         return ByokConfig()
 
     provider = Provider(blob.get("provider", Provider.CHATGPT_OAUTH.value))
+    chatgpt_model = blob.get("chatgpt", {}).get("model", "chatgpt/gpt-6-luna")
+    if isinstance(chatgpt_model, str):
+        normalized_model = chatgpt_model.strip().lower()
+        if normalized_model == "chatgpt/gpt-5.6" or normalized_model.startswith("chatgpt/gpt-5.6-"):
+            chatgpt_model = "chatgpt/gpt-6-luna"
     chatgpt = ChatGptConfig(
         enabled=bool(blob.get("chatgpt", {}).get("enabled", False)),
-        model=blob.get("chatgpt", {}).get("model", "chatgpt/gpt-6-luna"),
+        model=chatgpt_model,
     )
     azure_blob = blob.get("azure", {})
     azure = AzureConfig(
@@ -246,17 +251,17 @@ def load_config() -> ByokConfig:
 
 def validate_chatgpt_credential() -> bool:
     """Validate the ChatGPT OAuth token by shelling into ``auth status``."""
-    import subprocess  # noqa: PLC0415
+    import subprocess
 
     try:
-        result = subprocess.run(  # noqa: S603
-            ["lyrashield", "auth", "status"],  # noqa: S607
+        result = subprocess.run(
+            ["lyrashield", "auth", "status"],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
     return result.returncode == 0
 
@@ -266,15 +271,15 @@ def validate_azure_credential(azure: AzureConfig) -> bool:
     if not azure.is_complete():
         return False
     try:
-        import requests  # noqa: PLC0415
+        import requests
 
         url = f"{azure.endpoint.rstrip('/')}/openai/models?api-version={azure.api_version}"
-        resp = requests.get(  # noqa: S113
+        resp = requests.get(
             url,
             headers={"api-key": azure.api_key},
             timeout=15,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
     return resp.status_code == 200
 
@@ -289,7 +294,7 @@ def validate_credential(config: ByokConfig) -> bool:
 
 
 def apply_env(config: ByokConfig, env: dict[str, str] | None = None) -> dict[str, str]:
-    """Apply BYOK env vars into ``env`` (defaults to ``os.environ`` copy)."""
+    """BYOK test helper: merge provider vars into a supplied environment."""
     target = env if env is not None else dict(os.environ)
     target.update(config.to_env())
     return target
@@ -301,13 +306,13 @@ def apply_env(config: ByokConfig, env: dict[str, str] | None = None) -> dict[str
 
 
 def _json_dumps(obj: Any) -> str:
-    import json  # noqa: PLC0415
+    import json
 
     return json.dumps(obj, separators=(",", ":"))
 
 
 def _json_loads(raw: str) -> dict[str, Any]:
-    import json  # noqa: PLC0415
+    import json
 
     loaded = json.loads(raw)
     if not isinstance(loaded, dict):
@@ -326,5 +331,5 @@ def provider_label(provider: Provider) -> str:
 
 
 def is_launch_provider(provider: Provider) -> bool:
-    """Return whether a provider is a launch claim."""
+    """BYOK test helper: return whether a provider is a launch claim."""
     return provider in LAUNCH_PROVIDERS

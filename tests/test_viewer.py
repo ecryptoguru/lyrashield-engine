@@ -238,7 +238,7 @@ def test_build_run_state_keeps_same_call_id_separate_per_agent(tmp_path: Path) -
 def _get(url: str, *, cookie: str | None = None) -> tuple[int, str, bytes]:
     headers = {"Cookie": cookie} if cookie else {}
     req = urllib.request.Request(url, headers=headers)  # noqa: S310 - localhost test server
-    with urllib.request.urlopen(req) as resp:  # noqa: S310 - localhost test server  # nosec B310
+    with urllib.request.urlopen(req) as resp:  # noqa: S310 - localhost test server
         return resp.status, resp.headers.get("Content-Type", ""), resp.read()
 
 
@@ -298,7 +298,7 @@ def test_server_event_endpoint_forwards_cta(
         req = urllib.request.Request(  # noqa: S310 - localhost test server
             f"{url}/api/event", data=body, headers={"Content-Type": "application/json"}
         )
-        with urllib.request.urlopen(req) as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(req) as resp:  # noqa: S310
             assert resp.status == 204
         assert seen == [("PR reviews", "sidebar_nav")]
     finally:
@@ -333,7 +333,7 @@ def test_server_event_endpoint_forwards_email_funnel(
                 data=json.dumps(payload).encode(),
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req) as resp:  # noqa: S310  # nosec B310
+            with urllib.request.urlopen(req) as resp:  # noqa: S310
                 assert resp.status == 204
             assert seen == expected
     finally:
@@ -359,7 +359,7 @@ def test_server_event_endpoint_forwards_agent_steered(
             data=json.dumps({"event": "agent_steered"}).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req) as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(req) as resp:  # noqa: S310
             assert resp.status == 204
         assert seen == [True]
     finally:
@@ -409,7 +409,7 @@ def _post(
         url + path, data=json.dumps(payload).encode(), headers=headers, method="POST"
     )
     try:
-        with urllib.request.urlopen(req) as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(req) as resp:  # noqa: S310
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
@@ -418,7 +418,7 @@ def _post(
 def _session_cookie(url: str, token: str) -> str:
     """Bootstrap a session via the tokened URL and return its ``name=value`` cookie."""
     bootstrap = f"{url}/?token={token}"
-    with urllib.request.urlopen(bootstrap) as resp:  # noqa: S310 - localhost test server  # nosec B310
+    with urllib.request.urlopen(bootstrap) as resp:  # noqa: S310 - localhost test server
         raw = str(resp.headers.get("Set-Cookie", ""))
     return raw.split(";", 1)[0]
 
@@ -432,7 +432,7 @@ def _get_status(url: str, *, cookie: str | None = None) -> int:
     headers = {"Cookie": cookie} if cookie else {}
     req = urllib.request.Request(url, headers=headers)  # noqa: S310 - localhost test server
     try:
-        with urllib.request.urlopen(req) as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(req) as resp:  # noqa: S310
             return int(resp.status)
     except urllib.error.HTTPError as exc:
         return int(exc.code)
@@ -458,21 +458,21 @@ def test_capability_issued_only_for_tokened_bootstrap(
     httpd, url, token = serve(run_dir, open_browser=False)
     try:
         # A bare index load -- all a reachable client can do -- hands out nothing.
-        with urllib.request.urlopen(url + "/") as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(url + "/") as resp:  # noqa: S310
             assert resp.headers.get("Set-Cookie") is None
 
         # A wrong token is likewise refused the capability.
-        with urllib.request.urlopen(f"{url}/?token=wrong") as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(f"{url}/?token=wrong") as resp:  # noqa: S310
             assert resp.headers.get("Set-Cookie") is None
 
         # Only the correct bootstrap token mints the session cookie.
-        with urllib.request.urlopen(f"{url}/?token={token}") as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(f"{url}/?token={token}") as resp:  # noqa: S310
             cookie = str(resp.headers.get("Set-Cookie", ""))
         assert f"{_cookie_name(url)}=" in cookie
         assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
 
         # Static assets never carry it.
-        with urllib.request.urlopen(url + "/assets/app.js") as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(url + "/assets/app.js") as resp:  # noqa: S310
             assert resp.headers.get("Set-Cookie") is None
     finally:
         httpd.shutdown()
@@ -495,7 +495,7 @@ def test_unauthorized_client_cannot_acquire_capability(
     try:
         # A direct network client can reach the page but is handed no capability,
         # so replaying an empty/guessed cookie cannot steer a live scan.
-        with urllib.request.urlopen(url + "/") as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(url + "/") as resp:  # noqa: S310
             assert resp.headers.get("Set-Cookie") is None
         status, _ = _post(
             url,
@@ -719,7 +719,7 @@ def test_runs_list_requires_session_only(
     def _runs(cookie: str | None) -> dict[str, object]:
         headers = {"Cookie": cookie} if cookie else {}
         req = urllib.request.Request(f"{url}/api/runs", headers=headers)  # noqa: S310
-        with urllib.request.urlopen(req) as resp:  # noqa: S310 - localhost test server  # nosec B310
+        with urllib.request.urlopen(req) as resp:  # noqa: S310 - localhost test server
             return dict(json.loads(resp.read()))
 
     httpd, url, token = serve(launched, open_browser=False)

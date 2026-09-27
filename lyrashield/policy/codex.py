@@ -41,7 +41,7 @@ PROVIDER = "codex"
 
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
-TOKEN_URL = "https://auth.openai.com/oauth/token"  # noqa: S105  # nosec B105 - URL, not a secret
+TOKEN_URL = "https://auth.openai.com/oauth/token"  # noqa: S105
 CALLBACK_HOST = "localhost"
 CALLBACK_PORT = 1455
 CALLBACK_PATH = "/auth/callback"
@@ -210,8 +210,8 @@ def build_authorize_url(challenge: str, state: str) -> str:
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "state": state,
-        "id_token_add_organizations": "true",  # nosec B105
-        "codex_cli_simplified_flow": "true",  # nosec B105
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
         "originator": ORIGINATOR,
     }
     return f"{AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"

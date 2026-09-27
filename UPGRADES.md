@@ -1,5 +1,18 @@
 # LyraShield ownership and upstream-import ledger
 
+## Current state
+
+The upstream base is Strix v1.6.2 at
+`ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2`. Product behavior lives in
+`lyrashield/**` and `lyrashield_adapter/**`; `strix/config/loader.py` retains the
+product settings seam. The reviewed `strix/**` patch changes 16 files, including
+two removed skills, with a +149/-258 footprint and digest
+`30b8c59dc521d1fc9fceaf0d7b972c11d03a6808`. The exact allowlist and
+current gate live in `scripts/verify-controlled-derivative.sh`. Dated entries
+below describe earlier states, not the current patch inventory.
+
+## History
+
 ## GPT-6-only boundary and subscription main-model route (2026-09-25)
 
 The GPT-5.6 model family is fully retired from owned code, tests, and docs.
@@ -242,9 +255,8 @@ worker artifact schemas, or detection results. Any latency or infrastructure
 cost improvement depends on scan workload and storage and requires a separate
 benchmark before a quantified claim.
 
-Verification at `944a84f`: 1,302 tests passed and 1 skipped; repository-wide
-Pyright reported 0 errors and 0 warnings. Ruff, Mypy, Bandit, controlled-
-derivative policy, build/CLI, Desktop logic, native binary, sandbox image, and
+Verification at `944a84f`: 1,302 tests passed and 1 skipped. Ruff, Mypy, Bandit,
+controlled-derivative policy, build/CLI, Desktop logic, native binary, sandbox image, and
 worker-contract CI gates also passed.
 
 ## Upstream typing and import-cycle compatibility (2026-08-24)
@@ -255,11 +267,11 @@ async callable types, safe optional-callable access, typed Caido overloads, and
 lazy viewer/telemetry imports that remove cycles. It does not change model
 routing, budgets, provider selection, scan behavior, or public claims.
 
-The controlled-derivative gate now allows exactly 14 modified Strix files (the
-two existing integration seams plus these twelve compatibility files), enforces
-the reviewed +151/-57 footprint, and requires patch object
-`fafe7c8e0a7f58c4c10e5619a6579880cf1457c4`. Any byte-level change requires an
-explicit review and digest update.
+At that revision, the controlled-derivative gate allowed exactly 14 modified
+Strix files (the two existing integration seams plus twelve compatibility
+files), enforced the reviewed +151/-57 footprint and required patch object
+`fafe7c8e0a7f58c4c10e5619a6579880cf1457c4`. The current gate is recorded
+above; any byte-level change requires an explicit review and digest update.
 
 ## Upgrade to v1.5.3 product-outside-strix (2026-08-11)
 
@@ -320,22 +332,21 @@ plus the exact review-gated compatibility patch documented above.
   respectively, all registered through generic seams in the retained
   `strix/**` substrate.
 
-## Compatibility patches retained across imports
+## Compatibility patches recorded in the v1.5.3 import
 
 After the v1.5.3 product-outside-strix migration (PR #58), product behavior
-lives in `lyrashield/**` and `lyrashield_adapter/**`. The two generic seams below
-remain inside `strix/**`; the additional 2026-08-24 type/import compatibility
-files are separately pinned by exact patch digest. Everything else below is
-owned in the product tree and has no upstream equivalent to reconcile with.
+moved to `lyrashield/**` and `lyrashield_adapter/**`. The two generic seams below
+were then inside `strix/**`; the v1.6.2 import removed the skill-directory seam.
+The additional 2026-08-24 type/import compatibility files were separately pinned
+by exact patch digest. The product entries below remain in the owned tree.
 
-- `strix/config/loader.py` (one of two `strix/**` seams): registers a pluggable
+- `strix/config/loader.py` (the retained `strix/**` seam): registers a pluggable
   product settings loader via `register_settings_loader` and falls back to the
   upstream `Settings` class when none is registered. `lyrashield/policy/loader.py`
   is the registered product loader.
-- `strix/skills/__init__.py` (one of two `strix/**` seams): skips
-  telemetry-thread creation when the resolved settings disable telemetry, and
-  accepts additional skill directories via `register_skill_dir` (an upstream
-  v1.5.3 feature used to load `lyrashield/skills/`).
+- `strix/skills/__init__.py` provided a telemetry gate in the v1.5.3 patch;
+  the v1.6.2 import dropped it. Upstream `register_skill_dir` still loads
+  `lyrashield/skills/`.
 - `lyrashield_adapter`: compatibility adapter for LyraShield invocation. It
   forces telemetry off, disables the upstream update check, and admits
   `chatgpt/gpt-6-*` subscription routes for the main model by default (the
@@ -364,15 +375,13 @@ owned in the product tree and has no upstream equivalent to reconcile with.
 - Worker output compatibility: preserve the worker's expected result format and
   coordinate schema evolution with the application repository.
 - Apache attribution banners: retain the one-line LyraShield modification notice
-  on the two reviewed `strix/` seam files and on all `lyrashield/` product
-  source files that derive from upstream.
+  on `lyrashield/` product source files that derive from upstream.
 - Upstream formatter compatibility: retain Ruff's mechanical formatting in
   `lyrashield/tools/reporting/tool.py` and `tests/test_runner_root_prompt.py`
   until upstream contains the same formatting.
-- Upstream strict-typing compatibility: retain the local-variable narrowing in
-  `strix/skills/__init__.py` (one of the two seams) and dependency ecosystem
-  normalization in `lyrashield/tools/reporting/tool.py` until upstream contains
-  equivalent fixes.
+- Upstream strict-typing compatibility: the v1.5.3 patch narrowed a local
+  variable in `strix/skills/__init__.py`; the v1.6.2 import removed that patch.
+  Dependency normalization remains in `lyrashield/tools/reporting/tool.py`.
 
 ## Current upstream base
 
@@ -427,7 +436,7 @@ imports are now manual, reviewed merges.
 
 Merged from branch `codex/engine-v5`. This change set refined the GPT-5.6 cost accounting and telemetry plumbing while keeping the execution boundary intact:
 
-- `strix/core/hooks.py`: `_model_rates` now returns a 2-tuple (input, output) matching the GPT-5.6 Terra/Luna rate card; `_usage_cost_upper_bound` handles provider-reported cache-read tokens and extracts `input_tokens`/`output_tokens` from both dict and object usage entries via `_usage_value`.
+- `lyrashield/lifecycle/hooks.py`: `_model_rates` then returned a 2-tuple (input, output) matching the GPT-5.6 Terra/Luna rate card; `_usage_cost_upper_bound` handled provider-reported cache-read tokens and extracted `input_tokens`/`output_tokens` from dict and object usage entries via `_usage_value`.
 - `strix/interface/main.py`: telemetry start arguments are passed as explicit keyword arguments to `posthog.start` and `scarf.start` instead of an untyped kwargs dict.
 - `tests/conftest.py`: a pytest fixture clears LLM-related environment variables before each test to isolate unit tests from leaked Azure endpoints.
 - `Makefile`: the `type-check` and `security` targets now match `scripts/verify-controlled-derivative.sh` (mypy excludes `strix/interface/tui`, bandit covers `strix` and `lyrashield_adapter`).

@@ -13,7 +13,7 @@ help:
 	@echo "  lint-check    - Check code with ruff (no auto-fix)"
 	@echo "  type-check    - Run type checking with mypy"
 	@echo "  security      - Run security checks with bandit"
-	@echo "  check-all     - Run all code quality checks"
+	@echo "  check-all     - Run the CI source and policy gate"
 	@echo ""
 	@echo "Development:"
 	@echo "  pre-commit    - Run pre-commit hooks on all files"
@@ -61,8 +61,8 @@ security:
 	uv run bandit -r strix lyrashield_adapter lyrashield -q -c pyproject.toml
 	@echo "✅ Security checks complete!"
 
-check-all: format-check lint-check type-check security
-	@echo "✅ All code quality checks passed!"
+check-all:
+	scripts/verify-controlled-derivative.sh
 
 pre-commit:
 	@echo "🔧 Running pre-commit hooks..."
@@ -71,6 +71,7 @@ pre-commit:
 
 clean:
 	@echo "🧹 Cleaning up cache files..."
+	rm -f .coverage .coverage.*
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true

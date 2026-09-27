@@ -49,14 +49,7 @@ jobs:
         run: |
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
           for platform in linux/amd64 linux/arm64; do
-            docker run --rm --platform "$platform" "$image" sh -lc '
-              test "$(id -u)" != "0" &&
-              test ! -S /var/run/docker.sock &&
-              getcap /usr/lib/nmap/nmap | grep -q "cap_net_raw" &&
-              nmap -sn 127.0.0.1 >/dev/null &&
-              status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
-              case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
-            '
+            bash scripts/smoke-sandbox.sh "$image" "$platform"
           done
       - name: Promote the smoke-qualified digest
         env:

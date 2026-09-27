@@ -69,7 +69,6 @@ from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
     StrixProvider,
     configure_sdk_model_defaults,
-    is_gpt6_model,
     is_gpt6_supported_provider,
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
@@ -153,35 +152,13 @@ def validate_environment() -> None:
     # cannot bypass the product boundary.
     _reject_resolved_subscription_models(settings, console)
 
-    if codex.subscription_model(settings.llm.model):
-        if not settings.product.allow_chatgpt_subscription:
-            console.print(
-                f"[bold red]STRIX_LLM={settings.llm.model} routes through a ChatGPT "
-                "subscription, which is not supported for LyraShield scans.[/] "
-                "Set LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=1 or configure a GPT-6 "
-                "Sol or Luna API deployment instead."
-            )
-            sys.exit(1)
-        if not is_gpt6_model(settings.llm.model):
-            console.print(
-                f"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or "
-                "Luna deployment.[/] Subscription scans require a "
-                "chatgpt/gpt-6-sol or chatgpt/gpt-6-luna route."
-            )
-            sys.exit(1)
-        if not codex.is_authenticated():
-            console.print(
-                f"[red]STRIX_LLM={settings.llm.model} uses your ChatGPT subscription, "
-                "but you're not signed in.[/] Run [cyan]lyrashield auth login chatgpt[/] first."
-            )
-            sys.exit(1)
-        logger.info("Environment OK (ChatGPT subscription)")
-        return
-
     if not settings.llm.model:
         missing_required_vars.append("STRIX_LLM or LYRASHIELD_LLM")
     elif (
-        not is_gpt6_supported_provider(settings.llm.model)
+        (
+            not codex.subscription_model(settings.llm.model)
+            and not is_gpt6_supported_provider(settings.llm.model)
+        )
         or (
             settings.llm.delegate_model
             and not is_gpt6_supported_provider(settings.llm.delegate_model)
@@ -204,6 +181,32 @@ def validate_environment() -> None:
         )
         console.print()
         sys.exit(1)
+
+    if codex.subscription_model(settings.llm.model):
+        if not settings.product.allow_chatgpt_subscription:
+            console.print(
+                f"[bold red]STRIX_LLM={settings.llm.model} routes through a ChatGPT "
+                "subscription, which is not supported for LyraShield scans.[/] "
+                "Set LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=1 or configure a GPT-6 "
+                "Sol or Luna API deployment instead."
+            )
+            sys.exit(1)
+        normalized_subscription_route = (settings.llm.model or "").strip().lower().replace("_", "-")
+        if normalized_subscription_route not in {"chatgpt/gpt-6-sol", "chatgpt/gpt-6-luna"}:
+            console.print(
+                f"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or "
+                "Luna deployment.[/] Subscription scans require a "
+                "chatgpt/gpt-6-sol or chatgpt/gpt-6-luna route."
+            )
+            sys.exit(1)
+        if not codex.is_authenticated():
+            console.print(
+                f"[red]STRIX_LLM={settings.llm.model} uses your ChatGPT subscription, "
+                "but you're not signed in.[/] Run [cyan]lyrashield auth login chatgpt[/] first."
+            )
+            sys.exit(1)
+        logger.info("Environment OK (ChatGPT subscription)")
+        return
 
     if not settings.llm.api_key:
         missing_optional_vars.append("LLM_API_KEY")

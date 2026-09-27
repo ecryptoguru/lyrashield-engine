@@ -31,7 +31,7 @@ _ENV_KEYS = [
 
 
 @pytest.fixture(autouse=True)
-def _reset(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+def _reset(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for key in _ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(loader, "_cached", None)

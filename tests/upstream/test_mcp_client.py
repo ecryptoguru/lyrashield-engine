@@ -162,7 +162,7 @@ def _config(name: str, allowed_tools: list[str] | None) -> McpConnectionConfig:
     return McpConnectionConfig(
         name=name,
         url="https://mcp.example.com",
-        auth=BearerAuth(token="run-token"),  # nosec B106
+        auth=BearerAuth(token="run-token"),
         allowed_tools=allowed_tools,
     )
 
@@ -210,7 +210,7 @@ def test_bearer_config_parses_from_dict() -> None:
     )
 
     assert isinstance(config.auth, BearerAuth)
-    assert config.auth.token == "abc"  # nosec B105
+    assert config.auth.token == "abc"
     assert config.allowed_tools == ["list_files"]
 
 
@@ -1227,7 +1227,7 @@ def _secret_config(name: str) -> McpConnectionConfig:
     return McpConnectionConfig(
         name=name,
         url="https://mcp.example.com",
-        auth=BearerAuth(token="super-secret-bearer-token-42"),  # nosec B106
+        auth=BearerAuth(token="super-secret-bearer-token-42"),
         allowed_tools=["read_file"],
     )
 
