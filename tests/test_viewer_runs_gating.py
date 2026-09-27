@@ -58,6 +58,20 @@ def test_runs_payload_lists_when_verified(tmp_path: Path) -> None:
     assert beta["severity_counts"]["low"] == 1
 
 
+def test_runs_payload_keeps_history_when_one_findings_artifact_is_corrupt(tmp_path: Path) -> None:
+    base = tmp_path / "strix_runs"
+    broken = _make_run(tmp_path, "broken")
+    (broken / "vulnerabilities.json").write_text("{broken", encoding="utf-8")
+    _make_run(tmp_path, "good", severity="critical")
+
+    payload = build_runs_payload(base, verified=True)
+
+    assert len(payload["runs"]) == 2
+    entries = {run["name"]: run for run in payload["runs"]}
+    assert entries["broken"]["severity_counts"] is None
+    assert entries["good"]["severity_counts"]["critical"] == 1
+
+
 def test_runs_payload_empty_base(tmp_path: Path) -> None:
     payload = build_runs_payload(tmp_path / "strix_runs", verified=True)
     assert payload == {"locked": False, "count": 0, "runs": []}

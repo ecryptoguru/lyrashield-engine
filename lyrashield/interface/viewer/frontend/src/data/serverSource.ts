@@ -127,7 +127,7 @@ export interface RunListEntry {
   start_time: string | null;
   end_time: string | null;
   finished: boolean;
-  severity_counts: RunSeverityCounts;
+  severity_counts: RunSeverityCounts | null;
 }
 
 export interface RunsPayload {

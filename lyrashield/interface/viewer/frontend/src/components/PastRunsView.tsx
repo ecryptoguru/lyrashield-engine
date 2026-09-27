@@ -16,7 +16,10 @@ const SEV = [
   { key: "low", dot: "bg-blue-500", text: "text-blue-500" },
 ] as const;
 
-function SeverityChips({ counts }: { counts: RunSeverityCounts }) {
+function SeverityChips({ counts }: { counts: RunSeverityCounts | null }) {
+  if (!counts) {
+    return <span className="text-xs text-[#555]">Findings unavailable</span>;
+  }
   const shown = SEV.filter((s) => counts[s.key] > 0);
   if (shown.length === 0) {
     return <span className="text-xs text-[#555]">No findings</span>;
