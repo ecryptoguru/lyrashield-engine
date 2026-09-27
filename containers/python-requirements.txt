@@ -428,9 +428,9 @@ dicttoxml==1.7.16 \
     --hash=sha256:6f36ce644881db5cd8940bee9b7cb3f3f6b7b327ba8a67d83d3e2caa0538bf9d \
     --hash=sha256:8677671496d0d38e66c7179f82a7e9059f94887777955dc71b0ac602ee637c26
     # via arjun
-dirsearch==0.4.3.post1 \
-    --hash=sha256:5202d806e156a09871170d30fc329d30ea8477114c4804a76277732c8e845e4b \
-    --hash=sha256:fc6fc0309250ca8121f3123d6943640f71a02e8d3257c680c3001181c4335dd9
+dirsearch==0.5.0 \
+    --hash=sha256:10dc3476fdc9e71d7a0f41b2745b2261f3a1833f4f8c9db9b3b9c6dfe41c9597 \
+    --hash=sha256:8295dcf154c9c42bf01c0e41a743d1677fb80ff424906f7de5c1ac05aaaa79ee
     # via -r /tmp/lyrashield-sandbox-lock/requirements.in
 exceptiongroup==1.2.2 \
     --hash=sha256:3111b9d131c238bec2f8f516e123e14ba243563fb135d3fe885990585aa7795b \
