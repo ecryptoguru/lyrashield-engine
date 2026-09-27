@@ -70,7 +70,7 @@ class _PricedEntry:
 
 
 def analyze_cache_economics(run_record: Mapping[str, Any]) -> CacheEconomicsReport:
-    """Summarize billed cache economics from a parsed ``run.json`` mapping."""
+    """Eval API: summarize billed cache economics from a parsed ``run.json`` mapping."""
     report, _ = _evaluate(run_record)
     return report
 

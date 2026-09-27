@@ -294,7 +294,7 @@ def validate_credential(config: ByokConfig) -> bool:
 
 
 def apply_env(config: ByokConfig, env: dict[str, str] | None = None) -> dict[str, str]:
-    """Apply BYOK env vars into ``env`` (defaults to ``os.environ`` copy)."""
+    """BYOK test helper: merge provider vars into a supplied environment."""
     target = env if env is not None else dict(os.environ)
     target.update(config.to_env())
     return target
@@ -331,5 +331,5 @@ def provider_label(provider: Provider) -> str:
 
 
 def is_launch_provider(provider: Provider) -> bool:
-    """Return whether a provider is a launch claim."""
+    """BYOK test helper: return whether a provider is a launch claim."""
     return provider in LAUNCH_PROVIDERS

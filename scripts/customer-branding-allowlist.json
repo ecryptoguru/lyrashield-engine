@@ -3,7 +3,6 @@
     "imports": "Preserve upstream module, class, environment, storage, package and artifact compatibility identifiers.",
     "attribution": "Preserve upstream legal attribution and historical implementation comments.",
     "prompt": "Only the system prompt first line may change; remaining two upstream references are byte-preserved.",
-    "dormantUpdater": "update_check.py is legacy compatibility code, unreachable from the product CLI: --update fails closed in main.py. Do not reactivate it.",
     "internalIdentifiers": "Inherited internal identifiers: strix.* imports, Strix* class names, .strix paths, STRIX_* env vars, strix-agent package, strix/skills substrate references. Byte-preserved for upstream compatibility.",
     "attributionHeaders": "Line-1 controlled-derivative attribution headers (Apache-2.0 NOTICE obligations).",
     "internalMechanicsDocs": "Comments/docstrings/docs describing internal upstream mechanics (fork boundary, telemetry stack, sandbox internals) \u2014 never customer-facing branding."
@@ -136,31 +135,6 @@
       "    expected_digest = os.environ.get(\"STRIX_IMAGE_DIGEST\", \"\").strip()",
       "    stays confined to ``STRIX_LLM`` \u2014 delegate and dedupe models must use a",
       "                f\"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or \""
-    ],
-    "lyrashield/interface/update_check.py": [
-      "\"\"\"Update notifications and self-update for the strix CLI.",
-      "result in ``~/.strix``, a non-intrusive notice with the upgrade command",
-      "for the detected install method, and a ``strix --update`` self-update",
-      "GITHUB_REPO = \"usestrix/strix\"",
-      "PYPI_PACKAGE = \"strix-agent\"",
-      "_CACHE_PATH = Path.home() / \".strix\" / \"update-check.json\"",
-      "    return bool(os.environ.get(\"STRIX_NO_UPDATE_CHECK\")) or any(",
-      "        \"binary\": \"strix --update\",",
-      "        \"pipx\": \"pipx upgrade strix-agent\",",
-      "        \"uv\": \"uv tool upgrade strix-agent\",",
-      "        \"pip\": \"pip install --upgrade strix-agent\",",
-      "        f\"[#eab308]A new version of strix is available:[/] \"",
-      "    console.print(\"[#22c55e]\u2713 strix updated \u2014 restart the scan to use the new version[/]\")",
-      "    Returns True if strix was updated (caller should re-exec / exit).",
-      "        f\"[#eab308]A new version of strix is available:[/] \"",
-      "    choice = Prompt.ask(\"Update strix?\", choices=[\"y\", \"n\", \"s\"], default=\"n\")",
-      "    filename = f\"strix-{version}-{target}{archive_ext}\"",
-      "    binary_name = f\"strix-{version}-{target}\" + (\".exe\" if is_windows else \"\")",
-      "            f\"[#eab308]This strix was installed via {method};[/] \"",
-      "        console.print(\"[bold red]Could not determine the latest strix version.[/]\")",
-      "        console.print(f\"[#22c55e]strix {current} is already the latest version.[/]\")",
-      "            \"[#60a5fa]curl -sSL https://strix.ai/install | bash[/]\"",
-      "    console.print(f\"[#22c55e]\u2713 Updated strix to {latest}[/]\")"
     ],
     "lyrashield/interface/tui/renderers/__init__.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"

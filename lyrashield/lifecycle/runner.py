@@ -728,7 +728,7 @@ async def run_strix_scan(
                 if report_state is not None:
                     report_state.set_terminal_reason("engine_stopped")
                 return None
-            # The root agent (Terra) hit a model error. This may be a content
+            # The root agent hit a model error. This may be a content
             # filter, max-turns exhaustion, malformed JSON, or any other model
             # behavior issue. Rather than re-raising and losing all partial
             # findings, switch directly to the delegate model (Luna) at the

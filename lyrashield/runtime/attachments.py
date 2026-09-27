@@ -20,8 +20,8 @@ Guarantees enforced here:
   :data:`ATTACHMENTS_CONTAINER_DIR` — separate from the ``/workspace`` source
   tree. A ``manifest.json`` of the staged originals rides the same mount so
   in-sandbox tools can map names to digests.
-* Scratch copies: originals are never modified. When a tool needs writable
-  material, :func:`create_scratch_copy` re-verifies the staged digest, then
+* Scratch-copy helper (currently used only by tests; no tool calls it):
+  :func:`create_scratch_copy` re-verifies the staged digest, then
   writes a bounded copy into the writable in-container scratch area and
   returns a link record binding the scratch path to the original hash.
 """

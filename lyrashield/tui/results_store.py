@@ -78,16 +78,6 @@ def keyring_get(service: str, key: str) -> str | None:
         raise ResultsStoreKeyError("Local keychain is unavailable") from exc
 
 
-def keyring_delete(service: str, key: str) -> bool:
-    try:
-        import keyring  # noqa: PLC0415
-
-        keyring.delete_password(service, key)
-    except Exception:  # noqa: BLE001
-        return False
-    return True
-
-
 # ---------------------------------------------------------------------------
 # Envelope encryption: a single DEK stored in the keychain wraps row payloads.
 # ---------------------------------------------------------------------------
@@ -367,10 +357,3 @@ class ResultsStore:
 def new_run_id() -> str:
     """Generate a stable, unique run id for the local store."""
     return f"local-{int(time.time())}-{secrets.token_hex(4)}"
-
-
-def store_path_from_env(env: dict[str, str] | None = None) -> Path:
-    """Resolve the store path from env, falling back to the default."""
-    e = env if env is not None else os.environ
-    p = e.get("LYRASHIELD_LOCAL_STORE_PATH")
-    return Path(p) if p else DEFAULT_STORE_PATH

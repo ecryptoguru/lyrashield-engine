@@ -19,6 +19,7 @@ from lyrashield.artifacts import evidence as _evidence
 from lyrashield.artifacts import quality as _quality
 from lyrashield.artifacts.sarif import write_sarif
 from lyrashield.artifacts.usage import (
+    _METERED_USD_PER_MILLION,
     LLMUsageLedger,
     _int_or_zero,
     _round_cost,
@@ -1879,10 +1880,7 @@ def litellm_cost_callback(
     """LiteLLM ``success_callback`` adapter; forwards observed cost to the active scan."""
     kwargs_dict = _as_dict(kwargs)
     model = kwargs_dict.get("model") if kwargs_dict is not None else None
-    if isinstance(model, str) and model.strip().lower().split("/")[-1] in {
-        "gpt-6-sol",
-        "gpt-6-luna",
-    }:
+    if isinstance(model, str) and model.strip().lower().split("/")[-1] in _METERED_USD_PER_MILLION:
         # Azure's LiteLLM response_cost can be stale for GPT-6. The usage
         # ledger prices the provider token receipt with the pinned rate card.
         return

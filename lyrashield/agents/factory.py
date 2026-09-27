@@ -606,7 +606,7 @@ def register_agent_tools(*tools: Tool) -> None:
 
 
 def registered_agent_tools() -> tuple[Tool, ...]:
-    """Return the currently registered scan-agent tools."""
+    """Test API: return the currently registered scan-agent tools."""
     return tuple(_EXTRA_TOOLS)
 
 

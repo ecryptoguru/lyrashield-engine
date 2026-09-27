@@ -433,7 +433,7 @@ async def test_delegate_run_uses_delegate_model_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """A Terra coordinator must not override a Luna specialist at SDK runtime."""
+    """A Sol coordinator must not override a Luna specialist at SDK runtime."""
     _patch_engine_scaffold(monkeypatch, tmp_path, {"scope": "built-in"})
     monkeypatch.setattr(
         runner,
