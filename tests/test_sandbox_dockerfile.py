@@ -48,6 +48,11 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
     assert "ARG CAIDO_LINUX_ARM64_SHA256=" in content
     assert "--require-hashes" in content
     assert "containers/python-requirements.txt" in content
+    assert "containers/dirsearch-requirements.txt" in content
+    assert "containers/patch_dirsearch_metadata.py" in content
+    assert "/app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes" in content
+    assert "/app/.venv/bin/python /tmp/patch_dirsearch_metadata.py" in content
+    assert "/app/.venv/bin/pip check" in content
     assert "npm ci --omit=dev" in content
     assert "npm install -g" not in content
 

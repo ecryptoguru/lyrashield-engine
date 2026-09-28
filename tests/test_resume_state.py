@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 import pytest
 
 
-main_module = importlib.import_module("lyrashield.interface.main")
+resume_state_module = importlib.import_module("lyrashield.interface.resume_state")
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -82,12 +82,12 @@ def _stage_resumed_repository_run(
             },
         }
     ]
-    monkeypatch.setattr(main_module, "run_dir_for", lambda _name: run_dir)
-    monkeypatch.setattr(main_module, "runs_base_dir", lambda: tmp_path / "runs")
-    monkeypatch.setattr(main_module.tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(main_module, "read_run_record", lambda _run_dir: run_record)
+    monkeypatch.setattr(resume_state_module, "run_dir_for", lambda _name: run_dir)
+    monkeypatch.setattr(resume_state_module, "runs_base_dir", lambda: tmp_path / "runs")
+    monkeypatch.setattr(resume_state_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(resume_state_module, "read_run_record", lambda _run_dir: run_record)
     monkeypatch.setattr(
-        main_module,
+        resume_state_module,
         "read_resume_record",
         lambda _run_dir: {"targets_info": targets},
     )
@@ -110,24 +110,28 @@ def test_resume_mounts_product_docker_repository_clone(
     ]
     local_sources = [{"source_path": str(clone), "workspace_subdir": "repo", "mount": False}]
 
-    monkeypatch.setattr(main_module, "run_dir_for", lambda _name: run_dir)
-    monkeypatch.setattr(main_module, "runs_base_dir", lambda: tmp_path / "runs")
-    monkeypatch.setattr(main_module.tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(main_module, "read_run_record", lambda _run_dir: {"scan_mode": "standard"})
+    monkeypatch.setattr(resume_state_module, "run_dir_for", lambda _name: run_dir)
+    monkeypatch.setattr(resume_state_module, "runs_base_dir", lambda: tmp_path / "runs")
+    monkeypatch.setattr(resume_state_module.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(
-        main_module,
+        resume_state_module,
+        "read_run_record",
+        lambda _run_dir: {"scan_mode": "standard"},
+    )
+    monkeypatch.setattr(
+        resume_state_module,
         "read_resume_record",
         lambda _run_dir: {"targets_info": targets, "local_sources": local_sources},
     )
-    monkeypatch.setattr(main_module, "is_lyrashield_product", lambda: True)
+    monkeypatch.setattr(resume_state_module, "is_lyrashield_product", lambda: True)
     monkeypatch.setattr(
-        main_module,
+        resume_state_module,
         "load_settings",
         lambda: SimpleNamespace(runtime=SimpleNamespace(backend="docker")),
     )
     args = argparse.Namespace(resume="resume-run", instruction=None, scan_mode="deep")
 
-    main_module._load_resume_state(args, argparse.ArgumentParser())
+    resume_state_module._load_resume_state(args, argparse.ArgumentParser())
 
     assert args.local_sources == [
         {"source_path": str(clone), "workspace_subdir": "repo", "mount": True}
@@ -148,7 +152,7 @@ def test_resume_accepts_clone_at_recorded_revision(
     )
     args = _resume_args()
 
-    main_module._load_resume_state(args, argparse.ArgumentParser())
+    resume_state_module._load_resume_state(args, argparse.ArgumentParser())
 
     assert args.repository_revision == recorded
 
@@ -171,7 +175,7 @@ def test_resume_refuses_a_clone_whose_head_moved(
     assert altered != recorded
 
     with pytest.raises(SystemExit) as exc_info:
-        main_module._load_resume_state(_resume_args(), argparse.ArgumentParser())
+        resume_state_module._load_resume_state(_resume_args(), argparse.ArgumentParser())
 
     assert exc_info.value.code == 2
     assert "--resume resume-run" in capsys.readouterr().err
@@ -200,7 +204,7 @@ def test_resume_refuses_a_detached_clone_off_the_recorded_diff_head(
     assert moved != recorded
 
     with pytest.raises(SystemExit) as exc_info:
-        main_module._load_resume_state(_resume_args(), argparse.ArgumentParser())
+        resume_state_module._load_resume_state(_resume_args(), argparse.ArgumentParser())
 
     assert exc_info.value.code == 2
     assert "--resume resume-run" in capsys.readouterr().err
@@ -214,6 +218,6 @@ def test_resume_without_recorded_revision_skips_head_check(
     clone = _stage_resumed_repository_run(tmp_path, monkeypatch, {"scan_mode": "standard"})
     args = _resume_args()
 
-    main_module._load_resume_state(args, argparse.ArgumentParser())
+    resume_state_module._load_resume_state(args, argparse.ArgumentParser())
 
     assert args.targets_info[0]["details"]["cloned_repo_path"] == str(clone)

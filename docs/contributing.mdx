@@ -10,9 +10,9 @@ The root [CONTRIBUTING.md](https://github.com/ecryptoguru/lyrashield-engine/blob
 1. Branch from current `main`; never push directly to `main`.
 2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.
 3. Put LyraShield model, budget, lifecycle, identity, evidence, and artifact behavior behind explicit reviewed boundaries in `lyrashield/**`.
-4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The hard allowlist contains the two product seams plus the twelve typing/import-cycle compatibility fixes recorded in `UPGRADES.md`, and the gate pins the complete Strix patch digest.
+4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The hard allowlist contains the product settings seam and one reviewed skill override, plus two reviewed skill deletions; the gate pins the complete Strix patch digest.
 5. Add tests and update `NOTICE`, `UPGRADES.md`, and operator docs when the contract changes.
-6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate checks the pinned Strix v1.6.2 base, reviewed `strix/**` path allowlist and patch digest, and the current footprint bounds (+149/-258 lines). It runs frozen dependency sync, Ruff lint/format, the full pytest suite, mypy and Bandit. Package, native binary, Docker, worker-contract and deployment checks are separate gates described in the root contributor guide. Build the owned viewer with `make viewer`, then check its committed static assets for drift.
+6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate checks the pinned Strix v1.6.2 base, reviewed `strix/**` path allowlist and patch digest, and the current footprint bounds (two modified paths plus two reviewed deletions; +22/-201 lines). It runs frozen dependency sync, Ruff lint/format, the full pytest suite, strict mypy and Bandit. Package, native binary, Docker, worker-contract and deployment checks are separate gates described in the root contributor guide. Build the owned viewer with `make viewer`, then check its committed static assets for drift.
 7. Require human approval and green Engine CI.
 
 <Warning>

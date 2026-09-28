@@ -117,22 +117,22 @@ def test_replay_blocks_private_ranges_by_default() -> None:
         "http://127.0.0.1:8080/",
         "http://[::1]/",
     ):
-        reason = caido_api._check_replay_url_host(url)
+        reason = caido_api._replay_denial(url)
         assert reason is not None, url
-        assert "private-range" in reason
+        assert reason[1] == "private_range"
 
 
 def test_replay_blocks_private_ranges_with_userinfo_tricks() -> None:
     assert caido_api.load_egress_policy() is None
     # Userinfo must never smuggle a private host past the guard.
-    assert caido_api._check_replay_url_host("http://user:pass@10.0.0.5/") is not None
-    assert caido_api._check_replay_url_host("http://10.0.0.5:8080@10.0.0.9/") is not None
+    assert caido_api._replay_denial("http://user:pass@10.0.0.5/") is not None
+    assert caido_api._replay_denial("http://10.0.0.5:8080@10.0.0.9/") is not None
 
 
 def test_replay_allows_public_hosts_by_default() -> None:
     assert caido_api.load_egress_policy() is None
-    assert caido_api._check_replay_url_host("https://example.com/") is None
-    assert caido_api._check_replay_url_host("http://203.0.113.10/") is None
+    assert caido_api._replay_denial("https://203.0.113.10/") is None
+    assert caido_api._replay_denial("http://203.0.113.10/") is None
 
 
 def test_replay_allows_authorized_private_target_from_policy(
@@ -140,10 +140,10 @@ def test_replay_allows_authorized_private_target_from_policy(
 ) -> None:
     path = _write_policy(tmp_path, authorized_hosts=["10.2.3.4", "staging.internal.corp"])
     _trusted_policy(monkeypatch, path)
-    assert caido_api._check_replay_url_host("http://10.2.3.4:8000/") is None
-    assert caido_api._check_replay_url_host("https://staging.internal.corp/") is None
+    assert caido_api._replay_denial("http://10.2.3.4:8000/") is None
+    assert caido_api._replay_denial("https://staging.internal.corp/") is None
     # Other private hosts stay blocked.
-    assert caido_api._check_replay_url_host("http://10.9.9.9/") is not None
+    assert caido_api._replay_denial("http://10.9.9.9/") is not None
 
 
 def test_policy_opt_in_allows_private_but_metadata_stays_blocked(
@@ -151,9 +151,9 @@ def test_policy_opt_in_allows_private_but_metadata_stays_blocked(
 ) -> None:
     path = _write_policy(tmp_path, authorized_hosts=[], allow_private_egress=True)
     _trusted_policy(monkeypatch, path)
-    assert caido_api._check_replay_url_host("http://10.0.0.5/") is None
-    assert caido_api._check_replay_url_host("http://169.254.169.254/") is not None
-    assert caido_api._check_replay_url_host("http://metadata.google.internal/") is not None
+    assert caido_api._replay_denial("http://10.0.0.5/") is None
+    assert caido_api._replay_denial("http://169.254.169.254/") is not None
+    assert caido_api._replay_denial("http://metadata.google.internal/") is not None
 
 
 def test_policy_on_writable_mount_fails_closed(
@@ -168,10 +168,10 @@ def test_policy_on_writable_mount_fails_closed(
     assert policy is not None
     assert policy.authorized_hosts == frozenset()
     assert policy.allow_private_egress is False
-    assert caido_api._check_replay_url_host("http://10.2.3.4/") is not None
+    assert caido_api._replay_denial("http://10.2.3.4/") is not None
     # The agent-settable opt-in env must not override a present-but-untrusted policy.
     monkeypatch.setenv("STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS", "1")
-    assert caido_api._check_replay_url_host("http://10.2.3.4/") is not None
+    assert caido_api._replay_denial("http://10.2.3.4/") is not None
 
 
 def test_malformed_policy_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,7 +180,7 @@ def test_malformed_policy_fails_closed(tmp_path: Path, monkeypatch: pytest.Monke
     _trusted_policy(monkeypatch, path)
     policy = caido_api.load_egress_policy()
     assert policy == caido_api._FAIL_CLOSED_POLICY
-    assert caido_api._check_replay_url_host("http://10.2.3.4/") is not None
+    assert caido_api._replay_denial("http://10.2.3.4/") is not None
 
 
 def test_host_side_trust_opt_in_honors_writable_policy(
@@ -191,7 +191,7 @@ def test_host_side_trust_opt_in_honors_writable_policy(
     monkeypatch.setenv(caido_api._EGRESS_POLICY_TRUST_RW_ENV, "1")
     monkeypatch.setattr(caido_api, "_in_container", lambda: False)
     monkeypatch.setattr(caido_api, "_path_on_readonly_mount", lambda _p: False)
-    assert caido_api._check_replay_url_host("http://10.2.3.4/") is None
+    assert caido_api._replay_denial("http://10.2.3.4/") is None
 
 
 def test_host_side_trust_opt_in_ignored_inside_container(
@@ -202,13 +202,13 @@ def test_host_side_trust_opt_in_ignored_inside_container(
     monkeypatch.setenv(caido_api._EGRESS_POLICY_TRUST_RW_ENV, "1")
     monkeypatch.setattr(caido_api, "_in_container", lambda: True)
     monkeypatch.setattr(caido_api, "_path_on_readonly_mount", lambda _p: False)
-    assert caido_api._check_replay_url_host("http://10.2.3.4/") is not None
+    assert caido_api._replay_denial("http://10.2.3.4/") is not None
 
 
 def test_legacy_opt_in_env_still_works_without_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     assert caido_api.load_egress_policy() is None
     monkeypatch.setenv("STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS", "1")
-    assert caido_api._check_replay_url_host("http://10.0.0.5/") is None
+    assert caido_api._replay_denial("http://10.0.0.5/") is None
 
 
 def test_missing_policy_in_container_fails_closed(
@@ -226,7 +226,7 @@ def test_missing_policy_in_container_fails_closed(
     assert caido_api.load_egress_policy() is None
     # The agent-settable opt-in must NOT authorize private egress in-container.
     monkeypatch.setenv("STRIX_SANDBOX_ALLOW_PRIVATE_EGRESS", "1")
-    assert caido_api._check_replay_url_host("http://10.0.0.5/") is not None
+    assert caido_api._replay_denial("http://10.0.0.5/") is not None
 
 
 def test_policy_rejects_wrong_scan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -235,7 +235,7 @@ def test_policy_rejects_wrong_scan_id(tmp_path: Path, monkeypatch: pytest.Monkey
     _trusted_policy(monkeypatch, path, run_id="current-run")
     policy = caido_api.load_egress_policy()
     assert policy == caido_api._FAIL_CLOSED_POLICY
-    assert caido_api._check_replay_url_host("http://10.2.3.4/") is not None
+    assert caido_api._replay_denial("http://10.2.3.4/") is not None
 
 
 def test_policy_rejects_unsupported_version(
@@ -246,7 +246,7 @@ def test_policy_rejects_unsupported_version(
     _trusted_policy(monkeypatch, path)
     policy = caido_api.load_egress_policy()
     assert policy == caido_api._FAIL_CLOSED_POLICY
-    assert caido_api._check_replay_url_host("http://10.2.3.4/") is not None
+    assert caido_api._replay_denial("http://10.2.3.4/") is not None
 
 
 def test_policy_rejects_missing_scan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

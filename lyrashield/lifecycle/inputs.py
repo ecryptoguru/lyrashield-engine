@@ -14,14 +14,10 @@ from openai.types.shared import Reasoning
 from lyrashield.lifecycle.sessions import scrub_images_from_items
 from lyrashield.policy.models import (
     DEFAULT_MODEL_RETRY,
-    bedrock_route_supports_prompt_caching,
-    is_bedrock_route,
-    is_claude_model,
     is_gpt6_model,
     is_known_openai_bare_model,
     model_supports_reasoning,
     request_timeout_extra_args,
-    routes_through_litellm,
 )
 
 
@@ -337,7 +333,6 @@ def make_model_settings(
     max_output_tokens: int | None = None,
     prompt_cache_key: str | None = None,
     prompt_cache_options: PromptCacheOptions | None = None,
-    prompt_cache: bool = True,
     extra_headers: dict[str, str] | None = None,
 ) -> ModelSettings:
     extra_args: dict[str, Any] = request_timeout_extra_args(request_timeout) or {}
@@ -363,13 +358,6 @@ def make_model_settings(
     if force_required_tool_choice and _accepts_required_tool_choice(model_name):
         model_settings = model_settings.resolve(ModelSettings(tool_choice="required"))
 
-    cache_extra_args = _prompt_cache_extra_args(model_name) if prompt_cache else None
-    if cache_extra_args:
-        model_settings = model_settings.resolve(
-            ModelSettings(
-                extra_args={**(model_settings.extra_args or {}), **cache_extra_args},
-            ),
-        )
     return model_settings
 
 
@@ -386,32 +374,6 @@ def _reasoning_settings(effort: ReasoningEffort) -> ModelSettings:
     if effort != "max":
         return ModelSettings(reasoning=Reasoning(effort=effort))
     return ModelSettings(extra_body={"reasoning_effort": "max"})
-
-
-def _prompt_cache_extra_args(model_name: str) -> dict[str, Any] | None:
-    """LiteLLM ``cache_control_injection_points`` for Claude prompt caching.
-
-    System prompt + rolling last-message breakpoint everywhere; ``tool_config``
-    only on Bedrock Converse (the only route whose LiteLLM transform consumes
-    it — elsewhere it leaks onto the wire and native Anthropic 400s). Unmapped
-    Bedrock models get no points at all: Bedrock rejects the passed-through
-    field outright.
-
-    The field is LiteLLM's own, consumed by its transform, so it only goes to
-    routes LiteLLM serves. A bare ``claude-...`` name is served by the SDK's
-    OpenAI client instead (a gateway in front of Claude), and that client raises
-    ``TypeError`` on request kwargs it does not know.
-    """
-    if not is_claude_model(model_name) or not routes_through_litellm(model_name):
-        return None
-    if is_bedrock_route(model_name) and not bedrock_route_supports_prompt_caching(model_name):
-        return None
-
-    points: list[dict[str, Any]] = [{"location": "message", "role": "system"}]
-    if is_bedrock_route(model_name):
-        points.append({"location": "tool_config"})
-    points.append({"location": "message", "index": -1})
-    return {"cache_control_injection_points": points}
 
 
 def child_initial_input(

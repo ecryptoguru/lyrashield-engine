@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
@@ -8,13 +8,16 @@ from strix.skills import get_loaded_skill_names
 from strix.telemetry._common import (
     SEND_TIMEOUT,
     SESSION_ID,
-    TelemetryReportState,
     base_props,
     exception_props,
     get_scan_phase,
     get_version,
     is_first_run,
 )
+
+
+if TYPE_CHECKING:
+    from strix.report.state import ReportState
 
 
 logger = logging.getLogger(__name__)
@@ -88,7 +91,7 @@ def finding(severity: str, cwe: str | None = None, is_cve: bool = False) -> None
     )
 
 
-def end(report_state: TelemetryReportState, exit_reason: str = "completed") -> None:
+def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
     if report_state.posthog_scan_ended_sent:
         return
     if report_state.scan_ended_exit_reason is None:

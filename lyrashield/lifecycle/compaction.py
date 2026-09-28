@@ -340,7 +340,6 @@ async def _summarize(
         None,
         model_name=model,
         request_timeout=llm.timeout,
-        prompt_cache=False,
         extra_headers=llm.extra_headers,
     ).resolve(ModelSettings(max_tokens=max_tokens))
     # Reserve against the scan budget before this out-of-band model call.

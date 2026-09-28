@@ -6,18 +6,13 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
-import json
 import logging
 import uuid
 from collections.abc import Callable
-from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
-from agents import RunConfig
-from agents.exceptions import ModelBehaviorError
-from agents.sandbox import SandboxRunConfig
 from openai import RateLimitError
 
 from lyrashield.agents.factory import build_strix_agent, make_child_factory
@@ -33,6 +28,12 @@ from lyrashield.lifecycle.execution import (
 )
 from lyrashield.lifecycle.execution import (
     spawn_child_agent as start_child_agent,
+)
+from lyrashield.lifecycle.fallback import FallbackServices, run_root_agent
+from lyrashield.lifecycle.finalize import (
+    FinalizeServices,
+    cleanup_scan_resources,
+    finish_scan_result,
 )
 from lyrashield.lifecycle.hooks import (
     BudgetExceededError,
@@ -51,6 +52,10 @@ from lyrashield.lifecycle.inputs import (
     prompt_cache_options_for_model,
     prompt_cache_routing_enabled,
 )
+from lyrashield.lifecycle.restore import restore_coordinator
+from lyrashield.lifecycle.root_agent import RootAgentServices, build_root_runtime
+from lyrashield.lifecycle.sandbox_bringup import bring_up_sandbox
+from lyrashield.lifecycle.scan_context import create_scan_paths, resolve_scan_context
 from lyrashield.lifecycle.sessions import open_agent_session
 from lyrashield.policy.loader import load_settings
 from lyrashield.policy.models import (
@@ -125,22 +130,6 @@ def _engine_version() -> str:
         return version("lyrashield-engine")
     except PackageNotFoundError:
         return "development"
-
-
-def _coordinator_for_scan_mode(
-    coordinator: AgentCoordinator | None,
-    scan_mode: str,
-) -> AgentCoordinator:
-    mode_agent_limit = _MODE_AGENT_LIMITS.get(scan_mode, 4)
-    if coordinator is None:
-        return AgentCoordinator(max_agents=mode_agent_limit)
-    if len(coordinator.statuses) > mode_agent_limit:
-        raise RuntimeError(
-            f"Existing coordinator has {len(coordinator.statuses)} agents, "
-            f"above the {scan_mode} mode limit ({mode_agent_limit})",
-        )
-    coordinator.max_agents = min(coordinator.max_agents, mode_agent_limit)
-    return coordinator
 
 
 def _merge_root_prompt_context(
@@ -229,16 +218,19 @@ async def run_strix_scan(
     if scan_id is None:
         scan_id = f"scan-{uuid.uuid4().hex[:8]}"
 
-    run_dir = run_dir_for(scan_id)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    state_dir = runtime_state_dir(run_dir)
-    state_dir.mkdir(parents=True, exist_ok=True)
-    teardown_logging = setup_scan_logging(run_dir)
-    set_scan_id(scan_id)
-
-    agents_path = state_dir / "agents.json"
-    agents_db = state_dir / "agents.db"
-    is_resume = resume
+    paths = create_scan_paths(
+        scan_id=scan_id,
+        resume=resume,
+        run_dir_for=run_dir_for,
+        runtime_state_dir=runtime_state_dir,
+        setup_scan_logging=setup_scan_logging,
+        set_scan_id=set_scan_id,
+    )
+    run_dir = paths.run_dir
+    state_dir = paths.state_dir
+    agents_path = paths.agents_path
+    agents_db = paths.agents_db
+    is_resume = paths.is_resume
 
     logger.info(
         "%s LyraShield scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
@@ -250,21 +242,20 @@ async def run_strix_scan(
         run_dir,
     )
 
-    settings = load_settings()
-    configure_sdk_model_defaults(settings)
-    llm_settings = settings.llm
-    resolved_model = (model or llm_settings.model or "").strip()
-    if not resolved_model:
-        raise RuntimeError(
-            "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
-        )
-    logger.info("LLM model resolved: %s", resolved_model)
-    delegate_model = str(getattr(llm_settings, "delegate_model", None) or resolved_model).strip()
-    delegate_reasoning_effort: ReasoningEffort = getattr(
-        llm_settings,
-        "delegate_reasoning_effort",
-        llm_settings.reasoning_effort,
+    context = resolve_scan_context(
+        paths=paths,
+        scan_config=scan_config,
+        model=model,
+        load_settings=load_settings,
+        configure_sdk_model_defaults=configure_sdk_model_defaults,
+        uses_chat_completions_tool_schema=uses_chat_completions_tool_schema,
     )
+    llm_settings = context.llm_settings
+    resolved_model = context.resolved_model
+    delegate_model = context.delegate_model
+    delegate_reasoning_effort = context.delegate_reasoning_effort
+    scan_mode = context.scan_mode
+    logger.info("LLM model resolved: %s", resolved_model)
     logger.info(
         "LLM routing resolved: coordinator=%s/%s delegate=%s/%s",
         resolved_model,
@@ -272,139 +263,30 @@ async def run_strix_scan(
         delegate_model,
         delegate_reasoning_effort,
     )
-    chat_completions_tools = uses_chat_completions_tool_schema(resolved_model, settings)
-    delegate_chat_completions_tools = uses_chat_completions_tool_schema(delegate_model, settings)
-
-    scan_mode = str(scan_config.get("scan_mode") or "deep")
-    if coordinator is None:
-        coordinator = AgentCoordinator()
-    coordinator.set_snapshot_path(agents_path)
-
-    from lyrashield.tools.todo.tools import hydrate_todos_from_disk
-    from strix.tools.coverage.tools import hydrate_coverage_from_disk
-    from strix.tools.notes.tools import hydrate_notes_from_disk
-    from strix.tools.threat_model.tools import hydrate_threat_models_from_disk
-
-    # The coverage ledger and threat-model store are module-global; hydrating
-    # every run (not only resumes) binds them to this run's state dir and
-    # clears any store a prior scan in this process left behind.
-    hydrate_coverage_from_disk(state_dir)
-    hydrate_threat_models_from_disk(state_dir)
-
-    root_id: str | None = None
-    if is_resume:
-        hydrate_todos_from_disk(state_dir)
-        hydrate_notes_from_disk(state_dir)
-        if agents_path.is_symlink() or not agents_path.is_file():
-            raise RuntimeError(
-                f"Cannot resume scan {scan_id}: agents.json is not a regular file",
-            )
-        if agents_db.is_symlink() or not agents_db.is_file():
-            raise RuntimeError(
-                f"Cannot resume scan {scan_id}: agents.db is not a regular file",
-            )
-        try:
-            snap = json.loads(agents_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"Cannot resume scan {scan_id}: agents.json is unreadable: {exc}",
-            ) from exc
-        if not agents_db.exists():
-            raise RuntimeError(
-                f"Cannot resume scan {scan_id}: missing SDK session database at {agents_db}",
-            )
-        await coordinator.restore(snap)
-        report_state = get_global_report_state()
-        if report_state is not None:
-            hydrated_cost = report_state.get_total_llm_cost()
-            budget_stopped, reserve_stopped = recomputed_budget_flags(
-                hydrated_cost,
-                max_budget_usd,
-                interactive=interactive,
-            )
-            # A fresh process may resume a run that ended at (or over) its
-            # budget without the persisted pause flag surviving — for example
-            # when the previous process exited between the last snapshot and
-            # the pause being asserted. Re-derive the pause from the hydrated
-            # ledger so an interactive resume at 100% budget starts paused and
-            # the user's first message extends the budget, instead of the root
-            # agent launching into a doomed reservation attempt.
-            at_budget = max_budget_usd is not None and hydrated_cost >= max_budget_usd
-            await coordinator.reset_budget_stops(
-                budget_stopped=budget_stopped,
-                reserve_stopped=reserve_stopped,
-                budget_paused=interactive and (coordinator.budget_paused or at_budget),
-            )
-        for aid, parent in coordinator.parent_of.items():
-            if parent is None:
-                root_id = aid
-                break
-        if root_id is None:
-            raise RuntimeError(
-                f"Cannot resume scan {scan_id}: agents.json has no root agent (parent=None)",
-            )
-        logger.info(
-            "Resume: restored coordinator with %d agent(s); root=%s",
-            len(coordinator.statuses),
-            root_id,
-        )
-    else:
-        root_id = uuid.uuid4().hex[:8]
-
-    coordinator = _coordinator_for_scan_mode(coordinator, scan_mode)
-
-    logger.info("Bringing up sandbox session for scan %s", scan_id)
-    bundle = await session_manager.create_or_reuse(
-        scan_id,
-        image=image,
-        local_sources=local_sources or [],
-        targets=list(scan_config.get("targets") or []),
-        # Untrusted supporting-file evidence; validated/staged upstream of
-        # this call. It contributes nothing to scope or the egress policy.
-        attachments=(
-            attachments if attachments is not None else list(scan_config.get("attachments") or [])
-        ),
+    coordinator, root_id = await restore_coordinator(
+        coordinator=coordinator,
+        coordinator_factory=AgentCoordinator,
+        scan_mode=scan_mode,
+        state_dir=state_dir,
+        agents_path=agents_path,
+        agents_db=agents_db,
+        scan_id=scan_id,
+        is_resume=is_resume,
+        max_budget_usd=max_budget_usd,
+        interactive=interactive,
+        report_state_getter=get_global_report_state,
+        recomputed_budget_flags=recomputed_budget_flags,
     )
-    logger.info("Sandbox ready for scan %s", scan_id)
 
-    source_snapshots = bundle.get("source_snapshots")
-    if source_snapshots:
-        report_state = get_global_report_state()
-        if report_state is not None:
-            # These are digests of the independent files actually uploaded,
-            # not of an earlier live worktree that might have changed.
-            report_state.run_record["source_snapshots"] = source_snapshots
-            diff_scope = report_state.run_record.get("diff_scope")
-            if isinstance(diff_scope, dict):
-                for repo in diff_scope.get("repos", []):
-                    if not isinstance(repo, dict):
-                        continue
-                    for snapshot in source_snapshots:
-                        if repo.get("workspace_subdir") == snapshot.get("workspace_subdir"):
-                            repo["snapshot_digest"] = snapshot["snapshot_digest"]
-                            repo["snapshot_digest_stage"] = "uploaded_source"
-
-    attachment_manifest = bundle.get("attachment_manifest")
-    if attachment_manifest:
-        report_state = get_global_report_state()
-        if report_state is not None:
-            # Provenance: the manifest of staged originals (name, sha256,
-            # size, declared content type) actually mounted into the sandbox.
-            report_state.run_record["attachments"] = attachment_manifest
-
-    if bundle.get("default_scope_id"):
-        report_state = get_global_report_state()
-        if report_state is not None:
-            report_state.run_record["proxy_default_scope"] = {
-                "id": bundle["default_scope_id"],
-                "name": "authorized-targets",
-                "allowlist": bundle.get("default_scope_allowlist") or [],
-            }
-    capabilities = bundle.get("sandbox_capabilities")
-    if capabilities is not None:
-        report_state = get_global_report_state()
-        if report_state is not None:
-            report_state.set_sandbox_capabilities(capabilities)
+    bundle = await bring_up_sandbox(
+        scan_id=scan_id,
+        image=image,
+        local_sources=local_sources,
+        attachments=attachments,
+        scan_config=scan_config,
+        create_or_reuse=session_manager.create_or_reuse,
+        report_state_getter=get_global_report_state,
+    )
 
     sandbox_session = bundle["session"]
 
@@ -421,485 +303,87 @@ async def run_strix_scan(
     configure_spill_writer(_spill_to_workspace)
 
     sessions_to_close: list[Session] = []
+    finalizer = FinalizeServices(
+        get_global_report_state=get_global_report_state,
+        record_supports_evidence=_evidence.record_supports_evidence_v1_1,
+        export_http_exchange_evidence=_evidence.export_http_exchange_evidence,
+        set_active_hooks=set_active_hooks,
+        configure_spill_writer=configure_spill_writer,
+        cleanup_sandbox=session_manager.cleanup,
+    )
 
     try:
-        targets: list[Any] = list(scan_config.get("targets") or [])
-        is_whitebox = any(t.get("type") == "local_code" for t in targets)
-        skills = list(scan_config.get("skills") or [])
-        root_task = build_root_task(scan_config)
-        scope_context = build_scope_context(scan_config)
-        root_context = _merge_root_prompt_context(scope_context, extra_system_prompt_context)
-        root_instructions = _compose_root_instructions_override(
-            root_instructions_override,
-            skills=skills,
-            scan_mode=scan_mode,
-            is_whitebox=is_whitebox,
-            interactive=interactive,
-            system_prompt_context=root_context,
-        )
-        cache_enabled = bool(llm_settings.prompt_cache)
-        root_cache_options = (
-            prompt_cache_options_for_model(resolved_model) if cache_enabled else None
-        )
-        delegate_cache_options = (
-            prompt_cache_options_for_model(delegate_model) if cache_enabled else None
-        )
-        # Stable routing keys are decoupled from explicit cache options: when
-        # routing is enabled for an approved model, coordinator, delegates, and
-        # fallback each pin their prompt family to a stable key — with or
-        # without explicit breakpoints.
-        root_routing = cache_enabled and prompt_cache_routing_enabled(resolved_model)
-        delegate_routing = cache_enabled and prompt_cache_routing_enabled(delegate_model)
-        initial_input: Any = (
-            []
-            if is_resume
-            else build_root_initial_input(
-                scan_config,
-                model_name=resolved_model if root_cache_options else None,
-            )
-        )
-        max_output_tokens = resolve_max_output_tokens(
-            scan_mode,
-            getattr(llm_settings, "max_output_tokens", None),
-        )
-        model_settings = make_model_settings(
-            llm_settings.reasoning_effort,
-            model_name=resolved_model,
-            force_required_tool_choice=llm_settings.force_required_tool_choice,
-            request_timeout=llm_settings.timeout,
-            max_output_tokens=max_output_tokens,
-            prompt_cache_key=(
-                _stable_prompt_cache_key(
-                    "coordinator",
-                    json.dumps(
-                        {"model": resolved_model, "instructions": root_instructions},
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    scan_id,
-                )
-                if root_routing
-                else None
-            ),
-            prompt_cache_options=root_cache_options,
-            prompt_cache=cache_enabled,
-            extra_headers=llm_settings.extra_headers,
-        )
-        delegate_max_output_tokens = min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING)
-        delegate_cache_material = json.dumps(
-            {
-                "model": delegate_model,
-                "scan_mode": scan_mode,
-                "is_whitebox": is_whitebox,
-                "interactive": interactive,
-                "scope_context": scope_context,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        delegate_model_settings = make_model_settings(
-            delegate_reasoning_effort,
-            model_name=delegate_model,
-            force_required_tool_choice=llm_settings.force_required_tool_choice,
-            request_timeout=llm_settings.timeout,
-            max_output_tokens=delegate_max_output_tokens,
-            prompt_cache_key=(
-                _stable_prompt_cache_key("delegates", delegate_cache_material, scan_id)
-                if delegate_routing
-                else None
-            ),
-            prompt_cache_options=delegate_cache_options,
-            prompt_cache=cache_enabled,
-            extra_headers=llm_settings.extra_headers,
-        )
-        run_config = RunConfig(
-            model=resolved_model,
-            model_provider=StrixProvider(settings=settings),
-            model_settings=model_settings,
-            sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
-            trace_include_sensitive_data=False,
-        )
-        delegate_run_config = replace(
-            run_config,
-            model=delegate_model,
-            model_settings=delegate_model_settings,
-        )
-        hooks = ReportUsageHooks(
-            model=resolved_model,
+        root_runtime = await build_root_runtime(
+            scan_context=context,
+            coordinator=coordinator,
+            bundle=bundle,
+            scan_config=scan_config,
+            scan_id=scan_id,
+            max_turns=max_turns,
             max_budget_usd=max_budget_usd,
-            max_output_tokens=max_output_tokens,
-            max_input_tokens=getattr(llm_settings, "max_input_tokens", None),
+            interactive=interactive,
+            is_resume=is_resume,
+            event_sink=event_sink,
+            root_id=root_id,
+            sessions_to_close=sessions_to_close,
+            root_instructions_override=root_instructions_override,
+            extra_system_prompt_context=extra_system_prompt_context,
+            services=RootAgentServices(
+                build_root_task=build_root_task,
+                build_scope_context=build_scope_context,
+                merge_root_prompt_context=_merge_root_prompt_context,
+                compose_root_instructions_override=_compose_root_instructions_override,
+                resolve_max_output_tokens=resolve_max_output_tokens,
+                prompt_cache_options_for_model=prompt_cache_options_for_model,
+                prompt_cache_routing_enabled=prompt_cache_routing_enabled,
+                stable_prompt_cache_key=_stable_prompt_cache_key,
+                build_root_initial_input=build_root_initial_input,
+                make_model_settings=make_model_settings,
+                build_strix_agent=build_strix_agent,
+                make_child_factory=make_child_factory,
+                open_agent_session=open_agent_session,
+                start_child_agent=start_child_agent,
+                respawn_subagents=respawn_subagents,
+                set_active_hooks=set_active_hooks,
+                usage_hooks_factory=ReportUsageHooks,
+                engine_version=_engine_version,
+                model_routing_policy=_model_routing_policy,
+                report_state_getter=get_global_report_state,
+                model_provider_factory=lambda provider_settings: StrixProvider(
+                    settings=provider_settings,
+                ),
+                build_scan_targets=build_scan_targets,
+                delegate_output_token_ceiling=DELEGATE_OUTPUT_TOKEN_CEILING,
+            ),
+        )
+        result = await run_root_agent(
+            runtime=root_runtime,
+            coordinator=coordinator,
+            scan_id=scan_id,
             max_turns=max_turns,
             interactive=interactive,
+            is_resume=is_resume,
+            event_sink=event_sink,
+            services=FallbackServices(
+                run_agent_loop=run_agent_loop,
+                is_output_token_truncation=_is_output_token_truncation,
+                is_content_filter_error=_is_content_filter_error,
+                uses_chat_completions_tool_schema=uses_chat_completions_tool_schema,
+                make_model_settings=make_model_settings,
+                stable_prompt_cache_key=_stable_prompt_cache_key,
+                build_strix_agent=build_strix_agent,
+                report_state_getter=get_global_report_state,
+                delegate_output_token_ceiling=DELEGATE_OUTPUT_TOKEN_CEILING,
+            ),
         )
-        # Lets metered calls made outside the agent run loop (deduplication)
-        # reserve against this scan's budget. Cleared in the `finally` below so a
-        # later scan can never reserve against a stale budget.
-        set_active_hooks(hooks)
-        if interactive:
-            # The extender is what lets a user message lift a budget pause
-            # (see ``AgentCoordinator.send``). A resumed scan at or over its
-            # budget must stay paused until that message arrives; resuming
-            # here would silently extend the budget without user consent and
-            # start the root agent before the pause is re-asserted.
-            coordinator.set_budget_extender(hooks.extend_budget)
-
-        report_state = get_global_report_state()
-        if report_state is not None:
-            report_state.run_record.update(
-                {
-                    "engine_version": _engine_version(),
-                    "prompt_bundle_hash": hashlib.sha256(
-                        root_instructions.encode("utf-8")
-                    ).hexdigest(),
-                    "prompt_cache": {
-                        "enabled": cache_enabled,
-                        "routing_enabled": root_routing,
-                        "routing": "stable-prompt-v2" if root_routing else None,
-                        "mode": (
-                            "explicit"
-                            if root_cache_options
-                            else "implicit"
-                            if cache_enabled
-                            else None
-                        ),
-                        "ttl": root_cache_options["ttl"] if root_cache_options else None,
-                    },
-                    "model": resolved_model,
-                    "reasoning_effort": llm_settings.reasoning_effort,
-                    "delegate_model": delegate_model,
-                    "delegate_reasoning_effort": delegate_reasoning_effort,
-                    "model_routing_policy": _model_routing_policy(
-                        resolved_model,
-                        llm_settings.reasoning_effort,
-                        delegate_model,
-                        delegate_reasoning_effort,
-                    ),
-                    "max_output_tokens": max_output_tokens,
-                    # Record the thresholds actually in force (post-clamp) so
-                    # "was a cap applied to this scan?" is answerable from the run
-                    # record rather than by inspecting deployment env.
-                    "compaction_trigger_tokens": hooks.compaction_trigger_tokens,
-                    "compaction_target_tokens": hooks.compaction_target_tokens,
-                    "max_agents": coordinator.max_agents,
-                }
-            )
-            report_state.save_run_data()
-
-        root_agent = build_strix_agent(
-            name="LyraShield",
-            skills=skills,
-            is_root=True,
-            scan_mode=scan_mode,
-            is_whitebox=is_whitebox,
+        return await finish_scan_result(
+            result=result,
             interactive=interactive,
-            chat_completions_tools=chat_completions_tools,
-            system_prompt_context=root_context,
-            instructions_override=root_instructions,
-            model=resolved_model,
-            model_settings=model_settings,
+            scan_id=scan_id,
+            coordinator=coordinator,
+            root_id=root_id,
+            services=finalizer,
         )
-
-        if not is_resume:
-            await coordinator.register(
-                root_id,
-                "LyraShield",
-                parent_id=None,
-                task=root_task,
-                skills=skills,
-            )
-
-        child_agent_builder = make_child_factory(
-            scan_mode=scan_mode,
-            is_whitebox=is_whitebox,
-            interactive=interactive,
-            chat_completions_tools=delegate_chat_completions_tools,
-            system_prompt_context=scope_context,
-            model=delegate_model,
-            model_settings=delegate_model_settings,
-        )
-
-        server_conversation = getattr(settings.runtime, "server_conversation", False)
-
-        async def spawn_child_agent(**kwargs: Any) -> dict[str, Any]:
-            return await start_child_agent(
-                coordinator=coordinator,
-                factory=child_agent_builder,
-                agents_db_path=agents_db,
-                sessions_to_close=sessions_to_close,
-                run_config=delegate_run_config,
-                max_turns=max_turns,
-                interactive=interactive,
-                event_sink=event_sink,
-                hooks=hooks,
-                server_conversation=server_conversation,
-                model_name=delegate_model if delegate_cache_options else None,
-                **kwargs,
-            )
-
-        context: dict[str, Any] = {
-            "coordinator": coordinator,
-            "sandbox_session": bundle["session"],
-            "caido_client": bundle["caido_client"],
-            "agent_id": root_id,
-            "parent_id": None,
-            "interactive": interactive,
-            "spawn_child_agent": spawn_child_agent,
-            "scan_targets": build_scan_targets(scan_config),
-            "max_context_images": settings.runtime.max_context_images,
-            "server_conversation": server_conversation,
-        }
-
-        root_session = open_agent_session(
-            root_id,
-            agents_db,
-            server_conversation=server_conversation,
-            conversation_id=coordinator.conversation_ids.get(root_id),
-        )
-        sessions_to_close.append(root_session)
-        await coordinator.attach_runtime(root_id, session=root_session)
-
-        if is_resume:
-            await respawn_subagents(
-                coordinator=coordinator,
-                factory=child_agent_builder,
-                agents_db_path=agents_db,
-                sessions_to_close=sessions_to_close,
-                run_config=delegate_run_config,
-                max_turns=max_turns,
-                interactive=interactive,
-                parent_ctx=context,
-                root_id=root_id,
-                server_conversation=server_conversation,
-                event_sink=event_sink,
-                hooks=hooks,
-            )
-
-        # Resume + new ``--instruction``: SDK replay drives root from
-        # agents.db with ``initial_input=[]``, so a brand-new instruction
-        # passed on the resume CLI would otherwise be silently ignored.
-        # Inject it as a fresh user message in root's SDK session; the
-        # next run cycle will replay it with the rest of the session.
-        resume_instruction = str(scan_config.get("resume_instruction") or "").strip()
-        if is_resume and resume_instruction:
-            await coordinator.send(
-                root_id,
-                {
-                    "from": "user",
-                    "type": "instruction",
-                    "priority": "high",
-                    "content": resume_instruction,
-                },
-            )
-            logger.info(
-                "Resume: injected new instruction into root SDK session (len=%d)",
-                len(resume_instruction),
-            )
-
-        root_status = await coordinator.get_status(root_id)
-
-        try:
-            result = await run_agent_loop(
-                agent=root_agent,
-                initial_input=initial_input,
-                run_config=run_config,
-                context=context,
-                max_turns=max_turns,
-                coordinator=coordinator,
-                agent_id=root_id,
-                interactive=interactive,
-                session=root_session,
-                start_parked=bool(interactive and is_resume and root_status != "running"),
-                event_sink=event_sink,
-                hooks=hooks,
-            )
-        except ModelBehaviorError as exc:
-            if _is_output_token_truncation(exc):
-                # Output exhaustion is a budget boundary, not evidence that a
-                # different model should retry the same investigation.
-                logger.warning(
-                    "Scan %s: root output-token limit reached; preserving partial findings.",
-                    scan_id,
-                )
-                await coordinator.cancel_descendants(root_id)
-                with contextlib.suppress(Exception):
-                    await coordinator.set_status(root_id, "stopped")
-                report_state = get_global_report_state()
-                if report_state is not None:
-                    report_state.set_terminal_reason("engine_stopped")
-                return None
-            # The root agent hit a model error. This may be a content
-            # filter, max-turns exhaustion, malformed JSON, or any other model
-            # behavior issue. Rather than re-raising and losing all partial
-            # findings, switch directly to the delegate model (Luna) at the
-            # delegate reasoning effort. If the delegate also fails, salvage
-            # whatever was collected.
-            is_content_filter = _is_content_filter_error(exc)
-            # Log the originating exception type so content-filter blocks can be
-            # distinguished from genuine agent bugs (malformed JSON, etc.) in
-            # logs.  The fallback behaviour is unchanged either way.
-            exc_type = type(exc).__name__
-            if is_content_filter:
-                logger.warning(
-                    "Scan %s: root agent hit content_filter block "
-                    "(exc_type=%s); evaluating fallback options.",
-                    scan_id,
-                    exc_type,
-                )
-            else:
-                logger.warning(
-                    "Scan %s: root agent hit non-filter model error "
-                    "(exc_type=%s, detail=%r); treating as agent bug, "
-                    "evaluating fallback options.",
-                    scan_id,
-                    exc_type,
-                    str(exc)[:200],
-                )
-            if delegate_model == resolved_model:
-                logger.exception(
-                    "Scan %s: root agent hit %s and no separate delegate model "
-                    "is configured; salvaging partial findings.",
-                    scan_id,
-                    "content_filter" if is_content_filter else "model_error",
-                )
-                await coordinator.cancel_descendants(root_id)
-                with contextlib.suppress(Exception):
-                    await coordinator.set_status(root_id, "stopped")
-                report_state = get_global_report_state()
-                if report_state is not None:
-                    report_state.set_terminal_reason(
-                        "content_filter_stopped" if is_content_filter else "engine_stopped"
-                    )
-                return None
-            logger.warning(
-                "Scan %s: root agent (model=%s) hit %s (exc_type=%s); switching directly to "
-                "delegate model %s at %s reasoning (no coordinator retry).",
-                scan_id,
-                resolved_model,
-                "content_filter" if is_content_filter else "model_error",
-                exc_type,
-                delegate_model,
-                delegate_reasoning_effort,
-            )
-            fallback_chat_completions_tools = uses_chat_completions_tool_schema(
-                delegate_model, settings
-            )
-            fallback_model_settings = make_model_settings(
-                delegate_reasoning_effort,
-                model_name=delegate_model,
-                force_required_tool_choice=llm_settings.force_required_tool_choice,
-                request_timeout=llm_settings.timeout,
-                max_output_tokens=min(max_output_tokens, DELEGATE_OUTPUT_TOKEN_CEILING),
-                prompt_cache_key=(
-                    _stable_prompt_cache_key(
-                        "fallback",
-                        json.dumps(
-                            {"model": delegate_model, "instructions": root_instructions},
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                        scan_id,
-                    )
-                    if delegate_routing
-                    else None
-                ),
-                prompt_cache_options=delegate_cache_options,
-                prompt_cache=cache_enabled,
-                extra_headers=llm_settings.extra_headers,
-            )
-            fallback_agent = build_strix_agent(
-                name="LyraShield",
-                skills=skills,
-                is_root=True,
-                scan_mode=scan_mode,
-                is_whitebox=is_whitebox,
-                interactive=interactive,
-                chat_completions_tools=fallback_chat_completions_tools,
-                system_prompt_context=root_context,
-                instructions_override=root_instructions,
-                model=delegate_model,
-                model_settings=fallback_model_settings,
-            )
-            fallback_run_config = replace(
-                run_config,
-                model=delegate_model,
-                model_settings=fallback_model_settings,
-            )
-            try:
-                result = await run_agent_loop(
-                    agent=fallback_agent,
-                    initial_input=[],
-                    run_config=fallback_run_config,
-                    context=context,
-                    max_turns=max_turns,
-                    coordinator=coordinator,
-                    agent_id=root_id,
-                    interactive=interactive,
-                    session=root_session,
-                    start_parked=bool(interactive and is_resume and root_status != "running"),
-                    event_sink=event_sink,
-                    hooks=hooks,
-                )
-            except ModelBehaviorError as fallback_exc:
-                # Delegate fallback also failed. Salvage whatever findings were
-                # collected before the failure and treat the scan as stopped
-                # rather than failed. This preserves partial results instead of
-                # losing everything — the scan already spent budget and may have
-                # collected child-agent findings.
-                is_cf = _is_content_filter_error(fallback_exc)
-                fallback_exc_type = type(fallback_exc).__name__
-                terminal_reason = "content_filter_stopped" if is_cf else "engine_stopped"
-                logger.warning(
-                    "Scan %s: delegate fallback also failed "
-                    "(content_filter=%s, exc_type=%s, detail=%r); "
-                    "salvaging partial findings and stopping.",
-                    scan_id,
-                    is_cf,
-                    fallback_exc_type,
-                    str(fallback_exc)[:200],
-                )
-                await coordinator.cancel_descendants(root_id)
-                with contextlib.suppress(Exception):
-                    await coordinator.set_status(root_id, "stopped")
-                report_state = get_global_report_state()
-                if report_state is not None:
-                    report_state.set_terminal_reason(terminal_reason)
-                return None
-        if not interactive and result is not None:
-            final = getattr(result, "final_output", None)
-            scan_completed = False
-            if isinstance(final, str):
-                try:
-                    parsed = json.loads(final)
-                except (ValueError, TypeError):
-                    scan_completed = False
-                else:
-                    scan_completed = isinstance(parsed, dict) and bool(
-                        cast("dict[str, Any]", parsed).get("scan_completed")
-                    )
-            elif isinstance(final, dict):
-                scan_completed = bool(cast("dict[str, Any]", final).get("scan_completed"))
-            if not scan_completed:
-                report_state = get_global_report_state()
-                if report_state is not None:
-                    report_state.set_terminal_reason("incomplete")
-                final_type = type(cast("object", final)).__name__
-                logger.error(
-                    "Scan %s ended without calling finish_scan. The agent "
-                    "emitted a text-only turn instead of a lifecycle tool call, "
-                    "so no executive report was written. Final output was "
-                    "omitted from logs (type=%s).",
-                    scan_id,
-                    final_type,
-                )
-        coordinator.mark_shutting_down()
-        with contextlib.suppress(Exception):
-            await coordinator.cancel_descendants(root_id)
-        with contextlib.suppress(Exception):
-            current_status = await coordinator.get_status(root_id)
-            if current_status in {"running", "waiting"}:
-                await coordinator.set_status(root_id, "completed")
-        return result  # noqa: TRY300
     except BudgetExceededError as exc:
         logger.info("Scan %s stopped: %s", scan_id, exc)
         await coordinator.cancel_descendants(root_id)
@@ -931,41 +415,13 @@ async def run_strix_scan(
             await coordinator.set_status(root_id, "failed")
         raise
     finally:
-        set_active_hooks(None)
-        configure_spill_writer(None)
-        for s in sessions_to_close:
-            with contextlib.suppress(Exception):
-                close = getattr(s, "close", None)
-                if callable(close):
-                    close()
-        with contextlib.suppress(Exception):
-            await coordinator.maybe_snapshot()
-        state = artifact_state or get_global_report_state()
-        if state is not None and _evidence.record_supports_evidence_v1_1(state.run_record):
-            # Durable HTTP evidence must leave the proxy before teardown: the
-            # Caido project dies with the sandbox. A failed export records an
-            # explicit incomplete-evidence marker — never a receipt.
-            try:
-                outcome = await _evidence.export_http_exchange_evidence(
-                    bundle.get("caido_client"),
-                    state.get_run_dir(),
-                    run_record=state.run_record,
-                    findings=state.vulnerability_reports,
-                )
-            except Exception:
-                logger.exception("HTTP exchange evidence export failed")
-                outcome = {
-                    "status": "failed",
-                    "reason": "export raised before sandbox teardown",
-                }
-            state.set_evidence_export_outcome(outcome)
-            with contextlib.suppress(Exception):
-                state.save_run_data()
-        if cleanup_on_exit:
-            logger.info("Tearing down sandbox session for scan %s", scan_id)
-            cleanup_outcome = await session_manager.cleanup(scan_id)
-            state = artifact_state or get_global_report_state()
-            if state is not None:
-                state.set_cleanup_outcome(cleanup_outcome)
-        logger.info("LyraShield scan %s done", scan_id)
-        teardown_logging()
+        await cleanup_scan_resources(
+            scan_id=scan_id,
+            sessions_to_close=sessions_to_close,
+            coordinator=coordinator,
+            artifact_state=artifact_state,
+            bundle=bundle,
+            cleanup_on_exit=cleanup_on_exit,
+            paths=paths,
+            services=finalizer,
+        )

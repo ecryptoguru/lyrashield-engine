@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-import lyrashield.interface.utils as interface_utils
+from lyrashield.interface import source_acquisition
 from lyrashield.interface.utils import (
     build_mount_targets_info,
     clone_repository,
@@ -170,9 +170,9 @@ def test_collect_local_sources_can_mount_product_owned_repository_clone() -> Non
 def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path) -> None:
     repo_url = "-upload-pack=malicious-command"
     with (
-        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
-        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
-        patch.object(interface_utils.subprocess, "run") as run,
+        patch.object(source_acquisition, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(source_acquisition.subprocess, "run") as run,
     ):
         clone_repository(repo_url, "option-delimiter")
 
@@ -183,9 +183,9 @@ def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path)
 
 def test_clone_repository_checks_out_the_requested_branch(tmp_path: Path) -> None:
     with (
-        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
-        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
-        patch.object(interface_utils.subprocess, "run") as run,
+        patch.object(source_acquisition, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(source_acquisition.subprocess, "run") as run,
     ):
         clone_repository("https://github.com/org/repo", "branch-run", branch="release/2026.08")
 
@@ -202,9 +202,9 @@ def test_clone_repository_checks_out_a_full_commit_sha_detached(tmp_path: Path) 
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
     with (
-        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
-        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
-        patch.object(interface_utils.subprocess, "run", side_effect=fake_run) as run,
+        patch.object(source_acquisition, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(source_acquisition.subprocess, "run", side_effect=fake_run) as run,
     ):
         clone_repository("https://github.com/org/repo", "sha-run", branch=commit_sha)
 

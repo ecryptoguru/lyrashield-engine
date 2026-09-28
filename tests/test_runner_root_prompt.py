@@ -6,6 +6,7 @@ flow through to the root agent's ``build_strix_agent`` call.
 
 from __future__ import annotations
 
+import json
 import types
 from typing import Any
 
@@ -318,7 +319,7 @@ async def test_prompt_cache_policy_matrix_across_construction_paths(
     for call in settings_calls:
         assert (call["prompt_cache_key"] is not None) is effective_routing
         assert call["prompt_cache_options"] == expected_options
-        assert call["prompt_cache"] is cache_enabled
+        assert "prompt_cache" not in call
     for wire in wire_payloads:
         assert ((wire["extra_args"] or {}).get("prompt_cache_key") is not None) is effective_routing
         assert wire["prompt_cache_options"] == expected_options
@@ -629,3 +630,95 @@ async def test_extra_system_prompt_context_sanitized(
     assert ctx["notes"] == "safe value"
     assert ctx["dangerous"] == ""
     assert ctx["items"] == ["clean", "bad"]
+
+
+@pytest.mark.asyncio
+async def test_resume_instruction_is_added_to_root_mailbox(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """A resume instruction is persisted as a new user message for the root."""
+    agents_path = tmp_path / "agents.json"
+    agents_path.write_text(
+        json.dumps({"statuses": {"root": "running"}, "parent_of": {"root": None}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "agents.db").touch()
+    _patch_engine_scaffold(monkeypatch, tmp_path, {"scope": "built-in"})
+
+    async def _respawn(**_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(runner, "respawn_subagents", _respawn)
+    coordinator = AgentCoordinator()
+
+    await runner.run_strix_scan(
+        scan_config={
+            "targets": [],
+            "scan_mode": "deep",
+            "resume_instruction": "Recheck the missing evidence.",
+        },
+        scan_id="scan-resume-instruction",
+        image="img",
+        coordinator=coordinator,
+        resume=True,
+    )
+
+    assert coordinator.runtimes["root"].mailbox == [
+        {
+            "from": "user",
+            "type": "instruction",
+            "priority": "high",
+            "content": "Recheck the missing evidence.",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runner_clears_scan_hooks_and_cleans_sandbox_after_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """A terminal provider failure still releases scan-scoped hooks and sandbox."""
+    _patch_engine_scaffold(monkeypatch, tmp_path, {"scope": "built-in"})
+    cleanup_calls: list[tuple[Any, ...]] = []
+    hook_values: list[Any] = []
+    spill_writers: list[Any] = []
+    teardown_calls: list[None] = []
+    original_set_hooks = runner.set_active_hooks
+    original_configure_spill_writer = runner.configure_spill_writer
+
+    async def _cleanup(*args: Any, **_kwargs: Any) -> dict[str, str]:
+        cleanup_calls.append(args)
+        return {"status": "cleaned"}
+
+    def _set_active_hooks(value: Any) -> None:
+        hook_values.append(value)
+        original_set_hooks(value)
+
+    def _configure_spill_writer(value: Any) -> None:
+        spill_writers.append(value)
+        original_configure_spill_writer(value)
+
+    monkeypatch.setattr(session_manager, "cleanup", _cleanup)
+    monkeypatch.setattr(runner, "set_active_hooks", _set_active_hooks)
+    monkeypatch.setattr(runner, "configure_spill_writer", _configure_spill_writer)
+    monkeypatch.setattr(
+        runner,
+        "setup_scan_logging",
+        lambda _run_dir: lambda: teardown_calls.append(None),
+    )
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-cleanup-on-rate-limit",
+        image="img",
+        coordinator=AgentCoordinator(),
+    )
+
+    assert cleanup_calls == [("scan-cleanup-on-rate-limit",)]
+    assert hook_values[0] is not None
+    assert hook_values[-1] is None
+    assert callable(spill_writers[0])
+    assert spill_writers[-1] is None
+    assert teardown_calls == [None]

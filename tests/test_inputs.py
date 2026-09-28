@@ -5,9 +5,7 @@ from __future__ import annotations
 from itertools import pairwise
 from typing import Any
 
-import litellm
 import pytest
-from litellm.integrations import anthropic_cache_control_hook
 
 from lyrashield.lifecycle.inputs import (
     build_root_initial_input,
@@ -128,7 +126,18 @@ def test_gpt6_cache_settings_serialize_at_sdk_boundary(request_phase: str) -> No
 
 @pytest.mark.parametrize(
     "model_name",
-    ["openai/gpt-4o", "anthropic/claude-sonnet-4-5", "azure_ai/gpt-5.5-luna", None],
+    ["anthropic/claude-sonnet-4-5", "bedrock/anthropic.claude-opus-4-8"],
+)
+def test_rejected_provider_models_do_not_receive_legacy_cache_injection(
+    model_name: str,
+) -> None:
+    settings = make_model_settings(None, model_name=model_name)
+    assert not (settings.extra_args or {}).get("cache_control_injection_points")
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["openai/gpt-4o", "azure_ai/gpt-5.5-luna", None],
 )
 def test_unsupported_models_get_no_gpt6_cache_features(
     model_name: str | None,
@@ -152,87 +161,9 @@ def test_child_initial_input_no_consecutive_same_role(parent_history: list[Any])
     assert all(prev != nxt for prev, nxt in pairwise(roles))
 
 
-def _cache_points(model_name: str) -> Any:
-    extra = make_model_settings(None, model_name=model_name).extra_args or {}
-    return extra.get("cache_control_injection_points")
-
-
-def test_make_model_settings_enables_prompt_cache_for_bedrock_claude() -> None:
-    assert _cache_points("bedrock/global.anthropic.claude-opus-4-8") == [
-        {"location": "message", "role": "system"},
-        {"location": "tool_config"},
-        {"location": "message", "index": -1},
-    ]
-
-
-@pytest.mark.parametrize(
-    "model_name",
-    [
-        "anthropic/claude-sonnet-4-5",
-        "openrouter/anthropic/claude-3.5-sonnet",
-        "vertex_ai/claude-sonnet-4-5",
-    ],
-)
-def test_make_model_settings_enables_prompt_cache_for_non_bedrock_claude(model_name: str) -> None:
-    assert _cache_points(model_name) == [
-        {"location": "message", "role": "system"},
-        {"location": "message", "index": -1},
-    ]
-
-
-@pytest.mark.parametrize(
-    "model_name",
-    ["claude-sonnet-4-5", "openai/claude-sonnet-4-5", "any-llm/anthropic/claude-sonnet-4-5"],
-)
-def test_no_prompt_cache_for_claude_off_the_litellm_route(model_name: str) -> None:
-    # These names are served by SDK clients that raise TypeError on LiteLLM-only
-    # request kwargs — e.g. a gateway in front of Claude reached with a bare name.
-    assert _cache_points(model_name) is None
-
-
-def test_tool_config_point_not_leaked_to_non_bedrock_claude() -> None:
-    # LiteLLM only consumes tool_config on Bedrock; elsewhere it leaks onto the
-    # wire and native Anthropic 400s.
-    for model in ("anthropic/claude-sonnet-4-5", "openrouter/anthropic/claude-3.5-sonnet"):
-        points = _cache_points(model) or []
-        assert all(p.get("location") != "tool_config" for p in points)
-
-
-def test_prompt_cache_can_be_disabled() -> None:
-    assert (
-        make_model_settings(
-            None, model_name="anthropic/claude-sonnet-4-5", prompt_cache=False
-        ).extra_args
-        is None
-    )
-
-
-@pytest.mark.parametrize("model_name", ["gpt-5", "vertex_ai/gemini-2.5-pro", "openai/o3"])
-def test_make_model_settings_no_prompt_cache_for_non_claude(model_name: str) -> None:
+@pytest.mark.parametrize("model_name", ["gpt-5", "openai/o3"])
+def test_make_model_settings_adds_no_provider_specific_cache_fields(model_name: str) -> None:
     assert make_model_settings(None, model_name=model_name).extra_args is None
-
-
-def test_no_prompt_cache_for_unmapped_bedrock_claude_model(monkeypatch: Any) -> None:
-    # A Bedrock Claude model LiteLLM hasn't mapped must run uncached, not crash.
-    unmapped = "bedrock/global.anthropic.claude-brand-new-9"
-    monkeypatch.setattr(litellm, "model_cost", {}, raising=False)
-    if getattr(getattr(litellm, "utils", None), "supports_prompt_caching", None):
-        monkeypatch.setattr(litellm.utils, "supports_prompt_caching", lambda *_a, **_k: False)
-
-    assert make_model_settings(None, model_name=unmapped).extra_args is None
-
-
-def test_prompt_cache_kept_for_non_bedrock_claude_even_if_unmapped(monkeypatch: Any) -> None:
-    # Only Bedrock hard-rejects unknown cache fields, so only Bedrock is guarded.
-    monkeypatch.setattr(litellm, "model_cost", {}, raising=False)
-    if getattr(getattr(litellm, "utils", None), "supports_prompt_caching", None):
-        monkeypatch.setattr(litellm.utils, "supports_prompt_caching", lambda *_a, **_k: False)
-
-    for model in ("anthropic/claude-brand-new-9", "openrouter/anthropic/claude-brand-new"):
-        assert _cache_points(model) == [
-            {"location": "message", "role": "system"},
-            {"location": "message", "index": -1},
-        ]
 
 
 def test_max_reasoning_effort_sent_as_raw_body_field() -> None:
@@ -243,29 +174,6 @@ def test_max_reasoning_effort_sent_as_raw_body_field() -> None:
     assert settings.reasoning is None
     assert settings.extra_args == {"timeout": 30}
     assert settings.extra_body == {"reasoning_effort": "max"}
-
-
-def test_conversation_tail_breakpoint_moves_with_appended_transcript() -> None:
-    # LiteLLM must place the index=-1 cache_control on the last message however
-    # long the transcript grows.
-    apply = anthropic_cache_control_hook.AnthropicCacheControlHook._apply_message_injections
-    points = _cache_points("bedrock/global.anthropic.claude-opus-4-8")
-    msg_points = [p for p in points if p.get("location") == "message"]
-
-    def last_msg_cache_control(n_turns: int) -> Any:
-        messages: list[dict[str, Any]] = [{"role": "system", "content": "stable prompt"}]
-        for i in range(n_turns):
-            messages.append({"role": "assistant", "content": f"turn {i} action"})
-            messages.append({"role": "user", "content": f"turn {i} tool result"})
-        processed = apply(msg_points, messages, 4)
-        last = processed[-1]
-        content = last.get("content")
-        if isinstance(content, list):
-            return content[-1].get("cache_control")
-        return last.get("cache_control")
-
-    assert last_msg_cache_control(2) == {"type": "ephemeral"}
-    assert last_msg_cache_control(20) == {"type": "ephemeral"}
 
 
 def test_build_root_task_empty_config() -> None:

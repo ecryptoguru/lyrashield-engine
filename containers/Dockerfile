@@ -274,10 +274,15 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 
 COPY --chown=pentester:pentester containers/python-requirements.txt /tmp/python-requirements.txt
+COPY --chown=pentester:pentester containers/dirsearch-requirements.txt /tmp/dirsearch-requirements.txt
+COPY --chown=pentester:pentester containers/patch_dirsearch_metadata.py /tmp/patch_dirsearch_metadata.py
 
 USER pentester
 RUN python3 -m venv /app/.venv && \
     /app/.venv/bin/pip install --no-cache-dir --require-hashes -r /tmp/python-requirements.txt && \
+    /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/dirsearch-requirements.txt && \
+    /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py && \
+    /app/.venv/bin/pip check && \
     printf '%s\n' \
         '#!/bin/bash' \
         'exec /app/.venv/bin/python /home/pentester/tools/jwt_tool/jwt_tool.py "$@"' \

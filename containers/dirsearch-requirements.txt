@@ -1,0 +1,5 @@
+# Upstream Dirsearch 0.5.0 wheel, pinned to the PyPI SHA-256. Docker installs
+# this wheel with --no-deps, then patch_dirsearch_metadata.py changes only its
+# exact PyOpenSSL metadata pin and refreshes the installed RECORD file.
+dirsearch==0.5.0 \
+    --hash=sha256:10dc3476fdc9e71d7a0f41b2745b2261f3a1833f4f8c9db9b3b9c6dfe41c9597

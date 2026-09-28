@@ -5,11 +5,15 @@
 The upstream base is Strix v1.6.2 at
 `ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2`. Product behavior lives in
 `lyrashield/**` and `lyrashield_adapter/**`; `strix/config/loader.py` retains the
-product settings seam. The reviewed `strix/**` patch changes 16 files, including
-two removed skills, with a +149/-258 footprint and digest
-`30b8c59dc521d1fc9fceaf0d7b972c11d03a6808`. The exact allowlist and
-current gate live in `scripts/verify-controlled-derivative.sh`. Dated entries
-below describe earlier states, not the current patch inventory.
+product settings seam. The reviewed `strix/**` patch changes four paths: the
+settings seam, one reviewed skill override, and two removed skills. Its
+footprint is +22/-201 with digest
+`3629e8f382fdd8eccf78553b102a25e99c73454c`. Pyright and its twelve unused
+typing/import-cycle compatibility hunks were retired under R9; strict mypy is
+the sole Python type gate. R10 brings the owned Local TUI and viewer under Ruff
+and strict mypy. The exact allowlist and current gate live in
+`scripts/verify-controlled-derivative.sh`. Dated entries below describe earlier
+states, not the current patch inventory.
 
 ## History
 
@@ -271,7 +275,14 @@ At that revision, the controlled-derivative gate allowed exactly 14 modified
 Strix files (the two existing integration seams plus twelve compatibility
 files), enforced the reviewed +151/-57 footprint and required patch object
 `fafe7c8e0a7f58c4c10e5619a6579880cf1457c4`. The current gate is recorded
-above; any byte-level change requires an explicit review and digest update.
+in `scripts/verify-controlled-derivative.sh`; any byte-level change requires an
+explicit review and digest update. R9 (2026-09-28) retires Pyright as a check and
+restores those twelve typing/import-cycle compatibility hunks to the pinned
+upstream source. Strict mypy remains the sole Python type gate. The reviewed
+micro-fork now contains four changed paths (+22/-201) with patch digest
+`3629e8f382fdd8eccf78553b102a25e99c73454c`. R10 brings the owned Local TUI
+and viewer into Ruff linting and the strict mypy source gate; the former
+blanket per-directory exemptions are removed.
 
 ## Upgrade to v1.5.3 product-outside-strix (2026-08-11)
 

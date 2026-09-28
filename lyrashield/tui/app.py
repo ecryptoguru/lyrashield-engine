@@ -14,8 +14,8 @@ A Textual-based terminal UI that shells into the existing engine CLI. Flows:
 
 No engine thin-fork expansion — the TUI shells into the existing adapter.
 Azure credentials live in the OS keychain; ChatGPT OAuth uses the engine's
-owner-only auth store. Results persist in the local encrypted SQLite store. No benchmark/coverage claims, no money-back
-language, no upstream-engine naming.
+owner-only auth store. Results persist in the local encrypted SQLite store. No
+benchmark/coverage claims, no money-back language, no upstream-engine naming.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import asyncio
 import logging
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, ClassVar
 
 from rich.panel import Panel
 from rich.text import Text
@@ -49,10 +49,6 @@ from lyrashield.tui.results_store import ResultsStore, ResultsStoreKeyError
 from lyrashield.tui.scan_flow import ScanRequest, export_report, export_sarif, run_scan
 
 
-if TYPE_CHECKING:
-    pass
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +70,7 @@ class LyraShieldLocalApp(App[None]):
     .hidden { display: none; }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("q", "quit", "Quit"),
         Binding("d", "doctor", "Doctor"),
         Binding("r", "run_scan", "Run scan"),
@@ -216,8 +212,8 @@ class LyraShieldLocalApp(App[None]):
                 return
         try:
             save_config(self.config)
-        except Exception as exc:
-            status.update(f"[red]BYOK setup could not be saved: {exc}[/]")
+        except Exception as exc:  # noqa: BLE001 - report persistence errors without crashing the UI
+            status.update(Text(f"BYOK setup could not be saved: {exc}", style="red"))
             return
         status.update(f"BYOK setup saved: {provider_label(self.config.provider)}")
 
@@ -291,7 +287,7 @@ class LyraShieldLocalApp(App[None]):
         progress = self.query_one("#progress", Static)
 
         async def on_progress(p: Any) -> None:
-            progress.update(f"[{p.stream}] {p.line}")
+            progress.update(Text.assemble((f"[{p.stream}] ", "bold cyan"), p.line))
 
         try:
             result = await run_scan(req, self.config, self.store, on_progress=on_progress)
@@ -299,16 +295,19 @@ class LyraShieldLocalApp(App[None]):
             progress.update("[yellow]Scan cancelled. Check engine receipt for cleanup status.[/]")
             return
         except FileNotFoundError:
-            progress.update("[red]`lyrashield` CLI not found. Install the engine.[/]")
+            progress.update(Text("`lyrashield` CLI not found. Install the engine.", style="red"))
             return
-        except Exception as exc:
-            progress.update(f"[red]Scan failed: {exc}[/]")
+        except Exception as exc:  # noqa: BLE001 - keep subprocess failures inside the UI boundary
+            progress.update(Text(f"Scan failed: {exc}", style="red"))
             return
 
         else:
             color = "green" if result.status == "completed" else "yellow"
             progress.update(
-                f"[{color}]Scan {result.status} (exit {result.returncode}) in {result.elapsed_s:.1f}s[/]"
+                Text(
+                    f"Scan {result.status} (exit {result.returncode}) in {result.elapsed_s:.1f}s",
+                    style=color,
+                )
             )
             self._render_findings(result.run_id)
         finally:
@@ -321,7 +320,7 @@ class LyraShieldLocalApp(App[None]):
             findings = self.store.list_findings(run_id)
             run = self.store.get_run(run_id) if not findings else None
         except ResultsStoreKeyError as exc:
-            view.update(f"[red]Findings unavailable: {exc}[/]")
+            view.update(Text(f"Findings unavailable: {exc}", style="red"))
             return
         if not findings:
             view.update(
@@ -330,10 +329,18 @@ class LyraShieldLocalApp(App[None]):
                 else "Scan incomplete; findings may be unavailable."
             )
             return
-        lines = [f"Run {run_id} — {len(findings)} finding(s):", ""]
+        content = Text(f"Run {run_id} — {len(findings)} finding(s):\n\n")
         for f in findings:
-            lines.append(f"[{f.severity}] {f.title}")
-        view.update("\n".join(lines))
+            style = {
+                "CRITICAL": "bold red",
+                "HIGH": "red",
+                "MEDIUM": "yellow",
+                "LOW": "cyan",
+            }.get(f.severity.upper(), "white")
+            content.append(f"[{f.severity}] ", style=style)
+            content.append(f.title)
+            content.append("\n")
+        view.update(content)
 
     def _export(self, kind: str) -> None:
         try:
@@ -350,9 +357,11 @@ class LyraShieldLocalApp(App[None]):
                 dest = dest_dir / f"{run_id}.md"
                 export_report(run_id, self.store, dest)
         except (OSError, ValueError, RuntimeError) as exc:
-            self.query_one("#progress", Static).update(f"[red]Export failed: {exc}[/]")
+            self.query_one("#progress", Static).update(Text(f"Export failed: {exc}", style="red"))
             return
-        self.query_one("#progress", Static).update(f"[green]Exported {kind} to {dest}[/]")
+        self.query_one("#progress", Static).update(
+            Text(f"Exported {kind} to {dest}", style="green")
+        )
 
     def on_unmount(self) -> None:
         if self._scan_task and not self._scan_task.done():

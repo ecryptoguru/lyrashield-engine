@@ -128,7 +128,7 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-controlled-derivative.sh
 ```
 
-The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), mypy, Bandit, and the public worker contract. It also enforces the exact reviewed `strix/**` compatibility patch: a 14-file allowlist (plus two reviewed skill deletions), a +149/-258 footprint ceiling, and patch-object digest `30b8c59dc521d1fc9fceaf0d7b972c11d03a6808`. Any path or byte-level change outside that reviewed patch fails the gate.
+The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), strict mypy, Bandit, and the public worker contract. It also enforces the exact reviewed `strix/**` patch: two allowed modified paths plus two reviewed skill deletions, a +22/-201 footprint ceiling, and patch-object digest `3629e8f382fdd8eccf78553b102a25e99c73454c`. Any path or byte-level change outside that reviewed patch fails the gate.
 
 Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`, in addition to CLI/native build, sandbox smoke, and cross-repository worker contract checks. Mypy strict is the Python type gate. Merged revision `944a84f` recorded 1,302 passed and 1 skipped in its full pytest run; this is a revision-bound snapshot, and the executable gates remain the current source of truth.
 

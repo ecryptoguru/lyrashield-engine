@@ -81,7 +81,7 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
 1. Branch from `main`; never push directly to `main`.
 2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.
 3. Put LyraShield model, budget, lifecycle, identity, evidence, and artifact behavior behind explicit reviewed boundaries.
-4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The current hard allowlist contains the two product integration seams plus twelve upstream typing and import-cycle compatibility fixes recorded in `UPGRADES.md`. The gate also pins the complete Strix patch digest. Preserve the one-line LyraShield modification banner where it already exists:
+4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The current hard allowlist contains the product settings seam and one reviewed skill override, plus two reviewed skill deletions. The gate also pins the complete Strix patch digest. Preserve the one-line LyraShield modification banner where it already exists:
 
    ```python
    # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
@@ -95,7 +95,7 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
    git diff --check
    ```
 
-   That script executes exactly: `uv sync --frozen --extra viewer` (so the PDF/viewer tests actually run), `ruff check .`, `ruff format --check .`, the full `pytest` suite with `-W error::pydantic.PydanticDeprecatedSince211`, `mypy strix lyrashield_adapter lyrashield`, and `bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q`. It also diffs `strix/**` against the pinned v1.6.2 base and fails on an unlisted path, footprint growth beyond the reviewed +149/-258 lines, or any change to the pinned complete-patch digest.
+   That script executes exactly: `uv sync --frozen --extra viewer` (so the PDF/viewer tests actually run), `ruff check .`, `ruff format --check .`, the full `pytest` suite with `-W error::pydantic.PydanticDeprecatedSince211`, `mypy strix lyrashield_adapter lyrashield`, and `bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q`. It also diffs `strix/**` against the pinned v1.6.2 base and fails on an unlisted path, footprint growth beyond the reviewed +22/-201 lines, or any change to the pinned complete-patch digest `3629e8f382fdd8eccf78553b102a25e99c73454c`.
 
    The following are **separate gates** this script does not run — do not claim a local green gate covers them:
 

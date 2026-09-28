@@ -7,7 +7,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lyrashield.interface.main import _normalize_digest, _verify_image_digest
+from lyrashield.interface.main import (
+    _normalize_digest,
+    _verify_image_digest,
+    process_pull_line,
+)
 
 
 VALID_DIGEST = "a" * 64
@@ -66,3 +70,14 @@ def test_verify_image_digest_rejects_malformed_expected() -> None:
     client = _client_with_digests([f"repo/image@sha256:{VALID_DIGEST}"])
     with pytest.raises(RuntimeError, match="not a 64-character"):
         _verify_image_digest(client, "repo/image:tag", "sha256:abc123")
+
+
+def test_pull_progress_reports_completed_layer_count() -> None:
+    client = MagicMock()
+    layers: dict[str, str] = {}
+
+    update = process_pull_line({"id": "layer-1", "status": "Pull complete"}, layers, client, "")
+
+    assert layers == {"layer-1": "✓"}
+    assert update == "[bold cyan]Progress: 1/1 layers complete"
+    client.update.assert_called_once_with(update)

@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import socket
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from lyrashield.tui.byok_config import ByokConfig, validate_credential
 
@@ -102,7 +105,14 @@ def _probe_unix_socket(path: str, timeout: float = 2.0) -> bool:
 
 def _probe_tcp_host(host: str, timeout: float = 2.0) -> bool:
     try:
-        with socket.create_connection(host, timeout=timeout):
+        address = urlsplit(f"//{host}")
+        port = address.port
+    except ValueError:
+        return False
+    if address.hostname is None or port is None:
+        return False
+    try:
+        with socket.create_connection((address.hostname, port), timeout=timeout):
             return True
     except OSError:
         return False
@@ -111,14 +121,18 @@ def _probe_tcp_host(host: str, timeout: float = 2.0) -> bool:
 def _docker_version_handshake(env: Mapping[str, str]) -> str | None:
     """Issue a minimal Docker API version handshake. Returns the version or None."""
     try:
-        import docker
-
+        import docker  # noqa: PLC0415 - Docker SDK is optional for Local installs
+    except ImportError:
+        return None
+    try:
         client = docker.from_env(environment=dict(env))
-        info = client.version()
-        client.close()
+        try:
+            info = client.version()
+        finally:
+            client.close()
         ver = info.get("Version") if isinstance(info, dict) else None
         return str(ver) if ver else "unknown"
-    except Exception:
+    except (docker.errors.DockerException, OSError, KeyError, TypeError, ValueError):
         return None
 
 
@@ -130,10 +144,9 @@ def detect_runtime(env: Mapping[str, str] | None = None) -> CheckResult:
     reachable = False
     if host.startswith("unix://"):
         reachable = _probe_unix_socket(host)
-    elif host.startswith("tcp://") or host.startswith("http://"):
+    elif host.startswith(("tcp://", "http://")):
         # docker.from_env expects tcp:// or unix://; strip http:// -> tcp://
-        cleaned = host.replace("http://", "tcp://")
-        addr = cleaned.replace("tcp://", "")
+        addr = host.removeprefix("http://").removeprefix("tcp://")
         reachable = _probe_tcp_host(addr)
 
     if not reachable:
@@ -250,13 +263,19 @@ def run_smoke_scan(timeout_s: float = 10.0) -> CheckResult:
     (the engine's own repo root if available) and caps the wall-clock at
     ``timeout_s``. This is a connectivity check, not a real scan.
     """
-    import subprocess
-
     target = str(Path(__file__).resolve().parents[2])
+    executable = shutil.which("lyrashield")
+    if executable is None:
+        return CheckResult(
+            name="smoke-scan",
+            ok=False,
+            detail="`lyrashield` CLI not found on PATH.",
+            remediation="Install the engine: `pipx install lyrashield-engine`.",
+        )
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: S603 - resolved fixed CLI with a trusted repository target
             [
-                "lyrashield",
+                executable,
                 "--target",
                 target,
                 "--scan-mode",
@@ -276,14 +295,7 @@ def run_smoke_scan(timeout_s: float = 10.0) -> CheckResult:
             ok=True,
             detail=f"Smoke scan did not complete within {timeout_s}s but the stack started.",
         )
-    except FileNotFoundError:
-        return CheckResult(
-            name="smoke-scan",
-            ok=False,
-            detail="`lyrashield` CLI not found on PATH.",
-            remediation="Install the engine: `pipx install lyrashield-engine`.",
-        )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return CheckResult(
             name="smoke-scan",
             ok=False,
@@ -333,8 +345,7 @@ def format_report(report: DoctorReport) -> str:
         mark = "[OK]" if c.ok else "[FAIL]"
         lines.append(f"{mark} {c.name}: {c.detail}")
         if c.remediation:
-            for line in c.remediation.splitlines():
-                lines.append(f"      {line}")
+            lines.extend(f"      {line}" for line in c.remediation.splitlines())
         lines.append("")
     lines.append("All checks passed." if report.all_ok else "Some checks failed — see above.")
     return "\n".join(lines)

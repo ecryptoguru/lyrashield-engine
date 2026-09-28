@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -261,6 +262,38 @@ def test_agent_build_resolves_deferred_overrides() -> None:
     assert len(web_search_tools) == 1
     assert web_search_tools[0].name == factory._TOOL_OVERRIDES["web_search"].name
     assert web_search_tools[0] is not factory._TOOL_OVERRIDES["web_search"]
+
+
+def test_product_scan_build_resolves_lyrashield_agent_graph_tools() -> None:
+    """The product CLI's deferred graph registrations must replace Strix tools."""
+    _register_lyrashield_tool_overrides()
+
+    root = factory.build_strix_agent(is_root=True)
+    child = factory.build_strix_agent(is_root=False)
+
+    product_graph_tools = importlib.import_module("lyrashield.tools.agents_graph.tools")
+
+    overridden_names = (
+        "agent_finish",
+        "create_agent",
+        "send_message_to_agent",
+        "stop_agent",
+        "view_agent_graph",
+        "wait_for_agents",
+    )
+    assert all(
+        factory._TOOL_OVERRIDES[name] is getattr(product_graph_tools, name)
+        for name in overridden_names
+    )
+    root_names = [tool.name for tool in root.tools]
+    child_names = [tool.name for tool in child.tools]
+    assert all(root_names.count(name) == 1 for name in overridden_names if name != "agent_finish")
+    assert all(child_names.count(name) == 1 for name in overridden_names)
+    assert all(
+        tool is not getattr(product_graph_tools, tool.name)
+        for tool in (*root.tools, *child.tools)
+        if tool.name in overridden_names
+    )
 
 
 def test_opposite_policy_agents_own_distinct_tool_instances(

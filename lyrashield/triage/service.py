@@ -347,14 +347,12 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
                 model_name=model_route,
                 request_timeout=settings.llm.timeout,
                 max_output_tokens=limits.max_output_tokens,
-                prompt_cache=False,
             )
         else:
             model_settings = make_model_settings(
                 "medium",
                 model_name=model_route,
                 max_output_tokens=limits.max_output_tokens,
-                prompt_cache=False,
             )
         semaphore = asyncio.Semaphore(min(MAX_CONCURRENCY, limits.max_concurrency))
         active_hooks = get_active_hooks()

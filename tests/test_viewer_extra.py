@@ -7,6 +7,7 @@ for release builds and the ``verify-controlled-derivative.sh`` gate.
 from __future__ import annotations
 
 import importlib.util
+import os
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ _PDF_AVAILABLE = (
     importlib.util.find_spec("pypdf") is not None
     and importlib.util.find_spec("reportlab") is not None
 )
+_BASE_INSTALL_CHECK = os.environ.get("LYRASHIELD_TEST_BASE_INSTALL") == "1"
 
 
 def _read_pyproject() -> dict[str, Any]:
@@ -61,7 +63,10 @@ def test_build_and_ci_sync_with_viewer_extra() -> None:
                 pytest.fail(f"{path} has a bare uv sync without --extra viewer: {line}")
 
 
-@pytest.mark.skipif(_PDF_AVAILABLE, reason="extra is present, not testing base install")
+@pytest.mark.skipif(
+    _PDF_AVAILABLE and not _BASE_INSTALL_CHECK,
+    reason="extra is present, not testing base install",
+)
 def test_base_install_does_not_import_pdf_packages() -> None:
     """With the base sync neither PDF package is importable."""
     assert importlib.util.find_spec("pypdf") is None
