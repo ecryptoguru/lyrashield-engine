@@ -43,7 +43,7 @@ def main() -> None:
     if git is None:
         parser.error("git executable was not found")
     changed = subprocess.run(  # noqa: S603 - executable and fixed arguments are controlled
-        [git, "diff", "--name-only", "--diff-filter=ACMRTD", f"{args.base}...HEAD"],
+        [git, "diff", "--no-renames", "--name-only", "--diff-filter=ACMRTD", f"{args.base}...HEAD"],
         check=True,
         capture_output=True,
         text=True,
