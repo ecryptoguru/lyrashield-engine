@@ -57,6 +57,15 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
     assert "npm install -g" not in content
 
 
+def test_caido_download_retries_transient_server_errors() -> None:
+    content = DOCKERFILE.read_text(encoding="utf-8")
+    download_command = next(
+        line.strip() for line in content.splitlines() if "https://caido.download/releases/" in line
+    )
+
+    assert download_command.startswith("curl --retry 5 --retry-delay 2 --retry-max-time 120 -fsSL ")
+
+
 def test_nmap_file_capabilities_work_without_opt_in_net_admin() -> None:
     content = DOCKERFILE.read_text(encoding="utf-8")
 

@@ -262,7 +262,7 @@ RUN set -eux; \
         aarch64|arm64) CAIDO_ARCH="aarch64"; CAIDO_SHA256="$CAIDO_LINUX_ARM64_SHA256" ;; \
         *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://caido.download/releases/v${CAIDO_VERSION}/caido-cli-v${CAIDO_VERSION}-linux-${CAIDO_ARCH}.tar.gz" -o /tmp/caido-cli.tgz; \
+    curl --retry 5 --retry-delay 2 --retry-max-time 120 -fsSL "https://caido.download/releases/v${CAIDO_VERSION}/caido-cli-v${CAIDO_VERSION}-linux-${CAIDO_ARCH}.tar.gz" -o /tmp/caido-cli.tgz; \
     echo "${CAIDO_SHA256}  /tmp/caido-cli.tgz" | sha256sum -c -; \
     tar -xzf /tmp/caido-cli.tgz -C /tmp; \
     install -m 0755 /tmp/caido-cli /usr/local/bin/caido-cli; \
