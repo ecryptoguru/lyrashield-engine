@@ -831,7 +831,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                             f"{_SYSTEM_NOTICE_TAG} [CRITICAL] Runtime wrap-up: stop new tasks. "
                             "Root: stop unfinished children, collect filed reports, mark "
                             "unassessed work incomplete, and call finish_scan before the deadline. "
-                            "Children: file supported findings and call agent_finish."
+                            "Children: file supported findings, state unfinished checks and "
+                            "evidence gaps in result_summary, and call agent_finish."
                         ),
                     }
                 )

@@ -140,11 +140,15 @@ async def build_root_runtime(
         getattr(llm_settings, "max_output_tokens", None),
     )
     bounded_runtime = not interactive and coordinator.run_deadline is not None
-    model_request_timeout = (
-        min(llm_settings.timeout, 90 if scan_mode == "deep" else 60)
-        if bounded_runtime
-        else llm_settings.timeout
-    )
+    if bounded_runtime:
+        bounded_timeout = 90 if scan_mode == "deep" else 60
+        model_request_timeout = (
+            min(llm_settings.timeout, bounded_timeout)
+            if llm_settings.timeout > 0
+            else bounded_timeout
+        )
+    else:
+        model_request_timeout = llm_settings.timeout
     model_settings = services.make_model_settings(
         llm_settings.reasoning_effort,
         model_name=resolved_model,

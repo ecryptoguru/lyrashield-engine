@@ -21,6 +21,7 @@ import strix.tools.notes.tools as notes_tools
 from lyrashield.agents.prompt import render_system_prompt
 from lyrashield.lifecycle import runner
 from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.lifecycle.deadline import RunDeadline
 from lyrashield.lifecycle.inputs import _sanitize_prompt_value, make_model_settings
 from lyrashield.runtime import session_manager
 
@@ -50,6 +51,8 @@ def _patch_engine_scaffold(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
     scope_context: dict[str, Any],
+    *,
+    timeout: float = 300,
 ) -> dict[str, Any]:
     """Stub out everything around build_strix_agent and stop at run_agent_loop.
 
@@ -66,7 +69,7 @@ def _patch_engine_scaffold(
             model="openai/gpt-4o",
             reasoning_effort="high",
             force_required_tool_choice=False,
-            timeout=300,
+            timeout=timeout,
             prompt_cache=True,
             extra_headers=None,
         ),
@@ -112,6 +115,35 @@ def _patch_engine_scaffold(
 
     monkeypatch.setattr(runner, "run_agent_loop", _raise_rate_limit)
     return captured
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [0, -1])
+async def test_bounded_runtime_uses_mode_timeout_when_configured_timeout_is_nonpositive(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    timeout: float,
+) -> None:
+    _patch_engine_scaffold(monkeypatch, tmp_path, {}, timeout=timeout)
+    settings_calls: list[dict[str, Any]] = []
+
+    def _make_model_settings(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        settings_calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(runner, "make_model_settings", _make_model_settings)
+    coordinator = AgentCoordinator()
+    coordinator.run_deadline = RunDeadline.start(600)
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-nonpositive-timeout",
+        image="img",
+        coordinator=coordinator,
+    )
+
+    assert settings_calls
+    assert all(call["request_timeout"] == 90 for call in settings_calls)
 
 
 @pytest.mark.asyncio
