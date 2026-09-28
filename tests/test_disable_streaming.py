@@ -10,6 +10,7 @@ structured tool call — proves the wrapper works where the stock model fails.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -32,6 +33,8 @@ from openai.types.responses import (
 from lyrashield.policy import codex, loader
 from lyrashield.policy.loader import load_settings
 from lyrashield.policy.models import StrixProvider, _NonStreamingModel
+from lyrashield.policy.settings import LlmSettings, Settings
+from strix.config import models as strix_models
 
 
 if TYPE_CHECKING:
@@ -281,9 +284,18 @@ class _DummyModel(Model):
         raise NotImplementedError
 
 
+class _StalledModel(_DummyModel):
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ARG002
+        async def events() -> AsyncIterator[Any]:
+            await asyncio.Event().wait()
+            yield None
+
+        return events()
+
+
 @pytest.fixture
 def _reset_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    for key in ("STRIX_LLM", "LLM_DISABLE_STREAMING"):
+    for key in ("STRIX_LLM", "LLM_DISABLE_STREAMING", "LLM_STREAM_IDLE_TIMEOUT"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(loader, "_cached", None)
     monkeypatch.setattr(loader, "_override", None)
@@ -299,10 +311,12 @@ def test_get_model_wraps_when_disabled(
     load_settings()
 
     model = StrixProvider().get_model("openai/gpt-4o-mini")
-    assert isinstance(model, _NonStreamingModel)
+    assert isinstance(model, strix_models._TurnGuardModel)
+    assert isinstance(model._inner, _NonStreamingModel)
+    assert model._stream_idle_timeout == 0
 
 
-def test_get_model_unwrapped_by_default(
+def test_get_model_applies_stream_guard_by_default(
     monkeypatch: pytest.MonkeyPatch, _reset_settings: None
 ) -> None:
     inner = _DummyModel()
@@ -310,17 +324,47 @@ def test_get_model_unwrapped_by_default(
     load_settings()
 
     model = StrixProvider().get_model("openai/gpt-4o-mini")
-    assert model is inner
+    assert isinstance(model, strix_models._TurnGuardModel)
+    assert model._inner is inner
+    assert model._stream_idle_timeout == 300
+
+
+@pytest.mark.asyncio
+async def test_get_model_times_out_stalled_stream_from_config(
+    monkeypatch: pytest.MonkeyPatch, _reset_settings: None
+) -> None:
+    inner = _StalledModel()
+    monkeypatch.setattr("lyrashield.policy.models.MultiProvider.get_model", lambda *_: inner)
+    observed_timeouts: list[float] = []
+    with_idle_timeout = strix_models._with_idle_timeout
+
+    def record_idle_timeout(stream: Any, timeout: float) -> Any:
+        observed_timeouts.append(timeout)
+        return with_idle_timeout(stream, timeout)
+
+    monkeypatch.setattr(strix_models, "_with_idle_timeout", record_idle_timeout)
+    model = StrixProvider(settings=Settings(llm=LlmSettings(stream_idle_timeout=10))).get_model(
+        "openai/gpt-4o-mini"
+    )
+
+    assert isinstance(model, strix_models._TurnGuardModel)
+    assert model._stream_idle_timeout == 10
+    stream_kwargs = _call_kwargs()
+    stream_kwargs["model_settings"] = ModelSettings(extra_args={"timeout": 0.05})
+    with pytest.raises(TimeoutError, match="model stream produced no event"):
+        await _drain(model.stream_response(**stream_kwargs))
+    assert observed_timeouts == [0.05]
 
 
 def test_get_model_does_not_wrap_subscription_model(
     monkeypatch: pytest.MonkeyPatch, _reset_settings: None
 ) -> None:
-    # Subscription (ChatGPT) models are always streamed and must not be wrapped.
+    # Subscription (ChatGPT) models stay streamed and retain the stream guard.
     monkeypatch.setattr(codex, "subscription_model", lambda *_: "gpt-5.5")
     monkeypatch.setattr(codex, "get_subscription_client", lambda: AsyncOpenAI(api_key="x"))
     monkeypatch.setenv("LLM_DISABLE_STREAMING", "true")
     load_settings()
 
     model = StrixProvider().get_model("gpt-5.5")
-    assert not isinstance(model, _NonStreamingModel)
+    assert isinstance(model, strix_models._TurnGuardModel)
+    assert not isinstance(model._inner, _NonStreamingModel)

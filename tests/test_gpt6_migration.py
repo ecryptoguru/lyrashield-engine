@@ -11,6 +11,7 @@ from lyrashield.lifecycle.inputs import prompt_cache_options_for_model, prompt_c
 from lyrashield.policy.models import StrixProvider, is_gpt6_supported_provider
 from lyrashield.policy.settings import LlmSettings, Settings
 from lyrashield_adapter.cli import prepare_environment
+from strix.config import models as strix_models
 
 
 @pytest.mark.parametrize(
@@ -55,7 +56,9 @@ def test_azure_gpt6_uses_responses_route() -> None:
             api_base="https://example.services.ai.azure.com",
         )
     )
-    model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
+    guarded_model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
+    assert isinstance(guarded_model, strix_models._TurnGuardModel)
+    model = guarded_model._inner
     assert isinstance(model, OpenAIResponsesModel)
     assert model.model == "gpt-6-luna"
 
