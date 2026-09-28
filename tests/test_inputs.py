@@ -124,6 +124,17 @@ def test_gpt6_cache_settings_serialize_at_sdk_boundary(request_phase: str) -> No
     assert wire["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
 
 
+def test_bounded_runtime_limits_model_retries_without_changing_default() -> None:
+    bounded = make_model_settings(
+        "medium", model_name="openai/gpt-6-luna", request_timeout=60, bounded_runtime=True
+    )
+    default = make_model_settings("medium", model_name="openai/gpt-6-luna")
+
+    assert bounded.extra_args == {"timeout": 60}
+    assert bounded.retry is not None and bounded.retry.max_retries == 1
+    assert default.retry is not None and default.retry.max_retries == 5
+
+
 @pytest.mark.parametrize(
     "model_name",
     ["anthropic/claude-sonnet-4-5", "bedrock/anthropic.claude-opus-4-8"],

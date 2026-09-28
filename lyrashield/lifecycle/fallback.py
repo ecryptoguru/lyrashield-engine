@@ -137,7 +137,8 @@ async def run_root_agent(
             delegate_reasoning_effort,
             model_name=delegate_model,
             force_required_tool_choice=llm_settings.force_required_tool_choice,
-            request_timeout=llm_settings.timeout,
+            request_timeout=runtime.model_request_timeout,
+            bounded_runtime=runtime.bounded_runtime,
             max_output_tokens=min(
                 runtime.max_output_tokens,
                 services.delegate_output_token_ceiling,

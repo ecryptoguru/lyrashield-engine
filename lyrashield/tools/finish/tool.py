@@ -196,10 +196,9 @@ async def finish_scan(
       numbered lists for enumerations, and fenced code blocks
       (```` ```language ````) for any code/payload excerpts. Never emit
       one flat wall of prose or leave code unformatted.
-    - If **zero** vulnerabilities were found, say so plainly and
-      characterize the posture positively; ``technical_analysis`` should
-      summarize the areas tested and confirm no issues, and
-      ``recommendations`` should focus on general hardening.
+    - If **zero** vulnerabilities were found, say so plainly. Characterize
+      only completed coverage positively; describe unassessed or stopped work
+      as incomplete and never turn it into a clean result.
 
     Example (abbreviated — mirror this structure, not the wording)::
 

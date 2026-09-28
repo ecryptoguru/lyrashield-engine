@@ -246,8 +246,11 @@ async def run_cli(args: Any) -> None:
                                 "from": "system",
                                 "type": "runtime_wrap",
                                 "content": (
-                                    "Runtime wrap-up: stop new work, collect existing reports, "
-                                    "record unresolved coverage, and finish truthfully."
+                                    "Runtime wrap-up: stop new work. Root: stop unfinished "
+                                    "children, collect filed reports, mark unassessed work "
+                                    "incomplete, and call finish_scan before the deadline. "
+                                    "Children: file supported findings, state unfinished checks "
+                                    "and evidence gaps in result_summary, and call agent_finish."
                                 ),
                             },
                             interrupt=False,
@@ -271,6 +274,13 @@ async def run_cli(args: Any) -> None:
                 # worker can keep the findings already filed and report a
                 # truthful bounded result.
                 report_state.set_terminal_reason("runtime_deadline")
+                if coordinator is not None:
+                    _, statuses, _, _ = await coordinator.graph_snapshot()
+                    status_counts = {
+                        status: sum(value == status for value in statuses.values())
+                        for status in set(statuses.values())
+                    }
+                    logger.warning("Runtime deadline agent statuses: %s", status_counts)
                 logger.warning("Scan runtime deadline reached; salvaging partial results")
             finally:
                 wrap_task.cancel()

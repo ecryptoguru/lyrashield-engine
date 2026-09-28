@@ -17,10 +17,10 @@ def test_invalid_runtime_allowance_fails_closed(seconds: float) -> None:
 def test_deadline_uses_monotonic_clock_and_wrap_reserve() -> None:
     now = [0.0]
     deadline = RunDeadline.start(720, clock=lambda: now[0])
-    assert deadline.wrap_at == 600
-    now[0] = 601
+    assert deadline.wrap_at == 504
+    now[0] = 505
     assert deadline.wrapping_up()
-    assert deadline.remaining_seconds() == 119
+    assert deadline.remaining_seconds() == 215
     now[0] = 721
     assert deadline.remaining_seconds() == 0
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
 from agents.model_settings import ModelSettings
@@ -330,6 +331,7 @@ def make_model_settings(
     model_name: str,
     force_required_tool_choice: bool = False,
     request_timeout: float | None = None,
+    bounded_runtime: bool = False,
     max_output_tokens: int | None = None,
     prompt_cache_key: str | None = None,
     prompt_cache_options: PromptCacheOptions | None = None,
@@ -340,7 +342,9 @@ def make_model_settings(
         extra_args["prompt_cache_key"] = prompt_cache_key
     model_settings = ModelSettings(
         parallel_tool_calls=(False if _supports_parallel_tool_calls_setting(model_name) else None),
-        retry=DEFAULT_MODEL_RETRY,
+        retry=replace(DEFAULT_MODEL_RETRY, max_retries=1)
+        if bounded_runtime
+        else DEFAULT_MODEL_RETRY,
         include_usage=True,
         max_tokens=max_output_tokens,
         extra_args=extra_args or None,

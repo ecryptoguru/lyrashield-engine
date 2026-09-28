@@ -622,6 +622,7 @@ async def test_hook_warns_once_then_refuses_provider_calls_after_deadline() -> N
     first: list[Any] = []
     await hooks.on_llm_start(context, _agent(), None, first)
     assert "Runtime wrap-up" in first[0]["content"]
+    assert "unfinished checks and evidence gaps in result_summary" in first[0]["content"]
     second: list[Any] = []
     await hooks.on_llm_start(context, _agent(), None, second)
     assert second == []
