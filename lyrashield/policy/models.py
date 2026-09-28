@@ -35,6 +35,7 @@ from openai.types.shared import Reasoning
 
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
+from strix.config.models import _TurnGuardModel
 
 
 if TYPE_CHECKING:
@@ -441,6 +442,54 @@ def _response_usage(usage: Usage | None) -> ResponseUsage | None:
     )
 
 
+class _RequestBoundTurnGuardModel(_TurnGuardModel):
+    """Use the per-request model timeout to bound long silent stream gaps."""
+
+    async def stream_response(
+        self,
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],  # noqa: A002
+        model_settings: ModelSettings,
+        tools: list[Tool],
+        output_schema: AgentOutputSchemaBase | None,
+        handoffs: list[Handoff],
+        tracing: ModelTracing,
+        *,
+        previous_response_id: str | None,
+        conversation_id: str | None,
+        prompt: ResponsePromptParam | None,
+    ) -> AsyncIterator[TResponseStreamEvent]:
+        idle_timeout = self._stream_idle_timeout
+        request_timeout = (model_settings.extra_args or {}).get("timeout")
+        if (
+            idle_timeout > 0
+            and isinstance(request_timeout, int | float)
+            and not isinstance(request_timeout, bool)
+            and request_timeout > 0
+        ):
+            # Transport keepalives reset the provider read timeout, so bound
+            # the event gap by the tighter per-request scan timeout too.
+            idle_timeout = min(idle_timeout, float(request_timeout))
+        guard = _TurnGuardModel(
+            self._inner,
+            max_tool_calls_per_turn=self._max_tool_calls_per_turn,
+            stream_idle_timeout=idle_timeout,
+        )
+        async for event in guard.stream_response(
+            system_instructions,
+            input,
+            model_settings,
+            tools,
+            output_schema,
+            handoffs,
+            tracing,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+        ):
+            yield event
+
+
 class _CredentialedLitellmProvider(ModelProvider):
     """LiteLLM route bound to one endpoint's credentials.
 
@@ -546,42 +595,53 @@ class StrixProvider(MultiProvider):
         return self._get_fallback_provider("litellm"), original_model_name
 
     def get_model(self, model_name: str | None) -> Model:
+        # Apply the stream timeout and per-turn tool cap to credential-aware routes too.
         if self._settings is None:
             self._settings = load_settings()
         llm = self._settings.llm
         slug = codex.subscription_model(model_name)
+        idle_timeout = float(llm.stream_idle_timeout)
         if slug:
             # The ChatGPT subscription backend is always streamed; it has no
             # non-streaming mode to fall back to, so LLM_DISABLE_STREAMING
             # does not apply here.
-            return _CodexResponsesModel(
+            model: Model = _CodexResponsesModel(
                 slug,
                 codex.get_subscription_client(),
                 reasoning_effort=llm.reasoning_effort,
             )
-        # Routing consumes the same strict parser admission uses, so a raw
-        # route string can never be reinterpreted differently downstream.
-        route = parse_model_route(model_name)
-        # If a wrapper prefix is present, strip it so the SDK routes through
-        # the actual provider (e.g. litellm/azure/... → azure/...), not the
-        # wrapper's litellm fallback. Admission already checked route.provider.
-        routed_name = model_name
-        if route is not None and route.wrapper is not None and route.provider is not None:
-            routed_name = f"{route.provider}/{route.model_path}"
-        model = super().get_model(routed_name)
-        if (
-            _is_azure_model(model_name)
-            and is_gpt6_model(model_name)
-            and isinstance(model, OpenAIResponsesModel)
-        ):
-            model = _AzureUsageResponsesModel(
-                model.model,
-                model._get_client(),
-                model_is_explicit=model._model_is_explicit,
-            )
-        if llm.disable_streaming:
-            return _NonStreamingModel(model)
-        return model
+        else:
+            # Routing consumes the same strict parser admission uses, so a raw
+            # route string can never be reinterpreted differently downstream.
+            route = parse_model_route(model_name)
+            # If a wrapper prefix is present, strip it so the SDK routes through
+            # the actual provider (e.g. litellm/azure/... → azure/...), not the
+            # wrapper's litellm fallback. Admission already checked route.provider.
+            routed_name = model_name
+            if route is not None and route.wrapper is not None and route.provider is not None:
+                routed_name = f"{route.provider}/{route.model_path}"
+            model = super().get_model(routed_name)
+            if (
+                _is_azure_model(model_name)
+                and is_gpt6_model(model_name)
+                and isinstance(model, OpenAIResponsesModel)
+            ):
+                model = _AzureUsageResponsesModel(
+                    model.model,
+                    model._get_client(),
+                    model_is_explicit=model._model_is_explicit,
+                )
+            if llm.disable_streaming:
+                model = _NonStreamingModel(model)
+                # The wrapper emits its single event only once the whole request
+                # is done, so an idle gap is meaningless here; the request
+                # timeout bounds it instead.
+                idle_timeout = 0.0
+        return _RequestBoundTurnGuardModel(
+            model,
+            max_tool_calls_per_turn=llm.max_tool_calls_per_turn,
+            stream_idle_timeout=idle_timeout,
+        )
 
 
 def _azure_responses_base_url(api_base: str) -> str:

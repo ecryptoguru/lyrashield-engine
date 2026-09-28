@@ -156,8 +156,10 @@ def test_azure_gpt6_routes_through_responses_with_stripped_deployment_name() -> 
         )
     )
 
-    model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
+    guarded_model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
 
+    assert isinstance(guarded_model, strix_models._TurnGuardModel)
+    model = guarded_model._inner
     assert isinstance(model, OpenAIResponsesModel)
     assert model.model == "gpt-6-luna"
     assert str(model._client.base_url) == "https://example.services.ai.azure.com/openai/v1/"
@@ -174,7 +176,9 @@ async def test_azure_gpt6_captures_raw_terminal_usage_before_sdk_normalizes(
             api_base="https://example.services.ai.azure.com",
         )
     )
-    model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
+    guarded_model = StrixProvider(settings=settings).get_model("azure_ai/gpt-6-luna")
+    assert isinstance(guarded_model, strix_models._TurnGuardModel)
+    model = guarded_model._inner
     assert isinstance(model, _AzureUsageResponsesModel)
     captured: list[Any] = []
     state = SimpleNamespace(capture_provider_usage=captured.append)
@@ -213,8 +217,10 @@ def test_azure_multi_segment_name_uses_final_deployment() -> None:
         )
     )
 
-    model = StrixProvider(settings=settings).get_model("azure/eu/gpt-6-sol")
+    guarded_model = StrixProvider(settings=settings).get_model("azure/eu/gpt-6-sol")
 
+    assert isinstance(guarded_model, strix_models._TurnGuardModel)
+    model = guarded_model._inner
     assert isinstance(model, OpenAIResponsesModel)
     assert model.model == "gpt-6-sol"
     assert str(model._client.base_url) == "https://example.openai.azure.com/openai/v1/"
