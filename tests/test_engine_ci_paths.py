@@ -19,6 +19,11 @@ def test_runtime_workflow_dependency_or_test_changes_require_full_ci() -> None:
     )
 
 
+def test_runtime_file_renamed_to_documentation_still_requires_full_ci() -> None:
+    # --no-renames reports both the deleted source and added destination.
+    assert not is_documentation_only(["lyrashield/interface/main.py", "README.md"])
+
+
 def test_empty_or_unknown_path_sets_run_full_ci() -> None:
     assert not is_documentation_only([])
     assert not is_documentation_only(["docs/engine-diagram.svg"])
