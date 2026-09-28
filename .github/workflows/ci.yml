@@ -115,6 +115,10 @@ jobs:
         if: steps.changed_paths.outputs.docs_only != 'true'
         run: scripts/verify-controlled-derivative.sh
 
+      - name: Report owned/upstream Python twin drift
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        run: python3 scripts/report_twin_drift.py
+
       - name: Verify owned viewer source and committed build
         if: steps.changed_paths.outputs.docs_only != 'true'
         working-directory: lyrashield/interface/viewer/frontend

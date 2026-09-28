@@ -17,6 +17,24 @@ states, not the current patch inventory.
 
 ## History
 
+## DG-16 owned/upstream twin disposition (2026-09-28)
+
+CI now prints a sorted, informational CSV inventory of same-path Python modules
+under `lyrashield/**` and `strix/**`, including byte identity and matching-line
+counts. Drift alone does not fail CI: owned product behavior cannot be silently
+replaced by a future upstream import. The byte-identical TUI session-history
+loader is now a thin re-export of the pinned upstream implementation. The owned
+TUI projection continues to call it through its existing import path.
+
+Other close copies remain owned where the differences are behavior: the viewer
+PDF uses LyraShield branding and its owned transcript reader; the tool-output
+store uses `/workspace/.strix/tool-output`, which the sandbox and tests expect;
+`respond_to_user` requires an explicit message and uses the LyraShield
+coordinator; and todo creation retains LyraShield's priority-validation and
+duplicate behavior. They must not become direct upstream re-exports without
+explicit contract changes and focused regression tests. `strix/**` and the
+controlled-derivative patch digest are unchanged by this disposition.
+
 ## GPT-6-only boundary and subscription main-model route (2026-09-25)
 
 The GPT-5.6 model family is fully retired from owned code, tests, and docs.

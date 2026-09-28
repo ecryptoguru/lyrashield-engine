@@ -97,7 +97,7 @@
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],
     "lyrashield/interface/tui/history.py": [
-      "from strix.core.paths import runtime_state_dir"
+      "from strix.interface.tui.history import load_session_history"
     ],
     "lyrashield/interface/provider_contract_cli.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
