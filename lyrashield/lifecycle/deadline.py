@@ -34,7 +34,7 @@ class RunDeadline:
         if not math.isfinite(seconds) or seconds <= 0:
             raise ValueError("runtime budget must be a finite positive number of seconds")
         started = clock()
-        reserve = min(120.0, seconds * 0.2)
+        reserve = min(300.0, seconds * 0.3)
         return cls(hard_at=started + seconds, wrap_at=started + seconds - reserve, clock=clock)
 
     def remaining_seconds(self) -> float:

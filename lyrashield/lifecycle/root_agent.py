@@ -72,6 +72,8 @@ class RootRuntime:
     root_routing: bool
     delegate_routing: bool
     max_output_tokens: int
+    model_request_timeout: float
+    bounded_runtime: bool
     root_status: str | None
 
 
@@ -137,11 +139,18 @@ async def build_root_runtime(
         scan_mode,
         getattr(llm_settings, "max_output_tokens", None),
     )
+    bounded_runtime = not interactive and coordinator.run_deadline is not None
+    model_request_timeout = (
+        min(llm_settings.timeout, 90 if scan_mode == "deep" else 60)
+        if bounded_runtime
+        else llm_settings.timeout
+    )
     model_settings = services.make_model_settings(
         llm_settings.reasoning_effort,
         model_name=resolved_model,
         force_required_tool_choice=llm_settings.force_required_tool_choice,
-        request_timeout=llm_settings.timeout,
+        request_timeout=model_request_timeout,
+        bounded_runtime=bounded_runtime,
         max_output_tokens=max_output_tokens,
         prompt_cache_key=(
             services.stable_prompt_cache_key(
@@ -178,7 +187,8 @@ async def build_root_runtime(
         delegate_reasoning_effort,
         model_name=delegate_model,
         force_required_tool_choice=llm_settings.force_required_tool_choice,
-        request_timeout=llm_settings.timeout,
+        request_timeout=model_request_timeout,
+        bounded_runtime=bounded_runtime,
         max_output_tokens=delegate_max_output_tokens,
         prompt_cache_key=(
             services.stable_prompt_cache_key("delegates", delegate_cache_material, scan_id)
@@ -375,5 +385,7 @@ async def build_root_runtime(
         root_routing=root_routing,
         delegate_routing=delegate_routing,
         max_output_tokens=max_output_tokens,
+        model_request_timeout=model_request_timeout,
+        bounded_runtime=bounded_runtime,
         root_status=root_status,
     )

@@ -17,6 +17,7 @@ from agents.tool_context import ToolContext
 
 from lyrashield.artifacts.state import ReportState, set_global_report_state
 from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.lifecycle.deadline import RunDeadline
 from lyrashield.tools.agents_graph.tools import agent_finish, send_message_to_agent, wait_for_agents
 
 
@@ -180,6 +181,19 @@ async def test_wait_still_parks_while_a_child_is_running() -> None:
     result = await _call(wait_for_agents, coordinator, "root", {"timeout_seconds": 1})
 
     assert result["wait_outcome"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_at_runtime_wrap_instead_of_waiting_for_child() -> None:
+    coordinator = await _graph(interactive=False)
+    now = [0.0]
+    coordinator.run_deadline = RunDeadline.start(100, clock=lambda: now[0])
+    now[0] = 76
+
+    result = await _call(wait_for_agents, coordinator, "root", {"timeout_seconds": 300})
+
+    assert result["wait_outcome"] == "deadline_wrap"
+    assert coordinator.statuses["root"] == "running"
 
 
 @pytest.mark.asyncio

@@ -417,18 +417,43 @@ async def wait_for_agents(
             default=str,
         )
 
-    await coordinator.park_waiting(me, wait_kind="agents")
-    try:
-        await asyncio.wait_for(coordinator.wait_for_message(me), timeout_seconds)
-    except TimeoutError:
-        await coordinator.mark_running(me)
+    deadline = coordinator.run_deadline
+    if deadline is not None and deadline.wrapping_up():
         return json.dumps(
             {
                 "success": True,
-                "wait_outcome": "timeout",
-                "timeout_seconds": timeout_seconds,
+                "wait_outcome": "deadline_wrap",
                 "reason": reason,
-                "note": "No messages within timeout — continue work or call agent_finish.",
+                "note": (
+                    "Runtime wrap-up has begun. Do not wait again. Stop unfinished children, "
+                    "file supported findings, describe unassessed work as incomplete, and finish."
+                ),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    effective_timeout = (
+        min(timeout_seconds, deadline.until_wrap_seconds()) if deadline else timeout_seconds
+    )
+    await coordinator.park_waiting(me, wait_kind="agents")
+    try:
+        await asyncio.wait_for(coordinator.wait_for_message(me), effective_timeout)
+    except TimeoutError:
+        await coordinator.mark_running(me)
+        wrapping = deadline is not None and deadline.wrapping_up()
+        return json.dumps(
+            {
+                "success": True,
+                "wait_outcome": "deadline_wrap" if wrapping else "timeout",
+                "timeout_seconds": effective_timeout,
+                "reason": reason,
+                "note": (
+                    "Runtime wrap-up has begun. Stop unfinished children, file supported findings, "
+                    "describe unassessed work as incomplete, and finish."
+                    if wrapping
+                    else "No messages within timeout — continue work or call agent_finish."
+                ),
             },
             ensure_ascii=False,
             default=str,
