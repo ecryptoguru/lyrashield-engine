@@ -10,6 +10,7 @@ from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.dedupe import _check_dependency_duplicate, check_duplicate
 from lyrashield.artifacts.state import ReportState, set_global_report_state
 from lyrashield.tools.finish.tool import finish_scan
+from lyrashield.tools.reporting import validation as reporting_validation
 from lyrashield.tools.reporting.tool import (
     _do_create,
     _do_create_dependency,
@@ -32,6 +33,22 @@ _CVSS = {
     "integrity": "H",
     "availability": "H",
 }
+
+
+def test_product_reporting_validation_normalizes_cvss_cwe_and_ecosystem() -> None:
+    assert reporting_validation.extract_cwe("Observed issue mapped to CWE-79 (XSS)") == "CWE-79"
+    assert reporting_validation.validate_cwe("CWE-79") is None
+    assert reporting_validation.validate_cvss_breakdown(_CVSS) == []
+    assert reporting_validation.validate_cvss_breakdown({**_CVSS, "attack_vector": "Z"}) == [
+        "Invalid attack_vector: Z. Must be one of: ['N', 'A', 'L', 'P']"
+    ]
+    assert reporting_validation.calculate_cvss(_CVSS) == (
+        9.8,
+        "critical",
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    )
+    assert reporting_validation.normalize_package_ecosystem(" npm ") == "npm"
+    assert reporting_validation.normalize_package_ecosystem("  ") is None
 
 
 @pytest.fixture
@@ -139,7 +156,7 @@ async def test_dependency_report_sets_class_and_metadata(report_state: ReportSta
         impact="Arbitrary command execution.",
         remediation_steps="Upgrade to 4.17.21.",
         assumptions="Assumes the template sink is reachable.",
-        package_ecosystem="npm",
+        package_ecosystem=" npm ",
         fixed_version="4.17.21",
         cwe="CWE-94",
         advisory_cvss=7.2,

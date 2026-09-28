@@ -7,7 +7,7 @@ import json
 import os
 import time
 import urllib.request
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 
@@ -34,8 +34,6 @@ SortBy = Literal[
     "source",
 ]
 SortOrder = Literal["asc", "desc"]
-RequestSortField = Literal["created_at", "host", "method", "path", "source"]
-ResponseSortField = Literal["code", "roundtrip", "length"]
 ScopeAction = Literal["get", "list", "create", "update", "delete"]
 SitemapDepth = Literal["DIRECT", "ALL"]
 _SITEMAP_PAGE_SIZE = 30
@@ -147,20 +145,7 @@ async def list_requests_with_client(
     if scope_id:
         builder = builder.scope(scope_id)
     target, field = _REQ_FIELD_MAP[sort_by]
-    if target == "req":
-        request_field = cast("RequestSortField", field)
-        builder = (
-            builder.descending("req", request_field)
-            if sort_order == "desc"
-            else builder.ascending("req", request_field)
-        )
-    else:
-        response_field = cast("ResponseSortField", field)
-        builder = (
-            builder.descending("resp", response_field)
-            if sort_order == "desc"
-            else builder.ascending("resp", response_field)
-        )
+    builder = (builder.descending if sort_order == "desc" else builder.ascending)(target, field)
     return await builder.execute()
 
 

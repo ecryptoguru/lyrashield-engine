@@ -615,22 +615,6 @@ RECOMMENDED_MODEL_NAMES = (
     "openai/gpt-6-sol",
 )
 
-_RECOMMENDED_MODEL_NAME_SET = frozenset(name.lower() for name in RECOMMENDED_MODEL_NAMES)
-
-FRONTIER_MODEL_FAMILIES = (
-    (("azure", "azure_ai", "chatgpt", "openai"), ("gpt-6",)),
-    (
-        ("anthropic", "azure_ai", "bedrock", "claude", "databricks", "snowflake", "vertex_ai"),
-        ("claude-fable-5", "claude-opus-5", "claude-opus-4", "claude-sonnet-5", "claude-sonnet-4"),
-    ),
-    (("google", "gemini", "vertex_ai"), ("gemini-3",)),
-    (("deepseek",), ("deepseek-v4", "deepseek-r1", "deepseek-reasoner")),
-    (("alibaba", "dashscope", "qwen"), ("qwen3.8", "qwen3.7", "qwen3-max")),
-    (("moonshot", "moonshotai", "kimi"), ("kimi-k3", "kimi-k2.7", "kimi-k2.6")),
-    (("zai", "z-ai", "zai-org", "zhipuai"), ("glm-5.3", "glm-5.2")),
-)
-
-
 _sdk_config_lock = threading.Lock()
 _last_sdk_settings: Any | None = None
 
@@ -932,75 +916,8 @@ def model_supports_reasoning(model_name: str) -> bool:
 
 
 def is_recommended_or_frontier_model(model_name: str) -> bool:
-    """Return whether a model is recommended or in a frontier model family."""
-    name = _normalized_model_name(model_name)
-    if not name:
-        return False
-    if name in _RECOMMENDED_MODEL_NAME_SET:
-        return True
-    provider_name, bare_model_name = _split_model_provider(name)
-    return any(
-        _matches_frontier_family(provider_name, bare_model_name, provider_markers, prefixes)
-        for provider_markers, prefixes in FRONTIER_MODEL_FAMILIES
-    )
-
-
-def _normalized_model_name(model_name: str) -> str:
-    name = model_name.strip().lower()
-    for prefix in ("litellm/", "any-llm/"):
-        if name.startswith(prefix):
-            name = name[len(prefix) :]
-            break
-    return name
-
-
-def _split_model_provider(model_name: str) -> tuple[str | None, str]:
-    if "/" not in model_name:
-        return None, model_name
-    provider_name, bare_model_name = model_name.rsplit("/", 1)
-    return provider_name, bare_model_name
-
-
-def _matches_frontier_family(
-    provider_name: str | None,
-    model_name: str,
-    provider_markers: tuple[str, ...],
-    model_prefixes: tuple[str, ...],
-) -> bool:
-    if not _matches_model_prefix(model_name, model_prefixes):
-        return False
-    if provider_name is None:
-        return True
-    return _contains_provider_marker(
-        provider_name, provider_markers, split_compound_names=True
-    ) or _contains_provider_marker(model_name, provider_markers)
-
-
-def _matches_model_prefix(model_name: str, model_prefixes: tuple[str, ...]) -> bool:
-    return any(
-        candidate.startswith(prefix)
-        for candidate in _model_name_candidates(model_name)
-        for prefix in model_prefixes
-    )
-
-
-def _model_name_candidates(model_name: str) -> tuple[str, ...]:
-    if "." not in model_name:
-        return (model_name,)
-    suffixes = tuple(
-        model_name.split(".", index)[-1] for index in range(1, model_name.count(".") + 1)
-    )
-    return (model_name, *suffixes)
-
-
-def _contains_provider_marker(
-    value: str, provider_markers: tuple[str, ...], *, split_compound_names: bool = False
-) -> bool:
-    parts = set(value.replace(".", "/").split("/"))
-    if split_compound_names:
-        for separator in ("_", "-"):
-            parts.update(piece for part in tuple(parts) for piece in part.split(separator))
-    return any(marker in parts for marker in provider_markers)
+    """Return whether a model route is supported by the GPT-6 product boundary."""
+    return is_gpt6_supported_provider(model_name)
 
 
 def is_known_openai_bare_model(model_name: str) -> bool:
@@ -1012,61 +929,3 @@ def is_known_openai_bare_model(model_name: str) -> bool:
     model_cost = cast("dict[str, Any]", litellm.model_cost)
     entry = _model_cost_entry(model_cost, name)
     return bool(entry is not None and entry.get("litellm_provider") == "openai")
-
-
-def is_claude_model(model_name: str) -> bool:
-    return "claude" in (model_name or "").strip().lower()
-
-
-def is_bedrock_route(model_name: str) -> bool:
-    name = (model_name or "").strip().lower()
-    return name.startswith("bedrock/") or "anthropic." in name
-
-
-def routes_through_litellm(model_name: str | None) -> bool:
-    """Whether :class:`StrixProvider` sends this model through LiteLLM.
-
-    Bare names and the ``openai/``/``any-llm/`` prefixes are served by the SDK's
-    own clients, which raise ``TypeError`` on request fields they do not know,
-    so LiteLLM-only fields must not be attached there. A bare ``claude-...``
-    name is exactly that case: an ``LLM_API_BASE`` pointing at an
-    OpenAI-compatible gateway in front of Claude.
-    """
-    name = (model_name or "").strip()
-    if not name or codex.subscription_model(name):
-        return False
-    prefix, _, rest = name.partition("/")
-    return bool(rest) and prefix.lower() not in {"openai", "any-llm"}
-
-
-def _prompt_cache_name_candidates(model_name: str) -> list[str]:
-    # LiteLLM's model map keys the same model under several names; strip the
-    # route prefix, then leading dotted segments (region, provider).
-    name = (model_name or "").strip().lower()
-    for prefix in ("litellm/", "bedrock/"):
-        if name.startswith(prefix):
-            name = name[len(prefix) :]
-            break
-    candidates = [name]
-    rest = name
-    while "." in rest:
-        rest = rest.split(".", 1)[1]
-        candidates.append(rest)
-    return candidates
-
-
-def bedrock_route_supports_prompt_caching(model_name: str) -> bool:
-    # Bedrock rejects the cache marker for models LiteLLM's map doesn't
-    # recognise as cache-capable, so callers withhold it unless confirmed here.
-    import litellm
-
-    checker = getattr(getattr(litellm, "utils", None), "supports_prompt_caching", None)
-    for cand in _prompt_cache_name_candidates(model_name):
-        if checker is not None:
-            with contextlib.suppress(Exception):
-                if checker(cand):
-                    return True
-        entry = litellm.model_cost.get(cand)
-        if entry and entry.get("supports_prompt_caching"):
-            return True
-    return False

@@ -552,7 +552,7 @@ async def test_runner_falls_back_to_delegate_model_on_content_filter(
         "mode": "explicit",
         "ttl": "30m",
     }
-    assert model_setting_calls[-1]["prompt_cache"] is True
+    assert "prompt_cache" not in model_setting_calls[-1]
     assert model_setting_calls[-1]["extra_headers"] == {"X-Test": "fallback"}
 
 

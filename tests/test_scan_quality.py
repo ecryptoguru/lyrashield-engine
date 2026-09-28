@@ -7,6 +7,7 @@ ledger. Unexercised surfaces stay ``unassessed``; nothing is extrapolated.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,19 @@ from lyrashield.artifacts.state import ReportState
 from lyrashield.runtime.session_manager import write_egress_policy
 from lyrashield.tools.proxy import caido_api
 from strix.tools.coverage.tools import hydrate_coverage_from_disk
+
+
+@pytest.fixture(autouse=True)
+def _stub_public_test_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise scope accounting without external DNS under the socket guard."""
+
+    def resolve(hostname: str) -> list[str]:
+        try:
+            return [str(ipaddress.ip_address(hostname))]
+        except ValueError:
+            return ["93.184.216.34"]
+
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", resolve)
 
 
 def _agent_graph(*agents: tuple[str, str]) -> dict[str, Any]:

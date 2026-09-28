@@ -10,7 +10,7 @@ from textual.widgets import Input, Select, Static
 
 from lyrashield.tui.app import LyraShieldLocalApp
 from lyrashield.tui.byok_config import ByokConfig, ChatGptConfig, Provider
-from lyrashield.tui.results_store import ResultsStore, ResultsStoreKeyError
+from lyrashield.tui.results_store import FindingRecord, ResultsStore, ResultsStoreKeyError
 from lyrashield.tui.scan_flow import ScanResult
 
 
@@ -102,5 +102,35 @@ def test_results_key_failures_show_in_findings_and_export(
             monkeypatch.setattr(store, "list_runs", key_error)
             app._export("sarif")
             assert "Export failed" in str(app.query_one("#progress", Static).render())
+
+    asyncio.run(exercise())
+
+
+def test_untrusted_finding_title_is_rendered_as_plain_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ResultsStore(tmp_path / "results.db")
+    monkeypatch.setattr(
+        store,
+        "list_findings",
+        lambda _run_id: [
+            FindingRecord(
+                finding_id="f1",
+                run_id="r1",
+                severity="HIGH",
+                title="[red]owned title[/]",
+                payload={},
+            )
+        ],
+    )
+    app = LyraShieldLocalApp(ByokConfig(), store)
+
+    async def exercise() -> None:
+        async with app.run_test(size=(80, 24)):
+            app._render_findings("r1")
+            rendered = app.query_one("#findings", Static).render()
+            assert "[red]owned title[/]" in rendered.plain
+            title_start = rendered.plain.index("[red]owned title[/]")
+            assert all(not (span.start <= title_start < span.end) for span in rendered.spans)
 
     asyncio.run(exercise())

@@ -43,7 +43,7 @@ from strix.config.tool_call_limits import TurnToolCallLimiter
 
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable
+    from collections.abc import AsyncIterator
 
     from agents.agent_output import AgentOutputSchemaBase
     from agents.handoffs import Handoff
@@ -54,7 +54,6 @@ if TYPE_CHECKING:
     from agents.usage import Usage
     from openai import AsyncOpenAI
     from openai.types.responses.response_prompt_param import ResponsePromptParam
-    from openai.types.shared.reasoning_effort import ReasoningEffort as OpenAIReasoningEffort
 
     from strix.config.settings import LlmSettings, ReasoningEffort, Settings
 
@@ -97,14 +96,14 @@ class _CodexResponsesModel(OpenAIResponsesModel):
         effort = self._reasoning_effort
         if effort and effort != "none":
             # Clamp to efforts the backend accepts.
-            normalized_effort = cast("OpenAIReasoningEffort", effort)
-            if effort == "minimal":
-                normalized_effort = "low"
-            elif effort in {"xhigh", "max"}:
-                normalized_effort = "high"
-            overrides = overrides.resolve(
-                ModelSettings(reasoning=Reasoning(effort=normalized_effort))
-            )
+            match effort:
+                case "minimal":
+                    effort = "low"
+                case "xhigh" | "max":
+                    effort = "high"
+                case _:
+                    pass
+            overrides = overrides.resolve(ModelSettings(reasoning=Reasoning(effort=effort)))
         return model_settings.resolve(overrides)
 
     async def _fetch_response(self, *args: Any, stream: bool = False, **kwargs: Any) -> Any:
@@ -154,7 +153,7 @@ class _CodexResponsesModel(OpenAIResponsesModel):
         aclose = getattr(events, "aclose", None)
         if callable(aclose):
             with contextlib.suppress(Exception):
-                await cast("Awaitable[Any]", aclose())
+                await aclose()
             return
         close = getattr(events, "close", None)
         if callable(close):

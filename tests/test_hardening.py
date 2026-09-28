@@ -13,6 +13,7 @@ import pytest
 from agents.sandbox.sandboxes.docker import DockerSandboxClient
 from docker import errors as docker_errors
 
+from lyrashield.interface import environment_gate
 from lyrashield.interface.utils import validate_run_name
 from lyrashield.runtime.docker_client import (
     StrixDockerSandboxClient,
@@ -70,7 +71,7 @@ def test_invalid_model_exits_with_clean_cli_message(capsys: pytest.CaptureFixtur
     )
 
     with (
-        patch.object(main_module, "load_settings", return_value=settings),
+        patch.object(environment_gate, "load_settings", return_value=settings),
         pytest.raises(SystemExit) as exc_info,
     ):
         main_module.validate_environment()
@@ -92,7 +93,7 @@ def test_invalid_delegate_model_exits_before_sandbox_setup(
     )
 
     with (
-        patch.object(main_module, "load_settings", return_value=settings),
+        patch.object(environment_gate, "load_settings", return_value=settings),
         pytest.raises(SystemExit) as exc_info,
     ):
         main_module.validate_environment()
@@ -124,8 +125,8 @@ def test_subscription_main_validates_helper_models_before_return(
         dedupe=SimpleNamespace(model=dedupe_model),
         product=SimpleNamespace(allow_chatgpt_subscription=True),
     )
-    monkeypatch.setattr(main_module, "load_settings", lambda: settings)
-    monkeypatch.setattr(main_module.codex, "is_authenticated", lambda: True)
+    monkeypatch.setattr(environment_gate, "load_settings", lambda: settings)
+    monkeypatch.setattr(environment_gate.codex, "is_authenticated", lambda: True)
 
     with pytest.raises(SystemExit) as exc_info:
         main_module.validate_environment()
@@ -148,8 +149,8 @@ def test_subscription_main_rejects_nested_gpt6_route(
         dedupe=SimpleNamespace(model=""),
         product=SimpleNamespace(allow_chatgpt_subscription=True),
     )
-    monkeypatch.setattr(main_module, "load_settings", lambda: settings)
-    monkeypatch.setattr(main_module.codex, "is_authenticated", lambda: True)
+    monkeypatch.setattr(environment_gate, "load_settings", lambda: settings)
+    monkeypatch.setattr(environment_gate.codex, "is_authenticated", lambda: True)
 
     with pytest.raises(SystemExit) as exc_info:
         main_module.validate_environment()
@@ -169,8 +170,8 @@ def test_subscription_main_accepts_paid_gpt6_delegate(monkeypatch: pytest.Monkey
         dedupe=SimpleNamespace(model=""),
         product=SimpleNamespace(allow_chatgpt_subscription=True),
     )
-    monkeypatch.setattr(main_module, "load_settings", lambda: settings)
-    monkeypatch.setattr(main_module.codex, "is_authenticated", lambda: True)
+    monkeypatch.setattr(environment_gate, "load_settings", lambda: settings)
+    monkeypatch.setattr(environment_gate.codex, "is_authenticated", lambda: True)
 
     main_module.validate_environment()
 

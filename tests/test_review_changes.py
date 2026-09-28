@@ -32,7 +32,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-import lyrashield.interface.utils as interface_utils
+from lyrashield.interface import source_acquisition
 from lyrashield.interface.utils import (
     SourcePreflightError,
     clone_repository,
@@ -335,8 +335,8 @@ def test_scope_mode_full_needs_no_revisions(monkeypatch: pytest.MonkeyPatch) -> 
 
 def _clone_env(tmp_path: Path) -> Any:
     return (
-        patch.object(interface_utils, "_git_executable", return_value="/usr/bin/git"),
-        patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)),
+        patch.object(source_acquisition, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)),
     )
 
 
@@ -354,7 +354,11 @@ def test_clone_revision_detaches_and_asserts_head(tmp_path: Path) -> None:
         return _ok(argv)
 
     env1, env2 = _clone_env(tmp_path)
-    with env1, env2, patch.object(interface_utils.subprocess, "run", side_effect=fake_run) as run:
+    with (
+        env1,
+        env2,
+        patch.object(source_acquisition.subprocess, "run", side_effect=fake_run) as run,
+    ):
         clone_repository("https://github.com/org/repo", "rev-run", revision=SHA_B)
 
     clone_argv = run.call_args_list[0].args[0]
@@ -379,7 +383,11 @@ def test_clone_revision_treats_branch_as_fetch_hint_only(tmp_path: Path) -> None
         return _ok(argv)
 
     env1, env2 = _clone_env(tmp_path)
-    with env1, env2, patch.object(interface_utils.subprocess, "run", side_effect=fake_run) as run:
+    with (
+        env1,
+        env2,
+        patch.object(source_acquisition.subprocess, "run", side_effect=fake_run) as run,
+    ):
         clone_repository(
             "https://github.com/org/repo",
             "hint-run",
@@ -401,7 +409,7 @@ def test_real_moving_branch_still_checks_out_recorded_snapshot(tmp_path: Path) -
     (remote / "app.py").write_text("version = 'B'\n", encoding="utf-8")
     _commit_all(remote, "moved branch")
 
-    with patch.object(interface_utils.tempfile, "gettempdir", return_value=str(tmp_path)):
+    with patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)):
         acquired = Path(
             clone_repository(
                 str(remote),
@@ -435,7 +443,11 @@ def test_clone_missing_revision_fetches_then_detaches(tmp_path: Path) -> None:
         return _ok(argv)
 
     env1, env2 = _clone_env(tmp_path)
-    with env1, env2, patch.object(interface_utils.subprocess, "run", side_effect=fake_run) as run:
+    with (
+        env1,
+        env2,
+        patch.object(source_acquisition.subprocess, "run", side_effect=fake_run) as run,
+    ):
         clone_repository("https://github.com/org/repo", "fetch-run", revision=SHA_B)
 
     fetch_calls = [c.args[0] for c in run.call_args_list if "fetch" in c.args[0]]
@@ -461,7 +473,7 @@ def test_clone_missing_revision_is_named_preflight_failure(
     with (
         env1,
         env2,
-        patch.object(interface_utils.subprocess, "run", side_effect=fake_run),
+        patch.object(source_acquisition.subprocess, "run", side_effect=fake_run),
         pytest.raises(SystemExit) as exc_info,
     ):
         clone_repository("https://github.com/org/repo", "gone-run", revision=SHA_B)
@@ -484,7 +496,7 @@ def test_clone_checkout_mismatch_fails_closed(
     with (
         env1,
         env2,
-        patch.object(interface_utils.subprocess, "run", side_effect=fake_run),
+        patch.object(source_acquisition.subprocess, "run", side_effect=fake_run),
         pytest.raises(SystemExit) as exc_info,
     ):
         clone_repository("https://github.com/org/repo", "mismatch-run", revision=SHA_B)
@@ -508,7 +520,11 @@ def test_clone_required_base_commit_fetched_when_missing(tmp_path: Path) -> None
         return _ok(argv)
 
     env1, env2 = _clone_env(tmp_path)
-    with env1, env2, patch.object(interface_utils.subprocess, "run", side_effect=fake_run) as run:
+    with (
+        env1,
+        env2,
+        patch.object(source_acquisition.subprocess, "run", side_effect=fake_run) as run,
+    ):
         clone_repository(
             "https://github.com/org/repo",
             "base-run",
@@ -541,7 +557,7 @@ def test_clone_missing_base_is_named_preflight_failure(
     with (
         env1,
         env2,
-        patch.object(interface_utils.subprocess, "run", side_effect=fake_run),
+        patch.object(source_acquisition.subprocess, "run", side_effect=fake_run),
         pytest.raises(SystemExit) as exc_info,
     ):
         clone_repository(
@@ -618,8 +634,8 @@ def test_copied_status_entries_are_classified_and_recorded() -> None:
     # C-status entries (detected with --find-copies when the source is also
     # modified) keep their source path as related context.
     raw = b"C85\x00old_src.py\x00new_copy.py\x00D\x00gone.py\x00M\x00mod.py\x00"
-    entries = interface_utils._parse_name_status_z(raw)
-    classified = interface_utils._classify_diff_entries(entries)
+    entries = source_acquisition._parse_name_status_z(raw)
+    classified = source_acquisition._classify_diff_entries(entries)
 
     assert classified["copied_files"] == [
         {"old_path": "old_src.py", "new_path": "new_copy.py", "similarity": 85}
@@ -776,14 +792,14 @@ def test_asserted_diff_rejects_unverified_worktree_state(
     base = _commit_all(repo, "base")
     (repo / "app.py").write_text("changed\n", encoding="utf-8")
     head = _commit_all(repo, "head")
-    original = interface_utils._run_git_command_raw
+    original = source_acquisition._run_git_command_raw
 
     def failed_status(path: Path, args: list[str], **kwargs: Any) -> Any:
         if args[:2] == ["status", "--porcelain=v1"]:
             return subprocess.CompletedProcess(args, 1, b"", b"status unavailable")
         return original(path, args, **kwargs)
 
-    monkeypatch.setattr(interface_utils, "_run_git_command_raw", failed_status)
+    monkeypatch.setattr(source_acquisition, "_run_git_command_raw", failed_status)
     with pytest.raises(SourcePreflightError) as exc_info:
         resolve_diff_scope_context(
             _sources(repo), "diff", base, non_interactive=True, env={}, diff_head=head
@@ -809,7 +825,7 @@ def test_full_scope_records_dirty_local_source_before_upload(tmp_path: Path) -> 
 def test_unsafe_base_ref_cannot_inject_options(diff_repo: dict[str, Any]) -> None:
     """``--all`` must never reach ``git merge-base`` as an option."""
     with pytest.raises(SourcePreflightError, match="Unsafe or empty revision"):
-        interface_utils._resolve_repo_diff_scope(_sources(diff_repo["path"])[0], "--all", {})
+        source_acquisition._resolve_repo_diff_scope(_sources(diff_repo["path"])[0], "--all", {})
 
 
 def test_unsafe_base_ref_under_diff_head_is_named_failure(
@@ -818,7 +834,7 @@ def test_unsafe_base_ref_under_diff_head_is_named_failure(
     """Under an asserted head, a non-object-ID base fails closed at the
     immutable-input check before any Git invocation consumes it."""
     with pytest.raises(SourcePreflightError) as exc_info:
-        interface_utils._resolve_repo_diff_scope(
+        source_acquisition._resolve_repo_diff_scope(
             _sources(diff_repo["path"])[0], "--all", {}, diff_head=diff_repo["head"]
         )
     assert exc_info.value.reason == "invalid_base"
@@ -1008,7 +1024,7 @@ def test_snapshot_cli_uses_saved_revision_after_branch_moves(
         return real_clone(str(remote), *args, **kwargs)
 
     monkeypatch.setattr(cli_main, "clone_repository", clone_local)
-    monkeypatch.setattr(interface_utils.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(source_acquisition.tempfile, "gettempdir", lambda: str(tmp_path))
     runs_root = tmp_path / "runsroot"
     runs_root.mkdir()
     monkeypatch.chdir(runs_root)

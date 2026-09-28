@@ -15,9 +15,9 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from agents.tool_context import ToolContext
 
-from strix.core.agents import AgentCoordinator
-from strix.report.state import ReportState, set_global_report_state
-from strix.tools.agents_graph.tools import agent_finish, send_message_to_agent, wait_for_agents
+from lyrashield.artifacts.state import ReportState, set_global_report_state
+from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.tools.agents_graph.tools import agent_finish, send_message_to_agent, wait_for_agents
 
 
 if TYPE_CHECKING:

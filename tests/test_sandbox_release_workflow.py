@@ -8,12 +8,31 @@ CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
 SMOKE = Path(__file__).parents[1] / "scripts" / "smoke-sandbox.sh"
 
 
+def test_ci_audits_hash_pinned_container_locks_without_dependency_resolution() -> None:
+    content = CI_WORKFLOW.read_text(encoding="utf-8")
+    audit_job = content.split("  python-audit:", 1)[1].split("\n  verify:", 1)[0]
+
+    assert "Audit hash-pinned Dirsearch package" in audit_job
+    assert (
+        "pip-audit --require-hashes --disable-pip -r containers/dirsearch-requirements.txt"
+    ) in audit_job
+    assert "Audit hash-pinned sandbox Python dependency lock" in audit_job
+    assert (
+        "pip-audit --require-hashes --disable-pip -r containers/python-requirements.txt"
+    ) in audit_job
+
+
 def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
     content = WORKFLOW.read_text(encoding="utf-8")
 
     assert "platforms: linux/amd64,linux/arm64" in content
     smoke = SMOKE.read_text(encoding="utf-8")
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    replay_probe = ci.split("name: Guarded replay egress probes (built image)", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    assert "from caido_api import _replay_denial as blocked" in replay_probe
+    assert "blocked(url) is not None" in replay_probe
     assert 'bash scripts/smoke-sandbox.sh "$image" "$platform"' in content
     assert "bash scripts/smoke-sandbox.sh lyrashield-sandbox:ci" in ci
     for invariant in (

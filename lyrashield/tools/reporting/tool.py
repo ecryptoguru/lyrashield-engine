@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from agents import RunContextWrapper, function_tool
 
 from lyrashield.artifacts import evidence as _evidence
+from lyrashield.tools.reporting import validation as _validation
 from strix.tools.nullish import clean_optional
 
 
@@ -25,18 +26,6 @@ if TYPE_CHECKING:
     from lyrashield.artifacts.state import ReportState
 
 logger = logging.getLogger(__name__)
-
-
-_CVSS_VALID = {
-    "attack_vector": ["N", "A", "L", "P"],
-    "attack_complexity": ["L", "H"],
-    "privileges_required": ["N", "L", "H"],
-    "user_interaction": ["N", "R"],
-    "scope": ["U", "C"],
-    "confidentiality": ["N", "L", "H"],
-    "integrity": ["N", "L", "H"],
-    "availability": ["N", "L", "H"],
-}
 
 
 _CODE_LOCATION_FIELDS = (
@@ -119,37 +108,6 @@ def _validate_cve(cve: str) -> str | None:
     if not re.match(r"^CVE-\d{4}-\d{4,}$", cve):
         return f"invalid CVE format: '{cve}' (expected 'CVE-YYYY-NNNNN')"
     return None
-
-
-def _extract_cwe(cwe: str) -> str:
-    match = re.search(r"CWE-\d+", cwe)
-    return match.group(0) if match else cwe.strip()
-
-
-def _validate_cwe(cwe: str) -> str | None:
-    if not re.match(r"^CWE-\d+$", cwe):
-        return f"invalid CWE format: '{cwe}' (expected 'CWE-NNN')"
-    return None
-
-
-def _calculate_cvss(breakdown: dict[str, str]) -> tuple[float, str, str]:
-    try:
-        from cvss import CVSS3
-
-        vector = (
-            f"CVSS:3.1/AV:{breakdown['attack_vector']}/AC:{breakdown['attack_complexity']}/"
-            f"PR:{breakdown['privileges_required']}/UI:{breakdown['user_interaction']}/"
-            f"S:{breakdown['scope']}/C:{breakdown['confidentiality']}/"
-            f"I:{breakdown['integrity']}/A:{breakdown['availability']}"
-        )
-        c = CVSS3(vector)
-        score = c.scores()[0]
-        severity = c.severities()[0].lower()
-    except Exception:
-        logger.exception("Failed to calculate CVSS")
-        return 7.5, "high", ""
-    else:
-        return score, severity, vector
 
 
 _REQUIRED_FIELDS = {
@@ -302,7 +260,7 @@ def _finding_class_of(report: dict[str, Any]) -> str:
     return "dependency_cve" if report.get("dependency_metadata") else "dynamic"
 
 
-async def _do_create(  # noqa: PLR0912, PLR0915
+async def _do_create(  # noqa: PLR0912
     *,
     title: str,
     description: str,
@@ -367,10 +325,7 @@ async def _do_create(  # noqa: PLR0912, PLR0915
         errors.append("cvss_breakdown: must be an object with the 8 CVSS metrics")
         cvss_breakdown = {}
     else:
-        for name, valid in _CVSS_VALID.items():
-            value = cvss_breakdown.get(name)
-            if value not in valid:
-                errors.append(f"Invalid {name}: {value}. Must be one of: {valid}")
+        errors.extend(_validation.validate_cvss_breakdown(cvss_breakdown))
 
     parsed_locations = _normalize_code_locations(code_locations)
     if parsed_locations:
@@ -386,8 +341,8 @@ async def _do_create(  # noqa: PLR0912, PLR0915
         if cve_err:
             errors.append(cve_err)
     if cwe:
-        cwe = _extract_cwe(cwe)
-        cwe_err = _validate_cwe(cwe)
+        cwe = _validation.extract_cwe(cwe)
+        cwe_err = _validation.validate_cwe(cwe)
         if cwe_err:
             errors.append(cwe_err)
     normalized_control_ids, control_errors = _normalize_control_ids(control_ids)
@@ -396,7 +351,7 @@ async def _do_create(  # noqa: PLR0912, PLR0915
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
 
-    cvss_score, severity, _vector = _calculate_cvss(cvss_breakdown)
+    cvss_score, severity, _vector = _validation.calculate_cvss(cvss_breakdown)
 
     try:
         from lyrashield.artifacts.state import get_global_report_state
@@ -881,42 +836,6 @@ async def create_vulnerability_report(
     return json.dumps(_with_warning(result, exchange_warning), ensure_ascii=False, default=str)
 
 
-_DEP_SEVERITY_FROM_CVSS = {
-    (9.0, 10.0): "critical",
-    (7.0, 9.0): "high",
-    (4.0, 7.0): "medium",
-    (0.0, 4.0): "low",
-}
-
-
-def _dependency_severity(advisory_cvss: float | None) -> tuple[float, str]:
-    if advisory_cvss is None:
-        return 0.0, "info"
-    score = max(0.0, min(10.0, advisory_cvss))
-    for (lo, hi), label in _DEP_SEVERITY_FROM_CVSS.items():
-        if lo <= score < hi or (hi == 10.0 and score == 10.0):
-            return score, label
-    return score, "none"
-
-
-def _build_dependency_metadata(
-    *,
-    package_name: str,
-    installed_version: str,
-    package_ecosystem: str | None,
-    fixed_version: str | None,
-) -> dict[str, Any]:
-    metadata: dict[str, Any] = {
-        "package_name": package_name.strip(),
-        "installed_version": installed_version.strip(),
-    }
-    if package_ecosystem and package_ecosystem.strip():
-        metadata["package_ecosystem"] = package_ecosystem.strip()
-    if fixed_version and fixed_version.strip():
-        metadata["fixed_version"] = fixed_version.strip()
-    return metadata
-
-
 def _build_dependency_evidence(
     *,
     cve: str,
@@ -980,8 +899,8 @@ async def _do_create_dependency(  # noqa: PLR0912, PLR0915
         errors.append(cve_err)
 
     if cwe:
-        cwe = _extract_cwe(cwe)
-        cwe_err = _validate_cwe(cwe)
+        cwe = _validation.extract_cwe(cwe)
+        cwe_err = _validation.validate_cwe(cwe)
         if cwe_err:
             errors.append(cwe_err)
     normalized_control_ids, control_errors = _normalize_control_ids(control_ids)
@@ -1025,13 +944,12 @@ async def _do_create_dependency(  # noqa: PLR0912, PLR0915
                 "with all 8 CVSS v3.1 metrics when you restate the rating"
             )
         else:
-            for name, valid in _CVSS_VALID.items():
-                value = contextual_cvss_breakdown.get(name)
-                if value not in valid:
-                    errors.append(
-                        f"Invalid contextual_cvss_breakdown {name}: {value}. "
-                        f"Must be one of: {valid}"
-                    )
+            errors.extend(
+                _validation.validate_cvss_breakdown(
+                    contextual_cvss_breakdown,
+                    error_prefix="contextual_cvss_breakdown",
+                )
+            )
         if not str(contextual_cvss_reasoning or "").strip():
             errors.append(
                 "contextual_cvss_reasoning is required: state what you observed in "
@@ -1041,15 +959,15 @@ async def _do_create_dependency(  # noqa: PLR0912, PLR0915
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
 
-    cvss_score, severity = _dependency_severity(advisory_cvss)
-    dependency_metadata = _build_dependency_metadata(
+    cvss_score, severity = _validation.dependency_severity(advisory_cvss)
+    dependency_metadata = _validation.build_dependency_metadata(
         package_name=package_name,
         installed_version=installed_version,
         package_ecosystem=package_ecosystem or "",
         fixed_version=fixed_version,
     )
     if contextual_cvss_breakdown:
-        ctx_score, ctx_severity, ctx_vector = _calculate_cvss(contextual_cvss_breakdown)
+        ctx_score, ctx_severity, ctx_vector = _validation.calculate_cvss(contextual_cvss_breakdown)
         cvss_score, severity = ctx_score, ctx_severity
         dependency_metadata["contextual_cvss_breakdown"] = contextual_cvss_breakdown
         dependency_metadata["contextual_cvss_score"] = ctx_score
@@ -1575,18 +1493,6 @@ _UPDATE_TEXT_FIELDS = (
 )
 
 
-def _validate_cvss_breakdown(breakdown: Any) -> list[str]:
-    """Check the 8 CVSS metrics are all present with legal values."""
-    if not isinstance(breakdown, dict) or not breakdown:
-        return ["cvss_breakdown: must be an object with the 8 CVSS metrics"]
-    errors: list[str] = []
-    for name, valid in _CVSS_VALID.items():
-        value = breakdown.get(name)
-        if value not in valid:
-            errors.append(f"Invalid {name}: {value}. Must be one of: {valid}")
-    return errors
-
-
 def _collect_update_changes(fields: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:  # noqa: PLR0912, PLR0915
     """Validate the fields a revision replaces and return them with any errors."""
     errors: list[str] = []
@@ -1619,10 +1525,10 @@ def _collect_update_changes(fields: dict[str, Any]) -> tuple[dict[str, Any], lis
 
     breakdown = fields.get("cvss_breakdown")
     if breakdown is not None:
-        breakdown_errors = _validate_cvss_breakdown(breakdown)
+        breakdown_errors = _validation.validate_cvss_breakdown(breakdown)
         errors.extend(breakdown_errors)
         if not breakdown_errors:
-            cvss_score, severity, _vector = _calculate_cvss(breakdown)
+            cvss_score, severity, _vector = _validation.calculate_cvss(breakdown)
             # The rating belongs to the vector, so a revised vector carries
             # its own score and severity rather than leaving the old ones.
             changes["cvss_breakdown"] = breakdown
@@ -1651,8 +1557,8 @@ def _collect_update_changes(fields: dict[str, Any]) -> tuple[dict[str, Any], lis
             changes["cve"] = cve
     cwe = clean_optional(fields.get("cwe"))
     if cwe:
-        cwe = _extract_cwe(cwe)
-        cwe_err = _validate_cwe(cwe)
+        cwe = _validation.extract_cwe(cwe)
+        cwe_err = _validation.validate_cwe(cwe)
         if cwe_err:
             errors.append(cwe_err)
         else:
@@ -1766,7 +1672,7 @@ def _rate_dependency_revision(
         }
 
     if breakdown is not None:
-        score, _severity, vector = _calculate_cvss(breakdown)
+        score, _severity, vector = _validation.calculate_cvss(breakdown)
         metadata["contextual_cvss_breakdown"] = breakdown
         metadata["contextual_cvss_score"] = score
         metadata["contextual_cvss_vector"] = vector

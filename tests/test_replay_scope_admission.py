@@ -8,6 +8,7 @@ denied and logged as scope-violation evidence in the decision ledger.
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,6 +21,19 @@ import pytest
 
 from lyrashield.runtime.session_manager import write_egress_policy
 from lyrashield.tools.proxy import caido_api
+
+
+@pytest.fixture(autouse=True)
+def _stub_public_test_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep scope tests deterministic without resolving external test domains."""
+
+    def resolve(hostname: str) -> list[str]:
+        try:
+            return [str(ipaddress.ip_address(hostname))]
+        except ValueError:
+            return ["93.184.216.34"]
+
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", resolve)
 
 
 @pytest.fixture(autouse=True)

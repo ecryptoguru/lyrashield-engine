@@ -26,12 +26,12 @@ from typing import TYPE_CHECKING, Any
 from lyrashield.artifacts.sarif import _sarif_level
 from lyrashield.artifacts.state import validate_run_record
 from lyrashield.tui.byok_config import ByokConfig, Provider, engine_mode_for
-from lyrashield.tui.results_store import FindingRecord, ResultsStore, new_run_id
+from lyrashield.tui.results_store import FindingRecord, ResultsStore, RunRecord, new_run_id
 from strix.core.paths import run_dir_for
 
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping, Sequence
+    from collections.abc import Mapping
 
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ class ScanResult:
     terminal_reason: str | None = None
 
 
-def build_argv(req: ScanRequest, config: ByokConfig) -> list[str]:
+def build_argv(req: ScanRequest, _config: ByokConfig) -> list[str]:
     """Build the engine CLI argv for a scan request."""
     argv: list[str] = [ENGINE_CLI]
     argv += ["--target", req.target]
@@ -261,8 +261,6 @@ def _persist_run(
     result: ScanResult,
 ) -> None:
     """Persist the run + any parseable findings into the encrypted store."""
-    from lyrashield.tui.results_store import RunRecord
-
     payload: dict[str, Any] = {
         "returncode": result.returncode,
         "elapsed_s": result.elapsed_s,
@@ -399,7 +397,7 @@ def export_report(run_id: str, store: ResultsStore, dest: Path) -> Path:
         raise FileNotFoundError(f"Canonical report is unavailable for run {run_id}")
     findings = store.list_findings(run_id)
     lines = [
-        f"# LyraShield Local — Scan Report",
+        "# LyraShield Local — Scan Report",
         "",
         f"- **Run ID:** {run.run_id}",
         f"- **Target:** {run.target}",

@@ -282,6 +282,40 @@ def test_flag_off_keeps_schema_1_0_and_no_new_artifacts(monkeypatch, tmp_path) -
         assert dropped not in vuln
 
 
+def test_run_record_and_findings_survive_save_resume_save(state_1_1: ReportState) -> None:
+    state = state_1_1
+    state.add_vulnerability_report(**_vuln_kwargs())
+    assert state.save_run_data()
+
+    run_dir = state.get_run_dir()
+    first_record = _read_json(run_dir / "run.json")
+    first_findings = _read_json(run_dir / "vulnerabilities.json")
+
+    resumed = ReportState(run_name=state.run_name)
+    resumed._run_dir = run_dir
+    resumed.hydrate_from_run_dir()
+    assert resumed.save_run_data()
+
+    second_record = _read_json(run_dir / "run.json")
+    second_findings = _read_json(run_dir / "vulnerabilities.json")
+    assert second_findings == first_findings
+    for field in (
+        "schema_version",
+        "run_id",
+        "run_name",
+        "start_time",
+        "end_time",
+        "status",
+        "phase",
+        "auth_mode",
+        "targets_info",
+        "llm_usage",
+    ):
+        assert second_record[field] == first_record[field]
+    assert second_record["seq"] == first_record["seq"] + 1
+    validate_run_record(second_record)
+
+
 def test_schema_1_0_record_hydrates_and_stays_readable(tmp_path) -> None:
     run_dir = tmp_path / "run-legacy"
     run_dir.mkdir()

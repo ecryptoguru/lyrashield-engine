@@ -439,12 +439,6 @@ def _replay_denial(url: str) -> tuple[str, str] | None:
     return None
 
 
-def _check_replay_url_host(url: str) -> str | None:
-    """Return a human-readable block reason, or None if the host is allowed."""
-    denial = _replay_denial(url)
-    return denial[0] if denial is not None else None
-
-
 def caido_url() -> str:
     return os.environ.get("STRIX_CAIDO_URL", _DEFAULT_CAIDO_URL).rstrip("/")
 

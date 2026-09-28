@@ -43,19 +43,7 @@ fi
 
 ALLOWED_MODIFIED=(
   "strix/config/loader.py"
-  "strix/config/models.py"
-  "strix/interface/auth_cli.py"
-  "strix/interface/viewer/__init__.py"
-  "strix/interface/viewer/report_pdf.py"
-  "strix/interface/viewer/server.py"
-  "strix/interface/viewer/transcript.py"
   "strix/skills/vulnerabilities/semantic_confusion.md"
-  "strix/telemetry/_common.py"
-  "strix/telemetry/posthog.py"
-  "strix/telemetry/scarf.py"
-  "strix/tools/agents_graph/tools.py"
-  "strix/tools/proxy/caido_api.py"
-  "strix/tools/proxy/tools.py"
 )
 # Upstream files deliberately not carried: the sandbox image ships neither tool,
 # so the skills could never execute. Reviewed per the v1.6.2 disposition ledger.
@@ -89,10 +77,10 @@ fi
 # Hard footprint and exact-patch invariants for the v1.6.2 micro-fork.
 # The deletion count includes the two reviewed skill removals above.
 # ---------------------------------------------------------------------------
-MAX_FILES=16
-MAX_INSERTIONS=149
-MAX_DELETIONS=258
-EXPECTED_PATCH_OID="30b8c59dc521d1fc9fceaf0d7b972c11d03a6808"
+MAX_FILES=4
+MAX_INSERTIONS=22
+MAX_DELETIONS=201
+EXPECTED_PATCH_OID="3629e8f382fdd8eccf78553b102a25e99c73454c"
 
 # git diff --shortstat prints a single line like:
 #   " 4 files changed, 76 insertions(+), 720 deletions(-)"

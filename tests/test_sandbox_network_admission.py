@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import uuid
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,17 @@ def test_network_inspect_error_rejected(monkeypatch: pytest.MonkeyPatch) -> None
         _assert_sandbox_network_admission(_container("lyrashield-sandbox"), client)
 
 
+def test_test_socket_guard_blocks_external_access_and_allows_loopback() -> None:
+    with pytest.raises(OSError, match="test socket guard blocked"):
+        socket.getaddrinfo("example.com", 80)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        with socket.create_connection(server.getsockname(), timeout=1):
+            server.accept()[0].close()
+
+
 @pytest.mark.skipif(not _docker_available, reason="Docker daemon not available")
 def test_real_internal_network_admission_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     """E1: product admission must pass against a real Docker internal network and
@@ -153,7 +165,7 @@ def test_real_internal_network_admission_passes(monkeypatch: pytest.MonkeyPatch)
     network = client.networks.create(network_name, internal=True)
     try:
         container = client.containers.run(
-            "alpine:3.19",
+            "kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec7544537bcec1493277096",
             command="sleep 30",
             network=network_name,
             detach=True,

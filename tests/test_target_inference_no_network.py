@@ -22,6 +22,7 @@ import pytest
 import requests
 
 from lyrashield.interface import utils as interface_utils
+from lyrashield.interface.local_sources import resolve_target_type as resolve_source_type
 from lyrashield.interface.utils import infer_target_type, resolve_target_type
 
 
@@ -377,6 +378,38 @@ def test_omitted_kind_falls_back_to_offline_inference(no_network: dict[str, Mock
 
     assert kind == "repository"
     assert details == {"target_repo": "git@github.com:org/repo.git"}
+    _assert_no_http(no_network)
+
+
+def test_resolve_target_type_table_is_exported_from_local_sources(
+    tmp_path: Path, no_network: dict[str, Mock]
+) -> None:
+    assert interface_utils.resolve_target_type is resolve_source_type
+    cases = [
+        (
+            "https://github.com/acme/widgets",
+            "repository",
+            "repository",
+            {"target_repo": "https://github.com/acme/widgets"},
+        ),
+        (
+            "https://app.example.test/path",
+            "web_application",
+            "web_application",
+            {"target_url": "https://app.example.test/path"},
+        ),
+        (str(tmp_path), "local_code", "local_code", {"target_path": str(tmp_path.resolve())}),
+        ("203.0.113.11", "ip_address", "ip_address", {"target_ip": "203.0.113.11"}),
+        (
+            "git@github.com:acme/widgets.git",
+            None,
+            "repository",
+            {"target_repo": "git@github.com:acme/widgets.git"},
+        ),
+    ]
+
+    for target, explicit_kind, expected_kind, expected_details in cases:
+        assert resolve_source_type(target, explicit_kind) == (expected_kind, expected_details)
     _assert_no_http(no_network)
 
 

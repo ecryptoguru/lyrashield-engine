@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Self
 
 import pytest
 
@@ -16,6 +17,7 @@ from lyrashield.tui.doctor import (
     detect_runtime,
     format_report,
     run_doctor,
+    _probe_tcp_host,
 )
 
 
@@ -40,6 +42,43 @@ def test_detect_runtime_present(monkeypatch: pytest.MonkeyPatch) -> None:
     result = detect_runtime({"DOCKER_HOST": "unix:///var/run/docker.sock"})
     assert result.ok is True
     assert "1.2.3" in result.detail
+
+
+@pytest.mark.parametrize(
+    ("host", "expected_address"),
+    [
+        ("127.0.0.1:2375", ("127.0.0.1", 2375)),
+        ("[::1]:2375", ("::1", 2375)),
+    ],
+)
+def test_probe_tcp_host_passes_socket_address(
+    host: str,
+    expected_address: tuple[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[str, int]] = []
+
+    class Connected:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def connect(address: tuple[str, int], *, timeout: float) -> Connected:
+        seen.append(address)
+        assert timeout == 2.0
+        return Connected()
+
+    monkeypatch.setattr("lyrashield.tui.doctor.socket.create_connection", connect)
+
+    assert _probe_tcp_host(host)
+    assert seen == [expected_address]
+
+
+def test_probe_tcp_host_rejects_malformed_address() -> None:
+    assert not _probe_tcp_host("127.0.0.1:not-a-port")
+    assert not _probe_tcp_host("127.0.0.1")
 
 
 def test_check_byok_unconfigured() -> None:

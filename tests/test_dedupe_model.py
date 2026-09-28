@@ -371,12 +371,15 @@ async def test_dedupe_works_without_active_hooks() -> None:
 
 
 def test_runner_clears_active_hooks_on_every_exit_path() -> None:
-    """A stale hooks registration would let a later scan reserve against a dead budget."""
+    """The runner scopes hooks to a scan and always clears them during finalization."""
     runner = Path("lyrashield/lifecycle/runner.py").read_text(encoding="utf-8")
-    assert "set_active_hooks(hooks)" in runner
-    # The clear must live in the `finally` so it runs on success, failure, and cancel.
+    root_agent = Path("lyrashield/lifecycle/root_agent.py").read_text(encoding="utf-8")
+    finalizer = Path("lyrashield/lifecycle/finalize.py").read_text(encoding="utf-8")
+    assert "services.set_active_hooks(hooks)" in root_agent
+    assert "services.set_active_hooks(None)" in finalizer
+    # Cleanup is awaited from `finally`, so success, failure, and cancellation clear hooks.
     finally_block = runner.split("\n    finally:\n", 1)[1]
-    assert "set_active_hooks(None)" in finally_block
+    assert "cleanup_scan_resources(" in finally_block
 
 
 def test_extract_balanced_json_handles_fences_and_nesting() -> None:

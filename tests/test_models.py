@@ -34,6 +34,24 @@ def test_recommended_models_are_accepted(model_name: str) -> None:
 @pytest.mark.parametrize(
     "model_name",
     [
+        "anthropic/claude-opus-4-8",
+        "vertex_ai/gemini-3-pro-preview",
+        "deepseek/deepseek-v4-pro",
+        "qwen/qwen3-max",
+        "moonshot/kimi-k3",
+        "zai/glm-5.3",
+    ],
+)
+def test_recommendation_gate_does_not_advertise_rejected_provider_families(
+    model_name: str,
+) -> None:
+    assert not is_gpt6_supported_provider(model_name)
+    assert not is_recommended_or_frontier_model(model_name)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
         "openai/gpt-6-luna",
         "azure/eu/gpt-6-sol",
         "azure_ai/gpt-6-luna",
@@ -65,7 +83,7 @@ def test_request_timeout_extra_args_disabled(value: float | None) -> None:
 
 
 def test_recommended_models_are_matched_case_insensitively() -> None:
-    assert is_recommended_or_frontier_model("Vertex_AI/Gemini-3-Pro-Preview")
+    assert is_recommended_or_frontier_model("Azure_AI/GPT-6-Luna")
 
 
 @pytest.mark.parametrize(
@@ -237,50 +255,6 @@ def test_azure_gpt6_uses_responses_tools_when_programmatic_is_opted_in(
     )
 
     assert not uses_chat_completions_tool_schema("azure_ai/gpt-6-sol", settings)
-
-
-@pytest.mark.parametrize(
-    "model_name",
-    [
-        "gpt-6-luna",
-        "gpt-6-sol",
-        "openai/gpt-6-sol",
-        "chatgpt/gpt-6-luna",
-        "azure/gpt-6-luna",
-        "azure_ai/gpt-6-sol",
-        "litellm/openai/gpt-6-luna",
-        "bedrock_mantle/openai.gpt-6-luna",
-        "anthropic/claude-opus-5",
-        "anthropic/claude-opus-4-8",
-        "anthropic.claude-opus-4-8",
-        "anthropic/claude-opus-4-7",
-        "anthropic/claude-fable-5",
-        "anthropic/claude-sonnet-5",
-        "vertex_ai/claude-sonnet-5@default",
-        "vertex_ai/claude-sonnet-4-6@default",
-        "any-llm/anthropic/claude-sonnet-4-6",
-        "vertex_ai/gemini-3.1-pro-preview",
-        "openrouter/google/gemini-3.1-pro-preview",
-        "deepseek/deepseek-v4-pro",
-        "deepseek/deepseek-r1-0528",
-        "deepseek/deepseek-reasoner",
-        "dashscope/qwen3-max-2026-01-23",
-        "qwen3.7-max",
-        "dashscope/qwen3.8-max",
-        "moonshot/kimi-k2.6",
-        "kimi-k2.7-code",
-        "moonshot/kimi-k3",
-        "anthropic/claude-fable-5-1",
-        "vertex_ai/claude-fable-5-1@default",
-        "gemini/gemini-3.7-flash",
-        "glm-5.3",
-        "zai/glm-5.3-flash",
-        "openrouter/z-ai/glm-5.3",
-        "novita/zai-org/glm-5.2",
-    ],
-)
-def test_frontier_model_families_are_accepted(model_name: str) -> None:
-    assert is_recommended_or_frontier_model(model_name)
 
 
 @pytest.mark.parametrize(

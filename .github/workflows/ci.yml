@@ -32,6 +32,12 @@ jobs:
           uv export --frozen --all-extras --all-groups --no-emit-project --format requirements.txt -o "$RUNNER_TEMP/engine-requirements.txt"
           uv run --frozen --group audit pip-audit --require-hashes --disable-pip -r "$RUNNER_TEMP/engine-requirements.txt"
 
+      - name: Audit hash-pinned Dirsearch package
+        run: uv run --frozen --group audit pip-audit --require-hashes --disable-pip -r containers/dirsearch-requirements.txt
+
+      - name: Audit hash-pinned sandbox Python dependency lock
+        run: uv run --frozen --group audit pip-audit --require-hashes --disable-pip -r containers/python-requirements.txt
+
       - name: Prove the audit-tool lock rejects tampered artifacts
         run: |
           negative_dir="$RUNNER_TEMP/pip-audit-hash-negative"
@@ -65,26 +71,52 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Classify changed paths
+        id: changed_paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            python3 scripts/classify_engine_ci_paths.py --base "$BASE_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: steps.changed_paths.outputs.docs_only != 'true'
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        if: steps.changed_paths.outputs.docs_only != 'true'
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.changed_paths.outputs.docs_only != 'true'
         with:
           node-version: "22"
 
       - name: Provision deny-by-default sandbox network
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: |
           bash scripts/provision-sandbox-network.sh
           echo "STRIX_DOCKER_SANDBOX_NETWORK=lyrashield-sandbox" >> "$GITHUB_ENV"
 
+      - name: Test optional viewer against base install
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/engine-base-env
+          LYRASHIELD_TEST_BASE_INSTALL: "1"
+        run: >
+          uv run --frozen --no-default-groups --with pytest --with pytest-asyncio
+          pytest -q tests/test_viewer_extra.py
+
       - name: Verify source and policy gates
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: scripts/verify-controlled-derivative.sh
 
       - name: Verify owned viewer source and committed build
+        if: steps.changed_paths.outputs.docs_only != 'true'
         working-directory: lyrashield/interface/viewer/frontend
         run: |
           npm ci
@@ -98,17 +130,21 @@ jobs:
           fi
 
       - name: Verify customer branding
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: python scripts/verify-customer-branding.py
 
       - name: Verify Python packages and CLI
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: |
           uv build
           uv run lyrashield --version
 
       - name: Verify native release binary
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: bash scripts/build.sh
 
       - name: Read pinned worker-consumer revision
+        if: steps.changed_paths.outputs.docs_only != 'true'
         id: worker_pin
         run: |
           WORKER_PIN=$(tr -d '[:space:]' < .lyrashield-worker-pin)
@@ -120,6 +156,7 @@ jobs:
           echo "WORKER_PIN=$WORKER_PIN" >> "$GITHUB_OUTPUT"
 
       - name: Check out public LyraShield app contract
+        if: steps.changed_paths.outputs.docs_only != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ecryptoguru/lyrashield-ai
@@ -129,10 +166,11 @@ jobs:
           persist-credentials: false
 
       - name: Verify worker compatibility
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: scripts/verify-worker-contract.sh "$GITHUB_WORKSPACE/.ci/lyrashield-ai"
 
       - name: Upload release diagnostics
-        if: failure()
+        if: failure() && steps.changed_paths.outputs.docs_only != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: engine-ci-diagnostics-${{ github.run_id }}
@@ -149,23 +187,43 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
+      - name: Classify changed paths
+        id: changed_paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            python3 scripts/classify_engine_ci_paths.py --base "$BASE_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Docker Buildx
+        if: steps.changed_paths.outputs.docs_only != 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build sandbox image
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: |
-          docker build \
+          docker buildx build \
             -f containers/Dockerfile \
             -t lyrashield-sandbox:ci \
+            --cache-from type=gha,scope=engine-sandbox-v1 \
+            --cache-to type=gha,mode=max,scope=engine-sandbox-v1 \
+            --load \
             --progress=plain \
             .
 
       - name: Smoke sandbox image
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: bash scripts/smoke-sandbox.sh lyrashield-sandbox:ci
 
       - name: Relay grant isolation (built image)
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: |
           relay_dir=$(mktemp -d)
           trap 'rm -rf "$relay_dir"' EXIT
@@ -180,10 +238,11 @@ jobs:
             '
 
       - name: Guarded replay egress probes (built image)
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: |
           docker run --rm lyrashield-sandbox:ci /app/.venv/bin/python -c "
           import socket
-          from caido_api import _check_replay_url_host as blocked
+          from caido_api import _replay_denial as blocked
 
           for url in (
               'http://169.254.169.254/',
@@ -210,6 +269,7 @@ jobs:
           "
 
       - name: Deny-by-default network probes (built image)
+        if: steps.changed_paths.outputs.docs_only != 'true'
         run: |
           docker network create --internal ci-sandbox-internal
           trap 'docker network rm ci-sandbox-internal >/dev/null 2>&1 || true' EXIT

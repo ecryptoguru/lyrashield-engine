@@ -39,13 +39,7 @@ def test_cryptography_remains_a_base_dependency() -> None:
     assert any(req.startswith("cryptography") for req in deps)
 
 
-def test_vertex_extra_pins_google_auth() -> None:
+def test_rejected_provider_extras_are_not_distributed() -> None:
     extras = _optional_dependencies()
-    assert "vertex" in extras
-    assert any(req.startswith("google-auth") for req in extras["vertex"])
-
-
-def test_bedrock_extra_pins_boto3() -> None:
-    extras = _optional_dependencies()
-    assert "bedrock" in extras
-    assert any(req.startswith("boto3") for req in extras["bedrock"])
+    assert "vertex" not in extras
+    assert "bedrock" not in extras

@@ -221,15 +221,15 @@ def normalize_http_exchange_ids(raw: Any) -> tuple[list[str] | None, list[str]]:
             errors.append(f"http_exchange_ids[{index}] must be a numeric proxy request id")
             continue
         if request_id not in seen:
-            seen.add(request_id)
-            normalized.append(request_id)
-            if len(normalized) > MAX_HTTP_EXCHANGE_IDS:
+            if len(normalized) >= MAX_HTTP_EXCHANGE_IDS:
                 errors.append(
                     f"http_exchange_ids can contain at most "
                     f"{MAX_HTTP_EXCHANGE_IDS} distinct request ids"
                 )
                 break
-    return normalized, errors
+            seen.add(request_id)
+            normalized.append(request_id)
+    return (None, errors) if errors else (normalized, [])
 
 
 _CVSS_VECTOR_RE = re.compile(r"^CVSS:[34]\.\d/([A-Z]{1,3}:[NLHARCUPM]/*)+$")

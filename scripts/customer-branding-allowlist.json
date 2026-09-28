@@ -5,7 +5,8 @@
     "prompt": "Only the system prompt first line may change; remaining two upstream references are byte-preserved.",
     "internalIdentifiers": "Inherited internal identifiers: strix.* imports, Strix* class names, .strix paths, STRIX_* env vars, strix-agent package, strix/skills substrate references. Byte-preserved for upstream compatibility.",
     "attributionHeaders": "Line-1 controlled-derivative attribution headers (Apache-2.0 NOTICE obligations).",
-    "internalMechanicsDocs": "Comments/docstrings/docs describing internal upstream mechanics (fork boundary, telemetry stack, sandbox internals) \u2014 never customer-facing branding."
+    "internalMechanicsDocs": "Comments/docstrings/docs describing internal upstream mechanics (fork boundary, telemetry stack, sandbox internals) \u2014 never customer-facing branding.",
+    "approvedSplits": "Exact inherited compatibility identifiers and derivative notices retained in the approved DG-14/DG-15 extraction modules; entries remain file-and-line exact."
   },
   "source_lines": {
     "lyrashield/lifecycle/agents.py": [
@@ -45,7 +46,9 @@
       "        root_agent = build_strix_agent(",
       "            fallback_agent = build_strix_agent(",
       "    from strix.tools.coverage.tools import hydrate_coverage_from_disk",
-      "    from strix.tools.threat_model.tools import hydrate_threat_models_from_disk"
+      "    from strix.tools.threat_model.tools import hydrate_threat_models_from_disk",
+      "                build_strix_agent=build_strix_agent,",
+      "                model_provider_factory=lambda provider_settings: StrixProvider("
     ],
     "lyrashield/lifecycle/sessions.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
@@ -134,7 +137,8 @@
       "    If ``STRIX_IMAGE_DIGEST`` is set, the pulled image's ``RepoDigests`` must",
       "    expected_digest = os.environ.get(\"STRIX_IMAGE_DIGEST\", \"\").strip()",
       "    stays confined to ``STRIX_LLM`` \u2014 delegate and dedupe models must use a",
-      "                f\"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or \""
+      "                f\"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or \"",
+      "from strix.core.paths import run_dir_for"
     ],
     "lyrashield/interface/tui/renderers/__init__.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
@@ -332,7 +336,8 @@
       "                tool_version=_strix_version(),",
       "    from strix.report.coverage import read_agent_graph",
       "    from strix.tools.coverage.tools import get_coverage_entries",
-      "from strix.core.paths import run_dir_for"
+      "from strix.core.paths import run_dir_for",
+      "            tool_version=_strix_version(),"
     ],
     "lyrashield/artifacts/usage.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
@@ -631,8 +636,8 @@
     ],
     "docs/contributing.mdx": [
       "2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.",
-      "4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The hard allowlist contains the two product seams plus the twelve typing/import-cycle compatibility fixes recorded in `UPGRADES.md`, and the gate pins the complete Strix patch digest.",
-      "6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate checks the pinned Strix v1.6.2 base, reviewed `strix/**` path allowlist and patch digest, and the current footprint bounds (+149/-258 lines). It runs frozen dependency sync, Ruff lint/format, the full pytest suite, mypy and Bandit. Package, native binary, Docker, worker-contract and deployment checks are separate gates described in the root contributor guide. Build the owned viewer with `make viewer`, then check its committed static assets for drift."
+      "4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The hard allowlist contains the product settings seam and one reviewed skill override, plus two reviewed skill deletions; the gate pins the complete Strix patch digest.",
+      "6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate checks the pinned Strix v1.6.2 base, reviewed `strix/**` path allowlist and patch digest, and the current footprint bounds (two modified paths plus two reviewed deletions; +22/-201 lines). It runs frozen dependency sync, Ruff lint/format, the full pytest suite, strict mypy and Bandit. Package, native binary, Docker, worker-contract and deployment checks are separate gates described in the root contributor guide. Build the owned viewer with `make viewer`, then check its committed static assets for drift."
     ],
     "docs/index.mdx": [
       "4. The engine writes `run.json` and `vulnerabilities.json` under `strix_runs/<run-name>/`."
@@ -746,6 +751,79 @@
       "- [ ] Test Azure selection with inherited `STRIX_LLM`, `LLM_API_KEY`, `LLM_API_BASE`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and delegate/dedupe vars. After adapter preparation, `LlmSettings` must resolve the selected model, endpoint and key. Test ChatGPT selection with inherited metered Azure variables; no unrelated runtime variable should be removed.",
       "- [ ] Define one canonical connection-variable set in `build_env()`. Remove conflicting inherited routing/connection aliases, then set provider-selected `STRIX_LLM` or `LYRASHIELD_LLM`, `LLM_API_KEY`, `LLM_API_BASE`, and version as one unit. Handle delegate/dedupe routes explicitly rather than preserving stale alternate-provider credentials.",
       "- [ ] Change `make viewer` to the owned frontend path. Add `typecheck: tsc --noEmit` to package scripts. CI must run `npm ci`, `npm run typecheck`, `npm run build`, then `git diff --exit-code -- lyrashield/interface/viewer/static` and reject untracked generated files. Keep `strix/**` untouched."
+    ],
+    "lyrashield/artifacts/state_projection.py": [
+      "    from strix.report.coverage import read_agent_graph",
+      "    from strix.tools.coverage.tools import get_coverage_entries"
+    ],
+    "lyrashield/interface/arg_parser.py": [
+      "from strix.core.paths import run_dir_for, runtime_state_dir",
+      "        help=\"Path to a custom config file (JSON) to use instead of ~/.strix/cli-config.json\",",
+      "            \"Resume a prior scan by its run name (the dir under ./strix_runs/). \"",
+      "        # Upstream self-update fetches usestrix/strix release artifacts (or the",
+      "        # strix-agent package), which would replace this controlled derivative",
+      "                \"(set STRIX_MAX_LOCAL_COPY_MB to change it). Re-run with \""
+    ],
+    "lyrashield/interface/environment_gate.py": [
+      "    stays confined to ``STRIX_LLM`` \u2014 delegate and dedupe models must use a",
+      "        \"STRIX_LLM\": settings.llm.model,",
+      "        \"STRIX_DELEGATE_LLM\": getattr(settings.llm, \"delegate_model\", None),",
+      "        \"STRIX_DEDUPE_MODEL\": getattr(settings, \"dedupe\", None) and settings.dedupe.model,",
+      "        if name == \"STRIX_LLM\" and settings.product.allow_chatgpt_subscription:",
+      "    # merged. Enforced for every entry point so `strix.interface.main.main()`",
+      "        missing_required_vars.append(\"STRIX_LLM or LYRASHIELD_LLM\")",
+      "                f\"[bold red]STRIX_LLM={settings.llm.model} routes through a ChatGPT \"",
+      "                f\"[bold red]STRIX_LLM={settings.llm.model} is not a GPT-6 Sol or \"",
+      "                f\"[red]STRIX_LLM={settings.llm.model} uses your ChatGPT subscription, \"",
+      "            if var in {\"STRIX_LLM or LYRASHIELD_LLM\", \"STRIX_LLM\"}:",
+      "                error_text.append(\"STRIX_LLM / LYRASHIELD_LLM\", style=\"bold cyan\")",
+      "                elif var in {\"STRIX_REASONING_EFFORT\", \"LYRASHIELD_REASONING_EFFORT\"}:",
+      "                        \"STRIX_REASONING_EFFORT / LYRASHIELD_REASONING_EFFORT\",",
+      "                        \"export STRIX_REASONING_EFFORT='high'  # or LYRASHIELD_REASONING_EFFORT\\n\","
+    ],
+    "lyrashield/interface/image_pull.py": [
+      "    \"\"\"Pull the configured sandbox image, optionally verifying ``STRIX_IMAGE_DIGEST``.",
+      "    If ``STRIX_IMAGE_DIGEST`` is set, the pulled image's ``RepoDigests`` must",
+      "    expected_digest = os.environ.get(\"STRIX_IMAGE_DIGEST\", \"\").strip()"
+    ],
+    "lyrashield/interface/resume_state.py": [
+      "from strix.core.paths import run_dir_for, runs_base_dir",
+      "        repo_base = (Path(tempfile.gettempdir()) / \"strix_repos\").resolve()"
+    ],
+    "lyrashield/interface/source_acquisition.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "    base = Path(tempfile.gettempdir()) / \"strix_repos\""
+    ],
+    "lyrashield/interface/warmup.py": [
+      "    StrixProvider,",
+      "            \"Set STRIX_LLM to a model your plan includes (e.g. chatgpt/gpt-6-luna).\"",
+      "        model = StrixProvider(settings=settings).get_model(raw_model)"
+    ],
+    "lyrashield/lifecycle/fallback.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "    build_strix_agent: Callable[..., Any]",
+      "        fallback_agent = services.build_strix_agent("
+    ],
+    "lyrashield/lifecycle/finalize.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/lifecycle/restore.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.tools.coverage.tools import hydrate_coverage_from_disk",
+      "from strix.tools.notes.tools import hydrate_notes_from_disk",
+      "from strix.tools.threat_model.tools import hydrate_threat_models_from_disk"
+    ],
+    "lyrashield/lifecycle/root_agent.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "    build_strix_agent: Callable[..., Any]",
+      "    root_agent = services.build_strix_agent("
+    ],
+    "lyrashield/lifecycle/sandbox_bringup.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/lifecycle/scan_context.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "            \"No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().\","
     ]
   }
 }

@@ -37,9 +37,6 @@ hiddenimports = [
     'litellm',
     'litellm.llms',
     'litellm.llms.openai',
-    'litellm.llms.anthropic',
-    'litellm.llms.vertex_ai',
-    'litellm.llms.bedrock',
     'litellm.utils',
     'litellm.caching',
 
@@ -238,7 +235,6 @@ excludes = [
     'black',
     'isort',
     'pylint',
-    'pyright',
     'bandit',
     'pre_commit',
 

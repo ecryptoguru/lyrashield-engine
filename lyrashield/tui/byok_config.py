@@ -19,17 +19,18 @@ applied when the TUI shells into the engine CLI.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import TYPE_CHECKING, Any
+from enum import StrEnum
+from typing import Any
+
+import requests
 
 from lyrashield.tui.results_store import keyring_get, keyring_set
-
-
-if TYPE_CHECKING:
-    pass
 
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Keychain service names. Never write secrets to plaintext files.
 KEYCHAIN_SERVICE = "LyraShield-Local"
-KEYCHAIN_CHATGPT_TOKEN = "chatgpt-oauth-token"
+KEYCHAIN_CHATGPT_TOKEN = "chatgpt-oauth-token"  # noqa: S105 - keychain item name, not a credential
 KEYCHAIN_AZURE_KEY = "azure-openai-api-key"
 
 # Model profile names mirror the engine's LUNA/SOL deployment naming.
@@ -46,7 +47,7 @@ PROFILE_SOL = "sol"
 PROFILE_FALLBACK = "fallback"
 
 
-class Provider(str, Enum):
+class Provider(StrEnum):
     """Launch BYOK providers.
 
     ``LOCAL_SELF_HOSTED`` is kept for forward-compat but is never offered as a
@@ -209,7 +210,7 @@ def load_config() -> ByokConfig:
         return ByokConfig()
     try:
         blob = _json_loads(raw)
-    except Exception:
+    except (TypeError, ValueError):
         logger.warning("BYOK config blob unreadable; returning defaults")
         return ByokConfig()
 
@@ -251,17 +252,19 @@ def load_config() -> ByokConfig:
 
 def validate_chatgpt_credential() -> bool:
     """Validate the ChatGPT OAuth token by shelling into ``auth status``."""
-    import subprocess
+    executable = shutil.which("lyrashield")
+    if executable is None:
+        return False
 
     try:
-        result = subprocess.run(
-            ["lyrashield", "auth", "status"],
+        result = subprocess.run(  # noqa: S603 - resolved fixed CLI with constant arguments
+            [executable, "auth", "status"],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
 
@@ -271,15 +274,13 @@ def validate_azure_credential(azure: AzureConfig) -> bool:
     if not azure.is_complete():
         return False
     try:
-        import requests
-
         url = f"{azure.endpoint.rstrip('/')}/openai/models?api-version={azure.api_version}"
         resp = requests.get(
             url,
             headers={"api-key": azure.api_key},
             timeout=15,
         )
-    except Exception:
+    except requests.RequestException:
         return False
     return resp.status_code == 200
 
@@ -306,14 +307,10 @@ def apply_env(config: ByokConfig, env: dict[str, str] | None = None) -> dict[str
 
 
 def _json_dumps(obj: Any) -> str:
-    import json
-
     return json.dumps(obj, separators=(",", ":"))
 
 
 def _json_loads(raw: str) -> dict[str, Any]:
-    import json
-
     loaded = json.loads(raw)
     if not isinstance(loaded, dict):
         msg = "BYOK config blob is not an object"

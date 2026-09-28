@@ -1,4 +1,90 @@
+import errno
+import ipaddress
+import os
+import socket
+
 import pytest
+
+
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+
+def _is_loopback_host(host: object) -> bool:
+    if isinstance(host, str) and host.rstrip(".").lower() == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except (TypeError, ValueError):
+        return False
+    return address.is_loopback or (
+        isinstance(address, ipaddress.IPv6Address)
+        and address.ipv4_mapped is not None
+        and address.ipv4_mapped.is_loopback
+    )
+
+
+def _is_ip_literal(host: object) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _assert_allowed_socket_destination(family: int, address: object) -> None:
+    if family == socket.AF_UNIX:
+        docker_host = os.environ.get("DOCKER_HOST")
+        if not docker_host:
+            docker_socket = "/var/run/docker.sock"
+        elif docker_host.startswith("unix://"):
+            docker_socket = docker_host.removeprefix("unix://")
+        else:
+            docker_socket = None
+        if (
+            docker_socket is not None
+            and isinstance(address, (str, bytes))
+            and os.path.realpath(os.fsdecode(address)) == os.path.realpath(docker_socket)
+        ):
+            return
+    elif family in (socket.AF_INET, socket.AF_INET6) and isinstance(address, tuple):
+        if address and _is_loopback_host(address[0]):
+            return
+    raise OSError(errno.EPERM, "test socket guard blocked non-loopback network access")
+
+
+@pytest.fixture(autouse=True)
+def _guard_test_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Allow local test servers and the configured Docker Unix socket only."""
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+    original_sendto = socket.socket.sendto
+    original_getaddrinfo = socket.getaddrinfo
+
+    def guarded_connect(sock: socket.socket, address: object) -> None:
+        _assert_allowed_socket_destination(sock.family, address)
+        original_connect(sock, address)
+
+    def guarded_connect_ex(sock: socket.socket, address: object) -> int:
+        try:
+            _assert_allowed_socket_destination(sock.family, address)
+        except OSError as exc:
+            return exc.errno or errno.EPERM
+        return original_connect_ex(sock, address)
+
+    def guarded_sendto(sock: socket.socket, data: bytes, *args: object) -> int:
+        if args:
+            _assert_allowed_socket_destination(sock.family, args[-1])
+        return original_sendto(sock, data, *args)
+
+    def guarded_getaddrinfo(host: object, *args: object, **kwargs: object) -> list[tuple]:
+        if host not in (None, "") and not _is_loopback_host(host) and not _is_ip_literal(host):
+            raise OSError(errno.EPERM, "test socket guard blocked external DNS lookup")
+        return original_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+    monkeypatch.setattr(socket.socket, "sendto", guarded_sendto)
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
 
 
 _LLM_ENV_KEYS = [

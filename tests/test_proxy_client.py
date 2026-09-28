@@ -160,7 +160,7 @@ def test_build_raw_request_recomputes_content_length_for_modified_body() -> None
     body = '{"user":"a\' OR 1=1 -- injected long payload"}'
     _conn, raw = caido_api.build_raw_request(
         method="POST",
-        url="https://example.com/login",
+        url="https://203.0.113.10/login",
         headers={"content-length": "12", "Content-Type": "application/json"},
         body=body,
     )
@@ -173,7 +173,7 @@ def test_build_raw_request_drops_transfer_encoding_for_modified_body() -> None:
     body = '{"user":"updated"}'
     _conn, raw = caido_api.build_raw_request(
         method="POST",
-        url="https://example.com/login",
+        url="https://203.0.113.10/login",
         headers={
             "tRaNsFeR-EnCoDiNg": "chunked",
             "Content-Length": "7",
@@ -189,7 +189,7 @@ def test_build_raw_request_drops_stale_content_length_for_empty_body() -> None:
     # A body cleared to empty must not keep the inherited (non-zero) length.
     _conn, raw = caido_api.build_raw_request(
         method="POST",
-        url="https://example.com/x",
+        url="https://203.0.113.10/x",
         headers={"Content-Length": "12"},
         body="",
     )
@@ -217,7 +217,7 @@ def test_build_raw_request_rejects_crlf_in_header_value() -> None:
     with pytest.raises(ValueError, match="forbidden characters"):
         caido_api.build_raw_request(
             method="GET",
-            url="https://example.com/",
+            url="https://203.0.113.10/",
             headers={"X-Evil": "value\r\nX-Injected: yes"},
             body="",
         )
@@ -228,7 +228,7 @@ def test_build_raw_request_rejects_nul_in_header_name() -> None:
     with pytest.raises(ValueError, match="forbidden characters"):
         caido_api.build_raw_request(
             method="GET",
-            url="https://example.com/",
+            url="https://203.0.113.10/",
             headers={"X-Evil\x00": "value"},
             body="",
         )
@@ -238,57 +238,62 @@ def test_build_raw_request_accepts_clean_headers() -> None:
     """Clean headers must still be accepted and produce a valid raw request."""
     _conn, raw = caido_api.build_raw_request(
         method="GET",
-        url="https://example.com/",
+        url="https://203.0.113.10/",
         headers={"X-Clean": "value"},
         body="",
     )
     assert b"X-Clean: value" in raw
 
 
-def test_check_replay_url_host_blocks_non_http_scheme() -> None:
+def test_replay_denial_blocks_non_http_scheme() -> None:
     """Non-HTTP schemes (file://, gopher://) must be blocked."""
-    assert caido_api._check_replay_url_host("file:///etc/passwd") is not None
-    assert caido_api._check_replay_url_host("gopher://example.com/") is not None
+    assert caido_api._replay_denial("file:///etc/passwd")[1] == "non_http_scheme"
+    assert caido_api._replay_denial("gopher://example.com/")[1] == "non_http_scheme"
 
 
-def test_check_replay_url_host_blocks_google_metadata() -> None:
+def test_replay_denial_blocks_google_metadata() -> None:
     """Google cloud metadata hostname must be blocked."""
-    reason = caido_api._check_replay_url_host("http://metadata.google.internal/")
+    reason = caido_api._replay_denial("http://metadata.google.internal/")
     assert reason is not None
-    assert "metadata" in reason
+    assert reason[1] == "cloud_metadata"
+    assert "metadata" in reason[0]
 
 
-def test_check_replay_url_host_blocks_link_local_ipv4() -> None:
+def test_replay_denial_blocks_link_local_ipv4() -> None:
     """Link-local IPv4 (AWS/Azure IMDS at 169.254.169.254) must be blocked."""
-    reason = caido_api._check_replay_url_host("http://169.254.169.254/")
+    reason = caido_api._replay_denial("http://169.254.169.254/")
     assert reason is not None
-    assert "link-local" in reason
+    assert reason[1] == "link_local"
+    assert "169.254.169.254" in reason[0]
 
 
-def test_check_replay_url_host_blocks_link_local_ipv6() -> None:
+def test_replay_denial_blocks_link_local_ipv6() -> None:
     """Link-local IPv6 must be blocked."""
-    reason = caido_api._check_replay_url_host("http://[fe80::1]/")
+    reason = caido_api._replay_denial("http://[fe80::1]/")
     assert reason is not None
-    assert "link-local" in reason
+    assert reason[1] == "link_local"
+    assert "link-local" in reason[0]
 
 
-def test_check_replay_url_host_blocks_alibaba_metadata() -> None:
+def test_replay_denial_blocks_alibaba_metadata() -> None:
     """Alibaba Cloud metadata IP (100.100.100.200) must be blocked."""
-    reason = caido_api._check_replay_url_host("http://100.100.100.200/")
+    reason = caido_api._replay_denial("http://100.100.100.200/")
     assert reason is not None
-    assert "metadata" in reason
+    assert reason[1] == "cloud_metadata"
+    assert "metadata" in reason[0]
 
 
-def test_check_replay_url_host_blocks_host_gateway_by_default() -> None:
+def test_replay_denial_blocks_host_gateway_by_default() -> None:
     """host.docker.internal must be blocked unless explicitly opted in."""
-    reason = caido_api._check_replay_url_host("http://host.docker.internal/")
+    reason = caido_api._replay_denial("http://host.docker.internal/")
     assert reason is not None
-    assert "host.docker.internal" in reason
+    assert reason[1] == "host_gateway"
+    assert "host.docker.internal" in reason[0]
 
 
-def test_check_replay_url_host_allows_normal_host() -> None:
+def test_replay_denial_allows_normal_host() -> None:
     """Normal external hosts must not be blocked."""
-    assert caido_api._check_replay_url_host("https://example.com/") is None
+    assert caido_api._replay_denial("https://203.0.113.10/") is None
 
 
 def test_build_raw_request_rejects_non_http_scheme() -> None:

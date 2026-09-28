@@ -1,23 +1,137 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
 # Controlled subprocess boundary: provenance lookup resolves Git and uses shell=False.
-import json
+# Same-name aliases below are explicit re-exports for strict mypy compatibility.
+# ruff: noqa: PLC0414
 import logging
-import re
-import shutil
-import subprocess
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Optional, cast
-from uuid import uuid4
 
 from agents.usage import Usage
 
 from lyrashield.artifacts import evidence as _evidence
 from lyrashield.artifacts import quality as _quality
+from lyrashield.artifacts.repo_context import (
+    _derive_repository_context as _derive_repository_context,
+)
+from lyrashield.artifacts.repo_context import (
+    _git_head as _git_head,
+)
+from lyrashield.artifacts.repo_context import (
+    _parse_repo_full_name as _parse_repo_full_name,
+)
+from lyrashield.artifacts.repo_context import (
+    _sarif_repository_context as _sarif_repository_context,
+)
 from lyrashield.artifacts.sarif import write_sarif
+from lyrashield.artifacts.state_findings import (
+    _CONTROL_CHARS as _CONTROL_CHARS,
+)
+from lyrashield.artifacts.state_findings import (
+    _FINDING_TEXT_FIELDS as _FINDING_TEXT_FIELDS,
+)
+from lyrashield.artifacts.state_findings import (
+    _FINDING_URL_FIELDS as _FINDING_URL_FIELDS,
+)
+from lyrashield.artifacts.state_findings import (
+    _MAX_COLLECTION_SIZE as _MAX_COLLECTION_SIZE,
+)
+from lyrashield.artifacts.state_findings import (
+    _MAX_FINDING_SERIALIZED_SIZE as _MAX_FINDING_SERIALIZED_SIZE,
+)
+from lyrashield.artifacts.state_findings import (
+    _MAX_METADATA_DEPTH as _MAX_METADATA_DEPTH,
+)
+from lyrashield.artifacts.state_findings import (
+    _MAX_TEXT_LENGTH as _MAX_TEXT_LENGTH,
+)
+from lyrashield.artifacts.state_findings import (
+    _V1_1_FINDING_FIELDS as _V1_1_FINDING_FIELDS,
+)
+from lyrashield.artifacts.state_findings import (
+    _V1_1_FINDING_STRUCT_FIELDS as _V1_1_FINDING_STRUCT_FIELDS,
+)
+from lyrashield.artifacts.state_findings import (
+    _V1_1_FINDING_TEXT_FIELDS as _V1_1_FINDING_TEXT_FIELDS,
+)
+from lyrashield.artifacts.state_findings import (
+    _bound_collection as _bound_collection,
+)
+from lyrashield.artifacts.state_findings import (
+    _clean_title as _clean_title,
+)
+from lyrashield.artifacts.state_findings import (
+    _recursive_sanitize_unknown as _recursive_sanitize_unknown,
+)
+from lyrashield.artifacts.state_findings import (
+    _sanitize_code_locations as _sanitize_code_locations,
+)
+from lyrashield.artifacts.state_findings import (
+    _truncate_text as _truncate_text,
+)
+from lyrashield.artifacts.state_findings import (
+    add_vulnerability_report as _add_vulnerability_report,
+)
+from lyrashield.artifacts.state_findings import (
+    sanitize_finding as sanitize_finding,
+)
+from lyrashield.artifacts.state_findings import (
+    update_vulnerability_report as _update_vulnerability_report,
+)
+from lyrashield.artifacts.state_persistence import (
+    REQUIRED_RUN_RECORD_FIELDS as REQUIRED_RUN_RECORD_FIELDS,
+)
+from lyrashield.artifacts.state_persistence import (
+    RUN_RECORD_SCHEMA_VERSION as RUN_RECORD_SCHEMA_VERSION,
+)
+from lyrashield.artifacts.state_persistence import (
+    get_run_dir as _get_run_dir,
+)
+from lyrashield.artifacts.state_persistence import (
+    hydrate_from_run_dir as _hydrate_from_run_dir,
+)
+from lyrashield.artifacts.state_persistence import (
+    initial_run_record as initial_run_record,
+)
+from lyrashield.artifacts.state_persistence import (
+    save_artifacts as _persist_artifacts,
+)
+from lyrashield.artifacts.state_persistence import (
+    save_run_data as _save_run_data,
+)
+from lyrashield.artifacts.state_persistence import (
+    save_run_data_locked as _persist_run_data_locked,
+)
+from lyrashield.artifacts.state_persistence import (
+    validate_run_record as validate_run_record,
+)
+from lyrashield.artifacts.state_projection import (
+    _coverage_ledger_entries as _coverage_ledger_entries,
+)
+from lyrashield.artifacts.state_projection import (
+    _read_agent_graph as _read_agent_graph,
+)
+from lyrashield.artifacts.state_projection import (
+    format_final_scan_result as _format_scan_result,
+)
+from lyrashield.artifacts.state_projection import (
+    sanitize_attachments as sanitize_attachments,
+)
+from lyrashield.artifacts.state_projection import (
+    sanitize_local_sources as sanitize_local_sources,
+)
+from lyrashield.artifacts.state_projection import (
+    sanitize_targets_info as sanitize_targets_info,
+)
+from lyrashield.artifacts.state_projection import (
+    write_evidence_artifacts as _project_evidence_artifacts,
+)
+from lyrashield.artifacts.state_projection import (
+    write_report_projections as _project_report_projections,
+)
 from lyrashield.artifacts.usage import (
     _METERED_USD_PER_MILLION,
     LLMUsageLedger,
@@ -32,29 +146,15 @@ from lyrashield.artifacts.writer import (
     write_run_record,
     write_vulnerabilities,
 )
-from lyrashield.runtime.attachments import public_manifest
 from lyrashield.runtime.session_manager import CLEANUP_FAILED, CLEANUP_REMOVED
 from lyrashield.telemetry import posthog, scarf
-from lyrashield.utils.redaction import is_sensitive_key, redact_text, redact_url
+from lyrashield.utils.redaction import redact_text
 from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for, runtime_state_dir
 
 
 logger = logging.getLogger(__name__)
-
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
-
-
-def _clean_title(title: str) -> str:
-    """Return a single-line finding title.
-
-    A title quotes text from the scanned target, so it can carry newlines, tabs or
-    other control characters. Those break every artifact that renders the title on
-    one line, such as the markdown heading, the CSV cell and the TUI list. Control
-    characters become spaces and runs of whitespace collapse to one space.
-    """
-    return " ".join(_CONTROL_CHARS.sub(" ", title).split())
 
 
 _global_report_state: Optional["ReportState"] = None
@@ -73,7 +173,6 @@ _ALLOWED_PHASES = frozenset({"setup", "running", "finalizing", "completed", "sto
 # fields. The worker's zod schema uses `.strip()`, so unknown keys are ignored —
 # additive changes are safe to ship ahead of a worker update.
 
-RUN_RECORD_SCHEMA_VERSION = _evidence.RUN_RECORD_SCHEMA_VERSION_1_0
 
 # Schema 1.1 adds per-finding evidence (counterevidence, confidence rationale,
 # structured advisory_cvss, severity_change_conditions, engine-attested
@@ -89,74 +188,6 @@ RUN_RECORD_SCHEMA_VERSION = _evidence.RUN_RECORD_SCHEMA_VERSION_1_0
 # Fields every run.json write must carry from its first observable appearance
 # (the worker parses this contract at any point in the run, not just at the
 # end). Writers validate against this list before persisting.
-REQUIRED_RUN_RECORD_FIELDS: tuple[str, ...] = (
-    "schema_version",
-    "run_id",
-    "run_name",
-    "start_time",
-    "end_time",
-    "status",
-    "phase",
-    "auth_mode",
-    "targets_info",
-    "llm_usage",
-    "seq",
-    "turn_count",
-)
-
-
-def validate_run_record(record: dict[str, Any]) -> None:
-    """Raise when ``record`` is not a complete versioned worker contract."""
-    missing = [field for field in REQUIRED_RUN_RECORD_FIELDS if field not in record]
-    if missing:
-        raise RuntimeError(f"run.json contract incomplete, missing fields: {missing}")
-    if record.get("schema_version") not in _evidence.SUPPORTED_RUN_RECORD_SCHEMA_VERSIONS:
-        raise RuntimeError(
-            f"run.json contract carries unsupported schema_version: "
-            f"{record.get('schema_version')!r} (expected one of "
-            f"{sorted(_evidence.SUPPORTED_RUN_RECORD_SCHEMA_VERSIONS)!r})"
-        )
-
-
-def initial_run_record(
-    run_name: str | None,
-    *,
-    auth_mode: str,
-    targets_info: list[dict[str, Any]] | None = None,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Build the canonical first run record (the only constructor of it).
-
-    Both the CLI's pre-scan persistence and :class:`ReportState` build the
-    record here, so the first observable run.json is already a complete
-    versioned worker contract — never a partial hand-rolled dict.
-
-    ``targets_info`` is a required contract field and is accepted as an
-    explicit parameter so it is never dropped by the ``extra`` filter that
-    protects required fields from caller override (comment #6).
-    """
-    record: dict[str, Any] = {
-        "schema_version": _evidence.run_record_schema_version(),
-        "run_id": run_name or f"run-{uuid4().hex[:8]}",
-        "run_name": run_name,
-        "start_time": datetime.now(UTC).isoformat(),
-        "end_time": None,
-        "status": "running",
-        "phase": "setup",
-        "auth_mode": auth_mode,
-        "targets_info": targets_info if isinstance(targets_info, list) else [],
-        "llm_usage": LLMUsageLedger().to_record(),
-        "seq": 0,
-        "turn_count": 0,
-    }
-    if record["schema_version"] == _evidence.RUN_RECORD_SCHEMA_VERSION_1_1:
-        record["evidence_format"] = _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
-    if extra:
-        # Required contract fields are immutable here: extra must not
-        # overwrite them. A caller cannot forge status, schema_version,
-        # run_id, or any other field the worker contract depends on.
-        record.update({k: v for k, v in extra.items() if k not in REQUIRED_RUN_RECORD_FIELDS})
-    return record
 
 
 def _strix_version() -> str | None:
@@ -167,62 +198,6 @@ def _strix_version() -> str | None:
         return None
 
 
-def _parse_repo_full_name(uri: str) -> str | None:
-    """Extract ``owner/repo`` from a git URL or slug, else None."""
-    text = uri.strip().removesuffix(".git")
-    if not text:
-        return None
-    if "@" in text and ":" in text.split("@", 1)[1]:
-        # scp-style: git@host:owner/repo
-        text = text.split("@", 1)[1].split(":", 1)[1]
-    elif "://" in text:
-        # https://host/owner/repo
-        host_and_path = text.split("://", 1)[1]
-        text = host_and_path.split("/", 1)[1] if "/" in host_and_path else host_and_path
-    parts = [p for p in text.split("/") if p]
-    if len(parts) >= 2:
-        return "/".join(parts[-2:])
-    return None
-
-
-def _git_head(repo_path: str) -> tuple[str | None, str | None]:
-    """Best-effort ``(commit_sha, branch)`` for a cloned repo, or ``(None, None)``.
-
-    Used to populate SARIF versionControlProvenance. Failures (missing git,
-    non-repo path, detached HEAD, timeout) degrade to None so the SARIF
-    emit is never blocked by a provenance lookup.
-    """
-    path = Path(repo_path)
-    if not path.is_dir():
-        return None, None
-
-    git_executable = shutil.which("git")
-    if git_executable is None:
-        return None, None
-
-    def _run(args: list[str]) -> str | None:
-        try:
-            # Controlled subprocess boundary: Git path is resolved and shell is disabled.
-            result = subprocess.run(  # noqa: S603
-                [git_executable, "-C", str(path), *args],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        return result.stdout.strip() or None
-
-    commit = _run(["rev-parse", "HEAD"])
-    branch = _run(["rev-parse", "--abbrev-ref", "HEAD"])
-    if branch == "HEAD":  # detached HEAD carries no branch name
-        branch = None
-    return commit, branch
-
-
 def get_global_report_state() -> Optional["ReportState"]:
     return _global_report_state
 
@@ -231,299 +206,17 @@ def get_global_report_state() -> Optional["ReportState"]:
 # not listed here (id, severity, timestamp, cvss, cve, cwe, method,
 # finding_class, control_ids, agent_id) are structural identifiers copied
 # verbatim — they carry no operator or target-derived secrets.
-_FINDING_TEXT_FIELDS = (
-    "title",
-    "description",
-    "impact",
-    "technical_analysis",
-    "poc_description",
-    "remediation_steps",
-    "evidence",
-    "assumptions",
-    "fix_pr_body",
-    "agent_name",
-)
-_FINDING_URL_FIELDS = ("target", "endpoint")
 
 # Schema-1.1 finding fields sanitized as free text when the record carries
 # them. A 1.0 record must not emit them at all (readers deploy first).
-_V1_1_FINDING_TEXT_FIELDS = frozenset(
-    {
-        "counterevidence",
-        "confidence_rationale",
-        "severity_change_conditions",
-        "contextual_cvss_reasoning",
-        "updated_at",
-    }
-)
 # Schema-1.1 structured fields: validated at intake, recursively sanitized
 # here so nested model-controlled strings still pass through redaction.
-_V1_1_FINDING_STRUCT_FIELDS = frozenset({"advisory_cvss", "fix_verification", "update_history"})
-_V1_1_FINDING_FIELDS = (
-    _V1_1_FINDING_TEXT_FIELDS
-    | _V1_1_FINDING_STRUCT_FIELDS
-    | frozenset(
-        {
-            "confidence",
-            "http_exchange_ids",
-            "evidence_warnings",
-            "evidence_contract_version",
-            "verification_state",
-        }
-    )
-)
 
 # Deterministic bounds for artifact fields (E4): unbounded model-controlled
 # text could exhaust disk/memory or smuggle payloads through projections.
-_MAX_TEXT_LENGTH = 10_000
-_MAX_COLLECTION_SIZE = 1_000
-_MAX_METADATA_DEPTH = 10
-_MAX_FINDING_SERIALIZED_SIZE = 1_000_000
 # Persisted scope-violation entries bound (ledger bound is lower; this caps
 # the durable list merged across saves).
 _MAX_SCOPE_VIOLATION_ENTRIES = 500
-
-
-def _truncate_text(value: str, max_length: int = _MAX_TEXT_LENGTH) -> str:
-    """Deterministically truncate a string to ``max_length`` chars."""
-    if len(value) <= max_length:
-        return value
-    return value[: max_length - 3] + "..."
-
-
-def _bound_collection(items: list[Any], max_size: int = _MAX_COLLECTION_SIZE) -> list[Any]:
-    """Deterministically bound a collection to ``max_size`` items."""
-    if len(items) <= max_size:
-        return items
-    return items[:max_size]
-
-
-def _recursive_sanitize_unknown(value: Any, *, include_internal_paths: bool, depth: int = 0) -> Any:
-    """Recursively sanitize unknown dict/list/string values from model-controlled fields.
-
-    Every string leaf is redacted; nested dicts/lists are descended up to
-    ``_MAX_METADATA_DEPTH``; collections are bounded to ``_MAX_COLLECTION_SIZE``.
-    """
-    if depth > _MAX_METADATA_DEPTH:
-        return "[truncated:depth]"
-    if isinstance(value, str):
-        return _truncate_text(redact_text(value, include_internal_paths=include_internal_paths))
-    if isinstance(value, dict):
-        bounded = list(value.items())[:_MAX_COLLECTION_SIZE]
-        return {
-            str(k): (
-                "[SECRET]"
-                if is_sensitive_key(k)
-                else _recursive_sanitize_unknown(
-                    v, include_internal_paths=include_internal_paths, depth=depth + 1
-                )
-            )
-            for k, v in bounded
-        }
-    if isinstance(value, list):
-        bounded = value[:_MAX_COLLECTION_SIZE]
-        return [
-            _recursive_sanitize_unknown(
-                item, include_internal_paths=include_internal_paths, depth=depth + 1
-            )
-            for item in bounded
-        ]
-    return value
-
-
-def sanitize_finding(
-    report: dict[str, Any],
-    *,
-    include_internal_paths: bool,
-    schema_version: str = "1.0",
-) -> dict[str, Any]:
-    """Return the immutable sanitized snapshot of one finding.
-
-    Built once at the artifact persistence boundary; every durable/public
-    projection (vulnerabilities JSON/MD/CSV, SARIF, viewer, sync) consumes
-    only this snapshot, never the raw in-memory report. Schema-1.1 evidence
-    fields are emitted only for a 1.1 record — a 1.0 run keeps its original
-    contract even if the writer flag was toggled mid-run.
-    """
-    is_v1_1 = schema_version == _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
-    snapshot: dict[str, Any] = {}
-    for key, value in report.items():
-        if not is_v1_1 and key in _V1_1_FINDING_FIELDS:
-            continue
-        if is_sensitive_key(key):
-            snapshot[key] = "[SECRET]"
-        elif key in _FINDING_TEXT_FIELDS and isinstance(value, str):
-            snapshot[key] = _truncate_text(
-                redact_text(value, include_internal_paths=include_internal_paths)
-            )
-        elif key in _FINDING_URL_FIELDS and isinstance(value, str):
-            snapshot[key] = redact_url(redact_text(value, include_internal_paths=False))
-        elif key == "poc_script_code" and isinstance(value, str):
-            # The weaponized payload stays a local artifact, but its copy in
-            # the durable snapshot is stripped of secrets and host identity;
-            # sandbox-internal workspace paths are preserved by policy.
-            snapshot[key] = _truncate_text(redact_text(value, include_internal_paths=False))
-        elif key == "code_locations" and isinstance(value, list):
-            snapshot[key] = _bound_collection(
-                _sanitize_code_locations(value, include_internal_paths)
-            )
-        elif key == "dependency_metadata" and isinstance(value, dict):
-            snapshot[key] = {
-                str(k): (
-                    "[SECRET]"
-                    if is_sensitive_key(k)
-                    else _truncate_text(
-                        redact_text(str(v), include_internal_paths=include_internal_paths)
-                    )
-                    if isinstance(v, str)
-                    else _recursive_sanitize_unknown(
-                        v, include_internal_paths=include_internal_paths
-                    )
-                )
-                for k, v in value.items()
-            }
-        elif key == "cvss_breakdown" and isinstance(value, dict):
-            snapshot[key] = {
-                str(k): (
-                    "[SECRET]"
-                    if is_sensitive_key(k)
-                    else redact_text(str(v), include_internal_paths=False)
-                )
-                for k, v in value.items()
-            }
-        elif is_v1_1 and key in _V1_1_FINDING_TEXT_FIELDS and isinstance(value, str):
-            snapshot[key] = _truncate_text(
-                redact_text(value, include_internal_paths=include_internal_paths)
-            )
-        elif is_v1_1 and key == "http_exchange_ids" and isinstance(value, list):
-            # Proxy request ids are correlation references only; they are
-            # validated numeric ASCII at intake and bounded again here.
-            ids, _errors = _evidence.normalize_http_exchange_ids(value)
-            snapshot[key] = ids if isinstance(ids, list) else []
-        elif is_v1_1 and key == "update_history" and isinstance(value, list):
-            # Append-only revision history, bounded; entries are small dicts
-            # of metadata sanitized recursively like other structured fields.
-            snapshot[key] = _recursive_sanitize_unknown(
-                value[: _evidence.MAX_UPDATE_HISTORY_ENTRIES],
-                include_internal_paths=include_internal_paths,
-            )
-        elif is_v1_1 and key in _V1_1_FINDING_STRUCT_FIELDS:
-            snapshot[key] = _recursive_sanitize_unknown(
-                value, include_internal_paths=include_internal_paths
-            )
-        else:
-            # Unknown fields: recursively sanitize so model-controlled nested
-            # metadata cannot leak secrets through the catch-all branch.
-            snapshot[key] = _recursive_sanitize_unknown(
-                value, include_internal_paths=include_internal_paths
-            )
-
-    if is_v1_1:
-        # Schema-1.1 contract stamps. ``verification_state`` is honest about
-        # provenance: a filed finding is agent-asserted, and nothing here —
-        # including a successful HTTP export — upgrades it to verified. An
-        # engine verification path may stamp a stronger value upstream.
-        snapshot["evidence_contract_version"] = _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
-        snapshot.setdefault("verification_state", "unverified")
-
-    # E4: enforce the total serialized finding size bound as a last-line
-    # defense. The per-field limits above are the primary guard; this catch
-    # prevents a combination of many bounded fields from producing a single
-    # oversized record. If the snapshot still exceeds the bound, fall back to
-    # a minimal safe finding so persistence never writes an unbounded object.
-    try:
-        serialized = json.dumps(snapshot)
-    except (TypeError, ValueError):
-        serialized = ""
-    if len(serialized) > _MAX_FINDING_SERIALIZED_SIZE:
-        return {
-            "id": report.get("id", ""),
-            "title": redact_text(
-                _truncate_text(str(report.get("title", ""))),
-                include_internal_paths=include_internal_paths,
-            ),
-            "severity": str(report.get("severity", "info")).lower().strip() or "info",
-            "timestamp": report.get("timestamp", ""),
-            "error": (
-                "Finding exceeded the maximum serialized size and was reduced "
-                "to a safe stub. The original report could not be persisted."
-            ),
-        }
-    return snapshot
-
-
-def _sanitize_code_locations(
-    locations: list[Any], include_internal_paths: bool
-) -> list[dict[str, Any]]:
-    sanitized: list[dict[str, Any]] = []
-    for location in locations:
-        if not isinstance(location, dict):
-            continue
-        entry: dict[str, Any] = {}
-        for key, value in location.items():
-            if isinstance(value, str):
-                if key == "file":
-                    # Keep repo-relative paths; strip any host-absolute or
-                    # home-directory prefix that leaked into a location.
-                    entry[key] = redact_text(value, include_internal_paths=include_internal_paths)
-                else:  # snippet, fix_before, fix_after, label
-                    entry[key] = redact_text(value, include_internal_paths=include_internal_paths)
-            else:
-                entry[key] = value
-        sanitized.append(entry)
-    return sanitized
-
-
-def sanitize_targets_info(targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sanitized target identifiers for the durable run receipt.
-
-    URLs keep scheme/host/path shape but lose credentials and sensitive query
-    values; repository URLs get the same URL treatment; host filesystem paths
-    reduce to their basename; cloned host paths are dropped entirely.
-    """
-    sanitized: list[dict[str, Any]] = []
-    for target in targets:
-        entry: dict[str, Any] = {"type": target.get("type")}
-        details = target.get("details")
-        if isinstance(details, dict):
-            clean_details: dict[str, Any] = {}
-            for key, value in details.items():
-                if key == "cloned_repo_path":
-                    continue  # host path; private execution configuration
-                if isinstance(value, str) and value:
-                    if key in {"target_url", "target_repo"}:
-                        clean_details[key] = redact_url(
-                            redact_text(value, include_internal_paths=False)
-                        )
-                    else:
-                        clean_details[key] = redact_text(value, include_internal_paths=True)
-                elif value is not None:
-                    clean_details[key] = value
-            entry["details"] = clean_details
-        sanitized.append(entry)
-    return sanitized
-
-
-def sanitize_local_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Local source entries without host filesystem paths."""
-    sanitized: list[dict[str, Any]] = []
-    for source in sources:
-        entry: dict[str, Any] = {}
-        for key in ("workspace_subdir", "mount"):
-            if key in source:
-                entry[key] = source[key]
-        sanitized.append(entry)
-    return sanitized
-
-
-def sanitize_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Attachment manifest entries without host filesystem paths.
-
-    The durable run record carries each staged original's ``name``,
-    ``sha256``, ``size``, declared ``content_type``, and in-sandbox
-    ``container_path`` — never the host ``source_path``.
-    """
-    return public_manifest([a for a in attachments if isinstance(a, dict)])
 
 
 def set_global_report_state(report_state: Optional["ReportState"]) -> None:
@@ -608,493 +301,20 @@ class ReportState:
         self._scope_dropped_seen = 0
 
     def get_run_dir(self) -> Path:
-        if self._run_dir is None:
-            run_dir_name = self.run_name if self.run_name else self.run_id
-            self._run_dir = run_dir_for(run_dir_name)
-            self._run_dir.mkdir(parents=True, exist_ok=True)
-
-        return self._run_dir
+        return _get_run_dir(self, run_dir_for=run_dir_for)
 
     def hydrate_from_run_dir(self) -> None:
-        """Reload prior-scan state from ``{run_dir}/`` for resume.
+        _hydrate_from_run_dir(
+            self,
+            read_run_record=read_run_record,
+            int_or_zero=_int_or_zero,
+            clean_title=_clean_title,
+            logger=logger,
+        )
 
-        Restores:
+    add_vulnerability_report = _add_vulnerability_report
 
-        - ``vulnerability_reports`` from ``vulnerabilities.json`` so
-          :meth:`add_vulnerability_report` doesn't allocate a colliding
-          ``vuln-0001`` and overwrite the prior on-disk MD.
-        - ``run_record`` from ``run.json`` so timestamps, run inputs,
-          status, and final report state have one public source of truth.
-
-        Idempotent on missing files (fresh runs land here too via the
-        same code path). **Raises on corruption** — silently swallowing
-        a corrupt ``vulnerabilities.json`` would let the next vuln
-        allocate ``vuln-0001`` and overwrite the prior MD on disk
-        (data loss). Caller is expected to fail the run loud and let
-        the user inspect ``{run_dir}`` or pick a fresh ``--run-name``.
-        """
-        run_dir = self.get_run_dir()
-
-        data = read_run_record(run_dir)
-        persisted_report_revision: int | None = None
-        if data:
-            self.run_record.update(data)
-            if isinstance(data.get("start_time"), str):
-                self.start_time = data["start_time"]
-            if isinstance(data.get("end_time"), str):
-                self.end_time = data["end_time"]
-            scan_results = data.get("scan_results")
-            if isinstance(scan_results, dict):
-                scan_results = cast("dict[str, Any]", scan_results)
-                self.scan_results = scan_results
-                self.final_scan_result = self._format_final_scan_result(scan_results)
-            self._hydrate_llm_usage(data.get("llm_usage"))
-            self._save_seq = max(self._save_seq, _int_or_zero(data.get("seq")))
-            self._turn_count = max(self._turn_count, _int_or_zero(data.get("turn_count")))
-            self.run_record["seq"] = self._save_seq
-            self.run_record["turn_count"] = self._turn_count
-            revision = data.get("report_artifacts_revision")
-            if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0:
-                persisted_report_revision = revision
-            logger.info("report state hydrated run.json from %s", run_dir)
-
-        json_path = run_dir / "vulnerabilities.json"
-        if json_path.exists():
-            try:
-                vuln_data = json.loads(json_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise RuntimeError(
-                    f"vulnerabilities.json at {json_path} is corrupt ({exc}); "
-                    f"refusing to start fresh — that would overwrite prior "
-                    f"vulnerability MDs on disk. Inspect or delete the run dir.",
-                ) from exc
-            if not isinstance(vuln_data, list):
-                raise RuntimeError(
-                    f"vulnerabilities.json at {json_path} is not a list",
-                )
-            self.vulnerability_reports = [
-                cast("dict[str, Any]", r) for r in vuln_data if isinstance(r, dict)
-            ]
-            for r in self.vulnerability_reports:
-                # A finding written before the class was persisted still carries the
-                # metadata of its class, so name the class it always had.
-                if not r.get("finding_class"):
-                    r["finding_class"] = (
-                        "dependency_cve" if r.get("dependency_metadata") else "dynamic"
-                    )
-                title = r.get("title")
-                stale_md = False
-                if isinstance(title, str):
-                    r["title"] = _clean_title(title)
-                    stale_md = r["title"] != title
-                rid = r.get("id")
-                # A finding already on disk keeps its markdown, unless cleaning
-                # changed the title: the heading on disk then needs a rewrite.
-                if isinstance(rid, str) and not stale_md:
-                    self._saved_vuln_ids.add(rid)
-            logger.info(
-                "report state hydrated %d vulnerability report(s)",
-                len(self.vulnerability_reports),
-            )
-
-        if data and json_path.exists():
-            # Legacy records predate the durable revision and are revision 0.
-            # Both counters must agree so usage-only resume saves do not rewrite
-            # unchanged report projections.
-            restored_revision = persisted_report_revision or 0
-            self._report_artifacts_revision = restored_revision
-            self._persisted_report_artifacts_revision = restored_revision
-
-        # Same-process resume: the caido ledger may still hold entries already
-        # merged into the persisted record. Seed both offsets from the live
-        # snapshot so _sync_scope_decisions() only processes new denials —
-        # never re-appends entries or re-adds previously counted overflow.
-        try:
-            from lyrashield.tools.proxy import caido_api
-
-            snapshot = caido_api.get_scope_decisions()
-        except ImportError:
-            snapshot = None
-        if isinstance(snapshot, dict):
-            violations = snapshot.get("violations")
-            if isinstance(violations, list):
-                self._scope_violations_seen = max(self._scope_violations_seen, len(violations))
-            dropped = snapshot.get("dropped")
-            if isinstance(dropped, int) and not isinstance(dropped, bool):
-                self._scope_dropped_seen = max(self._scope_dropped_seen, dropped)
-
-    def add_vulnerability_report(
-        self,
-        title: str,
-        severity: str,
-        description: str | None = None,
-        impact: str | None = None,
-        target: str | None = None,
-        technical_analysis: str | None = None,
-        poc_description: str | None = None,
-        poc_script_code: str | None = None,
-        remediation_steps: str | None = None,
-        evidence: str | None = None,
-        assumptions: str | None = None,
-        fix_effort: str | None = None,
-        cvss: float | None = None,
-        cvss_breakdown: dict[str, str] | None = None,
-        endpoint: str | None = None,
-        method: str | None = None,
-        cve: str | None = None,
-        cwe: str | None = None,
-        code_locations: list[dict[str, Any]] | None = None,
-        fix_pr_body: str | None = None,
-        finding_class: str | None = None,
-        dependency_metadata: dict[str, Any] | None = None,
-        control_ids: list[int] | None = None,
-        counterevidence: str | None = None,
-        confidence: str | None = None,
-        confidence_rationale: str | None = None,
-        severity_change_conditions: str | None = None,
-        fix_verification: dict[str, Any] | str | None = None,
-        advisory_cvss: dict[str, Any] | float | None = None,
-        http_exchange_ids: list[str] | None = None,
-        evidence_warnings: list[str] | None = None,
-        agent_id: str | None = None,
-        agent_name: str | None = None,
-    ) -> str:
-        report_id = f"vuln-{len(self.vulnerability_reports) + 1:04d}"
-
-        report: dict[str, Any] = {
-            "id": report_id,
-            "title": _clean_title(title),
-            "severity": severity.lower().strip(),
-            "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
-        }
-
-        _redact_paths = not self._is_whitebox
-        if description:
-            report["description"] = redact_text(
-                description.strip(), include_internal_paths=_redact_paths
-            )
-        if impact:
-            report["impact"] = redact_text(impact.strip(), include_internal_paths=_redact_paths)
-        if target:
-            report["target"] = target.strip()
-        if technical_analysis:
-            report["technical_analysis"] = redact_text(
-                technical_analysis.strip(), include_internal_paths=_redact_paths
-            )
-        if poc_description:
-            report["poc_description"] = redact_text(
-                poc_description.strip(), include_internal_paths=_redact_paths
-            )
-        if poc_script_code:
-            report["poc_script_code"] = redact_text(
-                poc_script_code.strip(), include_internal_paths=False
-            )
-        if remediation_steps:
-            report["remediation_steps"] = redact_text(
-                remediation_steps.strip(), include_internal_paths=_redact_paths
-            )
-        if evidence:
-            report["evidence"] = redact_text(evidence.strip(), include_internal_paths=_redact_paths)
-        if assumptions:
-            report["assumptions"] = redact_text(
-                assumptions.strip(), include_internal_paths=_redact_paths
-            )
-        if fix_effort:
-            report["fix_effort"] = fix_effort.strip().lower()
-        if cvss is not None:
-            report["cvss"] = cvss
-        if cvss_breakdown:
-            report["cvss_breakdown"] = cvss_breakdown
-        if endpoint:
-            report["endpoint"] = endpoint.strip()
-        if method:
-            report["method"] = method.strip()
-        if cve:
-            report["cve"] = cve.strip()
-        if cwe:
-            report["cwe"] = cwe.strip()
-        if code_locations:
-            report["code_locations"] = code_locations
-        if fix_pr_body:
-            report["fix_pr_body"] = redact_text(
-                fix_pr_body.strip(), include_internal_paths=_redact_paths
-            )
-        report["finding_class"] = (finding_class or "dynamic").strip().lower()
-        if dependency_metadata:
-            report["dependency_metadata"] = dependency_metadata
-        if control_ids:
-            report["control_ids"] = sorted(set(control_ids))
-        # Schema-1.1 evidence fields. Values arrive already normalized by the
-        # reporting tool; they are sanitized again at the persistence boundary
-        # and only emitted when the record's declared version is 1.1.
-        if counterevidence:
-            report["counterevidence"] = redact_text(
-                counterevidence.strip(), include_internal_paths=_redact_paths
-            )
-        if confidence:
-            normalized_confidence, confidence_errors = _evidence.normalize_confidence(confidence)
-            if normalized_confidence is None:
-                raise ValueError(f"confidence rejected: {'; '.join(confidence_errors)}")
-            report["confidence"] = normalized_confidence
-        if confidence_rationale:
-            report["confidence_rationale"] = redact_text(
-                confidence_rationale.strip(), include_internal_paths=_redact_paths
-            )
-        if severity_change_conditions:
-            report["severity_change_conditions"] = redact_text(
-                severity_change_conditions.strip(), include_internal_paths=_redact_paths
-            )
-        if fix_verification is not None:
-            normalized_fv, fv_errors = _evidence.normalize_fix_verification(fix_verification)
-            if normalized_fv is None:
-                raise ValueError(f"fix_verification rejected: {'; '.join(fv_errors)}")
-            normalized_fv["recorded_at"] = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-            report["fix_verification"] = normalized_fv
-        if advisory_cvss is not None:
-            normalized_adv, adv_errors = _evidence.normalize_advisory_cvss(advisory_cvss)
-            if normalized_adv is None:
-                raise ValueError(f"advisory_cvss rejected: {'; '.join(adv_errors)}")
-            report["advisory_cvss"] = normalized_adv
-        if http_exchange_ids:
-            normalized_ids, id_errors = _evidence.normalize_http_exchange_ids(http_exchange_ids)
-            if id_errors or normalized_ids is None:
-                raise ValueError(f"http_exchange_ids rejected: {'; '.join(id_errors)}")
-            report["http_exchange_ids"] = normalized_ids
-        if evidence_warnings:
-            report["evidence_warnings"] = [
-                redact_text(str(w).strip(), include_internal_paths=_redact_paths)[:500]
-                for w in evidence_warnings[:10]
-                if str(w).strip()
-            ]
-        if agent_id:
-            report["agent_id"] = agent_id
-        if agent_name:
-            report["agent_name"] = agent_name
-
-        self.vulnerability_reports.append(report)
-        self._report_artifacts_revision += 1
-        logger.info(f"Added vulnerability report: {report_id} - {title}")
-        posthog.finding(severity, cwe=cwe, is_cve=bool(cve))
-        scarf.finding(severity, cwe=cwe, is_cve=bool(cve))
-
-        if self.vulnerability_found_callback:
-            # E4: callback receives the sanitized snapshot, not the raw report,
-            # so live CLI/TUI displays never show secrets or host paths.
-            sanitized = sanitize_finding(
-                report,
-                include_internal_paths=not _redact_paths,
-                schema_version=str(self.run_record.get("schema_version", "1.0")),
-            )
-            self.vulnerability_found_callback(sanitized)
-
-        self._set_phase("running")
-        persisted = self.save_run_data()
-        if not persisted:
-            # The report was broadcast to the callback but not durably
-            # persisted. Remove the in-memory report and the durable ID marker
-            # so the next report does not reuse the same ID or skip its
-            # Markdown artifact (comment #16).
-            self.vulnerability_reports.pop()
-            self._saved_vuln_ids.discard(report_id)
-            raise RuntimeError(
-                f"Vulnerability report {report_id} was not durably persisted; "
-                "artifact write failed and the report has been rolled back."
-            )
-        return report_id
-
-    def update_vulnerability_report(
-        self,
-        report_id: str,
-        fields: dict[str, Any],
-        *,
-        update_reason: str | None = None,
-        updated_by_agent_id: str | None = None,
-        updated_by_agent_name: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Apply a revision to an existing report, keeping its identity.
-
-        Invariants enforced here:
-
-        - Creation-time identity never moves: ``id``, ``timestamp``,
-          ``finding_class`` and the original author stay put.
-        - The append-only ``update_history`` gains exactly one bounded entry
-          per persisted revision; invalid updates leave prior evidence
-          untouched.
-        - Persistence precedes the in-memory change: the revised projections
-          are written to disk first, and a failed write rolls the in-memory
-          list back so the original evidence survives.
-        - Dependent fields are dropped when the field they describe is
-          superseded (severity/conclusion changes invalidate the projections
-          that restate them), and all projections regenerate in one pass.
-        - A sealed run (status ``completed``) is immutable: late revisions
-          cannot mutate evidence a report was already rendered from.
-
-        Returns the revised report dict, or ``None`` when the id is unknown or
-        nothing in ``fields`` changes it. Raises ``RuntimeError`` when the
-        revision cannot be durably persisted.
-        """
-        with self._report_artifacts_lock:
-            index = next(
-                (i for i, r in enumerate(self.vulnerability_reports) if r.get("id") == report_id),
-                None,
-            )
-            if index is None:
-                logger.warning("cannot update unknown vulnerability report %s", report_id)
-                return None
-            original = self.vulnerability_reports[index]
-
-            if not _evidence.record_supports_evidence_v1_1(self.run_record):
-                # A 1.0 record strips the evidence fields a revision adds
-                # (update_history, updated_at, ...), so revising it would lose
-                # attribution on disk. The record's version is fixed at
-                # creation; this run cannot be retroactively upgraded.
-                raise RuntimeError(
-                    f"Vulnerability report {report_id} belongs to a schema-1.0 "
-                    "record; revisions require the 1.1 writer "
-                    "(LYRASHIELD_RUN_RECORD_V1_1 at scan start)."
-                )
-            if self.run_record.get("status") == "completed":
-                raise RuntimeError(
-                    f"Vulnerability report {report_id} belongs to a sealed "
-                    "(completed) run; the report is immutable."
-                )
-
-            changed: dict[str, Any] = {}
-            for key, raw_value in fields.items():
-                if key not in _evidence.UPDATABLE_REPORT_FIELDS or raw_value is None:
-                    continue
-                value = raw_value
-                if isinstance(value, str):
-                    value = _clean_title(value) if key == "title" else value.strip()
-                    if key in {"severity", "confidence", "fix_effort"}:
-                        value = value.lower()
-                    if not value:
-                        continue
-                if key == "fix_verification":
-                    normalized_fv, fv_errors = _evidence.normalize_fix_verification(value)
-                    if normalized_fv is None:
-                        raise ValueError(f"fix_verification rejected: {'; '.join(fv_errors)}")
-                    normalized_fv["recorded_at"] = datetime.now(UTC).strftime(
-                        "%Y-%m-%d %H:%M:%S UTC"
-                    )
-                    value = normalized_fv
-                elif key == "advisory_cvss":
-                    normalized_adv, adv_errors = _evidence.normalize_advisory_cvss(value)
-                    if normalized_adv is None:
-                        raise ValueError(f"advisory_cvss rejected: {'; '.join(adv_errors)}")
-                    value = normalized_adv
-                elif key == "http_exchange_ids":
-                    normalized_ids, id_errors = _evidence.normalize_http_exchange_ids(value)
-                    if id_errors or normalized_ids is None:
-                        raise ValueError(f"http_exchange_ids rejected: {'; '.join(id_errors)}")
-                    value = normalized_ids
-                if original.get(key) == value:
-                    continue
-                changed[key] = value
-
-            superseded = {
-                dependent
-                for primary, dependents in _evidence.DEPENDENT_REPORT_FIELDS.items()
-                if primary in changed
-                for dependent in dependents
-                if dependent not in changed and original.get(dependent) not in (None, "", [], {})
-            }
-
-            if not changed and not superseded:
-                logger.info("update for %s carried no new content; keeping it as is", report_id)
-                return None
-
-            raw_history = original.get("update_history")
-            history: list[dict[str, Any]] = (
-                [e for e in raw_history if isinstance(e, dict)]
-                if isinstance(raw_history, list)
-                else []
-            )
-            if len(history) >= _evidence.MAX_UPDATE_HISTORY_ENTRIES:
-                raise RuntimeError(
-                    f"Vulnerability report {report_id} reached the revision "
-                    f"history bound ({_evidence.MAX_UPDATE_HISTORY_ENTRIES}); "
-                    "further revisions would drop attribution. File a new "
-                    "finding instead of rewriting this one."
-                )
-
-            entry: dict[str, Any] = {
-                "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "fields": sorted(changed),
-            }
-            if superseded:
-                entry["dropped_fields"] = sorted(superseded)
-            if update_reason and update_reason.strip():
-                entry["reason"] = update_reason.strip()[: _evidence.MAX_UPDATE_REASON_CHARS]
-            if updated_by_agent_id:
-                entry["agent_id"] = updated_by_agent_id
-            if updated_by_agent_name:
-                entry["agent_name"] = updated_by_agent_name
-            for key in ("severity", "cvss", "confidence"):
-                if key in changed and original.get(key) is not None:
-                    entry[f"previous_{key}"] = original[key]
-            history.append(entry)
-
-            revised = {**original, **changed}
-            for dependent in superseded:
-                revised.pop(dependent, None)
-            revised["update_history"] = history
-            revised["updated_at"] = entry["timestamp"]
-
-            violations = _evidence.validate_revised_finding(revised, original)
-            if violations:
-                raise RuntimeError(
-                    f"Vulnerability report {report_id} revision violates "
-                    f"creation-time invariants: {'; '.join(violations)}. "
-                    "Original evidence unchanged."
-                )
-
-            # Persist the revised projections BEFORE the in-memory report is
-            # replaced, so a failed write leaves the original evidence
-            # untouched. The markdown is re-rendered in the same pass (the id
-            # is discarded from the saved set first) so on-disk evidence can
-            # never carry the superseded statement next to the new verdict.
-            candidate = list(self.vulnerability_reports)
-            candidate[index] = revised
-            saved_ids = set(self._saved_vuln_ids)
-            saved_ids.discard(report_id)
-            try:
-                self._write_report_projections(candidate, saved_ids)
-            except (OSError, RuntimeError):
-                logger.exception(
-                    "revision of %s failed to persist; original evidence kept",
-                    report_id,
-                )
-                raise
-
-            self.vulnerability_reports[index] = revised
-            self._saved_vuln_ids = saved_ids
-            self._report_artifacts_revision += 1
-            persisted = self.save_run_data()
-            if not persisted:
-                # run.json could not be written even though the finding
-                # projections were. The evidence itself is durable; roll back
-                # the in-memory swap so a later save retries the full record.
-                self.vulnerability_reports[index] = original
-                self._report_artifacts_revision -= 1
-                raise RuntimeError(
-                    f"Vulnerability report {report_id} revision could not be "
-                    "recorded in run.json; rolled back."
-                )
-
-            logger.info(
-                "Updated vulnerability report %s (%s)",
-                report_id,
-                ", ".join(entry["fields"]) or "no field replaced",
-            )
-            if self.vulnerability_updated_callback:
-                sanitized = sanitize_finding(
-                    revised,
-                    include_internal_paths=not self._is_whitebox,
-                    schema_version=str(self.run_record.get("schema_version", "1.0")),
-                )
-                self.vulnerability_updated_callback(sanitized)
-            return revised
+    update_vulnerability_report = _update_vulnerability_report
 
     def set_sandbox_capabilities(self, capabilities: dict[str, Any]) -> None:
         """Record the probed sandbox capability set as run provenance.
@@ -1392,55 +612,18 @@ class ReportState:
         )
         self._set_phase("running")
 
-    def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> bool:
-        with self._report_artifacts_lock:
-            return self._save_run_data_locked(mark_complete=mark_complete, status=status)
+    save_run_data = _save_run_data
 
-    def _save_run_data_locked(self, mark_complete: bool = False, status: str | None = None) -> bool:
-        """Persist scan artifacts and return whether all required writes
-        succeeded.
-
-        When ``mark_complete=True`` and the required receipt cannot be
-        persisted, the in-memory completion fields are reverted so a later
-        incidental save cannot persist a completed record without a durable
-        receipt.
-        """
-        # Snapshot pre-completion state so a failed receipt write can revert
-        # in-memory completion eligibility — a failed persistence must not
-        # leave the lifecycle marked completed (E3 monotonic fail-closed).
-        prev_status = self.run_record.get("status")
-        prev_end_time = self.end_time
-
-        if mark_complete:
-            self.end_time = datetime.now(UTC).isoformat()
-            self.run_record["end_time"] = self.end_time
-            self.run_record["status"] = "completed"
-            self._set_phase("completed")
-        elif status and self.run_record.get("status") != "completed":
-            current_status = self.run_record.get("status")
-            if status == "stopped" and current_status in {"failed", "interrupted"}:
-                status = str(current_status)
-            if self.end_time is None:
-                self.end_time = datetime.now(UTC).isoformat()
-            self.run_record["end_time"] = self.end_time
-            self.run_record["status"] = status
-            self._set_phase(status)
-
-        self._sync_progress()
-        self._sync_llm_usage_record()
-        persisted = self._save_artifacts()
-
-        # If the receipt write failed and we had marked complete, revert the
-        # in-memory completion so a later incidental save cannot persist a
-        # completed record without a durable receipt. Keep receipt_persisted
-        # as False — the write actually failed.
-        if mark_complete and not self.receipt_persisted:
-            self.run_record["status"] = prev_status
-            self.run_record["end_time"] = prev_end_time
-            self.end_time = prev_end_time
-            if prev_status != "completed":
-                self._set_phase(str(prev_status or "running"))
-        return persisted
+    def _save_run_data_locked(
+        self,
+        mark_complete: bool = False,
+        status: str | None = None,
+    ) -> bool:
+        return _persist_run_data_locked(
+            self,
+            mark_complete=mark_complete,
+            status=status,
+        )
 
     def set_terminal_reason(self, reason: str) -> None:
         """Record a machine-readable non-completion reason for worker callers."""
@@ -1488,278 +671,51 @@ class ReportState:
     def cleanup(self, status: str = "stopped") -> None:
         self.save_run_data(status=status)
 
-    def _format_final_scan_result(self, scan_results: dict[str, Any]) -> str:
-        return f"""# Executive Summary
-
-{str(scan_results.get("executive_summary", "")).strip()}
-
-# Methodology
-
-{str(scan_results.get("methodology", "")).strip()}
-
-# Technical Analysis
-
-{str(scan_results.get("technical_analysis", "")).strip()}
-
-# Recommendations
-
-{str(scan_results.get("recommendations", "")).strip()}
-"""
+    _format_final_scan_result = staticmethod(_format_scan_result)
 
     def _write_report_projections(
         self,
         reports: list[dict[str, Any]],
         saved_vuln_ids: set[str],
     ) -> bool:
-        """Write the finding projections (JSON/CSV/MD + SARIF) for ``reports``.
-
-        The vulnerabilities write is required — its failure raises so callers
-        that must roll back (finding revisions) can. SARIF is best-effort:
-        its failure is logged and returns ``False`` without raising.
-        """
-        run_dir = self.get_run_dir()
-        include_internal_paths = not self._is_whitebox
-        schema_version = str(self.run_record.get("schema_version", "1.0"))
-        # One immutable sanitized snapshot feeds every durable/public
-        # projection; the raw in-memory reports never reach disk.
-        snapshot = [
-            sanitize_finding(
-                report,
-                include_internal_paths=include_internal_paths,
-                schema_version=schema_version,
-            )
-            for report in reports
-        ]
-        write_vulnerabilities(run_dir, snapshot, saved_vuln_ids)
-        try:
-            write_sarif(
-                run_dir,
-                snapshot,
-                tool_version=_strix_version(),
-                repository_context=self._sarif_repository_context(),
-            )
-        except Exception:
-            logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
-            return False
-        return True
+        return _project_report_projections(
+            self,
+            reports,
+            saved_vuln_ids,
+            write_vulnerabilities=write_vulnerabilities,
+            write_sarif=write_sarif,
+            tool_version=_strix_version(),
+            logger=logger,
+        )
 
     def _write_evidence_artifacts(self, run_dir: Path) -> bool:
-        """Write the schema-1.1 companion artifacts (coverage, threat model).
-
-        Both are bounded and best-effort: failures are logged and reported as
-        ``False`` so the persisted revision stays honest, but they never block
-        the required receipt.
-        """
-        persisted = True
-        try:
-            coverage = _evidence.build_coverage_document(
-                run_record=self.run_record,
-                agent_graph=_read_agent_graph(runtime_state_dir(run_dir)),
-                vulnerability_reports=self.vulnerability_reports,
-                exit_reason=self.scan_ended_exit_reason,
-            )
-            _evidence.write_coverage_artifact(run_dir, coverage)
-        except Exception:
-            persisted = False
-            logger.exception("coverage.json write failed (non-fatal)")
-        try:
-            threat_model = _evidence.build_threat_model_document(run_dir, self.run_record)
-            if threat_model is not None:
-                _evidence.write_threat_model_artifact(run_dir, threat_model)
-        except Exception:
-            persisted = False
-            logger.exception("threat_model.json write failed (non-fatal)")
-        return persisted
+        return _project_evidence_artifacts(
+            self,
+            run_dir,
+            evidence=_evidence,
+            runtime_state_dir=runtime_state_dir,
+            read_agent_graph=_read_agent_graph,
+            logger=logger,
+        )
 
     def _save_artifacts(self) -> bool:
-        """Write scan artifacts under ``run_dir``.
-
-        Returns ``True`` only when every required artifact (vulnerabilities,
-        run record) is successfully persisted. Non-fatal artifacts (executive
-        report, SARIF) may fail and be logged, but they do not make this
-        return ``False``. Callers that must know whether durability succeeded
-        (e.g. vulnerability report tools) should act on the return value.
-        """
-        run_dir = self.get_run_dir()
-        run_dir.mkdir(parents=True, exist_ok=True)
-
-        evidence_v1_1 = _evidence.record_supports_evidence_v1_1(self.run_record)
-
-        report_artifacts_revision = self._report_artifacts_revision
-        write_report_artifacts = (
-            self._persisted_report_artifacts_revision != report_artifacts_revision
+        return _persist_artifacts(
+            self,
+            evidence=_evidence,
+            quality=_quality,
+            runtime_state_dir=runtime_state_dir,
+            read_agent_graph=_read_agent_graph,
+            coverage_ledger_entries=_coverage_ledger_entries,
+            write_executive_report_fn=write_executive_report,
+            validate_run_record_fn=validate_run_record,
+            write_run_record_fn=write_run_record,
+            write_resume_record_fn=write_resume_record,
+            logger=logger,
         )
-        report_artifacts_persisted = not write_report_artifacts
-        if write_report_artifacts:
-            # Each artifact is isolated so a failure in one cannot skip the others;
-            # run.json is the billing/cost receipt and is written last.
-            optional_artifacts_persisted = True
-            if self.final_scan_result:
-                try:
-                    write_executive_report(run_dir, self.final_scan_result)
-                except (OSError, RuntimeError):
-                    optional_artifacts_persisted = False
-                    logger.exception("Executive report write failed (non-fatal)")
 
-            # The worker must distinguish a clean scan from missing output. Always
-            # write this artifact after a content change, including for a valid
-            # zero-finding result. Failure makes the whole save fail.
-            try:
-                projections_persisted = self._write_report_projections(
-                    self.vulnerability_reports, self._saved_vuln_ids
-                )
-            except (OSError, RuntimeError):
-                logger.exception("Vulnerabilities artifact write failed (required)")
-                self.receipt_persisted = False
-                self.run_record["receipt_persisted"] = False
-                return False
-            if not projections_persisted:
-                optional_artifacts_persisted = False
-            report_artifacts_persisted = optional_artifacts_persisted
+    _sarif_repository_context = _sarif_repository_context
 
-        if evidence_v1_1:
-            # Coverage and the threat model change independently of the
-            # finding projections (agents record coverage entries without
-            # touching findings), so they refresh on every save.
-            if not self._write_evidence_artifacts(run_dir):
-                report_artifacts_persisted = False
-            # Replay-guard denials and the honest quality ledger are derived
-            # from observed activity only — unexercised surfaces stay
-            # unassessed, never smoothed into a coverage number.
-            admitted_hosts: dict[str, int] = {}
-            try:
-                admitted_hosts = self._sync_scope_decisions()
-            except Exception:
-                logger.exception("scope_violations sync failed (non-fatal)")
-            try:
-                recorded = self.run_record.get("scope_violations")
-                recorded = recorded if isinstance(recorded, dict) else {}
-                self.run_record["scan_quality"] = _quality.build_scan_quality(
-                    run_record=self.run_record,
-                    agent_graph=_read_agent_graph(runtime_state_dir(run_dir)),
-                    coverage_entries=_coverage_ledger_entries(),
-                    vulnerability_reports=self.vulnerability_reports,
-                    scope_decisions={
-                        "violations": recorded.get("entries") or [],
-                        "dropped": recorded.get("dropped") or 0,
-                        "admitted_hosts": admitted_hosts,
-                    },
-                )
-            except Exception:
-                report_artifacts_persisted = False
-                logger.exception("scan_quality build failed (non-fatal)")
-            # The result manifest binds every emitted artifact to this record
-            # by checksum — the immutable link the worker verifies against.
-            try:
-                self.run_record["result_manifest"] = _evidence.build_result_manifest(run_dir)
-            except Exception:
-                logger.exception("result manifest build failed (non-fatal)")
-
-        persisted_report_revision = self._persisted_report_artifacts_revision
-        if report_artifacts_persisted:
-            persisted_report_revision = report_artifacts_revision
-        self.run_record["report_artifacts_revision"] = persisted_report_revision
-        persisted_report_revision = self._persisted_report_artifacts_revision
-        if report_artifacts_persisted:
-            persisted_report_revision = report_artifacts_revision
-        self.run_record["report_artifacts_revision"] = persisted_report_revision
-
-        try:
-            # Validate the full worker contract before any write: the first
-            # observable run.json must already be complete and versioned.
-            validate_run_record(self.run_record)
-            # Snapshot claims persistence optimistically so the durable record
-            # carries receipt_persisted=true the moment it lands on disk; a
-            # failed write reverts both the record flag and in-memory state.
-            self.receipt_persisted = True
-            self.run_record["receipt_persisted"] = True
-            write_run_record(run_dir, self.run_record)
-        except (OSError, RuntimeError):
-            # The run record carries the cost receipt the worker reconciles
-            # against the provider total; a silent skip here mis-bills the
-            # scan as if it cost nothing. Flag it, never swallow it.
-            self.receipt_persisted = False
-            self.run_record["receipt_persisted"] = False
-            logger.exception("run.json receipt persist FAILED — cost receipt not written")
-            return False
-
-        # Write the private resume record with unsanitized execution fields so
-        # a resumed scan can recover cloned_repo_path / source_path values that
-        # the public run.json intentionally redacts (comment #5). This is
-        # non-fatal to the receipt; a missing resume file can still be recovered
-        # from the public record (resume will just lose host paths).
-        if write_report_artifacts:
-            try:
-                write_resume_record(
-                    run_dir,
-                    targets_info=self._raw_targets_info,
-                    local_sources=self._raw_local_sources,
-                )
-            except (OSError, RuntimeError):
-                report_artifacts_persisted = False
-                logger.exception("Resume record write failed (non-fatal)")
-
-        if report_artifacts_persisted:
-            self._persisted_report_artifacts_revision = persisted_report_revision
-
-        logger.info("Essential scan data saved to: %s", run_dir)
-        return True
-
-    def _sarif_repository_context(self) -> dict[str, Any] | None:
-        """Repo/commit/branch context for SARIF provenance (repo scans only).
-
-        Cached after first derivation — ``_save_artifacts`` runs on every
-        state save, and the git lookup only needs to happen once per run.
-        Returns None for URL / IP (DAST) targets that have no repository.
-        """
-        if not self._sarif_repo_ctx_ready:
-            self._sarif_repo_ctx = self._derive_repository_context()
-            self._sarif_repo_ctx_ready = True
-        return self._sarif_repo_ctx
-
-    def _derive_repository_context(self) -> dict[str, Any] | None:
-        # Prefer the in-memory raw repository targets; the durable record's
-        # targets_info is sanitized and carries no cloned paths. An empty
-        # in-memory list means set_scan_config was never called, so fall back
-        # to the run record (e.g. tests that set it directly).
-        raw_targets = getattr(self, "_repo_context_targets", None) or []
-        if raw_targets:
-            repo_targets = [cast("dict[str, Any]", t) for t in raw_targets]
-        else:
-            targets = self.run_record.get("targets_info")
-            if not isinstance(targets, list):
-                return None
-            repo_targets = [
-                cast("dict[str, Any]", t)
-                for t in targets
-                if isinstance(t, dict) and t.get("type") == "repository"
-            ]
-        if len(repo_targets) != 1:
-            return None
-        target = repo_targets[0]
-        details = target.get("details")
-        if not isinstance(details, dict):
-            return None
-        details = cast("dict[str, Any]", details)
-
-        uri = details.get("target_repo")
-        if not isinstance(uri, str) or not uri.strip():
-            return None
-
-        # Public SARIF provenance: URL shape without credentials/query tokens.
-        context: dict[str, Any] = {"repositoryUri": redact_url(uri.strip())}
-        full_name = _parse_repo_full_name(uri)
-        if full_name:
-            context["repositoryFullName"] = full_name
-        cloned = details.get("cloned_repo_path")
-        if isinstance(cloned, str) and cloned.strip():
-            commit, branch = _git_head(cloned.strip())
-            if commit:
-                context["commitSha"] = commit
-            if branch:
-                context["branch"] = branch
-                context["ref"] = f"refs/heads/{branch}"
-        return context
+    _derive_repository_context = _derive_repository_context
 
     def _sync_llm_usage_record(self) -> None:
         self.run_record["llm_usage"] = self._build_llm_usage_record()
@@ -1782,20 +738,6 @@ class ReportState:
     def _hydrate_llm_usage(self, raw_usage: Any) -> None:
         self._llm_usage.hydrate(raw_usage)
         self._sync_llm_usage_record()
-
-
-def _read_agent_graph(state_dir: Path) -> dict[str, Any]:
-    """Lazy wrapper so the substrate coverage module loads only on demand."""
-    from strix.report.coverage import read_agent_graph
-
-    return read_agent_graph(state_dir)
-
-
-def _coverage_ledger_entries() -> list[dict[str, Any]]:
-    """Lazy wrapper for the model-declared coverage ledger store."""
-    from strix.tools.coverage.tools import get_coverage_entries
-
-    return cast("list[dict[str, Any]]", get_coverage_entries())
 
 
 def _as_dict(obj: Any) -> dict[str, Any] | None:
