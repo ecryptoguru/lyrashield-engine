@@ -242,7 +242,7 @@ jobs:
         run: |
           docker run --rm lyrashield-sandbox:ci /app/.venv/bin/python -c "
           import socket
-          from caido_api import _check_replay_url_host as blocked
+          from caido_api import _replay_denial as blocked
 
           for url in (
               'http://169.254.169.254/',

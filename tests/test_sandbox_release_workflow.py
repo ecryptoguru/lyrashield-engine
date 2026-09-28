@@ -28,6 +28,11 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
     assert "platforms: linux/amd64,linux/arm64" in content
     smoke = SMOKE.read_text(encoding="utf-8")
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    replay_probe = ci.split("name: Guarded replay egress probes (built image)", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    assert "from caido_api import _replay_denial as blocked" in replay_probe
+    assert "blocked(url) is not None" in replay_probe
     assert 'bash scripts/smoke-sandbox.sh "$image" "$platform"' in content
     assert "bash scripts/smoke-sandbox.sh lyrashield-sandbox:ci" in ci
     for invariant in (
