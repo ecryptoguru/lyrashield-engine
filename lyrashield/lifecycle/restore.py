@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-_MODE_AGENT_LIMITS = {"quick": 2, "standard": 4, "deep": 6}
+_MODE_AGENT_LIMITS = {"quick": 4, "standard": 4, "deep": 6}
 
 
 def _coordinator_for_scan_mode(

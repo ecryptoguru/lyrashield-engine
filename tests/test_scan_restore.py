@@ -127,5 +127,5 @@ async def test_new_scan_uses_fresh_root_id_and_hydrates_shared_ledgers(
 
     assert root_id
     assert root_id not in {"", "root-1"}
-    assert coordinator.max_agents == 2
+    assert coordinator.max_agents == 4
     assert hydrated == ["coverage", "threats"]
