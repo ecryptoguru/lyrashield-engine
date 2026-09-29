@@ -11,6 +11,8 @@ Time-boxed assessment focused on high-impact vulnerabilities. Prioritize breadth
 
 Optimize for fast feedback on critical security issues. Skip exhaustive enumeration in favor of targeted testing on high-value attack surfaces.
 
+When several independent high-impact surfaces exist, start up to three focused subagents early so their checks run concurrently. Keep assignments narrow, avoid overlapping work, and stop adding agents when the remaining scan budget is tight.
+
 ## Phase 1: Rapid Orientation
 
 **Whitebox (source available)**
