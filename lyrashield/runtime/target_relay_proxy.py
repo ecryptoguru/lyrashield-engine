@@ -210,18 +210,7 @@ def make_server(
             try:
                 connection.request(self.command, url, body=body or None, headers=headers)
                 response = connection.getresponse()
-                payload = response.read(MAX_RESPONSE_BYTES + 1)
-                if len(payload) > MAX_RESPONSE_BYTES:
-                    self.send_error(502, "Relay response exceeds bound")
-                    return
-                self.send_response(response.status)
-                for key, value in response.getheaders():
-                    if key.lower() not in HOP_HEADERS:
-                        self.send_header(key, value)
-                self.send_header("Content-Length", str(len(payload)))
-                self.send_header("Connection", "close")
-                self.end_headers()
-                self.wfile.write(payload)
+                self.forward_response(response)
             except (OSError, http.client.HTTPException):
                 # Buffer before replying so transport failures cannot appear
                 # as a successful truncated target response.
@@ -230,6 +219,50 @@ def make_server(
                 self.close_connection = True
             finally:
                 connection.close()
+
+        def forward_response(self, response: http.client.HTTPResponse) -> None:
+            response_headers = response.getheaders()
+            response_connection_headers = {
+                name.strip().lower()
+                for key, value in response_headers
+                if key.lower() == "connection"
+                for name in value.split(",")
+            }
+            lengths = [
+                value.strip() for key, value in response_headers if key.lower() == "content-length"
+            ]
+            valid_length = len(lengths) == 1 and lengths[0].isascii() and lengths[0].isdecimal()
+            length = (lengths[0].lstrip("0") or "0") if valid_length else None
+            transfer_encoding = any(
+                key.lower() == "transfer-encoding" for key, _value in response_headers
+            )
+            forbidden_length = 100 <= response.status < 200 or response.status == 204
+            bodyless = self.command == "HEAD" or forbidden_length or response.status == 304
+            if not bodyless and lengths and (not valid_length or transfer_encoding):
+                raise http.client.HTTPException("Ambiguous relay content length")
+            payload = b"" if bodyless else response.read(MAX_RESPONSE_BYTES + 1)
+            if len(payload) > MAX_RESPONSE_BYTES:
+                self.send_error(502, "Relay response exceeds bound")
+                return
+            if not bodyless and length is not None and str(len(payload)) != length:
+                raise http.client.HTTPException("Incomplete relay response")
+            self.send_response(response.status)
+            for key, value in response_headers:
+                if key.lower() not in HOP_HEADERS | response_connection_headers:
+                    self.send_header(key, value)
+            if not bodyless:
+                self.send_header("Content-Length", str(len(payload)))
+            elif (
+                not forbidden_length
+                and length is not None
+                and not transfer_encoding
+                and "content-length" not in response_connection_headers
+            ):
+                # HEAD/304 describe the selected representation, not an empty body.
+                self.send_header("Content-Length", length)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(payload)
 
         do_GET = forward  # noqa: N815 - stdlib callback
         do_HEAD = forward  # noqa: N815 - stdlib callback
