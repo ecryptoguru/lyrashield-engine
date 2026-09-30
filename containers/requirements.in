@@ -13,7 +13,7 @@ jinja2==3.1.6
 lxml==6.1.2
 pip==26.2
 pycryptodomex==3.23.0
-pyjwt==2.13.0
+pyjwt==2.14.0
 pyopenssl==26.4.0
 PySocks==1.7.1
 ratelimit==2.2.1

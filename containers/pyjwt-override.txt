@@ -1,0 +1,3 @@
+# Semgrep 1.178.0 metadata is patched after the closed hash-lock install.
+# Keep this resolver exception restricted to the tested security-fixed line.
+pyjwt[crypto]==2.14.0

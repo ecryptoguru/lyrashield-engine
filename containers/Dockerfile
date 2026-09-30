@@ -278,10 +278,13 @@ COPY --chown=pentester:pentester containers/dirsearch-requirements.txt /tmp/dirs
 COPY --chown=pentester:pentester containers/patch_dirsearch_metadata.py /tmp/patch_dirsearch_metadata.py
 
 USER pentester
+# Install the complete audited hash lock without re-resolving Semgrep's narrow
+# PyJWT metadata restriction; the reviewed patch and pip check enforce the graph.
 RUN python3 -m venv /app/.venv && \
-    /app/.venv/bin/pip install --no-cache-dir --require-hashes -r /tmp/python-requirements.txt && \
+    /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/python-requirements.txt && \
     /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/dirsearch-requirements.txt && \
     /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py && \
+    /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py --package semgrep && \
     /app/.venv/bin/pip check && \
     printf '%s\n' \
         '#!/bin/bash' \
@@ -294,6 +297,7 @@ RUN python3 -m venv /app/.venv && \
 # the replay egress guard. One implementation lives in
 # lyrashield/tools/proxy/caido_api.py; this COPY is its only packaging step.
 COPY --chown=root:root lyrashield/runtime/target_relay_proxy.py /opt/lyrashield/target_relay_proxy.py
+COPY --chown=root:root containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify_semgrep_pyjwt.py
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 

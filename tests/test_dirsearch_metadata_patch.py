@@ -22,16 +22,18 @@ def _record_hash(content: bytes) -> str:
     )
 
 
-def _make_dist_info(tmp_path: Path, requirement: bytes) -> tuple[Path, bytes]:
-    dist_info = tmp_path / "dirsearch-0.5.0.dist-info"
+def _make_dist_info(
+    tmp_path: Path, requirement: bytes, package: str = "dirsearch", version: str = "0.5.0"
+) -> tuple[Path, bytes]:
+    dist_info = tmp_path / f"{package}-{version}.dist-info"
     dist_info.mkdir()
-    metadata = b"Name: dirsearch\nVersion: 0.5.0\n" + requirement + b"\n"
+    metadata = f"Name: {package}\nVersion: {version}\n".encode() + requirement + b"\n"
     (dist_info / "METADATA").write_bytes(metadata)
     with (dist_info / "RECORD").open("w", encoding="utf-8", newline="") as stream:
         csv.writer(stream, lineterminator="\n").writerows(
             [
-                ["dirsearch-0.5.0.dist-info/METADATA", _record_hash(metadata), str(len(metadata))],
-                ["dirsearch-0.5.0.dist-info/RECORD", "", ""],
+                [f"{dist_info.name}/METADATA", _record_hash(metadata), str(len(metadata))],
+                [f"{dist_info.name}/RECORD", "", ""],
             ]
         )
     return dist_info, metadata
@@ -60,3 +62,61 @@ def test_patch_fails_closed_on_any_other_dependency_metadata(tmp_path: Path) -> 
 
     assert (dist_info / "METADATA").read_bytes() == original
     assert (dist_info / "RECORD").read_bytes() == original_record
+
+
+def test_semgrep_patch_changes_only_pyjwt_and_updates_record(tmp_path: Path) -> None:
+    dist_info, original = _make_dist_info(
+        tmp_path,
+        b"Requires-Dist: pyjwt[crypto]~=2.13.0\nRequires-Dist: requests>=2",
+        "semgrep",
+        "1.178.0",
+    )
+
+    patch_dist_info(dist_info, "semgrep")
+
+    patched = (dist_info / "METADATA").read_bytes()
+    assert patched == original.replace(
+        b"Requires-Dist: pyjwt[crypto]~=2.13.0\n", b"Requires-Dist: pyjwt[crypto]>=2.14.0,<2.15.0\n"
+    )
+    with (dist_info / "RECORD").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert rows[0][1:] == [_record_hash(patched), str(len(patched))]
+
+
+@pytest.mark.parametrize(
+    "version,requirement",
+    [
+        ("1.177.0", b"Requires-Dist: pyjwt[crypto]~=2.13.0"),
+        ("1.178.0", b"Requires-Dist: pyjwt[crypto]>=2.13.0"),
+        ("1.178.0", b"Requires-Dist: pyjwt[crypto]~=2.13.0; extra == 'mcp'"),
+        ("1.178.0", b"Name: semgrep\nRequires-Dist: pyjwt[crypto]~=2.13.0"),
+        ("1.178.0", b"Requires-Dist: pyjwt[crypto]~=2.13.0\nRequires-Dist: pyjwt[crypto]~=2.13.0"),
+    ],
+)
+def test_semgrep_patch_rejects_unreviewed_metadata(
+    tmp_path: Path, version: str, requirement: bytes
+) -> None:
+    dist_info, original = _make_dist_info(tmp_path, requirement, "semgrep", version)
+    original_record = (dist_info / "RECORD").read_bytes()
+
+    with pytest.raises(ValueError):
+        patch_dist_info(dist_info, "semgrep")
+
+    assert (dist_info / "METADATA").read_bytes() == original
+    assert (dist_info / "RECORD").read_bytes() == original_record
+
+
+def test_semgrep_patch_rejects_tampered_record_without_writes(tmp_path: Path) -> None:
+    dist_info, original = _make_dist_info(
+        tmp_path, b"Requires-Dist: pyjwt[crypto]~=2.13.0", "semgrep", "1.178.0"
+    )
+    record = (
+        (dist_info / "RECORD").read_bytes().replace(_record_hash(original).encode(), b"sha256=bad")
+    )
+    (dist_info / "RECORD").write_bytes(record)
+
+    with pytest.raises(ValueError, match="does not match"):
+        patch_dist_info(dist_info, "semgrep")
+
+    assert (dist_info / "METADATA").read_bytes() == original
+    assert (dist_info / "RECORD").read_bytes() == record
