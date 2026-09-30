@@ -53,6 +53,8 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
     assert "/app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes" in content
     assert "/app/.venv/bin/python /tmp/patch_dirsearch_metadata.py" in content
     assert "/app/.venv/bin/pip check" in content
+    assert "patch_dirsearch_metadata.py --package semgrep" in content
+    assert "containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify_semgrep_pyjwt.py" in content
     assert "npm ci --omit=dev" in content
     assert "npm install -g" not in content
 

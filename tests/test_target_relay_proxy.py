@@ -3,6 +3,7 @@
 import datetime
 import json
 import shutil
+import socket
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -58,6 +59,7 @@ def write_ca(root: Path) -> tuple[Path, Path]:
 @pytest.fixture
 def relay_bridge(tmp_path: Path):
     requests = []
+    replies = {}
 
     class Relay(BaseHTTPRequestHandler):
         def log_message(self, _format: str, *_args: object) -> None:
@@ -66,7 +68,9 @@ def relay_bridge(tmp_path: Path):
         def handle_forward(self) -> None:
             requests.append((self.command, self.path, self.headers.get("X-Lyra-Relay-Grant")))
             url = urlsplit(self.path)
-            if (
+            if url.path in replies:
+                self.wfile.write(replies[url.path])
+            elif (
                 url.hostname != "target.example"
                 or unquote(url.path).startswith("/admin")
                 or self.command == "POST"
@@ -84,6 +88,7 @@ def relay_bridge(tmp_path: Path):
                 self.wfile.write(json.dumps({"url": self.path}).encode())
 
         do_GET = handle_forward  # noqa: N815 - stdlib callback
+        do_HEAD = handle_forward  # noqa: N815 - stdlib callback
         do_POST = handle_forward  # noqa: N815 - stdlib callback
 
     cert, key = write_ca(tmp_path)
@@ -97,7 +102,7 @@ def relay_bridge(tmp_path: Path):
     for thread in threads:
         thread.start()
     try:
-        yield bridge.server_port, cert, requests
+        yield bridge.server_port, cert, requests, replies
     finally:
         for server in (bridge, relay):
             server.shutdown()
@@ -132,7 +137,7 @@ def curl(port: int, cert: Path | None, path: str, *args: str) -> subprocess.Comp
 
 
 def test_https_curl_retains_tls_and_forwards_inspectable_request(relay_bridge) -> None:
-    port, cert, requests = relay_bridge
+    port, cert, requests, _replies = relay_bridge
     response = curl(port, cert, "/public?x=1")
     assert response.returncode == 0, response.stderr
     assert json.loads(response.stdout) == {"url": "https://target.example/public?x=1"}
@@ -146,14 +151,143 @@ def test_https_curl_retains_tls_and_forwards_inspectable_request(relay_bridge) -
 def test_https_policy_denials_survive_bridge(
     relay_bridge, path: str, args: tuple[str, ...]
 ) -> None:
-    port, cert, _requests = relay_bridge
+    port, cert, _requests, _replies = relay_bridge
     response = curl(port, cert, path, "--write-out", "%{http_code}", *args)
     assert response.returncode == 0, response.stderr
     assert response.stdout.endswith("403")
 
 
 def test_https_client_rejects_untrusted_testing_ca(relay_bridge) -> None:
-    port, _cert, requests = relay_bridge
+    port, _cert, requests, _replies = relay_bridge
     response = curl(port, None, "/public")
     assert response.returncode != 0
     assert requests == []
+
+
+def framed_response(relay_bridge, upstream: bytes, method: str = "GET"):
+    """Read the whole downstream wire so clients cannot hide illegal bodies."""
+    port, _cert, requests, replies = relay_bridge
+    replies["/framing"] = upstream
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+        connection.sendall(
+            f"{method} http://target.example/framing HTTP/1.1\r\n"
+            "Host: target.example\r\nConnection: close\r\n\r\n".encode()
+        )
+        chunks = []
+        while chunk := connection.recv(65536):
+            chunks.append(chunk)
+    head, body = b"".join(chunks).split(b"\r\n\r\n", 1)
+    lines = head.decode("iso-8859-1").split("\r\n")
+    headers = [tuple(line.lower().split(":", 1)) for line in lines[1:]]
+    assert requests == [(method, "http://target.example/framing", "lrg1.payload.signature")]
+    return int(lines[0].split()[1]), [(key, value.strip()) for key, value in headers], body
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_representation_length_survives_head(relay_bridge, method: str) -> None:
+    status, headers, body = framed_response(
+        relay_bridge, b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata", method
+    )
+    assert status == 200
+    assert ("content-length", "4") in headers
+    assert body == (b"data" if method == "GET" else b"")
+
+
+@pytest.mark.parametrize("status", [101, 204])
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_forbidden_response_framing(relay_bridge, status: int, method: str) -> None:
+    observed, headers, body = framed_response(
+        relay_bridge, f"HTTP/1.1 {status} Test\r\nContent-Length: 4\r\n\r\ndata".encode(), method
+    )
+    assert observed == status
+    assert not any(key == "content-length" for key, _value in headers)
+    assert body == b""
+
+
+@pytest.mark.parametrize("method,status", [("HEAD", 200), ("GET", 304)])
+@pytest.mark.parametrize(
+    "length_headers,expected",
+    [
+        (b"Content-Length: 123\r\n", "123"),
+        (b"Content-Length: 0\r\n", "0"),
+        (b"Content-Length: 000123\r\n", "123"),
+        (b"", None),
+        (b"Content-Length: -1\r\n", None),
+        (b"Content-Length: +1\r\n", None),
+        (b"Content-Length: invalid\r\n", None),
+        (b"Content-Length: 4, 4\r\n", None),
+        (b"Content-Length: 4\r\nContent-Length: 4\r\n", None),
+        (b"Content-Length: 4\r\nContent-Length: 5\r\n", None),
+        (b"Content-Length: 4\r\nConnection: Content-Length\r\n", None),
+        (b"Content-Length: 4\r\nTransfer-Encoding: chunked\r\n", None),
+    ],
+)
+def test_bodyless_representation_length_is_conservative(
+    relay_bridge, method: str, status: int, length_headers: bytes, expected: str | None
+) -> None:
+    observed, headers, body = framed_response(
+        relay_bridge,
+        f"HTTP/1.1 {status} Test\r\n".encode() + length_headers + b"\r\nillegal",
+        method,
+    )
+    assert observed == status
+    assert [value for key, value in headers if key == "content-length"] == (
+        [expected] if expected is not None else []
+    )
+    assert body == b""
+
+
+def test_all_response_connection_fields_are_stripped(relay_bridge) -> None:
+    status, headers, body = framed_response(
+        relay_bridge,
+        b"HTTP/1.1 200 OK\r\nConnection: X-First\r\nConnection: x-SECOND, Content-Length\r\n"
+        b"X-First: private\r\nX-Second: private\r\nContent-Length: 4\r\n"
+        b"X-End-To-End: retained\r\n\r\ndata",
+    )
+    assert status == 200
+    assert body == b"data"
+    assert ("x-end-to-end", "retained") in headers
+    assert not any(key in {"x-first", "x-second"} for key, _value in headers)
+    assert [value for key, value in headers if key == "connection"] == ["close"]
+    assert [value for key, value in headers if key == "content-length"] == ["4"]
+
+
+def test_chunked_response_is_buffered_and_reframed(relay_bridge) -> None:
+    status, headers, body = framed_response(
+        relay_bridge,
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: X-Trailer\r\n\r\n"
+        b"2\r\nda\r\n2\r\nta\r\n0\r\nX-Trailer: private\r\n\r\n",
+    )
+    assert status == 200
+    assert body == b"data"
+    assert ("content-length", "4") in headers
+    assert not any(key in {"transfer-encoding", "trailer", "x-trailer"} for key, _value in headers)
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        b"",
+        b"not HTTP\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\ncut",
+        b"HTTP/1.1 200 OK\r\nContent-Length: invalid\r\n\r\ndata",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Length: 5\r\n\r\ndata!",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Length: 4\r\n\r\ndata",
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n"
+        b"4\r\ndata\r\n0\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ncut",
+    ],
+)
+def test_transport_and_ambiguous_lengths_fail_before_success(relay_bridge, upstream: bytes) -> None:
+    status, _headers, body = framed_response(relay_bridge, upstream)
+    assert status == 502
+    assert b"Relay transport failed" in body
+
+
+def test_oversized_response_fails_before_success(relay_bridge, monkeypatch) -> None:
+    monkeypatch.setattr("lyrashield.runtime.target_relay_proxy.MAX_RESPONSE_BYTES", 16)
+    status, _headers, body = framed_response(
+        relay_bridge, b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\n" + b"x" * 17
+    )
+    assert status == 502
+    assert b"Relay response exceeds bound" in body
