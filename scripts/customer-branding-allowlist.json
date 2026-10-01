@@ -368,6 +368,7 @@
       "from strix.utils.secret_files import write_secret_text"
     ],
     "lyrashield/policy/models.py": [
+      "# (strix.config.models._with_idle_timeout). Message-matching is the contract",
       "from strix.config.models import _TurnGuardModel",
       "            or os.environ.get(\"STRIX_PROGRAMMATIC_TOOL_CALLING\", \"\")",
       "            return _StrixOpenRouterStreamingHandler(",

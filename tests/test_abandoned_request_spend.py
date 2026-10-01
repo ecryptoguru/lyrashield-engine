@@ -10,7 +10,11 @@ accounting and never enter the verified usage receipt.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -54,8 +58,13 @@ def _hooks(max_budget_usd: float) -> ReportUsageHooks:
 
 
 @pytest.fixture(autouse=True)
-def _flat_rate_card(monkeypatch: pytest.MonkeyPatch) -> None:
+def _flat_rate_card(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     monkeypatch.setattr(hooks_module, "_model_rate_card", lambda _model: _RATE_CARD)
+    # _reservation_input_rate is functools-cached: clear entries captured
+    # while the rate card is patched so they cannot leak into later tests.
+    hooks_module._reservation_input_rate.cache_clear()
+    yield
+    hooks_module._reservation_input_rate.cache_clear()
 
 
 @pytest.mark.asyncio
