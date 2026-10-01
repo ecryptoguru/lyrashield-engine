@@ -55,6 +55,9 @@ dependencies = [
   "docker>=7.1.0",
   "textual>=6.0.0",
   "requests>=2.32.0",
+  # Owned direct import (lyrashield/interface/local_sources.py URL parsing);
+  # previously satisfied only transitively (DE-17).
+  "yarl>=1.18,<2",
   "cvss>=3.2",
   "caido-sdk-client>=0.2.0",
   # Security-fixed line; Intel macOS release builds compile against static OpenSSL.

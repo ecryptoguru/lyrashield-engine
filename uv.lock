@@ -1206,6 +1206,7 @@ dependencies = [
     { name = "requests" },
     { name = "rich" },
     { name = "textual" },
+    { name = "yarl" },
 ]
 
 [package.optional-dependencies]
@@ -1254,6 +1255,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rich" },
     { name = "textual", specifier = ">=6.0.0" },
+    { name = "yarl", specifier = ">=1.18,<2" },
 ]
 provides-extras = ["viewer"]
 
