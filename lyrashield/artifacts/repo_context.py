@@ -126,7 +126,6 @@ def _derive_repository_context(self: ReportState) -> dict[str, Any] | None:
     return context
 
 
+# Stable downstream facade: the public name is pinned by the artifact-state
+# facade test; the underscore helpers remain the internal implementation.
 parse_repo_full_name = _parse_repo_full_name
-git_head = _git_head
-sarif_repository_context = _sarif_repository_context
-derive_repository_context = _derive_repository_context
