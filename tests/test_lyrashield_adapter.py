@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib
 import json
-from typing import TYPE_CHECKING
+import time
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from lyrashield.lifecycle.deadline import RunDeadline
 from lyrashield.policy import loader
 from lyrashield.policy.loader import apply_config_override
 from lyrashield.policy.settings import (
@@ -105,18 +108,87 @@ def test_main_prints_product_version(
 
 
 def test_main_delegates_non_version_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
-    called = False
+    captured: dict[str, float | None] = {}
 
-    def fake_upstream_main() -> None:
-        nonlocal called
-        called = True
+    def fake_upstream_main(*, entry_monotonic: float | None) -> None:
+        captured["entry_monotonic"] = entry_monotonic
 
     # Isolate from the developer's local .env, which may name any deployment.
     monkeypatch.setattr(cli, "load_dotenv", None)
     monkeypatch.setattr(cli, "_run_upstream", fake_upstream_main)
     monkeypatch.setattr(cli.sys, "argv", ["lyrashield", "--non-interactive"])
     cli.main()
-    assert called is True
+    assert isinstance(captured["entry_monotonic"], float)
+
+
+def test_adapter_deadline_starts_before_setup_and_covers_pull_and_clone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product_main = importlib.import_module("lyrashield.interface.main")
+    run_product_main = product_main.main
+    clock = [100.0]
+    captured: dict[str, object] = {}
+
+    class StopAfterCloneError(Exception):
+        pass
+
+    def advance_setup() -> None:
+        clock[0] += 1.5
+
+    def product_entry(*, entry_monotonic: float | None = None) -> None:
+        captured["entry_monotonic"] = entry_monotonic
+        run_product_main(entry_monotonic=entry_monotonic, monotonic=lambda: clock[0])
+
+    def pull_image(*, deadline: Any) -> None:
+        captured["pull_deadline"] = deadline
+        clock[0] += 1.0
+
+    def clone_repository(*_args: Any, deadline: Any, **_kwargs: Any) -> str:
+        captured["clone_deadline"] = deadline
+        captured["clone_remaining"] = deadline.remaining_seconds()
+        raise StopAfterCloneError
+
+    args = SimpleNamespace(
+        config=None,
+        runtime_budget_seconds=10.0,
+        non_interactive=True,
+        resume=None,
+        run_name="adapter-deadline",
+        targets_info=[
+            {"type": "repository", "details": {"target_repo": "https://example.test/repo.git"}}
+        ],
+        repository_revision=None,
+        diff_head=None,
+        diff_base=None,
+        repository_branch=None,
+    )
+
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cli.multiprocessing, "freeze_support", lambda: None)
+    monkeypatch.setattr(cli, "load_dotenv", None)
+    monkeypatch.setattr(cli, "prepare_environment", advance_setup)
+    monkeypatch.setattr(cli, "_register_lyrashield_skills", advance_setup)
+    monkeypatch.setattr(cli, "_register_lyrashield_tool_overrides", advance_setup)
+    monkeypatch.setattr(cli, "_register_lyrashield_model_policy", advance_setup)
+    monkeypatch.setattr(cli.sys, "argv", ["lyrashield", "--non-interactive"])
+    monkeypatch.setattr(product_main, "main", product_entry)
+    monkeypatch.setattr(product_main, "configure_dependency_logging", lambda: None)
+    monkeypatch.setattr(product_main, "parse_arguments", lambda: args)
+    monkeypatch.setattr(product_main, "validate_environment", lambda: None)
+    monkeypatch.setattr(product_main, "check_docker_installed", lambda: None)
+    monkeypatch.setattr(product_main, "pull_docker_image", pull_image)
+    monkeypatch.setattr(product_main, "clone_repository", clone_repository)
+
+    with pytest.raises(StopAfterCloneError):
+        cli.main()
+
+    deadline = captured["pull_deadline"]
+    assert isinstance(deadline, RunDeadline)
+    assert captured["entry_monotonic"] == 100.0
+    assert deadline.hard_at == 110.0
+    assert deadline.remaining_seconds() == 3.0
+    assert captured["clone_deadline"] is deadline
+    assert captured["clone_remaining"] == 3.0
 
 
 def test_prepare_environment_disables_update_check() -> None:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import sys
+import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING, cast, get_args, get_origin
@@ -244,13 +246,18 @@ def _register_lyrashield_model_policy() -> None:
     register_model_policy_loader("model_supports_programmatic_tool_calling", _load)
 
 
-def _run_upstream() -> None:
+def _run_upstream(*, entry_monotonic: float) -> None:
     from lyrashield.interface.main import main as product_main  # noqa: PLC0415
 
-    product_main()
+    product_main(entry_monotonic=entry_monotonic)
 
 
 def main() -> None:
+    entry_monotonic = time.monotonic()
+    # The Windows release is a frozen PyInstaller executable. Docker image
+    # acquisition uses an owned child process so its blocking SDK calls can
+    # be stopped at the scan deadline.
+    multiprocessing.freeze_support()
     if sys.argv[1:] in (["--version"], ["-v"]):
         print(f"lyrashield {get_version()}")  # noqa: T201
         return
@@ -261,7 +268,7 @@ def main() -> None:
     _register_lyrashield_skills()
     _register_lyrashield_tool_overrides()
     _register_lyrashield_model_policy()
-    _run_upstream()
+    _run_upstream(entry_monotonic=entry_monotonic)
 
 
 if __name__ == "__main__":

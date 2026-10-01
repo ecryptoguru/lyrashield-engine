@@ -511,35 +511,21 @@ def test_clone_subprocess_timeout_without_budget_left_behaves_as_before(
 # ---------------------------------------------------------------------------
 
 
-def _patch_pull_client(monkeypatch: pytest.MonkeyPatch, pull_stream: Any) -> MagicMock:
-    client = MagicMock()
-    client.api.pull = pull_stream
-    monkeypatch.setattr(image_pull, "check_docker_connection", lambda: client)
-    monkeypatch.setattr(image_pull, "image_exists", lambda *_a, **_k: False)
+def test_image_pull_propagates_deadline_exhaustion_from_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deadline = RunDeadline.start(90.0)
     monkeypatch.setattr(
         image_pull,
         "load_settings",
         lambda: SimpleNamespace(runtime=SimpleNamespace(image="sandbox:img")),
     )
-    monkeypatch.delenv("STRIX_IMAGE_DIGEST", raising=False)
-    return client
-
-
-def test_image_pull_stops_streaming_once_the_deadline_passes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    now = [0.0]
-    deadline = RunDeadline.start(90.0, clock=lambda: now[0], started_at=0.0)
-
-    def stream(*_a: Any, **_k: Any) -> Any:
-        yield {"status": "Pulling from lyrashield/sandbox"}
-        now[0] = 120.0  # the layer fetch outlived the allowance
-        yield {"status": "Digest: sha256:abc"}
-
-    _patch_pull_client(monkeypatch, lambda *_a, **_k: stream())
+    supervisor = Mock(side_effect=RunDeadlineExceededError)
+    monkeypatch.setattr(image_pull, "_run_bounded_docker_operation", supervisor)
 
     with pytest.raises(RunDeadlineExceededError):
         image_pull.pull_docker_image(deadline=deadline)
+    supervisor.assert_called_once_with("sandbox:img", "", deadline)
 
 
 def test_image_pull_with_no_remaining_allowance_never_starts(
@@ -547,11 +533,15 @@ def test_image_pull_with_no_remaining_allowance_never_starts(
 ) -> None:
     now = [95.0]
     deadline = RunDeadline.start(90.0, clock=lambda: now[0], started_at=0.0)
-    pull = Mock()
-
-    _patch_pull_client(monkeypatch, pull)
+    monkeypatch.setattr(
+        image_pull,
+        "load_settings",
+        lambda: SimpleNamespace(runtime=SimpleNamespace(image="sandbox:img")),
+    )
+    supervisor = Mock()
+    monkeypatch.setattr(image_pull, "_run_bounded_docker_operation", supervisor)
 
     with pytest.raises(RunDeadlineExceededError):
         image_pull.pull_docker_image(deadline=deadline)
 
-    pull.assert_not_called()
+    supervisor.assert_not_called()
