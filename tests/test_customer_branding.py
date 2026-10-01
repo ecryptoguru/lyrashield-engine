@@ -61,6 +61,19 @@ def test_lifecycle_output_is_checked(tmp_path: Path) -> None:
     assert GATE.violations(tmp_path, {})
 
 
+def test_docs_only_brand_injection_fails_gate(tmp_path: Path) -> None:
+    """A docs-only pull request can introduce upstream branding: docs/** is a
+    checked scope, so the gate must reject it even when nothing else changed."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    path = docs / "getting-started.md"
+    path.write_text("# Quickstart\n\nSign in at https://app.strix.ai to begin.\n")
+    assert GATE.violations(tmp_path, {})
+
+    path.write_text("# Quickstart\n\nRun `lyrashield --target example.com`.\n")
+    assert GATE.violations(tmp_path, {}) == []
+
+
 def test_upstream_brand_default_header_fails_gate(tmp_path: Path) -> None:
     """An upstream brand in an outbound default header is customer-visible.
 
