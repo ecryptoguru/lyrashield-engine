@@ -43,14 +43,14 @@ def _docker_daemon_handler(stage: str, reached: threading.Event) -> type[BaseHTT
             if self.path == "/version":
                 if stage == "connection":
                     reached.set()
-                    time.sleep(5)
+                    time.sleep(12)
                     return
                 self._json(200, {"ApiVersion": "1.41", "Version": "test"})
                 return
             if stage in {"inspect", "silent_pull"} and "/images/test-image/json" in self.path:
                 if stage == "inspect":
                     reached.set()
-                    time.sleep(5)
+                    time.sleep(12)
                     return
                 self._json(404, {"message": "No such image: test-image"})
                 return
@@ -72,7 +72,7 @@ def _docker_daemon_handler(stage: str, reached: threading.Event) -> type[BaseHTT
                 self.send_header("Content-Length", "4096")
                 self.end_headers()
                 self.wfile.flush()
-                time.sleep(5)
+                time.sleep(12)
                 return
             self._json(404, {"message": "not found"})
 
@@ -144,7 +144,10 @@ def test_docker_connection_inspect_and_pull_are_deadline_bound(
     monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
     # Allow spawn/import overhead while leaving the fake daemon blocked far
     # beyond the supervised deadline.
-    deadline = RunDeadline.start(2.0)
+    # A spawned worker imports the engine before reaching the daemon. Keep the
+    # deadline comfortably above that startup cost while the fake operation
+    # itself remains blocked well beyond the allowance.
+    deadline = RunDeadline.start(5.0)
     active_before = {process.pid for process in multiprocessing.active_children()}
     started = time.monotonic()
 
@@ -156,7 +159,7 @@ def test_docker_connection_inspect_and_pull_are_deadline_bound(
         server.server_close()
 
     assert reached.wait(timeout=0.1), f"fake Docker daemon did not reach {stage}"
-    assert time.monotonic() - started < 3.0
+    assert time.monotonic() - started < 6.5
     assert {process.pid for process in multiprocessing.active_children()} <= active_before
 
 
