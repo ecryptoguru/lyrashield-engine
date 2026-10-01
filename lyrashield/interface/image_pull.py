@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
 import sys
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from docker.errors import DockerException, ImageNotFound
 from rich.console import Console
@@ -14,7 +15,12 @@ from rich.panel import Panel
 from rich.text import Text
 
 from lyrashield.interface.utils import check_docker_connection, image_exists
+from lyrashield.lifecycle.deadline import RunDeadlineExceededError
 from lyrashield.policy.loader import load_settings
+
+
+if TYPE_CHECKING:
+    from lyrashield.lifecycle.deadline import RunDeadline
 
 
 logger = logging.getLogger(__name__)
@@ -60,11 +66,15 @@ def _verify_image_digest(client: Any, image: str, expected_digest: str) -> None:
     )
 
 
-def pull_docker_image() -> None:
+def pull_docker_image(*, deadline: RunDeadline | None = None) -> None:
     """Pull the configured sandbox image, optionally verifying ``STRIX_IMAGE_DIGEST``.
 
     If ``STRIX_IMAGE_DIGEST`` is set, the pulled image's ``RepoDigests`` must
     contain the expected value. The function exits on pull or verification failure.
+
+    When ``deadline`` (the scan's shared runtime allowance) is supplied, a pull
+    that would start or continue past it raises ``RunDeadlineExceededError``
+    instead of silently overrunning the worker budget.
     """
     console = Console()
     client = check_docker_connection()
@@ -87,6 +97,9 @@ def pull_docker_image() -> None:
         logger.debug("Docker image already present locally: %s", image)
         return
 
+    if deadline is not None and deadline.remaining_seconds() <= 0:
+        raise RunDeadlineExceededError("runtime allowance exhausted before sandbox image pull")
+
     logger.info("Pulling docker image: %s", image)
     console.print()
     console.print(f"[dim]Pulling image[/] {image}")
@@ -94,11 +107,24 @@ def pull_docker_image() -> None:
     console.print()
 
     with console.status("[bold cyan]Downloading image layers...", spinner="dots") as status:
+        pull_stream: Any = None
         try:
             layers_info: dict[str, str] = {}
             last_update = ""
 
-            for line in client.api.pull(image, stream=True, decode=True):
+            # Check the shared allowance before consuming each streamed line so
+            # a stalled layer fetch cannot outlive the worker's budget.
+            pull_stream = client.api.pull(image, stream=True, decode=True)
+            pull_iter = iter(pull_stream)
+            while True:
+                if deadline is not None and deadline.remaining_seconds() <= 0:
+                    raise RunDeadlineExceededError(
+                        "runtime allowance exhausted during sandbox image pull"
+                    )
+                try:
+                    line = next(pull_iter)
+                except StopIteration:
+                    break
                 last_update = process_pull_line(line, layers_info, status, last_update)
 
             if expected_digest:
@@ -122,6 +148,13 @@ def pull_docker_image() -> None:
             )
             console.print(panel, "\n")
             sys.exit(1)
+        finally:
+            # An abandoned pull must not leak the open response stream.
+            if pull_stream is not None:
+                close = getattr(pull_stream, "close", None)
+                if callable(close):
+                    with contextlib.suppress(Exception):
+                        close()
 
     logger.info("Docker image %s ready", image)
     success_text = Text()

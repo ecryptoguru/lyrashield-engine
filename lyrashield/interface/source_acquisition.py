@@ -22,6 +22,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
+
 
 _SUPPORTED_SCOPE_MODES = {"auto", "diff", "full"}
 
@@ -56,6 +58,19 @@ _GIT_OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 def _is_git_object_id(value: str) -> bool:
     """True iff *value* is a full 40- or 64-character lowercase Git object ID."""
     return bool(_GIT_OBJECT_ID_RE.fullmatch(value))
+
+
+def _raise_if_deadline_exhausted(deadline: RunDeadline | None, phase: str) -> None:
+    """Stop acquisition when the shared scan allowance is already spent."""
+    if deadline is not None and deadline.remaining_seconds() <= 0:
+        raise RunDeadlineExceededError(f"runtime allowance exhausted during {phase}")
+
+
+def _bounded_timeout(deadline: RunDeadline | None, cap: float) -> float:
+    """Cap a subprocess wait at both its configured bound and the allowance."""
+    if deadline is None:
+        return cap
+    return max(0.001, min(cap, deadline.remaining_seconds()))
 
 
 def validate_git_object_id(value: str) -> str:
@@ -985,16 +1000,19 @@ def _commit_available(repo_path: Path, sha: str) -> bool:
     return _git_ref_exists(repo_path, f"{sha}^{{commit}}")
 
 
-def _ensure_commit_available(repo_path: Path, sha: str, reason: str) -> None:
+def _ensure_commit_available(
+    repo_path: Path, sha: str, reason: str, deadline: RunDeadline | None = None
+) -> None:
     """Ensure commit *sha* exists locally; one bounded fetch, then fail closed."""
     if _commit_available(repo_path, sha):
         return
+    _raise_if_deadline_exhausted(deadline, f"fetch of required commit {sha}")
     try:
         fetch = _run_git_command(
             repo_path,
             ["fetch", "origin", sha],
             check=False,
-            timeout=_GIT_FETCH_TIMEOUT_SECONDS,
+            timeout=_bounded_timeout(deadline, _GIT_FETCH_TIMEOUT_SECONDS),
         )
     except (OSError, subprocess.SubprocessError) as e:
         raise SourcePreflightError(reason, f"Fetching required commit {sha} failed: {e}") from e
@@ -1024,7 +1042,9 @@ def _read_only_head_revision(repo_path: Path) -> str | None:
     return sha or None
 
 
-def _assert_checkout_revision(repo_path: Path, revision: str) -> None:
+def _assert_checkout_revision(
+    repo_path: Path, revision: str, deadline: RunDeadline | None = None
+) -> None:
     """Detach the checkout at *revision* and assert HEAD's object ID matches.
 
     A branch name is only a fetch hint — the recorded immutable revision is
@@ -1032,20 +1052,21 @@ def _assert_checkout_revision(repo_path: Path, revision: str) -> None:
     force-pushed or non-branch head), one bounded direct fetch is attempted
     before failing closed.
     """
+    _raise_if_deadline_exhausted(deadline, f"checkout at revision {revision}")
     checkout = _run_git_command(
         repo_path,
         ["checkout", "--detach", revision],
         check=False,
-        timeout=_GIT_CHECKOUT_TIMEOUT_SECONDS,
+        timeout=_bounded_timeout(deadline, _GIT_CHECKOUT_TIMEOUT_SECONDS),
     )
     if checkout.returncode != 0:
-        _ensure_commit_available(repo_path, revision, "missing_revision")
+        _ensure_commit_available(repo_path, revision, "missing_revision", deadline)
         try:
             _run_git_command(
                 repo_path,
                 ["checkout", "--detach", revision],
                 check=True,
-                timeout=_GIT_CHECKOUT_TIMEOUT_SECONDS,
+                timeout=_bounded_timeout(deadline, _GIT_CHECKOUT_TIMEOUT_SECONDS),
             )
         except subprocess.CalledProcessError as e:
             detail = e.stderr.strip() if isinstance(e.stderr, str) else str(e)
@@ -1071,6 +1092,7 @@ def clone_repository(
     *,
     revision: str | None = None,
     required_commits: tuple[str, ...] = (),
+    deadline: RunDeadline | None = None,
 ) -> str:
     console = Console()
 
@@ -1087,6 +1109,11 @@ def clone_repository(
             f"The repository destination name {repo_name!r} is not a safe subdirectory.",
         )
         sys.exit(1)
+
+    # The clone shares the scan's monotonic deadline: refuse to spawn git
+    # once the allowance is gone rather than starting work that can only be
+    # abandoned.
+    _raise_if_deadline_exhausted(deadline, "repository clone")
 
     base = Path(tempfile.gettempdir()) / "strix_repos"
     base.mkdir(parents=True, exist_ok=True)
@@ -1121,12 +1148,13 @@ def clone_repository(
                 capture_output=True,
                 text=True,
                 check=True,
-                timeout=_GIT_CLONE_TIMEOUT_SECONDS,
+                timeout=_bounded_timeout(deadline, _GIT_CLONE_TIMEOUT_SECONDS),
             )
+            _raise_if_deadline_exhausted(deadline, "repository checkout")
             if pinned_revision:
-                _assert_checkout_revision(clone_path, pinned_revision.lower())
+                _assert_checkout_revision(clone_path, pinned_revision.lower(), deadline)
             for required in required_commits:
-                _ensure_commit_available(clone_path, required, "missing_base")
+                _ensure_commit_available(clone_path, required, "missing_base", deadline)
 
         return str(clone_path.absolute())
 
@@ -1134,6 +1162,13 @@ def clone_repository(
         _print_source_preflight_error(console, e)
         sys.exit(1)
     except subprocess.TimeoutExpired as e:
+        # A git wait that outlived the allowance is a deadline event, not a
+        # clone failure — surface it as RunDeadlineExceededError so the entry
+        # point can record the honest bounded terminal artifact.
+        if deadline is not None and deadline.remaining_seconds() <= 0:
+            raise RunDeadlineExceededError(
+                f"runtime allowance exhausted during repository clone of {repo_url}"
+            ) from e
         _print_clone_error(
             console,
             f"Timed out acquiring repository {repo_url}: {e}",

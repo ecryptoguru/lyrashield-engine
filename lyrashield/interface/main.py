@@ -9,6 +9,8 @@ import asyncio
 import logging
 import shutil
 import sys
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,11 +20,13 @@ from rich.panel import Panel
 from rich.text import Text
 
 from lyrashield.artifacts.state import (
+    ReportState,
     get_global_report_state,
     initial_run_record,
     sanitize_attachments,
     sanitize_local_sources,
     sanitize_targets_info,
+    set_global_report_state,
     validate_run_record,
 )
 from lyrashield.artifacts.writer import (
@@ -51,6 +55,7 @@ from lyrashield.interface.utils import (
     validate_config_file,
 )
 from lyrashield.interface.warmup import warm_up_llm
+from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
 from lyrashield.policy.settings import (
@@ -209,7 +214,11 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     # releases, so the upstream version check would suggest the wrong package.
 
 
-def main() -> None:
+def main(
+    *,
+    entry_monotonic: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
     # Auto-load the engine .env if present; explicit shell exports still win.
     try:
         from dotenv import load_dotenv
@@ -262,9 +271,23 @@ def main() -> None:
     if args.config:
         apply_config_override(validate_config_file(args.config))
 
+    # The non-interactive runtime allowance starts as early as the owned scan
+    # entry permits: image pull, repository clone and diff-scope resolution
+    # all consume the same deadline the lifecycle enforces. Interpreter and
+    # import time before main() cannot be included — the worker's own timer
+    # starts at process spawn and already accounts for it.
+    args.run_deadline = None
+    runtime_seconds = getattr(args, "runtime_budget_seconds", None)
+    if getattr(args, "non_interactive", False) and runtime_seconds is not None:
+        args.run_deadline = RunDeadline.start(
+            runtime_seconds,
+            clock=monotonic,
+            started_at=entry_monotonic if entry_monotonic is not None else monotonic(),
+        )
+    deadline = args.run_deadline
+
     validate_environment()
     check_docker_installed()
-    pull_docker_image()
 
     # Non-interactive worker runs must not make an unmetered warm-up request or
     # persist provider credentials under the container home directory.
@@ -273,112 +296,145 @@ def main() -> None:
 
     args.run_name = args.resume or args.run_name or generate_run_name(args.targets_info)
 
-    if not args.resume:
-        # --repository-revision pins the remote checkout; --diff-head asserts
-        # the comparison head. When both are absent a full-SHA
-        # --repository-branch is the legacy pin form. The validated diff-head
-        # doubles as the checkout revision when no explicit revision is given —
-        # Review Changes compares the recorded head, not a moving branch tip.
-        checkout_revision = args.repository_revision or args.diff_head
-        required_commits: tuple[str, ...] = ()
-        if args.diff_base and _is_full_git_commit_sha(args.diff_base):
-            required_commits = (args.diff_base.lower(),)
+    deadline_exhausted = False
+    try:
+        pull_docker_image(deadline=deadline)
 
-        for target_info in args.targets_info:
-            if target_info["type"] == "repository":
-                repo_url = target_info["details"]["target_repo"]
-                dest_name = target_info["details"].get("workspace_subdir")
-                cloned_path = clone_repository(
-                    repo_url,
-                    args.run_name,
-                    dest_name,
-                    args.repository_branch,
-                    revision=checkout_revision,
-                    required_commits=required_commits,
+        if not args.resume:
+            # --repository-revision pins the remote checkout; --diff-head asserts
+            # the comparison head. When both are absent a full-SHA
+            # --repository-branch is the legacy pin form. The validated diff-head
+            # doubles as the checkout revision when no explicit revision is given —
+            # Review Changes compares the recorded head, not a moving branch tip.
+            checkout_revision = args.repository_revision or args.diff_head
+            required_commits: tuple[str, ...] = ()
+            if args.diff_base and _is_full_git_commit_sha(args.diff_base):
+                required_commits = (args.diff_base.lower(),)
+
+            for target_info in args.targets_info:
+                if target_info["type"] == "repository":
+                    repo_url = target_info["details"]["target_repo"]
+                    dest_name = target_info["details"].get("workspace_subdir")
+                    cloned_path = clone_repository(
+                        repo_url,
+                        args.run_name,
+                        dest_name,
+                        args.repository_branch,
+                        revision=checkout_revision,
+                        required_commits=required_commits,
+                        deadline=deadline,
+                    )
+                    target_info["details"]["cloned_repo_path"] = cloned_path
+
+            runtime = load_settings().runtime
+            args.local_sources = collect_local_sources(
+                args.targets_info,
+                # Product Docker scans own the fresh clone and keep TMPDIR on the
+                # host-visible worker root. A read-only bind avoids streaming the
+                # entire Git tree through Docker's archive API before every scan.
+                mount_cloned_repositories=is_lyrashield_product() and runtime.backend == "docker",
+            )
+            try:
+                diff_scope = resolve_diff_scope_context(
+                    local_sources=args.local_sources,
+                    scope_mode=args.scope_mode,
+                    diff_base=args.diff_base,
+                    non_interactive=args.non_interactive,
+                    diff_head=args.diff_head,
                 )
-                target_info["details"]["cloned_repo_path"] = cloned_path
+            except ValueError as e:
+                console = Console()
+                error_text = Text()
+                error_text.append("DIFF SCOPE RESOLUTION FAILED", style="bold red")
+                error_text.append("\n\n", style="white")
+                error_text.append(str(e), style="white")
 
-        runtime = load_settings().runtime
-        args.local_sources = collect_local_sources(
-            args.targets_info,
-            # Product Docker scans own the fresh clone and keep TMPDIR on the
-            # host-visible worker root. A read-only bind avoids streaming the
-            # entire Git tree through Docker's archive API before every scan.
-            mount_cloned_repositories=is_lyrashield_product() and runtime.backend == "docker",
+                panel = Panel(
+                    error_text,
+                    title="[bold white]LYRASHIELD",
+                    title_align="left",
+                    border_style="red",
+                    padding=(1, 2),
+                )
+                console.print("\n")
+                console.print(panel)
+                console.print()
+                sys.exit(1)
+
+            args.diff_scope = diff_scope.metadata
+
+            if diff_scope.active and diff_scope.metadata.get("no_change"):
+                # Empty analyzable diff: record a durable no-change receipt and
+                # stop. No sandbox, warm-up, or provider call is ever reached —
+                # the run record below is the entire output of this run.
+                _persist_run_record(
+                    args,
+                    terminal={
+                        "status": "completed",
+                        "phase": "completed",
+                        "terminal_reason": "no_change",
+                        "end_time": datetime.now(UTC).isoformat(),
+                        "instruction": None,
+                        "instruction_chars": len(args.instruction or ""),
+                    },
+                )
+                console = Console()
+                note_text = Text()
+                note_text.append("NO ANALYZABLE CHANGES", style="bold #22c55e")
+                note_text.append("\n\n", style="white")
+                note_text.append(
+                    "Diff-scope resolved zero analyzable files "
+                    f"({diff_scope.metadata.get('no_change_reason', 'empty_diff')}). "
+                    "The run was recorded as a no-change receipt; no scan was launched.\n",
+                    style="white",
+                )
+                panel = Panel(
+                    note_text,
+                    title="[bold white]LYRASHIELD",
+                    title_align="left",
+                    border_style="#22c55e",
+                    padding=(1, 2),
+                )
+                console.print("\n")
+                console.print(panel)
+                console.print()
+                sys.exit(0)
+
+            if diff_scope.instruction_block:
+                if args.instruction:
+                    args.instruction = f"{diff_scope.instruction_block}\n\n{args.instruction}"
+                else:
+                    args.instruction = diff_scope.instruction_block
+
+            _persist_run_record(args)
+    except RunDeadlineExceededError:
+        # Acquisition ran the shared allowance to zero: fall through to the
+        # honest bounded terminal artifact below instead of starting a scan
+        # that can only be killed mid-flight.
+        deadline_exhausted = True
+
+    if deadline is not None and deadline.remaining_seconds() <= 0:
+        deadline_exhausted = True
+
+    if deadline_exhausted:
+        # The allowance was spent before model work could begin. Persist the
+        # truthful stopped receipt — never a fabricated clean result — then
+        # hydrate it so persisted findings and the terminal reason reach the
+        # worker exit-code contract below.
+        _persist_run_record(
+            args,
+            terminal={
+                "status": "stopped",
+                "phase": "stopped",
+                "terminal_reason": "runtime_deadline",
+                "end_time": datetime.now(UTC).isoformat(),
+                "instruction": None,
+                "instruction_chars": len(args.instruction or ""),
+            },
         )
-        try:
-            diff_scope = resolve_diff_scope_context(
-                local_sources=args.local_sources,
-                scope_mode=args.scope_mode,
-                diff_base=args.diff_base,
-                non_interactive=args.non_interactive,
-                diff_head=args.diff_head,
-            )
-        except ValueError as e:
-            console = Console()
-            error_text = Text()
-            error_text.append("DIFF SCOPE RESOLUTION FAILED", style="bold red")
-            error_text.append("\n\n", style="white")
-            error_text.append(str(e), style="white")
-
-            panel = Panel(
-                error_text,
-                title="[bold white]LYRASHIELD",
-                title_align="left",
-                border_style="red",
-                padding=(1, 2),
-            )
-            console.print("\n")
-            console.print(panel)
-            console.print()
-            sys.exit(1)
-
-        args.diff_scope = diff_scope.metadata
-
-        if diff_scope.active and diff_scope.metadata.get("no_change"):
-            # Empty analyzable diff: record a durable no-change receipt and
-            # stop. No sandbox, warm-up, or provider call is ever reached —
-            # the run record below is the entire output of this run.
-            _persist_run_record(
-                args,
-                terminal={
-                    "status": "completed",
-                    "phase": "completed",
-                    "terminal_reason": "no_change",
-                    "end_time": datetime.now(UTC).isoformat(),
-                    "instruction": None,
-                    "instruction_chars": len(args.instruction or ""),
-                },
-            )
-            console = Console()
-            note_text = Text()
-            note_text.append("NO ANALYZABLE CHANGES", style="bold #22c55e")
-            note_text.append("\n\n", style="white")
-            note_text.append(
-                "Diff-scope resolved zero analyzable files "
-                f"({diff_scope.metadata.get('no_change_reason', 'empty_diff')}). "
-                "The run was recorded as a no-change receipt; no scan was launched.\n",
-                style="white",
-            )
-            panel = Panel(
-                note_text,
-                title="[bold white]LYRASHIELD",
-                title_align="left",
-                border_style="#22c55e",
-                padding=(1, 2),
-            )
-            console.print("\n")
-            console.print(panel)
-            console.print()
-            sys.exit(0)
-
-        if diff_scope.instruction_block:
-            if args.instruction:
-                args.instruction = f"{diff_scope.instruction_block}\n\n{args.instruction}"
-            else:
-                args.instruction = diff_scope.instruction_block
-
-        _persist_run_record(args)
+        exhausted_state = ReportState(args.run_name)
+        exhausted_state.hydrate_from_run_dir()
+        set_global_report_state(exhausted_state)
 
     if not args.non_interactive:
         asyncio.run(warm_up_llm(show_model_warning=False, usages=warm_up_usages))
@@ -406,7 +462,10 @@ def main() -> None:
     exit_reason = "user_exit"
     try:
         if args.non_interactive:
-            asyncio.run(run_cli(args))
+            # An allowance already spent on preprocessing means no model work:
+            # the bounded terminal record above is the entire run output.
+            if not deadline_exhausted:
+                asyncio.run(run_cli(args))
         else:
             asyncio.run(run_tui(args))
     except KeyboardInterrupt:
