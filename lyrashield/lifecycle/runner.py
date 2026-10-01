@@ -82,7 +82,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 StreamEventSink = Callable[[str, Any], None]
-_MODE_AGENT_LIMITS = {"quick": 2, "standard": 4, "deep": 6}
 _MODE_OUTPUT_TOKEN_LIMITS = {"quick": 4_096, "standard": 8_192, "deep": 16_384}
 _DEFAULT_OUTPUT_TOKENS = 8_192
 # Ceiling applied to delegate agents regardless of the coordinator's budget, so

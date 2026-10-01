@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from lyrashield.lifecycle import restore
+from lyrashield.lifecycle.agents import AgentCoordinator
 
 
 if TYPE_CHECKING:
@@ -129,3 +130,74 @@ async def test_new_scan_uses_fresh_root_id_and_hydrates_shared_ledgers(
     assert root_id not in {"", "root-1"}
     assert coordinator.max_agents == 4
     assert hydrated == ["coverage", "threats"]
+
+
+@pytest.mark.asyncio
+async def test_quick_scan_configures_real_coordinator_concurrency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Quick concurrency ceiling is read by the live factory path in
+    restore.py (parallelized in #190); no other module supplies it."""
+    monkeypatch.setattr(restore, "hydrate_coverage_from_disk", lambda _path: None)
+    monkeypatch.setattr(restore, "hydrate_threat_models_from_disk", lambda _path: None)
+
+    coordinator, _ = await restore.restore_coordinator(
+        coordinator=None,
+        coordinator_factory=AgentCoordinator,
+        scan_mode="quick",
+        state_dir=tmp_path,
+        agents_path=tmp_path / "agents.json",
+        agents_db=tmp_path / "agents.db",
+        scan_id="scan-quick",
+        is_resume=False,
+        max_budget_usd=None,
+        interactive=False,
+        report_state_getter=lambda: None,
+        recomputed_budget_flags=lambda *_args, **_kwargs: (False, False),
+    )
+
+    assert type(coordinator) is AgentCoordinator
+    assert coordinator.max_agents == 4
+
+
+@pytest.mark.parametrize(
+    ("scan_mode", "expected_limit"),
+    [("quick", 4), ("standard", 4), ("deep", 6), ("unlisted", 4)],
+)
+def test_scan_mode_agent_limit_reaches_the_coordinator_factory(
+    scan_mode: str, expected_limit: int
+) -> None:
+    created: list[int] = []
+
+    def factory(*, max_agents: int = 0) -> _Coordinator:
+        created.append(max_agents)
+        coordinator = _Coordinator()
+        coordinator.max_agents = max_agents
+        return coordinator
+
+    coordinator = restore._coordinator_for_scan_mode(
+        None, scan_mode, coordinator_factory=factory
+    )
+
+    assert created == [expected_limit]
+    assert coordinator.max_agents == expected_limit
+
+
+def test_quick_mode_clamps_an_injected_coordinator() -> None:
+    coordinator = _Coordinator()
+    coordinator.max_agents = 99
+    coordinator.statuses = {f"a{i}": "stopped" for i in range(4)}
+
+    result = restore._coordinator_for_scan_mode(coordinator, "quick")
+
+    assert result is coordinator
+    assert coordinator.max_agents == 4
+
+
+def test_quick_mode_rejects_an_over_limit_coordinator() -> None:
+    coordinator = _Coordinator()
+    coordinator.statuses = {f"a{i}": "stopped" for i in range(5)}
+
+    with pytest.raises(RuntimeError, match="quick"):
+        restore._coordinator_for_scan_mode(coordinator, "quick")
