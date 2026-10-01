@@ -645,9 +645,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             self._reservations.pop(key, None)
             report_state = get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            committed = (
-                max(observed, self._committed_cost_floor)
-                + sum(self._abandoned_floors.values())
+            committed = max(observed, self._committed_cost_floor) + sum(
+                self._abandoned_floors.values()
             )
             reserved = sum(self._reservations.values())
             if committed + reserved + reservation > self._max_budget_usd:
@@ -675,9 +674,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 # No usage was reported, but the provider may still bill the
                 # partial work. Keep the bounded reservation as a conservative
                 # estimated-spend floor instead of assuming a zero charge.
-                self._abandoned_floors[key] = (
-                    self._abandoned_floors.get(key, 0.0) + reservation
-                )
+                self._abandoned_floors[key] = self._abandoned_floors.get(key, 0.0) + reservation
 
     async def reserve_web_search_call(
         self,
@@ -699,9 +696,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             self._reservations.pop(key, None)
             report_state = get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            committed = (
-                max(observed, self._committed_cost_floor)
-                + sum(self._abandoned_floors.values())
+            committed = max(observed, self._committed_cost_floor) + sum(
+                self._abandoned_floors.values()
             )
             reserved = sum(self._reservations.values())
             if committed + reserved + estimated_cost > self._max_budget_usd:
@@ -910,9 +906,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     )
                 report_state = get_global_report_state()
                 observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-                committed = (
-                    max(observed, self._committed_cost_floor)
-                    + sum(self._abandoned_floors.values())
+                committed = max(observed, self._committed_cost_floor) + sum(
+                    self._abandoned_floors.values()
                 )
                 reserved = sum(self._reservations.values())
                 if committed + reserved + reservation > self._max_budget_usd:
@@ -961,10 +956,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
 
         if self._max_budget_usd is not None:
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            cost = (
-                max(observed, self._committed_cost_floor)
-                + sum(self._abandoned_floors.values())
-            )
+            cost = max(observed, self._committed_cost_floor) + sum(self._abandoned_floors.values())
             if cost >= self._max_budget_usd:
                 if self._interactive:
                     raise BudgetPausedError(

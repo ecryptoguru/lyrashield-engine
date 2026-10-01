@@ -176,9 +176,7 @@ def test_scan_mode_agent_limit_reaches_the_coordinator_factory(
         coordinator.max_agents = max_agents
         return coordinator
 
-    coordinator = restore._coordinator_for_scan_mode(
-        None, scan_mode, coordinator_factory=factory
-    )
+    coordinator = restore._coordinator_for_scan_mode(None, scan_mode, coordinator_factory=factory)
 
     assert created == [expected_limit]
     assert coordinator.max_agents == expected_limit
