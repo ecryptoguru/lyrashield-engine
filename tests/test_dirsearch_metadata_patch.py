@@ -76,7 +76,7 @@ def test_semgrep_patch_changes_only_pyjwt_and_updates_record(tmp_path: Path) -> 
 
     patched = (dist_info / "METADATA").read_bytes()
     assert patched == original.replace(
-        b"Requires-Dist: pyjwt[crypto]~=2.13.0\n", b"Requires-Dist: pyjwt[crypto]>=2.14.0,<2.15.0\n"
+        b"Requires-Dist: pyjwt[crypto]~=2.13.0\n", b"Requires-Dist: pyjwt[crypto]>=2.15.1,<2.16.0\n"
     )
     with (dist_info / "RECORD").open(encoding="utf-8", newline="") as stream:
         rows = list(csv.reader(stream))

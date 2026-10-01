@@ -26,7 +26,7 @@ from semgrep.mcp.utilities.token_verifier import IntrospectionTokenVerifier
 
 def main() -> None:
     assert version("semgrep") == "1.178.0"
-    assert version("PyJWT") == "2.14.0"
+    assert version("PyJWT") == "2.15.1"
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
     public.update(kid="fixture", alg="RS256", use="sig")
