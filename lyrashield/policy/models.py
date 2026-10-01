@@ -29,6 +29,7 @@ from agents.retry import (
     RetryPolicyContext,
     retry_policies,
 )
+from openai import APITimeoutError
 from openai.types.responses import Response, ResponseCompletedEvent
 from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared import Reasoning
@@ -36,6 +37,37 @@ from openai.types.shared import Reasoning
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
 from strix.config.models import _TurnGuardModel
+
+
+class BoundedStreamTimeoutError(TimeoutError):
+    """A configured stream-idle or provider request timeout bounded a model turn.
+
+    Subclasses ``TimeoutError`` so existing timeout handling keeps working,
+    while the explicit type lets the root agent distinguish a bounded stream
+    gap from unrelated internal timeouts and salvage partial findings instead
+    of failing the scan.
+    """
+
+
+# The inherited stream guard abandons a silent turn with this exact phrasing
+# (strix.config.models._with_idle_timeout). Message-matching is the contract
+# with the vendored boundary; owned wrappers re-raise the classified type.
+_STREAM_IDLE_TIMEOUT_MARKER = "model stream produced no event"
+
+
+def is_bounded_stream_timeout(exc: BaseException) -> bool:
+    """Classify owned stream-idle and provider request timeouts.
+
+    Selected cases only: the configured stream-idle guard, the classified
+    owned wrapper type, and the provider per-request timeout. Unrelated
+    internal timeouts, programming errors, auth errors and invalid artifacts
+    never match and stay failures.
+    """
+    if isinstance(exc, BoundedStreamTimeoutError):
+        return True
+    if isinstance(exc, APITimeoutError):
+        return True
+    return isinstance(exc, TimeoutError) and _STREAM_IDLE_TIMEOUT_MARKER in str(exc)
 
 
 if TYPE_CHECKING:
@@ -475,19 +507,26 @@ class _RequestBoundTurnGuardModel(_TurnGuardModel):
             max_tool_calls_per_turn=self._max_tool_calls_per_turn,
             stream_idle_timeout=idle_timeout,
         )
-        async for event in guard.stream_response(
-            system_instructions,
-            input,
-            model_settings,
-            tools,
-            output_schema,
-            handoffs,
-            tracing,
-            previous_response_id=previous_response_id,
-            conversation_id=conversation_id,
-            prompt=prompt,
-        ):
-            yield event
+        try:
+            async for event in guard.stream_response(
+                system_instructions,
+                input,
+                model_settings,
+                tools,
+                output_schema,
+                handoffs,
+                tracing,
+                previous_response_id=previous_response_id,
+                conversation_id=conversation_id,
+                prompt=prompt,
+            ):
+                yield event
+        except TimeoutError as exc:
+            # The guard already closed the abandoned inner stream; re-raise
+            # through the owned boundary with the explicit classification so
+            # callers can distinguish a bounded stream gap from unrelated
+            # internal timeouts.
+            raise BoundedStreamTimeoutError(str(exc)) from exc
 
 
 class _CredentialedLitellmProvider(ModelProvider):
