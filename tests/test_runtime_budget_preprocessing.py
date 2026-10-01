@@ -21,7 +21,7 @@ import pytest
 
 from lyrashield.artifacts.state import get_global_report_state, set_global_report_state
 from lyrashield.interface import cli as cli_module
-from lyrashield.interface import image_pull, source_acquisition
+from lyrashield.interface import image_pull, repo_clone, source_acquisition
 from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
 
 
@@ -432,7 +432,7 @@ def test_clone_timeout_is_bounded_by_the_remaining_allowance(
         calls.append(kwargs)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(source_acquisition, "subprocess", _fake_subprocess(fake_run))
+    monkeypatch.setattr(repo_clone, "subprocess", _fake_subprocess(fake_run))
     monkeypatch.setattr(source_acquisition.tempfile, "gettempdir", lambda: str(tmp_path))
 
     path = source_acquisition.clone_repository(
@@ -455,7 +455,7 @@ def test_clone_refuses_to_spawn_git_once_the_budget_is_gone(
         calls.append(kwargs)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(source_acquisition, "subprocess", _fake_subprocess(fake_run))
+    monkeypatch.setattr(repo_clone, "subprocess", _fake_subprocess(fake_run))
     monkeypatch.setattr(source_acquisition.tempfile, "gettempdir", lambda: str(tmp_path))
 
     with pytest.raises(RunDeadlineExceededError):
@@ -477,7 +477,7 @@ def test_clone_subprocess_timeout_maps_to_the_deadline_when_exhausted(
         now[0] = 200.0  # the wait outlived the allowance
         raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
 
-    monkeypatch.setattr(source_acquisition, "subprocess", _fake_subprocess(fake_run))
+    monkeypatch.setattr(repo_clone, "subprocess", _fake_subprocess(fake_run))
     monkeypatch.setattr(source_acquisition.tempfile, "gettempdir", lambda: str(tmp_path))
 
     with pytest.raises(RunDeadlineExceededError):
@@ -496,7 +496,7 @@ def test_clone_subprocess_timeout_without_budget_left_behaves_as_before(
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
 
-    monkeypatch.setattr(source_acquisition, "subprocess", _fake_subprocess(fake_run))
+    monkeypatch.setattr(repo_clone, "subprocess", _fake_subprocess(fake_run))
     monkeypatch.setattr(source_acquisition.tempfile, "gettempdir", lambda: str(tmp_path))
 
     with pytest.raises(SystemExit) as exc_info:

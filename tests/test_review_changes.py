@@ -32,7 +32,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from lyrashield.interface import source_acquisition
+from lyrashield.interface import diff_scope, repo_clone, source_acquisition
 from lyrashield.interface.utils import (
     SourcePreflightError,
     clone_repository,
@@ -335,7 +335,7 @@ def test_scope_mode_full_needs_no_revisions(monkeypatch: pytest.MonkeyPatch) -> 
 
 def _clone_env(tmp_path: Path) -> Any:
     return (
-        patch.object(source_acquisition, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(repo_clone, "_git_executable", return_value="/usr/bin/git"),
         patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)),
     )
 
@@ -799,7 +799,7 @@ def test_asserted_diff_rejects_unverified_worktree_state(
             return subprocess.CompletedProcess(args, 1, b"", b"status unavailable")
         return original(path, args, **kwargs)
 
-    monkeypatch.setattr(source_acquisition, "_run_git_command_raw", failed_status)
+    monkeypatch.setattr(diff_scope, "_run_git_command_raw", failed_status)
     with pytest.raises(SourcePreflightError) as exc_info:
         resolve_diff_scope_context(
             _sources(repo), "diff", base, non_interactive=True, env={}, diff_head=head
