@@ -42,7 +42,7 @@ dependencies = [
   # Keep the SDK within the reviewed openai-agents and LiteLLM compatibility range.
   "openai>=2.48.0,<3.2",
   # Compatible-release pin reviewed in dependency update #77.
-  "litellm~=1.90",
+  "litellm~=1.90.7",
   "jinja2>=3.1.6",
   "pyyaml>=6.0.3",
   "httpx>=0.28.1",
