@@ -132,11 +132,11 @@ exclude = [
 python_version = "3.12"
 strict = true
 
-# Keep only the upstream Textual TUI and tests outside the strict source gate.
-# The owned Local TUI and viewer are maintained product code and are checked.
+# Keep only the upstream Go/Bubble Tea sidecar TUI tree and tests outside the
+# strict source gate. The owned interface TUI, Local TUI, and viewer are
+# maintained product code and are checked.
 exclude = [
     "strix/interface/tui",
-    "lyrashield/interface/tui",
     "tests",
 ]
 strict_optional = true
