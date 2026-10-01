@@ -30,10 +30,19 @@ class RunDeadline:
     clock: Callable[[], float]
 
     @classmethod
-    def start(cls, seconds: float, *, clock: Callable[[], float] = time.monotonic) -> RunDeadline:
+    def start(
+        cls,
+        seconds: float,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        started_at: float | None = None,
+    ) -> RunDeadline:
         if not math.isfinite(seconds) or seconds <= 0:
             raise ValueError("runtime budget must be a finite positive number of seconds")
-        started = clock()
+        # ``started_at`` lets the scan entry reuse a monotonic reading taken
+        # before preprocessing (image pull, clone) so that work consumes the
+        # same allowance the lifecycle enforces.
+        started = started_at if started_at is not None else clock()
         reserve = min(300.0, seconds * 0.3)
         return cls(hard_at=started + seconds, wrap_at=started + seconds - reserve, clock=clock)
 

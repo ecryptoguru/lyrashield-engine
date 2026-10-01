@@ -15,6 +15,7 @@ from lyrashield.policy.models import (
     StrixProvider,
     _azure_responses_base_url,
     _AzureUsageResponsesModel,
+    _is_azure_model,
     is_gpt6_model,
     is_gpt6_supported_provider,
     is_recommended_or_frontier_model,
@@ -354,6 +355,38 @@ def test_model_path_preserves_original_case_for_azure_deployments() -> None:
     assert route.model_path == "MyDeployment-GPT"
     assert parse_model_route("litellm/Azure/MyDeployment-GPT").model_path == "MyDeployment-GPT"
     assert parse_model_route("azure/eu/MyDeployment-GPT").model_path == "eu/MyDeployment-GPT"
+
+
+def test_azure_ai_worker_alias_canonicalizes_to_the_engine_provider() -> None:
+    """The web worker spells the Azure AI provider ``azure-ai``; the engine's
+    canonical spelling is ``azure_ai``. The documented alias normalizes at the
+    owned route boundary for admission and routing alike, while the model path
+    keeps its original case."""
+    route = parse_model_route("azure-ai/gpt-6-sol")
+    assert route is not None
+    assert route.provider == "azure_ai"
+    assert route.model_path == "gpt-6-sol"
+
+    wrapped = parse_model_route("litellm/azure-ai/MyDeployment-GPT")
+    assert wrapped is not None
+    assert wrapped.provider == "azure_ai"
+    assert wrapped.model_path == "MyDeployment-GPT"
+
+    assert is_gpt6_supported_provider("azure-ai/gpt-6-sol") is True
+    assert is_gpt6_supported_provider("azure-ai/gpt-6-luna") is True
+    assert _is_azure_model("azure-ai/gpt-6-sol") is True
+    assert _is_azure_model("openai/gpt-6-sol") is False
+
+
+def test_azure_ai_alias_keeps_gpt6_only_policy_and_invalid_routes_rejected() -> None:
+    """The alias admits nothing the canonical spelling would not."""
+    assert is_gpt6_supported_provider("azure-ai/gpt-5") is False
+    assert is_gpt6_supported_provider("evil/azure-ai/gpt-6-luna") is False
+    assert is_gpt6_supported_provider("litellm/evil/azure-ai/gpt-6-luna") is False
+    with pytest.raises(ValueError, match="model route"):
+        parse_model_route("azure-ai//gpt-6-luna")
+    with pytest.raises(ValueError, match="model route"):
+        parse_model_route("azure-ai/")
 
 
 def test_admission_checks_exactly_the_provider_routing_selects() -> None:

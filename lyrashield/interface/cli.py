@@ -205,9 +205,18 @@ async def run_cli(args: Any) -> None:
         runtime_seconds = getattr(args, "runtime_budget_seconds", None)
         if runtime_seconds is not None and not non_interactive:
             raise ValueError("runtime budget is supported only for non-interactive scans")
-        deadline = (
-            RunDeadline.start(runtime_seconds) if non_interactive and runtime_seconds else None
-        )
+        # Reuse the deadline main() attached before image pull and repository
+        # acquisition — preprocessing consumes the same allowance. Direct
+        # run_cli callers that skipped main() still start their own here.
+        deadline = getattr(args, "run_deadline", None)
+        if deadline is None and non_interactive and runtime_seconds:
+            deadline = RunDeadline.start(runtime_seconds)
+        if deadline is not None and deadline.remaining_seconds() <= 0:
+            # The allowance was fully consumed before model work could begin:
+            # record the honest bounded terminal state and skip the scan.
+            report_state.set_terminal_reason("runtime_deadline")
+            logger.warning("Runtime allowance exhausted before scan start; skipping model work")
+            return
         coordinator = AgentCoordinator() if deadline is not None else None
         if coordinator is not None:
             coordinator.run_deadline = deadline

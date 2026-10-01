@@ -820,6 +820,12 @@ async def _run_cycle(
                     )
             finally:
                 await coordinator.detach_stream(agent_id, stream)
+                # An early exit (deadline refusal, budget stop, idle timeout,
+                # cancellation) must not leave the SDK run streaming in the
+                # background: stop it deterministically the same way an
+                # interrupt does. A finished stream ignores the cancel.
+                with contextlib.suppress(Exception):
+                    stream.cancel(mode="immediate")
                 await coordinator.track_conversation_id(agent_id)
         except BudgetPausedError as exc:
             logger.info("agent %s paused at the scan budget limit: %s", agent_id, exc)

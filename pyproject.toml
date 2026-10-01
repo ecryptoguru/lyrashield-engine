@@ -42,7 +42,7 @@ dependencies = [
   # Keep the SDK within the reviewed openai-agents and LiteLLM compatibility range.
   "openai>=2.48.0,<3.2",
   # Compatible-release pin reviewed in dependency update #77.
-  "litellm~=1.90",
+  "litellm~=1.90.7",
   "jinja2>=3.1.6",
   "pyyaml>=6.0.3",
   "httpx>=0.28.1",
@@ -55,6 +55,9 @@ dependencies = [
   "docker>=7.1.0",
   "textual>=6.0.0",
   "requests>=2.32.0",
+  # Owned direct import (lyrashield/interface/local_sources.py URL parsing);
+  # previously satisfied only transitively (DE-17).
+  "yarl>=1.18,<2",
   "cvss>=3.2",
   "caido-sdk-client>=0.2.0",
   # Security-fixed line; Intel macOS release builds compile against static OpenSSL.
@@ -132,11 +135,11 @@ exclude = [
 python_version = "3.12"
 strict = true
 
-# Keep only the upstream Textual TUI and tests outside the strict source gate.
-# The owned Local TUI and viewer are maintained product code and are checked.
+# Keep only the upstream Go/Bubble Tea sidecar TUI tree and tests outside the
+# strict source gate. The owned interface TUI, Local TUI, and viewer are
+# maintained product code and are checked.
 exclude = [
     "strix/interface/tui",
-    "lyrashield/interface/tui",
     "tests",
 ]
 strict_optional = true

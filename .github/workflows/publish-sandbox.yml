@@ -20,6 +20,12 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    # Publish only from reviewed refs: a tag push (sandbox-v*) or a manual
+    # dispatch from main. Dispatch from any other ref fails closed so an
+    # arbitrary unreviewed checkout can never publish a sandbox image.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

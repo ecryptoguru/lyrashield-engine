@@ -31,7 +31,7 @@ PATCHES = {
     "semgrep": (
         "1.178.0",
         b"Requires-Dist: pyjwt[crypto]~=2.13.0",
-        b"Requires-Dist: pyjwt[crypto]>=2.14.0,<2.15.0",
+        b"Requires-Dist: pyjwt[crypto]>=2.15.1,<2.16.0",
     ),
 }
 

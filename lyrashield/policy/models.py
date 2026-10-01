@@ -29,6 +29,7 @@ from agents.retry import (
     RetryPolicyContext,
     retry_policies,
 )
+from openai import APITimeoutError
 from openai.types.responses import Response, ResponseCompletedEvent
 from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared import Reasoning
@@ -36,6 +37,37 @@ from openai.types.shared import Reasoning
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
 from strix.config.models import _TurnGuardModel
+
+
+class BoundedStreamTimeoutError(TimeoutError):
+    """A configured stream-idle or provider request timeout bounded a model turn.
+
+    Subclasses ``TimeoutError`` so existing timeout handling keeps working,
+    while the explicit type lets the root agent distinguish a bounded stream
+    gap from unrelated internal timeouts and salvage partial findings instead
+    of failing the scan.
+    """
+
+
+# The inherited stream guard abandons a silent turn with this exact phrasing
+# (strix.config.models._with_idle_timeout). Message-matching is the contract
+# with the vendored boundary; owned wrappers re-raise the classified type.
+_STREAM_IDLE_TIMEOUT_MARKER = "model stream produced no event"
+
+
+def is_bounded_stream_timeout(exc: BaseException) -> bool:
+    """Classify owned stream-idle and provider request timeouts.
+
+    Selected cases only: the configured stream-idle guard, the classified
+    owned wrapper type, and the provider per-request timeout. Unrelated
+    internal timeouts, programming errors, auth errors and invalid artifacts
+    never match and stay failures.
+    """
+    if isinstance(exc, BoundedStreamTimeoutError):
+        return True
+    if isinstance(exc, APITimeoutError):
+        return True
+    return isinstance(exc, TimeoutError) and _STREAM_IDLE_TIMEOUT_MARKER in str(exc)
 
 
 if TYPE_CHECKING:
@@ -78,6 +110,23 @@ _GPT6_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "azure", "azure
 # provider selected by routing is then the first component after it.
 _ROUTE_WRAPPER_PREFIXES: tuple[str, ...] = ("litellm", "any-llm")
 
+# Documented provider aliases normalized at the owned route boundary. The web
+# worker spells the Azure AI provider ``azure-ai``; the engine's canonical
+# spelling is ``azure_ai``. Normalization applies only to the provider
+# component of a route — never to the model path, which stays case-sensitive.
+_PROVIDER_ALIASES: dict[str, str] = {"azure-ai": "azure_ai"}
+
+
+def canonical_provider(provider: str | None) -> str | None:
+    """Return the canonical provider for a parsed route component.
+
+    Shared by admission and routing so both interpret a raw route string
+    identically: ``azure-ai/...`` is the Azure AI route, everywhere.
+    """
+    if provider is None:
+        return None
+    return _PROVIDER_ALIASES.get(provider.lower(), provider.lower())
+
 
 @dataclasses.dataclass(frozen=True)
 class ModelRoute:
@@ -107,7 +156,8 @@ def parse_model_route(model_name: str | None) -> ModelRoute | None:
 
     Validation and wrapper matching are performed on the lowercased string,
     but ``provider`` and ``model_path`` are sliced out of the original-case
-    string. The provider is then lowercased for canonical admission/routing
+    string. The provider is then lowercased and passed through the documented
+    alias map (``azure-ai`` → ``azure_ai``) for canonical admission/routing
     decisions, while the model path keeps its original case — Azure
     deployment names and other case-sensitive identifiers are not corrupted.
     """
@@ -137,7 +187,7 @@ def parse_model_route(model_name: str | None) -> ModelRoute | None:
         provider, model_path = None, remainder
     return ModelRoute(
         wrapper=wrapper,
-        provider=provider.lower() if provider is not None else None,
+        provider=canonical_provider(provider),
         model_path=model_path,
         original=name,
     )
@@ -475,19 +525,26 @@ class _RequestBoundTurnGuardModel(_TurnGuardModel):
             max_tool_calls_per_turn=self._max_tool_calls_per_turn,
             stream_idle_timeout=idle_timeout,
         )
-        async for event in guard.stream_response(
-            system_instructions,
-            input,
-            model_settings,
-            tools,
-            output_schema,
-            handoffs,
-            tracing,
-            previous_response_id=previous_response_id,
-            conversation_id=conversation_id,
-            prompt=prompt,
-        ):
-            yield event
+        try:
+            async for event in guard.stream_response(
+                system_instructions,
+                input,
+                model_settings,
+                tools,
+                output_schema,
+                handoffs,
+                tracing,
+                previous_response_id=previous_response_id,
+                conversation_id=conversation_id,
+                prompt=prompt,
+            ):
+                yield event
+        except TimeoutError as exc:
+            # The guard already closed the abandoned inner stream; re-raise
+            # through the owned boundary with the explicit classification so
+            # callers can distinguish a bounded stream gap from unrelated
+            # internal timeouts.
+            raise BoundedStreamTimeoutError(str(exc)) from exc
 
 
 class _CredentialedLitellmProvider(ModelProvider):
@@ -614,11 +671,13 @@ class StrixProvider(MultiProvider):
             # Routing consumes the same strict parser admission uses, so a raw
             # route string can never be reinterpreted differently downstream.
             route = parse_model_route(model_name)
-            # If a wrapper prefix is present, strip it so the SDK routes through
-            # the actual provider (e.g. litellm/azure/... → azure/...), not the
-            # wrapper's litellm fallback. Admission already checked route.provider.
+            # Rebuild the routed name from the parsed route so a wrapper prefix
+            # is stripped (e.g. litellm/azure/... → azure/...) and documented
+            # provider aliases canonicalize identically for routing and
+            # admission (e.g. azure-ai/... → azure_ai/...). The model path keeps
+            # its original case. Admission already checked route.provider.
             routed_name = model_name
-            if route is not None and route.wrapper is not None and route.provider is not None:
+            if route is not None and route.provider is not None:
                 routed_name = f"{route.provider}/{route.model_path}"
             model = super().get_model(routed_name)
             if (
@@ -734,14 +793,12 @@ def configure_sdk_model_defaults(settings: Settings) -> None:
 
 def _is_azure_model(model_name: str | None) -> bool:
     """Return True if the model is routed through Azure or Azure AI."""
-    if not model_name:
+    try:
+        route = parse_model_route(model_name)
+    except ValueError:
+        # Malformed routes fail closed; admission rejects them separately.
         return False
-    name = model_name.strip().lower()
-    for prefix in ("litellm/", "any-llm/"):
-        if name.startswith(prefix):
-            name = name[len(prefix) :]
-            break
-    return name.startswith(("azure/", "azure_ai/"))
+    return route is not None and route.provider in {"azure", "azure_ai"}
 
 
 def _mirror_api_key_to_provider_env(model_name: str | None, api_key: str) -> None:
@@ -774,15 +831,7 @@ def _mirror_azure_env(
     api_version: str | None,
 ) -> None:
     """Mirror Azure OpenAI / Azure AI config into LiteLLM's expected env vars."""
-    if not model_name:
-        return
-
-    name = model_name.strip()
-    for prefix in ("litellm/", "any-llm/"):
-        if name.lower().startswith(prefix):
-            name = name[len(prefix) :]
-            break
-    if not name.lower().startswith(("azure/", "azure_ai/")):
+    if not _is_azure_model(model_name):
         return
 
     if api_base:

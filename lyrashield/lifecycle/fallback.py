@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 from agents.exceptions import ModelBehaviorError
 
+from lyrashield.policy.models import is_bounded_stream_timeout
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -32,6 +34,37 @@ class FallbackServices:
     build_strix_agent: Callable[..., Any]
     report_state_getter: Callable[[], Any | None]
     delegate_output_token_ceiling: int
+
+
+async def _salvage_bounded_stream_timeout(
+    *,
+    runtime: RootRuntime,
+    coordinator: Any,
+    scan_id: str,
+    exc: BaseException,
+    services: FallbackServices,
+) -> None:
+    """Settle a bounded stream-idle/provider timeout like a model-behavior stop.
+
+    The inherited stream guard raises ``TimeoutError``; without this route a
+    root turn that went silent past its configured bound failed the whole scan
+    even when findings were already filed. Cancel descendants, mark the root
+    stopped, and record the existing engine-stopped terminal reason so the
+    reader keeps the incomplete/PARTIAL contract. The stream is already closed
+    by the guard and no new model call is made here.
+    """
+    logger.warning(
+        "Scan %s: root model stream hit its configured idle/provider timeout "
+        "(exc_type=%s); salvaging partial findings.",
+        scan_id,
+        type(exc).__name__,
+    )
+    await coordinator.cancel_descendants(runtime.root_id)
+    with contextlib.suppress(Exception):
+        await coordinator.set_status(runtime.root_id, "stopped")
+    report_state = services.report_state_getter()
+    if report_state is not None:
+        report_state.set_terminal_reason("engine_stopped")
 
 
 async def run_root_agent(
@@ -212,4 +245,30 @@ async def run_root_agent(
             if report_state is not None:
                 report_state.set_terminal_reason(terminal_reason)
             return None
+        except Exception as fallback_exc:
+            if not is_bounded_stream_timeout(fallback_exc):
+                raise
+            await _salvage_bounded_stream_timeout(
+                runtime=runtime,
+                coordinator=coordinator,
+                scan_id=scan_id,
+                exc=fallback_exc,
+                services=services,
+            )
+            return None
+    except Exception as exc:
+        # A bounded stream-idle/provider timeout is a configured boundary, not
+        # a crash: salvage partial findings instead of failing the scan.
+        # Unrelated internal timeouts, programming errors, auth errors and
+        # invalid artifacts re-raise unchanged.
+        if not is_bounded_stream_timeout(exc):
+            raise
+        await _salvage_bounded_stream_timeout(
+            runtime=runtime,
+            coordinator=coordinator,
+            scan_id=scan_id,
+            exc=exc,
+            services=services,
+        )
+        return None
     return result

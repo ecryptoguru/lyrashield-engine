@@ -82,8 +82,9 @@ jobs:
           else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
+      # The interpreter itself is cheap and also serves the branding gate,
+      # which must run even when every expensive Python gate is skipped.
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        if: steps.changed_paths.outputs.docs_only != 'true'
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -133,8 +134,10 @@ jobs:
             exit 1
           fi
 
+      # Customer-facing branding is gated on docs-only changes too: docs/** is
+      # part of the checked scope, so skipping this gate would let upstream
+      # branding ship through a documentation-only pull request.
       - name: Verify customer branding
-        if: steps.changed_paths.outputs.docs_only != 'true'
         run: python scripts/verify-customer-branding.py
 
       - name: Verify Python packages and CLI

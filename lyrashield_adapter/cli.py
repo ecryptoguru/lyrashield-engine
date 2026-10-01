@@ -147,7 +147,7 @@ def _reject_unsupported_models(env: MutableMapping[str, str]) -> None:
         if not is_gpt6_supported_provider(value):
             raise SystemExit(
                 f"{name}={value} is not an approved GPT-6 Sol/Luna deployment "
-                "from openai, azure, azure_ai, or chatgpt."
+                "from openai, azure, azure_ai (alias azure-ai), or chatgpt."
             )
 
 

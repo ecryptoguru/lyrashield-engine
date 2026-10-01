@@ -64,7 +64,7 @@ def get_package_version() -> str:
         return "dev"
 
 
-class ChatTextArea(TextArea):  # type: ignore[misc]
+class ChatTextArea(TextArea):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._app_reference: StrixTUIApp | None = None
@@ -75,15 +75,14 @@ class ChatTextArea(TextArea):  # type: ignore[misc]
     def on_mount(self) -> None:
         self._update_height()
 
-    def _on_key(self, event: events.Key) -> None:
+    async def _on_key(self, event: events.Key) -> None:
         if event.key == "shift+enter":
             self.insert("\n")
             event.prevent_default()
             return
 
         if event.key == "enter" and self._app_reference:
-            text_content = str(self.text)  # type: ignore[has-type]
-            message = text_content.strip()
+            message = self.text.strip()
             if message:
                 self.text = ""
 
@@ -92,9 +91,9 @@ class ChatTextArea(TextArea):  # type: ignore[misc]
                 event.prevent_default()
                 return
 
-        super()._on_key(event)
+        await super()._on_key(event)
 
-    @on(TextArea.Changed)  # type: ignore[misc]
+    @on(TextArea.Changed)
     def _update_height(self, _event: TextArea.Changed | None = None) -> None:
         if not self.parent:
             return
@@ -104,12 +103,13 @@ class ChatTextArea(TextArea):  # type: ignore[misc]
 
         new_height = target_lines + 2
 
-        if self.parent.styles.height != new_height:
+        current_height = self.parent.styles.height
+        if current_height is None or current_height.value != new_height:
             self.parent.styles.height = new_height
             self.scroll_cursor_visible()
 
 
-class SplashScreen(Static):  # type: ignore[misc]
+class SplashScreen(Static):
     ALLOW_SELECT = False
     PRIMARY_GREEN = "#22c55e"
     BANNER = "LyraShield"
@@ -226,7 +226,13 @@ class SplashScreen(Static):  # type: ignore[misc]
         return text
 
 
-class HelpScreen(ModalScreen):  # type: ignore[misc]
+class NonSelectableStatic(Static):
+    """Static variant excluded from mouse text selection."""
+
+    ALLOW_SELECT = False
+
+
+class HelpScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         yield Grid(
             Label("LyraShield Help", id="help_title"),
@@ -242,7 +248,7 @@ class HelpScreen(ModalScreen):  # type: ignore[misc]
         self.app.pop_screen()
 
 
-class StopAgentScreen(ModalScreen):  # type: ignore[misc]
+class StopAgentScreen(ModalScreen[None]):
     def __init__(self, agent_name: str, agent_id: str):
         super().__init__()
         self.agent_name = agent_name
@@ -286,11 +292,12 @@ class StopAgentScreen(ModalScreen):  # type: ignore[misc]
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.app.pop_screen()
-        if event.button.id == "stop_agent":
-            self.app.action_confirm_stop_agent(self.agent_id)
+        app = self.app
+        if event.button.id == "stop_agent" and isinstance(app, StrixTUIApp):
+            app.action_confirm_stop_agent(self.agent_id)
 
 
-class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
+class VulnerabilityDetailScreen(ModalScreen[None]):
     SEVERITY_COLORS: ClassVar[dict[str, str]] = {
         "critical": "#dc2626",  # Red
         "high": "#ea580c",  # Orange
@@ -663,7 +670,7 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
             self.app.pop_screen()
 
 
-class VulnerabilityItem(Static):  # type: ignore[misc]
+class VulnerabilityItem(Static):
     def __init__(self, label: Text, vuln_data: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(label, **kwargs)
         self.vuln_data = vuln_data
@@ -673,7 +680,7 @@ class VulnerabilityItem(Static):  # type: ignore[misc]
         self.app.push_screen(VulnerabilityDetailScreen(self.vuln_data))
 
 
-class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
+class VulnerabilitiesPanel(VerticalScroll):
     SEVERITY_COLORS: ClassVar[dict[str, str]] = {
         "critical": "#dc2626",  # Red
         "high": "#ea580c",  # Orange
@@ -718,7 +725,7 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
             self.mount(item)
 
 
-class QuitScreen(ModalScreen):  # type: ignore[misc]
+class QuitScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         yield Grid(
             Label("Quit LyraShield?", id="quit_title"),
@@ -756,13 +763,14 @@ class QuitScreen(ModalScreen):  # type: ignore[misc]
             event.prevent_default()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "quit":
-            await self.app.action_custom_quit()
+        app = self.app
+        if event.button.id == "quit" and isinstance(app, StrixTUIApp):
+            await app.action_custom_quit()
         else:
             self.app.pop_screen()
 
 
-class StrixTUIApp(App):  # type: ignore[misc]
+class StrixTUIApp(App[None]):
     CSS_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "tui_styles.tcss")
     ALLOW_SELECT = True
 
@@ -771,7 +779,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
     selected_agent_id: reactive[str | None] = reactive(default=None)
     show_splash: reactive[bool] = reactive(default=True)
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("f1", "toggle_help", "Help", priority=True),
         Binding("ctrl+q", "request_quit", "Quit", priority=True),
         Binding("ctrl+c", "request_quit", "Quit", priority=True),
@@ -805,7 +813,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         self.coordinator = AgentCoordinator()
 
-        self.agent_nodes: dict[str, TreeNode] = {}
+        self.agent_nodes: dict[str, TreeNode[dict[str, str]]] = {}
 
         self._displayed_agents: set[str] = set()
         self._displayed_events: list[str] = []
@@ -875,7 +883,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             yield SplashScreen(id="splash_screen")
 
     def watch_show_splash(self, show_splash: bool) -> None:
-        if not show_splash and self.is_mounted:
+        if not show_splash and self.is_running:
             try:
                 splash = self.query_one("#splash_screen")
                 splash.remove()
@@ -895,17 +903,14 @@ class StrixTUIApp(App):  # type: ignore[misc]
             chat_history = VerticalScroll(chat_display, id="chat_history")
             chat_history.can_focus = True
 
-            status_text = Static("", id="status_text")
-            status_text.ALLOW_SELECT = False
-            keymap_indicator = Static("", id="keymap_indicator")
-            keymap_indicator.ALLOW_SELECT = False
+            status_text = NonSelectableStatic("", id="status_text")
+            keymap_indicator = NonSelectableStatic("", id="keymap_indicator")
 
             agent_status_display = Horizontal(
                 status_text, keymap_indicator, id="agent_status_display", classes="hidden"
             )
 
-            chat_prompt = Static("> ", id="chat_prompt")
-            chat_prompt.ALLOW_SELECT = False
+            chat_prompt = NonSelectableStatic("> ", id="chat_prompt")
             chat_input = ChatTextArea(
                 "",
                 id="chat_input",
@@ -914,21 +919,19 @@ class StrixTUIApp(App):  # type: ignore[misc]
             chat_input.set_app_reference(self)
             chat_input_container = Horizontal(chat_prompt, chat_input, id="chat_input_container")
 
-            agents_tree = Tree("Agents", id="agents_tree")
+            agents_tree: Tree[dict[str, str]] = Tree("Agents", id="agents_tree")
             agents_tree.root.expand()
             agents_tree.show_root = False
 
-            agents_tree.show_guide = True
+            agents_tree.show_guides = True
             agents_tree.guide_depth = 3
-            agents_tree.guide_style = "dashed"
 
             stats_display = Static("", id="stats_display")
             stats_scroll = VerticalScroll(stats_display, id="stats_scroll")
 
             vulnerabilities_panel = VulnerabilitiesPanel(id="vulnerabilities_panel")
 
-            viewer_cta = Static(self._viewer_cta_markup(), id="viewer_cta")
-            viewer_cta.ALLOW_SELECT = False
+            viewer_cta = NonSelectableStatic(self._viewer_cta_markup(), id="viewer_cta")
 
             sidebar = Vertical(
                 viewer_cta, agents_tree, vulnerabilities_panel, stats_scroll, id="sidebar"
@@ -947,7 +950,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if len(self.screen_stack) > 1 or self.show_splash:
             return
 
-        if not self.is_mounted:
+        if not self.is_running:
             return
 
         try:
@@ -962,7 +965,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if len(self.screen_stack) > 1 or self.show_splash:
             return
 
-        if not self.is_mounted:
+        if not self.is_running:
             return
 
         try:
@@ -994,7 +997,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if len(self.screen_stack) > 1:
             return
 
-        if not self.is_mounted:
+        if not self.is_running:
             return
 
         try:
@@ -1114,7 +1117,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
     def _get_chat_content(
         self,
-    ) -> tuple[Any, str | None]:
+    ) -> tuple[Any, str]:
         if not self.selected_agent_id:
             return self._get_chat_placeholder_content("Loading...", "placeholder-no-agent")
 
@@ -1127,13 +1130,13 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         current_event_ids = [f"{e['id']}:{e.get('version', 0)}" for e in events]
         if current_event_ids == self._displayed_events:
-            return None, None
+            return None, ""
 
         self._displayed_events = current_event_ids
         return self._get_rendered_events_content(events), "chat-content"
 
     def _update_chat_view(self) -> None:
-        if len(self.screen_stack) > 1 or self.show_splash or not self.is_mounted:
+        if len(self.screen_stack) > 1 or self.show_splash or not self.is_running:
             return
 
         try:
@@ -1501,7 +1504,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if len(self.screen_stack) > 1 or self.show_splash:
             return
 
-        if not self.is_mounted:
+        if not self.is_running:
             return
 
         self._displayed_events.clear()
@@ -1576,7 +1579,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if len(self.screen_stack) > 1 or self.show_splash:
             return
 
-        if not self.is_mounted:
+        if not self.is_running:
             return
 
         agent_id = agent_data["id"]
@@ -1631,8 +1634,15 @@ class StrixTUIApp(App):  # type: ignore[misc]
         except (AttributeError, ValueError, RuntimeError) as e:
             logger.warning(f"Failed to add agent node {agent_id}: {e}")
 
-    def _copy_node_under(self, node_to_copy: TreeNode, new_parent: TreeNode) -> None:
-        agent_id = node_to_copy.data["agent_id"]
+    def _copy_node_under(
+        self,
+        node_to_copy: TreeNode[dict[str, str]],
+        new_parent: TreeNode[dict[str, str]],
+    ) -> None:
+        node_data = node_to_copy.data
+        if node_data is None:
+            return
+        agent_id = node_data["agent_id"]
         agent_data = self.live_view.agents.get(agent_id, {})
         agent_name_raw = agent_data.get("name", "Agent")
         status = agent_data.get("status", "running")
@@ -1654,7 +1664,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         new_node = new_parent.add(
             agent_name,
-            data=node_to_copy.data,
+            data=node_data,
         )
         new_node.allow_expand = node_to_copy.allow_expand
 
@@ -1710,12 +1720,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         return AgentMessageRenderer.render_simple(content)
 
-    @on(Tree.NodeHighlighted)  # type: ignore[misc]
-    def handle_tree_highlight(self, event: Tree.NodeHighlighted) -> None:
+    @on(Tree.NodeHighlighted)
+    def handle_tree_highlight(self, event: Tree.NodeHighlighted[dict[str, str]]) -> None:
         if len(self.screen_stack) > 1 or self.show_splash:
             return
 
-        if not self.is_mounted:
+        if not self.is_running:
             return
 
         node = event.node
@@ -1730,12 +1740,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
             if agent_id:
                 self.selected_agent_id = agent_id
 
-    @on(Tree.NodeSelected)  # type: ignore[misc]
-    def handle_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+    @on(Tree.NodeSelected)
+    def handle_tree_node_selected(self, event: Tree.NodeSelected[dict[str, str]]) -> None:
         if len(self.screen_stack) > 1 or self.show_splash:
             return
 
-        if not self.is_mounted:
+        if not self.is_running:
             return
 
         node = event.node
@@ -1787,7 +1797,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         return "Unknown Agent"
 
     def action_toggle_help(self) -> None:
-        if self.show_splash or not self.is_mounted:
+        if self.show_splash or not self.is_running:
             return
 
         try:
@@ -1805,7 +1815,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.push_screen(HelpScreen())
 
     async def action_request_quit(self) -> None:
-        if self.show_splash or not self.is_mounted:
+        if self.show_splash or not self.is_running:
             await self.action_custom_quit()
             return
 
@@ -1821,7 +1831,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.push_screen(QuitScreen())
 
     def action_stop_selected_agent(self) -> None:
-        if self.show_splash or not self.is_mounted:
+        if self.show_splash or not self.is_running:
             return
 
         if len(self.screen_stack) > 1:
@@ -1980,7 +1990,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             return True
 
     def on_resize(self, event: events.Resize) -> None:
-        if self.show_splash or not self.is_mounted:
+        if self.show_splash or not self.is_running:
             return
 
         try:

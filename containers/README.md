@@ -8,10 +8,11 @@ dependency field, and the original METADATA checksum/size in RECORD before any
 write, then updates RECORD to describe the changed bytes.
 
 - Dirsearch 0.5.0: the existing exception permits the tested PyOpenSSL 26.4.0.
-- Semgrep 1.178.0: permit only `pyjwt[crypto]>=2.14.0,<2.15.0`, replacing its
+- Semgrep 1.178.0: permit only `pyjwt[crypto]>=2.15.1,<2.16.0`, replacing its
   vulnerable `~=2.13.0` restriction. Keep Semgrep's original verified wheel and
-  hashes. PyJWT 2.14.0 is pinned in both engine and sandbox locks; all other
-  sandbox dependency versions and artifact hashes remain unchanged.
+  hashes. PyJWT 2.15.1 is pinned in both engine and sandbox locks (CVE-2026-101918
+  fix line); all other sandbox dependency versions and artifact hashes remain
+  unchanged.
 
 The Semgrep exception requires the real installed MCP verifier to accept a
 valid RS256 token and reject forged/expired tokens and redirected JWKS. The

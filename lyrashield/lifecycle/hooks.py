@@ -592,6 +592,13 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._compaction_thresholds = resolve_compaction_thresholds(max_input_tokens)
         self._reservation_lock = asyncio.Lock()
         self._reservations: dict[str, float] = {}
+        # Bounded conservative floor for abandoned attempts (E1.3): a request
+        # that was started but never reported usage may still have been
+        # partially billed by the provider. Estimates live only in this
+        # process-local budget accounting — they are never written into the
+        # verified usage receipt — and actual usage reported later for the
+        # same key replaces the estimate instead of adding to it.
+        self._abandoned_floors: dict[str, float] = {}
         self._committed_cost_floor = 0.0
         self._budget_increment = max_budget_usd
         self._max_turns = max_turns
@@ -638,7 +645,9 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             self._reservations.pop(key, None)
             report_state = get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            committed = max(observed, self._committed_cost_floor)
+            committed = max(observed, self._committed_cost_floor) + sum(
+                self._abandoned_floors.values()
+            )
             reserved = sum(self._reservations.values())
             if committed + reserved + reservation > self._max_budget_usd:
                 # Interactive scans pause for a budget extension rather than
@@ -655,9 +664,17 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
     async def release_out_of_band_request(self, *, key: str, model: str, usage: Any = None) -> None:
         """Drop an out-of-band reservation and commit its observed cost."""
         async with self._reservation_lock:
-            self._reservations.pop(key, None)
+            reservation = self._reservations.pop(key, None)
             if usage is not None:
                 self._committed_cost_floor += _usage_cost_upper_bound(model, usage)
+                # Actual usage for this key reconciles any abandoned-attempt
+                # floor: the estimate is replaced, never added twice.
+                self._abandoned_floors.pop(key, None)
+            elif reservation is not None:
+                # No usage was reported, but the provider may still bill the
+                # partial work. Keep the bounded reservation as a conservative
+                # estimated-spend floor instead of assuming a zero charge.
+                self._abandoned_floors[key] = self._abandoned_floors.get(key, 0.0) + reservation
 
     async def reserve_web_search_call(
         self,
@@ -679,7 +696,9 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             self._reservations.pop(key, None)
             report_state = get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            committed = max(observed, self._committed_cost_floor)
+            committed = max(observed, self._committed_cost_floor) + sum(
+                self._abandoned_floors.values()
+            )
             reserved = sum(self._reservations.values())
             if committed + reserved + estimated_cost > self._max_budget_usd:
                 raise BudgetExceededError(
@@ -874,12 +893,22 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             ) / 1_000_000
             agent_id = self._agent_id(context, agent)
             async with self._reservation_lock:
-                # A repeated start for the same agent means the prior attempt did
-                # not complete; providers do not bill a response with no usage.
-                self._reservations.pop(agent_id, None)
+                prior = self._reservations.pop(agent_id, None)
+                if prior is not None:
+                    # A repeated start for the same agent means the prior
+                    # attempt was abandoned (stream died, turn aborted, run
+                    # cancelled). The provider may still bill the partial
+                    # work even though no usage was reported, so the bounded
+                    # reservation becomes a conservative estimated-spend
+                    # floor instead of being written off as zero (E1.3).
+                    self._abandoned_floors[agent_id] = (
+                        self._abandoned_floors.get(agent_id, 0.0) + prior
+                    )
                 report_state = get_global_report_state()
                 observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-                committed = max(observed, self._committed_cost_floor)
+                committed = max(observed, self._committed_cost_floor) + sum(
+                    self._abandoned_floors.values()
+                )
                 reserved = sum(self._reservations.values())
                 if committed + reserved + reservation > self._max_budget_usd:
                     if self._interactive:
@@ -920,10 +949,14 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         async with self._reservation_lock:
             self._reservations.pop(agent_id, None)
             self._committed_cost_floor += _usage_cost_upper_bound(model, response.usage)
+            # Actual usage for this agent reconciles any abandoned-attempt
+            # floor: the estimate is replaced by the verified usage rather
+            # than added to it (E1.3).
+            self._abandoned_floors.pop(agent_id, None)
 
         if self._max_budget_usd is not None:
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            cost = max(observed, self._committed_cost_floor)
+            cost = max(observed, self._committed_cost_floor) + sum(self._abandoned_floors.values())
             if cost >= self._max_budget_usd:
                 if self._interactive:
                     raise BudgetPausedError(

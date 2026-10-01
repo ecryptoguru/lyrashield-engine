@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from lyrashield.interface import source_acquisition
+from lyrashield.interface import repo_clone, source_acquisition
 from lyrashield.interface.utils import (
     build_mount_targets_info,
     clone_repository,
@@ -170,7 +170,7 @@ def test_collect_local_sources_can_mount_product_owned_repository_clone() -> Non
 def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path) -> None:
     repo_url = "-upload-pack=malicious-command"
     with (
-        patch.object(source_acquisition, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(repo_clone, "_git_executable", return_value="/usr/bin/git"),
         patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)),
         patch.object(source_acquisition.subprocess, "run") as run,
     ):
@@ -183,7 +183,7 @@ def test_clone_repository_terminates_option_parsing_for_repo_url(tmp_path: Path)
 
 def test_clone_repository_checks_out_the_requested_branch(tmp_path: Path) -> None:
     with (
-        patch.object(source_acquisition, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(repo_clone, "_git_executable", return_value="/usr/bin/git"),
         patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)),
         patch.object(source_acquisition.subprocess, "run") as run,
     ):
@@ -202,7 +202,7 @@ def test_clone_repository_checks_out_a_full_commit_sha_detached(tmp_path: Path) 
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
     with (
-        patch.object(source_acquisition, "_git_executable", return_value="/usr/bin/git"),
+        patch.object(repo_clone, "_git_executable", return_value="/usr/bin/git"),
         patch.object(source_acquisition.tempfile, "gettempdir", return_value=str(tmp_path)),
         patch.object(source_acquisition.subprocess, "run", side_effect=fake_run) as run,
     ):

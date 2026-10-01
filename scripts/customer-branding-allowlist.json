@@ -181,7 +181,9 @@
       "        return pkg_version(\"strix-agent\")",
       "        self._app_reference: StrixTUIApp | None = None",
       "    def set_app_reference(self, app: \"StrixTUIApp\") -> None:",
-      "class StrixTUIApp(App):  # type: ignore[misc]",
+      "        if event.button.id == \"stop_agent\" and isinstance(app, StrixTUIApp):",
+      "        if event.button.id == \"quit\" and isinstance(app, StrixTUIApp):",
+      "class StrixTUIApp(App[None]):",
       "            StrixTUIApp._append_renderable(combined, item)",
       "        return StrixTUIApp._sanitize_text(combined)",
       "            combined.append_text(StrixTUIApp._sanitize_text(item))",
@@ -366,6 +368,7 @@
       "from strix.utils.secret_files import write_secret_text"
     ],
     "lyrashield/policy/models.py": [
+      "# (strix.config.models._with_idle_timeout). Message-matching is the contract",
       "from strix.config.models import _TurnGuardModel",
       "            or os.environ.get(\"STRIX_PROGRAMMATIC_TOOL_CALLING\", \"\")",
       "            return _StrixOpenRouterStreamingHandler(",
@@ -825,6 +828,16 @@
     "lyrashield/lifecycle/scan_context.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "            \"No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().\","
+    ],
+    "lyrashield/interface/diff_scope.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/interface/git_command.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
+    ],
+    "lyrashield/interface/repo_clone.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "    base = Path(tempfile.gettempdir()) / \"strix_repos\""
     ]
   }
 }
