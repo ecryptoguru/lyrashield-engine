@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,10 +13,13 @@ from agents.models.openai_responses import OpenAIResponsesModel
 
 from lyrashield.policy.models import (
     RECOMMENDED_MODEL_NAMES,
+    BoundedStreamTimeoutError,
     StrixProvider,
     _azure_responses_base_url,
     _AzureUsageResponsesModel,
     _is_azure_model,
+    _RequestBoundTurnGuardModel,
+    is_bounded_stream_timeout,
     is_gpt6_model,
     is_gpt6_supported_provider,
     is_recommended_or_frontier_model,
@@ -25,6 +29,92 @@ from lyrashield.policy.models import (
 )
 from lyrashield.policy.settings import LlmSettings, Settings
 from strix.config import models as strix_models
+
+
+@pytest.mark.asyncio
+async def test_inner_timeout_through_request_guard_remains_a_failure() -> None:
+    class Inner:
+        async def stream_response(self, *args: Any, **kwargs: Any):  # noqa: ARG002
+            raise TimeoutError("internal adapter timeout")
+            yield
+
+    model = _RequestBoundTurnGuardModel(
+        inner=Inner(), max_tool_calls_per_turn=5, stream_idle_timeout=1.0
+    )
+
+    with pytest.raises(TimeoutError, match="internal adapter timeout") as caught:
+        async for _event in model.stream_response(
+            None,
+            [],
+            ModelSettings(),
+            [],
+            None,
+            [],
+            None,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
+        ):
+            pass
+
+    assert not is_bounded_stream_timeout(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_request_guard_marks_its_own_stream_idle_timeout() -> None:
+    class Inner:
+        async def stream_response(self, *args: Any, **kwargs: Any):  # noqa: ARG002
+            await asyncio.sleep(1)
+            yield SimpleNamespace(type="completed")
+
+    model = _RequestBoundTurnGuardModel(
+        inner=Inner(), max_tool_calls_per_turn=5, stream_idle_timeout=0.01
+    )
+
+    with pytest.raises(BoundedStreamTimeoutError):
+        async for _event in model.stream_response(
+            None,
+            [],
+            ModelSettings(),
+            [],
+            None,
+            [],
+            None,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_request_guard_detects_inner_stream_suppressing_idle_cancellation() -> None:
+    class Inner:
+        async def stream_response(self, *args: Any, **kwargs: Any):  # noqa: ARG002
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.03)
+                yield SimpleNamespace(type="completed")
+
+    model = _RequestBoundTurnGuardModel(
+        inner=Inner(), max_tool_calls_per_turn=5, stream_idle_timeout=0.01
+    )
+
+    with pytest.raises(BoundedStreamTimeoutError):
+        async for _event in model.stream_response(
+            None,
+            [],
+            ModelSettings(),
+            [],
+            None,
+            [],
+            None,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
+        ):
+            pass
 
 
 @pytest.mark.parametrize("model_name", RECOMMENDED_MODEL_NAMES)

@@ -10,6 +10,7 @@ import json
 import logging
 import math
 from collections.abc import Callable
+from itertools import count
 from typing import TYPE_CHECKING, Any, cast
 
 from agents.lifecycle import RunHooks
@@ -592,13 +593,26 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._compaction_thresholds = resolve_compaction_thresholds(max_input_tokens)
         self._reservation_lock = asyncio.Lock()
         self._reservations: dict[str, float] = {}
+        self._agent_reservations: dict[tuple[str, int], float] = {}
         # Bounded conservative floor for abandoned attempts (E1.3): a request
         # that was started but never reported usage may still have been
         # partially billed by the provider. Estimates live only in this
         # process-local budget accounting — they are never written into the
-        # verified usage receipt — and actual usage reported later for the
-        # same key replaces the estimate instead of adding to it.
+        # verified usage receipt. A response can reconcile only the matching
+        # request attempt, not another request made by the same agent.
         self._abandoned_floors: dict[str, float] = {}
+        self._agent_abandoned_floors: dict[tuple[str, int], float] = {}
+        self._attempt_ids = count(1)
+        # The SDK runs start and end hooks in separate child tasks, so a
+        # ContextVar set by on_llm_start cannot identify the matching end
+        # callback. Keep the active attempt in shared hook state, scoped to the
+        # RunContextWrapper identity and agent. Model wrappers bind the exact
+        # response ID to this request's input identity before the SDK calls the
+        # end hook. Retaining inputs and wrappers prevents their ids being
+        # reused while an abandoned attempt is still accounted.
+        self._active_attempts: dict[tuple[int, str], tuple[Any, tuple[str, int]]] = {}
+        self._input_attempts: dict[int, tuple[Any, Any, str, tuple[str, int]]] = {}
+        self._response_attempts: dict[tuple[int, str, str], list[tuple[Any, tuple[str, int]]]] = {}
         self._committed_cost_floor = 0.0
         self._budget_increment = max_budget_usd
         self._max_turns = max_turns
@@ -645,10 +659,12 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             self._reservations.pop(key, None)
             report_state = get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            committed = max(observed, self._committed_cost_floor) + sum(
-                self._abandoned_floors.values()
+            committed = (
+                max(observed, self._committed_cost_floor)
+                + sum(self._abandoned_floors.values())
+                + sum(self._agent_abandoned_floors.values())
             )
-            reserved = sum(self._reservations.values())
+            reserved = sum(self._reservations.values()) + sum(self._agent_reservations.values())
             if committed + reserved + reservation > self._max_budget_usd:
                 # Interactive scans pause for a budget extension rather than
                 # hard-stopping; non-interactive scans stop immediately.
@@ -696,10 +712,12 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             self._reservations.pop(key, None)
             report_state = get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            committed = max(observed, self._committed_cost_floor) + sum(
-                self._abandoned_floors.values()
+            committed = (
+                max(observed, self._committed_cost_floor)
+                + sum(self._abandoned_floors.values())
+                + sum(self._agent_abandoned_floors.values())
             )
-            reserved = sum(self._reservations.values())
+            reserved = sum(self._reservations.values()) + sum(self._agent_reservations.values())
             if committed + reserved + estimated_cost > self._max_budget_usd:
                 raise BudgetExceededError(
                     f"Next web search would exceed ${self._max_budget_usd:.2f}"
@@ -827,6 +845,18 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             return max_tokens
         return self._max_output_tokens
 
+    async def bind_model_response(self, input_items: Any, response_id: str) -> None:
+        """Bind a model response to the hook attempt started for its input."""
+        async with self._reservation_lock:
+            input_entry = self._input_attempts.get(id(input_items))
+            if input_entry is None or input_entry[0] is not input_items:
+                return
+            context, agent_id, attempt_key = input_entry[1:]
+            response_key = (id(context), agent_id, response_id)
+            bindings = self._response_attempts.setdefault(response_key, [])
+            if not any(binding[0] is context and binding[1] == attempt_key for binding in bindings):
+                bindings.append((context, attempt_key))
+
     async def on_llm_start(
         self,
         context: RunContextWrapper[dict[str, Any]],
@@ -893,23 +923,31 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             ) / 1_000_000
             agent_id = self._agent_id(context, agent)
             async with self._reservation_lock:
-                prior = self._reservations.pop(agent_id, None)
-                if prior is not None:
+                scope = (id(context), agent_id)
+                active = self._active_attempts.get(scope)
+                previous_attempt = (
+                    active[1] if active is not None and active[0] is context else None
+                )
+                if previous_attempt is not None:
+                    prior = self._agent_reservations.pop(previous_attempt, None)
+                else:
+                    prior = None
+                if prior is not None and previous_attempt is not None:
                     # A repeated start for the same agent means the prior
                     # attempt was abandoned (stream died, turn aborted, run
                     # cancelled). The provider may still bill the partial
                     # work even though no usage was reported, so the bounded
                     # reservation becomes a conservative estimated-spend
                     # floor instead of being written off as zero (E1.3).
-                    self._abandoned_floors[agent_id] = (
-                        self._abandoned_floors.get(agent_id, 0.0) + prior
-                    )
+                    self._agent_abandoned_floors[previous_attempt] = prior
                 report_state = get_global_report_state()
                 observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-                committed = max(observed, self._committed_cost_floor) + sum(
-                    self._abandoned_floors.values()
+                committed = (
+                    max(observed, self._committed_cost_floor)
+                    + sum(self._abandoned_floors.values())
+                    + sum(self._agent_abandoned_floors.values())
                 )
-                reserved = sum(self._reservations.values())
+                reserved = sum(self._reservations.values()) + sum(self._agent_reservations.values())
                 if committed + reserved + reservation > self._max_budget_usd:
                     if self._interactive:
                         raise BudgetPausedError(
@@ -919,7 +957,15 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     raise BudgetExceededError(
                         f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
                     )
-                self._reservations[agent_id] = reservation
+                attempt_key = (agent_id, next(self._attempt_ids))
+                self._agent_reservations[attempt_key] = reservation
+                self._active_attempts[scope] = (context, attempt_key)
+                self._input_attempts[id(input_items)] = (
+                    input_items,
+                    context,
+                    agent_id,
+                    attempt_key,
+                )
 
     async def on_llm_end(
         self,
@@ -947,16 +993,59 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 logger.exception("failed to record SDK usage for agent %s", agent_id)
 
         async with self._reservation_lock:
-            self._reservations.pop(agent_id, None)
+            scope = (id(context), agent_id)
+            active = self._active_attempts.get(scope)
+            response_id = getattr(response, "response_id", None)
+            bound: list[tuple[Any, tuple[str, int]]] = []
+            if isinstance(response_id, str) and response_id:
+                bound = [
+                    binding
+                    for binding in self._response_attempts.get(
+                        (id(context), agent_id, response_id), []
+                    )
+                    if binding[0] is context
+                ]
+            if len(bound) == 1:
+                attempt_key = bound[0][1]
+            elif (
+                not bound
+                and active is not None
+                and active[0] is context
+                and not any(key[0] == agent_id for key in self._agent_abandoned_floors)
+            ):
+                # Compatibility for direct hook users and providers without a
+                # response ID. Once an abandoned floor exists, an unbound
+                # response is ambiguous and must not release a newer attempt.
+                attempt_key = active[1]
+            else:
+                attempt_key = None
+            if attempt_key is not None:
+                self._agent_reservations.pop(attempt_key, None)
+                self._agent_abandoned_floors.pop(attempt_key, None)
+                if active is not None and active[0] is context and active[1] == attempt_key:
+                    self._active_attempts.pop(scope, None)
+                for input_id, input_entry in tuple(self._input_attempts.items()):
+                    if input_entry[1] is context and input_entry[3] == attempt_key:
+                        self._input_attempts.pop(input_id, None)
+                for response_key, bindings in tuple(self._response_attempts.items()):
+                    remaining = [
+                        binding
+                        for binding in bindings
+                        if binding[0] is not context or binding[1] != attempt_key
+                    ]
+                    if remaining:
+                        self._response_attempts[response_key] = remaining
+                    else:
+                        self._response_attempts.pop(response_key, None)
             self._committed_cost_floor += _usage_cost_upper_bound(model, response.usage)
-            # Actual usage for this agent reconciles any abandoned-attempt
-            # floor: the estimate is replaced by the verified usage rather
-            # than added to it (E1.3).
-            self._abandoned_floors.pop(agent_id, None)
 
         if self._max_budget_usd is not None:
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
-            cost = max(observed, self._committed_cost_floor) + sum(self._abandoned_floors.values())
+            cost = (
+                max(observed, self._committed_cost_floor)
+                + sum(self._abandoned_floors.values())
+                + sum(self._agent_abandoned_floors.values())
+            )
             if cost >= self._max_budget_usd:
                 if self._interactive:
                     raise BudgetPausedError(
