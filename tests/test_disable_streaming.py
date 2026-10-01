@@ -32,7 +32,11 @@ from openai.types.responses import (
 
 from lyrashield.policy import codex, loader
 from lyrashield.policy.loader import load_settings
-from lyrashield.policy.models import StrixProvider, _NonStreamingModel
+from lyrashield.policy.models import (
+    StrixProvider,
+    _NonStreamingModel,
+    _RequestBoundTurnGuardModel,
+)
 from lyrashield.policy.settings import LlmSettings, Settings
 from strix.config import models as strix_models
 
@@ -335,25 +339,16 @@ async def test_get_model_times_out_stalled_stream_from_config(
 ) -> None:
     inner = _StalledModel()
     monkeypatch.setattr("lyrashield.policy.models.MultiProvider.get_model", lambda *_: inner)
-    observed_timeouts: list[float] = []
-    with_idle_timeout = strix_models._with_idle_timeout
-
-    def record_idle_timeout(stream: Any, timeout: float) -> Any:
-        observed_timeouts.append(timeout)
-        return with_idle_timeout(stream, timeout)
-
-    monkeypatch.setattr(strix_models, "_with_idle_timeout", record_idle_timeout)
     model = StrixProvider(settings=Settings(llm=LlmSettings(stream_idle_timeout=10))).get_model(
         "openai/gpt-4o-mini"
     )
 
-    assert isinstance(model, strix_models._TurnGuardModel)
+    assert isinstance(model, _RequestBoundTurnGuardModel)
     assert model._stream_idle_timeout == 10
     stream_kwargs = _call_kwargs()
     stream_kwargs["model_settings"] = ModelSettings(extra_args={"timeout": 0.05})
-    with pytest.raises(TimeoutError, match="model stream produced no event"):
+    with pytest.raises(TimeoutError, match=r"model stream produced no event for 0\.05s"):
         await _drain(model.stream_response(**stream_kwargs))
-    assert observed_timeouts == [0.05]
 
 
 def test_get_model_does_not_wrap_subscription_model(
