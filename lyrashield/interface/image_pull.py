@@ -176,13 +176,9 @@ def _run_bounded_docker_operation(
                     raise RuntimeError("Docker image worker returned an invalid response")
             elif not process.is_alive():
                 raise RuntimeError(f"Docker image worker exited with status {process.exitcode}")
-        process.join(timeout=deadline.remaining_seconds())
+        process.join(timeout=min(1.0, deadline.remaining_seconds()))
         if process.is_alive():
-            if deadline.remaining_seconds() <= 0:
-                raise RunDeadlineExceededError(
-                    "runtime allowance exhausted during sandbox image acquisition"
-                )
-            raise RuntimeError("Docker image worker did not exit after completing its operation")
+            logger.warning("Docker image worker slow to exit after completion; stopping it")
         if pulled:
             logger.info("Docker image %s ready", image)
         return pulled

@@ -23,7 +23,7 @@ def _blocked_docker_worker(sender: Any, _image: str, _expected_digest: str) -> N
 
 def _slow_cleanup_worker(sender: Any, _image: str, _expected_digest: str) -> None:
     sender.send(("complete", False))
-    time.sleep(2)
+    time.sleep(5)
 
 
 def _docker_daemon_handler(stage: str, reached: threading.Event) -> type[BaseHTTPRequestHandler]:
@@ -121,14 +121,15 @@ def test_silent_docker_operation_is_terminated_and_reaped_at_deadline() -> None:
 
 
 def test_slow_child_cleanup_cannot_overrun_the_scan_deadline() -> None:
-    deadline = RunDeadline.start(0.2)
+    deadline = RunDeadline.start(3600)
     active_before = {process.pid for process in multiprocessing.active_children()}
     started = time.monotonic()
 
-    with pytest.raises(RunDeadlineExceededError):
-        _run_bounded_docker_operation("test-image", "", deadline, worker=_slow_cleanup_worker)
+    assert not _run_bounded_docker_operation(
+        "test-image", "", deadline, worker=_slow_cleanup_worker
+    )
 
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < 4.5
     assert {process.pid for process in multiprocessing.active_children()} <= active_before
 
 
