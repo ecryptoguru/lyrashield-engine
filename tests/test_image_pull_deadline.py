@@ -8,6 +8,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -19,11 +20,6 @@ def _blocked_docker_worker(sender: Any, _image: str, _expected_digest: str) -> N
     sender.send(("pulling", None))
     time.sleep(2)
     sender.send(("complete", True))
-
-
-def _slow_cleanup_worker(sender: Any, _image: str, _expected_digest: str) -> None:
-    sender.send(("complete", False))
-    time.sleep(5)
 
 
 def _docker_daemon_handler(stage: str, reached: threading.Event) -> type[BaseHTTPRequestHandler]:
@@ -120,17 +116,27 @@ def test_silent_docker_operation_is_terminated_and_reaped_at_deadline() -> None:
     assert {process.pid for process in multiprocessing.active_children()} <= active_before
 
 
-def test_slow_child_cleanup_cannot_overrun_the_scan_deadline() -> None:
-    deadline = RunDeadline.start(3600)
-    active_before = {process.pid for process in multiprocessing.active_children()}
-    started = time.monotonic()
+def test_completed_worker_wait_is_bounded_before_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+    receiver = Mock()
+    receiver.poll.return_value = True
+    receiver.recv.return_value = ("complete", False)
+    process = Mock()
+    process.pid = 4321
+    process.is_alive.side_effect = [True, True, False, False]
+    context = Mock()
+    context.Pipe.return_value = (receiver, Mock())
+    context.Process.return_value = process
+    monkeypatch.setattr(multiprocessing, "get_context", lambda _method: context)
 
-    assert not _run_bounded_docker_operation(
-        "test-image", "", deadline, worker=_slow_cleanup_worker
-    )
+    assert not _run_bounded_docker_operation("test-image", "", RunDeadline.start(3600))
 
-    assert time.monotonic() - started < 4.5
-    assert {process.pid for process in multiprocessing.active_children()} <= active_before
+    assert process.join.call_args_list == [
+        call(timeout=1.0),
+        call(timeout=0.2),
+        call(timeout=0),
+    ]
+    process.terminate.assert_called_once()
+    process.close.assert_called_once()
 
 
 @pytest.mark.parametrize("stage", ["connection", "inspect", "silent_pull"])
