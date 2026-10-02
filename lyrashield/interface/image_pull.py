@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import multiprocessing
 import os
 import re
 import sys
@@ -20,10 +22,187 @@ from lyrashield.policy.loader import load_settings
 
 
 if TYPE_CHECKING:
+    from multiprocessing.process import BaseProcess
+
     from lyrashield.lifecycle.deadline import RunDeadline
 
 
 logger = logging.getLogger(__name__)
+
+
+def _docker_image_operation_worker(sender: Any, image: str, expected_digest: str) -> None:
+    """Run blocking Docker SDK calls in a process the scan can stop."""
+    client: Any = None
+    pull_stream: Any = None
+    outcome: tuple[str, Any] | None = None
+    try:
+        client = check_docker_connection()
+        needs_pull = not image_exists(client, image)
+        if not needs_pull and expected_digest:
+            try:
+                _verify_image_digest(client, image, expected_digest)
+            except RuntimeError:
+                logger.warning("Local image %s digest does not match; re-pulling", image)
+                needs_pull = True
+        if not needs_pull:
+            outcome = ("complete", False)
+        else:
+            sender.send(("pulling", None))
+            pull_stream = client.api.pull(image, stream=True, decode=True)
+            for line in pull_stream:
+                if not isinstance(line, dict):
+                    continue
+                error = line.get("error")
+                if isinstance(error, str):
+                    outcome = ("error", f"Docker image pull failed: {error[:2048]}")
+                    break
+                progress: dict[str, Any] = {}
+                for key in ("status", "id", "progress"):
+                    value = line.get(key)
+                    if isinstance(value, str):
+                        progress[key] = value[:4096]
+                details = line.get("progressDetail")
+                if isinstance(details, dict):
+                    progress["progressDetail"] = {
+                        key: value
+                        for key, value in details.items()
+                        if key in {"current", "total"} and isinstance(value, int)
+                    }
+                if len(json.dumps(progress)) > 8192:
+                    outcome = ("error", "Docker image pull returned an oversized progress record")
+                    break
+                sender.send(("progress", progress))
+
+            if outcome is None:
+                if expected_digest:
+                    _verify_image_digest(client, image, expected_digest)
+                outcome = ("complete", True)
+    except Exception as exc:
+        outcome = ("error", f"{type(exc).__name__}: {str(exc)[:2048]}")
+    finally:
+        if pull_stream is not None:
+            close = getattr(pull_stream, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()
+        if client is not None:
+            with contextlib.suppress(Exception):
+                client.close()
+    if outcome is not None:
+        with contextlib.suppress(Exception):
+            sender.send(outcome)
+    with contextlib.suppress(Exception):
+        sender.close()
+
+
+def _stop_docker_worker(process: BaseProcess) -> None:
+    """Stop and reap the Docker child without waiting past the scan budget."""
+    if process.pid is None:
+        process.close()
+        return
+    if process.is_alive():
+        with contextlib.suppress(OSError, ValueError):
+            process.terminate()
+        process.join(timeout=0.2)
+    if process.is_alive():
+        with contextlib.suppress(OSError, ValueError):
+            process.kill()
+        process.join(timeout=0.2)
+    if process.is_alive():
+        raise RuntimeError(
+            f"Docker image worker pid {process.pid} remained alive after bounded termination"
+        )
+    process.join(timeout=0)
+    process.close()
+
+
+def _run_bounded_docker_operation(
+    image: str,
+    expected_digest: str,
+    deadline: RunDeadline,
+    *,
+    worker: Any = _docker_image_operation_worker,
+) -> bool:
+    """Supervise connection, inspect and pull as one deadline-bound operation."""
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(target=worker, args=(sender, image, expected_digest))
+    try:
+        process.start()
+    except BaseException:
+        sender.close()
+        receiver.close()
+        _stop_docker_worker(process)
+        raise
+    sender.close()
+    console = Console()
+    status_stack = contextlib.ExitStack()
+    status: Any = None
+    layers_info: dict[str, str] = {}
+    last_update = ""
+    pulled = False
+    completed = False
+    try:
+        while not completed:
+            remaining = deadline.remaining_seconds()
+            if remaining <= 0:
+                raise RunDeadlineExceededError(
+                    "runtime allowance exhausted during sandbox image acquisition"
+                )
+            if receiver.poll(min(remaining, 0.1)):
+                try:
+                    kind, payload = receiver.recv()
+                except EOFError as exc:
+                    raise RuntimeError("Docker image worker exited without a result") from exc
+                if kind == "pulling":
+                    console.print()
+                    console.print(f"[dim]Pulling image[/] {image}")
+                    console.print(
+                        "[dim yellow]This only happens on first run and may take "
+                        "a few minutes...[/]"
+                    )
+                    console.print()
+                    status = status_stack.enter_context(
+                        console.status("[bold cyan]Downloading image layers...", spinner="dots")
+                    )
+                elif kind == "progress" and status is not None:
+                    last_update = process_pull_line(payload, layers_info, status, last_update)
+                elif kind == "complete":
+                    pulled = bool(payload)
+                    completed = True
+                elif kind == "error":
+                    raise RuntimeError(str(payload)[:2100])
+                else:
+                    raise RuntimeError("Docker image worker returned an invalid response")
+            elif not process.is_alive():
+                raise RuntimeError(f"Docker image worker exited with status {process.exitcode}")
+        process.join(timeout=min(1.0, deadline.remaining_seconds()))
+        if process.is_alive():
+            logger.warning("Docker image worker slow to exit after completion; stopping it")
+        if pulled:
+            logger.info("Docker image %s ready", image)
+        return pulled
+    finally:
+        status_stack.close()
+        receiver.close()
+        _stop_docker_worker(process)
+
+
+def _print_pull_failure(console: Console, image: str, error: Exception) -> None:
+    error_text = Text()
+    error_text.append("FAILED TO PULL IMAGE", style="bold red")
+    error_text.append("\n\n", style="white")
+    error_text.append(f"Could not download: {image}\n", style="white")
+    error_text.append(str(error), style="dim red")
+
+    panel = Panel(
+        error_text,
+        title="[bold white]LYRASHIELD",
+        title_align="left",
+        border_style="red",
+        padding=(1, 2),
+    )
+    console.print(panel, "\n")
 
 
 def _normalize_digest(value: str) -> str:
@@ -77,10 +256,30 @@ def pull_docker_image(*, deadline: RunDeadline | None = None) -> None:
     instead of silently overrunning the worker budget.
     """
     console = Console()
-    client = check_docker_connection()
-
     image = load_settings().runtime.image
     expected_digest = os.environ.get("STRIX_IMAGE_DIGEST", "").strip()
+
+    if deadline is not None:
+        if deadline.remaining_seconds() <= 0:
+            raise RunDeadlineExceededError(
+                "runtime allowance exhausted before sandbox image acquisition"
+            )
+        try:
+            pulled = _run_bounded_docker_operation(image, expected_digest, deadline)
+        except (DockerException, RuntimeError) as error:
+            logger.exception("Failed to acquire docker image %s", image)
+            _print_pull_failure(console, image, error)
+            sys.exit(1)
+        if not pulled:
+            logger.debug("Docker image already present locally: %s", image)
+            return
+        success_text = Text()
+        success_text.append("Docker image ready", style="#22c55e")
+        console.print(success_text)
+        console.print()
+        return
+
+    client = check_docker_connection()
 
     needs_pull = not image_exists(client, image)
     if not needs_pull and expected_digest:
@@ -96,9 +295,6 @@ def pull_docker_image(*, deadline: RunDeadline | None = None) -> None:
     if not needs_pull:
         logger.debug("Docker image already present locally: %s", image)
         return
-
-    if deadline is not None and deadline.remaining_seconds() <= 0:
-        raise RunDeadlineExceededError("runtime allowance exhausted before sandbox image pull")
 
     logger.info("Pulling docker image: %s", image)
     console.print()
@@ -117,10 +313,6 @@ def pull_docker_image(*, deadline: RunDeadline | None = None) -> None:
             pull_stream = client.api.pull(image, stream=True, decode=True)
             pull_iter = iter(pull_stream)
             while True:
-                if deadline is not None and deadline.remaining_seconds() <= 0:
-                    raise RunDeadlineExceededError(
-                        "runtime allowance exhausted during sandbox image pull"
-                    )
                 try:
                     line = next(pull_iter)
                 except StopIteration:
@@ -133,20 +325,7 @@ def pull_docker_image(*, deadline: RunDeadline | None = None) -> None:
         except (DockerException, RuntimeError) as e:
             logger.exception("Failed to pull docker image %s", image)
             console.print()
-            error_text = Text()
-            error_text.append("FAILED TO PULL IMAGE", style="bold red")
-            error_text.append("\n\n", style="white")
-            error_text.append(f"Could not download: {image}\n", style="white")
-            error_text.append(str(e), style="dim red")
-
-            panel = Panel(
-                error_text,
-                title="[bold white]LYRASHIELD",
-                title_align="left",
-                border_style="red",
-                padding=(1, 2),
-            )
-            console.print(panel, "\n")
+            _print_pull_failure(console, image, e)
             sys.exit(1)
         finally:
             # An abandoned pull must not leak the open response stream.

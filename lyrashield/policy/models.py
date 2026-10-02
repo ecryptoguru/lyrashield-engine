@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import inspect
@@ -49,12 +50,6 @@ class BoundedStreamTimeoutError(TimeoutError):
     """
 
 
-# The inherited stream guard abandons a silent turn with this exact phrasing
-# (strix.config.models._with_idle_timeout). Message-matching is the contract
-# with the vendored boundary; owned wrappers re-raise the classified type.
-_STREAM_IDLE_TIMEOUT_MARKER = "model stream produced no event"
-
-
 def is_bounded_stream_timeout(exc: BaseException) -> bool:
     """Classify owned stream-idle and provider request timeouts.
 
@@ -65,9 +60,7 @@ def is_bounded_stream_timeout(exc: BaseException) -> bool:
     """
     if isinstance(exc, BoundedStreamTimeoutError):
         return True
-    if isinstance(exc, APITimeoutError):
-        return True
-    return isinstance(exc, TimeoutError) and _STREAM_IDLE_TIMEOUT_MARKER in str(exc)
+    return isinstance(exc, APITimeoutError)
 
 
 if TYPE_CHECKING:
@@ -492,6 +485,17 @@ def _response_usage(usage: Usage | None) -> ResponseUsage | None:
     )
 
 
+async def _bind_usage_response(input_items: Any, response_id: object) -> None:
+    if not isinstance(response_id, str) or not response_id:
+        return
+    from lyrashield.lifecycle.hooks import get_active_hooks
+
+    hooks = get_active_hooks()
+    bind = getattr(hooks, "bind_model_response", None)
+    if callable(bind):
+        await bind(input_items, response_id)
+
+
 class _RequestBoundTurnGuardModel(_TurnGuardModel):
     """Use the per-request model timeout to bound long silent stream gaps."""
 
@@ -523,28 +527,56 @@ class _RequestBoundTurnGuardModel(_TurnGuardModel):
         guard = _TurnGuardModel(
             self._inner,
             max_tool_calls_per_turn=self._max_tool_calls_per_turn,
-            stream_idle_timeout=idle_timeout,
+            # The upstream guard wraps each ``anext`` in ``wait_for`` and
+            # rewrites every TimeoutError, including errors raised by the
+            # provider adapter. Apply the idle bound here so its own expiry is
+            # distinguishable from an inner timeout.
+            stream_idle_timeout=0.0,
         )
+        stream = guard.stream_response(
+            system_instructions,
+            input,
+            model_settings,
+            tools,
+            output_schema,
+            handoffs,
+            tracing,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+        )
+        iterator = stream.__aiter__()
         try:
-            async for event in guard.stream_response(
-                system_instructions,
-                input,
-                model_settings,
-                tools,
-                output_schema,
-                handoffs,
-                tracing,
-                previous_response_id=previous_response_id,
-                conversation_id=conversation_id,
-                prompt=prompt,
-            ):
+            while True:
+                timeout = asyncio.timeout(idle_timeout) if idle_timeout > 0 else None
+                try:
+                    if timeout is None:
+                        event = await anext(iterator)
+                    else:
+                        try:
+                            async with timeout:
+                                event = await anext(iterator)
+                        except TimeoutError as exc:
+                            if timeout.expired():
+                                raise BoundedStreamTimeoutError(
+                                    f"model stream produced no event for {idle_timeout:g}s"
+                                ) from exc
+                            raise
+                        if timeout.expired():
+                            raise BoundedStreamTimeoutError(
+                                f"model stream produced no event for {idle_timeout:g}s"
+                            )
+                except StopAsyncIteration:
+                    break
+                if getattr(event, "type", None) == "response.completed":
+                    response = getattr(event, "response", None)
+                    await _bind_usage_response(input, getattr(response, "id", None))
                 yield event
-        except TimeoutError as exc:
-            # The guard already closed the abandoned inner stream; re-raise
-            # through the owned boundary with the explicit classification so
-            # callers can distinguish a bounded stream gap from unrelated
-            # internal timeouts.
-            raise BoundedStreamTimeoutError(str(exc)) from exc
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    await close()
 
 
 class _CredentialedLitellmProvider(ModelProvider):

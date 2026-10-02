@@ -1,13 +1,15 @@
 """Bounded stream-idle/provider timeouts salvage partial findings (E1.2).
 
-The inherited stream guard abandons a silent turn with ``TimeoutError``; the
-owned boundary classifies it (and the provider request timeout) so the root
-agent routes it through the existing partial/finalization behavior instead of
-failing the whole scan. Unrelated internal timeouts stay failures.
+The owned stream wrapper classifies its idle timeout (and supported provider
+request timeouts) so the root agent routes them through the existing
+partial/finalization behavior instead of failing the whole scan. Unrelated
+internal timeouts stay failures, even if their message resembles the old idle
+marker.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
@@ -114,8 +116,10 @@ async def _assert_salvaged(exc: BaseException, *, delegate_model: str | None) ->
 
 @pytest.mark.asyncio
 async def test_stream_idle_timeout_salvages_partial_findings() -> None:
-    """The inherited guard's TimeoutError is classified and salvaged."""
-    await _assert_salvaged(TimeoutError(_STREAM_IDLE_MESSAGE), delegate_model="openai/gpt-6-sol")
+    """The owned wrapper's classified idle timeout is salvaged."""
+    await _assert_salvaged(
+        BoundedStreamTimeoutError(_STREAM_IDLE_MESSAGE), delegate_model="openai/gpt-6-sol"
+    )
 
 
 @pytest.mark.asyncio
@@ -131,12 +135,59 @@ async def test_provider_request_timeout_salvages_partial_findings() -> None:
 
 
 @pytest.mark.asyncio
+async def test_inner_timeout_with_idle_marker_fails_through_wrapper_and_fallback() -> None:
+    class Inner:
+        async def stream_response(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise TimeoutError(_STREAM_IDLE_MESSAGE)
+            yield  # pragma: no cover
+
+    model = _RequestBoundTurnGuardModel(
+        inner=Inner(), max_tool_calls_per_turn=5, stream_idle_timeout=0.01
+    )
+
+    async def run_agent_loop(**_kwargs: Any) -> None:
+        async for _event in model.stream_response(
+            None,
+            [],
+            ModelSettings(),
+            [],
+            None,
+            [],
+            None,
+            previous_response_id=None,
+            conversation_id=None,
+            prompt=None,
+        ):
+            pass
+
+    runtime = _runtime(delegate_model="delegate/model")
+    coordinator = _coordinator()
+    report_state = MagicMock()
+
+    with pytest.raises(TimeoutError, match="model stream produced no event"):
+        await run_root_agent(
+            runtime=runtime,
+            coordinator=coordinator,
+            scan_id="scan-marker-collision",
+            max_turns=8,
+            interactive=False,
+            is_resume=False,
+            event_sink=None,
+            services=_services(run_agent_loop, report_state),
+        )
+
+    coordinator.cancel_descendants.assert_not_awaited()
+    coordinator.set_status.assert_not_awaited()
+    report_state.set_terminal_reason.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_no_finding_timeout_is_still_incomplete_never_clean_success() -> None:
     """A bounded stream timeout with zero findings still records a stop reason."""
     runtime = _runtime(delegate_model="openai/gpt-6-sol")
     coordinator = _coordinator()
     report_state = MagicMock()
-    run_agent_loop = AsyncMock(side_effect=TimeoutError(_STREAM_IDLE_MESSAGE))
+    run_agent_loop = AsyncMock(side_effect=BoundedStreamTimeoutError(_STREAM_IDLE_MESSAGE))
 
     result = await run_root_agent(
         runtime=runtime,
@@ -278,7 +329,7 @@ async def test_content_filter_path_unchanged() -> None:
 
 
 def test_classifier_selects_only_bounded_stream_timeouts() -> None:
-    assert is_bounded_stream_timeout(TimeoutError(_STREAM_IDLE_MESSAGE)) is True
+    assert is_bounded_stream_timeout(TimeoutError(_STREAM_IDLE_MESSAGE)) is False
     assert is_bounded_stream_timeout(BoundedStreamTimeoutError(_STREAM_IDLE_MESSAGE)) is True
     assert is_bounded_stream_timeout(APITimeoutError("request timed out")) is True
     assert is_bounded_stream_timeout(TimeoutError("internal wait_for expired")) is False
@@ -288,17 +339,17 @@ def test_classifier_selects_only_bounded_stream_timeouts() -> None:
 
 @pytest.mark.asyncio
 async def test_owned_stream_wrapper_reclassifies_the_guard_timeout() -> None:
-    """The owned credentialed-route wrapper raises the classified type."""
+    """The owned credentialed-route wrapper classifies its own idle expiry."""
 
-    async def raising_guard_stream(*_args: Any, **_kwargs: Any) -> Any:
-        raise TimeoutError(_STREAM_IDLE_MESSAGE)
+    async def silent_guard_stream(*_args: Any, **_kwargs: Any) -> Any:
+        await asyncio.Event().wait()
         yield  # pragma: no cover
 
-    with patch("strix.config.models._TurnGuardModel.stream_response", raising_guard_stream):
+    with patch("strix.config.models._TurnGuardModel.stream_response", silent_guard_stream):
         model = _RequestBoundTurnGuardModel(
             inner=MagicMock(),
             max_tool_calls_per_turn=5,
-            stream_idle_timeout=300.0,
+            stream_idle_timeout=0.01,
         )
         with pytest.raises(BoundedStreamTimeoutError, match="model stream produced no event"):
             async for _event in model.stream_response(
