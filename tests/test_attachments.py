@@ -751,7 +751,8 @@ async def test_scratch_copy_links_to_original_and_never_modifies_it(
         # The staged original is untouched — same bytes, still read-only.
         assert staged.read_bytes() == original_bytes
         assert staged.stat().st_mode == original_mode
-        assert original_mode & 0o222 == 0
+        if os.name != "nt":
+            assert original_mode & 0o222 == 0
     finally:
         shutil.rmtree(host_dir, ignore_errors=True)
 
