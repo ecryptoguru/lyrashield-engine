@@ -381,6 +381,13 @@ def validate_attachment(
     # Make the path absolute but retain the final component so the no-follow
     # open can bind the opened file identity to the lstat result below.
     path = Path(raw).expanduser().absolute()
+    name = path.name
+    if any(c in name for c in "\r\n\x85\u2028\u2029"):
+        raise AttachmentInputError(
+            "invalid_name",
+            f"Attachment '{raw}' has a line terminator in its filename; names must be single-line.",
+        )
+
     # lstat first: the final component itself must be a plain file, not a link.
     try:
         st = os.lstat(path)
@@ -409,12 +416,6 @@ def validate_attachment(
             "passive text evidence, not programs.",
         )
 
-    name = path.name
-    if any(c in name for c in "\r\n\x85\u2028\u2029"):
-        raise AttachmentInputError(
-            "invalid_name",
-            f"Attachment '{raw}' has a line terminator in its filename; names must be single-line.",
-        )
     if not _allowed_suffix(name):
         allowed = ", ".join(s.lstrip(".") for s in ALLOWED_SUFFIXES)
         raise AttachmentInputError(

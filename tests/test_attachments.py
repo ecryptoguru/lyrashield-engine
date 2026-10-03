@@ -527,6 +527,7 @@ def test_replaced_attachment_does_not_follow_symlink(tmp_path: Path) -> None:
     source = _write(tmp_path / "note.txt", "same bytes")
     outside = _write(tmp_path / "private.txt", "same bytes")
     outside.chmod(0o600)
+    outside_mode = outside.stat().st_mode & 0o777
     entry = validate_attachment(str(source))
     source.unlink()
     source.symlink_to(outside)
@@ -535,7 +536,7 @@ def test_replaced_attachment_does_not_follow_symlink(tmp_path: Path) -> None:
 
     with pytest.raises(AttachmentInputError):
         _stage_one_attachment(entry, str(staging))
-    assert outside.stat().st_mode & 0o777 == 0o600
+    assert outside.stat().st_mode & 0o777 == outside_mode
 
 
 def test_stage_attachments_rejects_unvalidated_entries() -> None:
@@ -544,7 +545,7 @@ def test_stage_attachments_rejects_unvalidated_entries() -> None:
 
 
 def test_validate_rejects_line_terminator_in_name(tmp_path: Path) -> None:
-    source = _write(tmp_path / "report\n.md", "x")
+    source = tmp_path / "report\n.md"
     with pytest.raises(AttachmentInputError, match="invalid_name"):
         validate_attachment(str(source))
 

@@ -2,11 +2,15 @@ import errno
 import ipaddress
 import os
 import socket
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 
 import pytest
 
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+_TEST_ALLOWED_SOCKET_DESTINATIONS: set[tuple[str, int]] = set()
 
 
 def _is_loopback_host(host: object) -> bool:
@@ -32,7 +36,8 @@ def _is_ip_literal(host: object) -> bool:
 
 
 def _assert_allowed_socket_destination(family: int, address: object) -> None:
-    if family == socket.AF_UNIX:
+    unix_family = getattr(socket, "AF_UNIX", None)
+    if unix_family is not None and family == unix_family:
         docker_host = os.environ.get("DOCKER_HOST")
         if not docker_host:
             docker_socket = "/var/run/docker.sock"
@@ -49,12 +54,16 @@ def _assert_allowed_socket_destination(family: int, address: object) -> None:
     elif family in (socket.AF_INET, socket.AF_INET6) and isinstance(address, tuple):
         if address and _is_loopback_host(address[0]):
             return
+        destination = (str(address[0]), int(address[1])) if len(address) >= 2 else None
+        if destination in _TEST_ALLOWED_SOCKET_DESTINATIONS:
+            return
     raise OSError(errno.EPERM, "test socket guard blocked non-loopback network access")
 
 
 @pytest.fixture(autouse=True)
 def _guard_test_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Allow local test servers and the configured Docker Unix socket only."""
+    """Allow loopback, the Docker socket, and explicitly scoped test targets."""
+    _TEST_ALLOWED_SOCKET_DESTINATIONS.clear()
     original_connect = socket.socket.connect
     original_connect_ex = socket.socket.connect_ex
     original_sendto = socket.socket.sendto
@@ -85,6 +94,24 @@ def _guard_test_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
     monkeypatch.setattr(socket.socket, "sendto", guarded_sendto)
     monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+
+
+@pytest.fixture
+def allow_test_socket_destination() -> Callable[
+    [str, int], AbstractContextManager[tuple[str, int]]
+]:
+    """Temporarily allow one exact IP and port for a local integration test."""
+
+    @contextmanager
+    def allow(host: str, port: int) -> Iterator[tuple[str, int]]:
+        destination = (str(ipaddress.ip_address(host)), port)
+        _TEST_ALLOWED_SOCKET_DESTINATIONS.add(destination)
+        try:
+            yield destination
+        finally:
+            _TEST_ALLOWED_SOCKET_DESTINATIONS.discard(destination)
+
+    return allow
 
 
 _LLM_ENV_KEYS = [

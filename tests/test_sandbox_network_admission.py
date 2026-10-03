@@ -218,6 +218,7 @@ def test_real_internal_network_admission_passes(monkeypatch: pytest.MonkeyPatch)
 )
 def test_live_siblings_isolated_while_host_relay_and_readiness_work(
     monkeypatch: pytest.MonkeyPatch,
+    allow_test_socket_destination: Any,
 ) -> None:
     """Verify sibling denial while loopback and the approved host relay remain usable."""
     client = docker_sdk.from_env()
@@ -271,16 +272,19 @@ threading.Event().wait()
             _assert_sandbox_network_admission(container, client)
             address = container.attrs["NetworkSettings"]["Networks"][network_name]["IPAddress"]
             deadline = time.monotonic() + 20.0
-            while time.monotonic() < deadline:
-                try:
-                    with urllib.request.urlopen(f"http://{address}:48080/", timeout=1) as response:
-                        assert response.read() == b"ready"
-                    break
-                except OSError:
-                    # Bridge endpoint and service readiness are asynchronous.
-                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
-            else:
-                pytest.fail("Host-to-sandbox readiness/API path unavailable")
+            with allow_test_socket_destination(address, 48080):
+                while time.monotonic() < deadline:
+                    try:
+                        with urllib.request.urlopen(
+                            f"http://{address}:48080/", timeout=1
+                        ) as response:
+                            assert response.read() == b"ready"
+                        break
+                    except OSError:
+                        # Bridge endpoint and service readiness are asynchronous.
+                        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                else:
+                    pytest.fail("Host-to-sandbox readiness/API path unavailable")
 
         for container, sibling in ((containers[0], containers[1]), (containers[1], containers[0])):
             sibling_ip = sibling.attrs["NetworkSettings"]["Networks"][network_name]["IPAddress"]
