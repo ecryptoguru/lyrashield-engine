@@ -50,7 +50,7 @@ def _send(event: str, properties: dict[str, Any]) -> bool:
             json=cast("dict[str, Any]", payload),
             timeout=10,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("posthog send failed for event %s", event, exc_info=True)
         return False
     else:
