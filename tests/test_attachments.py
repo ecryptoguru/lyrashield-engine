@@ -724,7 +724,7 @@ class _FakeSession:
         self.writes: dict[str, bytes] = {}
 
     async def write(self, path: Path, data: io.BytesIO) -> None:
-        self.writes[str(path)] = data.getvalue()
+        self.writes[path.as_posix()] = data.getvalue()
 
 
 @pytest.mark.asyncio
