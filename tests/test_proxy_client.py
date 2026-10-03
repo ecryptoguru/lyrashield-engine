@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from agents.tool_context import ToolContext
+from caido_sdk_client import Client
+from caido_sdk_client.types import ConnectionInfoInput, ReplaySendOptions
 
 from lyrashield.tools.proxy import caido_api, tools
 from strix.runtime.caido_handle import CaidoBootstrapHandle
@@ -194,6 +199,445 @@ def test_build_raw_request_drops_stale_content_length_for_empty_body() -> None:
         body="",
     )
     assert _headers_named(raw, "Content-Length") == []
+
+
+def test_captured_host_header_does_not_replace_transport_authority() -> None:
+    original = SimpleNamespace(host="recorded.example", port=8443, is_tls=True)
+    components = caido_api.parse_raw_request("GET /admin HTTP/1.1\r\nHost: virtual.example\r\n\r\n")
+
+    assert caido_api.full_url_from_components(original, components, {}) == (
+        "https://recorded.example:8443/admin"
+    )
+
+
+def test_parse_raw_request_preserves_binary_body_and_duplicate_header_lines() -> None:
+    raw = (
+        b"POST /upload HTTP/1.1\r\nHost: target.example\r\n"
+        b"X-Tag: one\r\nx-tag: two\r\nContent-Length: 3\r\n\r\n\x00\xffx"
+    )
+
+    components = caido_api.parse_raw_request(raw)
+
+    assert components["body"] == b"\x00\xffx"
+    assert components["header_lines"] == [
+        "Host: target.example",
+        "X-Tag: one",
+        "x-tag: two",
+        "Content-Length: 3",
+    ]
+
+
+@pytest.fixture
+def replay_client(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Exercise real Caido SDK option models while replacing its transport calls."""
+    client = Client("http://127.0.0.1:48080")
+    monkeypatch.setattr(
+        client.graphql,
+        "query",
+        AsyncMock(
+            return_value={
+                "upstreamProxiesHttp": [],
+                "upstreamProxiesSocks": [],
+                "upstreamPlugins": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        client.replay.sessions,
+        "create",
+        AsyncMock(return_value=SimpleNamespace(id="session")),
+    )
+    monkeypatch.setattr(
+        client.replay,
+        "send",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                status="DONE", error=None, entry=SimpleNamespace(response=None)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        caido_api,
+        "load_egress_policy",
+        lambda: caido_api.EgressPolicy(authorized_hosts=frozenset({"target.example"})),
+    )
+    return client
+
+
+async def test_replay_pins_the_validated_dns_answer_without_changing_http_authority(
+    monkeypatch: pytest.MonkeyPatch, replay_client: Any
+) -> None:
+    resolve = Mock(side_effect=[["203.0.113.5"], ["203.0.113.9"]])
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", resolve)
+    connection, raw = caido_api.build_raw_request(
+        method="GET", url="https://target.example/", headers={}, body=""
+    )
+
+    await caido_api.replay_send_raw(replay_client, connection=connection, raw=raw)
+
+    options = replay_client.replay.send.call_args.args[1]
+    assert isinstance(options, ReplaySendOptions)
+    assert options.connection.host == "203.0.113.9"
+    assert options.connection.sni == "target.example"
+    assert options.connection.is_tls
+    assert b"Host: target.example" in options.raw
+    assert resolve.call_count == 2
+    await replay_client.aclose()
+
+
+async def test_replay_rechecks_dns_before_creating_a_session(
+    monkeypatch: pytest.MonkeyPatch, replay_client: Any
+) -> None:
+    caido_api.clear_scope_decisions()
+    resolve = Mock(side_effect=[["203.0.113.5"], ["::ffff:169.254.169.254"]])
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", resolve)
+    connection, raw = caido_api.build_raw_request(
+        method="GET", url="https://target.example/", headers={}, body=""
+    )
+
+    with pytest.raises(ValueError, match="link-local"):
+        await caido_api.replay_send_raw(replay_client, connection=connection, raw=raw)
+
+    replay_client.replay.sessions.create.assert_not_called()
+    replay_client.replay.send.assert_not_called()
+    assert caido_api.get_scope_decisions()["violations"][-1]["rule"] == "link_local"
+    await replay_client.aclose()
+
+
+@pytest.mark.parametrize("resolved_ip", ["127.0.0.1", "10.1.2.3"])
+async def test_replay_rejects_authorized_hostname_resolving_to_private_address(
+    monkeypatch: pytest.MonkeyPatch, replay_client: Any, resolved_ip: str
+) -> None:
+    caido_api.clear_scope_decisions()
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", lambda _host: ["203.0.113.5"])
+    connection, raw = caido_api.build_raw_request(
+        method="GET", url="http://target.example/", headers={}, body=""
+    )
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", lambda _host: [resolved_ip])
+
+    with pytest.raises(ValueError, match="private-range"):
+        await caido_api.replay_send_raw(replay_client, connection=connection, raw=raw)
+
+    replay_client.replay.sessions.create.assert_not_called()
+    replay_client.replay.send.assert_not_called()
+    await replay_client.aclose()
+
+
+async def test_replay_preserves_authority_when_the_verified_target_relay_is_active(
+    monkeypatch: pytest.MonkeyPatch, replay_client: Any
+) -> None:
+    replay_client.graphql.query.return_value["upstreamProxiesHttp"] = [
+        {
+            "id": "relay",
+            "enabled": True,
+            "connection": {"host": "127.0.0.1", "port": 48081, "isTLS": False},
+            "allowlist": ["*"],
+            "denylist": [],
+        }
+    ]
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", lambda _host: ["203.0.113.5"])
+    connection, raw = caido_api.build_raw_request(
+        method="GET", url="https://target.example/", headers={}, body=""
+    )
+
+    await caido_api.replay_send_raw(replay_client, connection=connection, raw=raw)
+
+    options = replay_client.replay.send.call_args.args[1]
+    assert options.connection.host == "target.example"
+    assert b"Host: target.example" in options.raw
+    await replay_client.aclose()
+
+
+async def test_replay_rejects_an_unverified_caido_upstream(
+    replay_client: Any,
+) -> None:
+    replay_client.graphql.query.return_value["upstreamProxiesHttp"] = [
+        {
+            "id": "unexpected",
+            "enabled": True,
+            "connection": {"host": "proxy.evil", "port": 8080, "isTLS": False},
+            "allowlist": ["*"],
+            "denylist": [],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="verified target relay"):
+        await caido_api.replay_send_raw(
+            replay_client,
+            connection=ConnectionInfoInput(host="203.0.113.5", port=443, is_tls=True),
+            raw=b"GET / HTTP/1.1\r\nHost: target.example\r\n\r\n",
+        )
+
+    replay_client.replay.sessions.create.assert_not_called()
+    replay_client.replay.send.assert_not_called()
+    await replay_client.aclose()
+
+
+def test_build_replay_request_preserves_captured_bytes_and_transport_authority() -> None:
+    original = SimpleNamespace(
+        raw=(
+            b"POST /upload HTTP/1.1\r\nHost: virtual.example\r\n"
+            b"X-Tag: one\r\nx-tag: two\r\nContent-Length: 3\r\n\r\n\x00\xffx"
+        ),
+        host="recorded.example",
+        port=8443,
+        is_tls=True,
+    )
+
+    connection, raw = caido_api.build_replay_request(original, {})
+
+    assert connection.host == "recorded.example"
+    assert connection.port == 8443
+    assert connection.is_tls
+    assert raw == original.raw
+
+
+@pytest.mark.parametrize("public_sink", ["api", "tool"])
+async def test_public_repeat_request_replays_original_capture_without_normalizing_bytes(
+    monkeypatch: pytest.MonkeyPatch, replay_client: Any, public_sink: str
+) -> None:
+    captured = b"POST /upload HTTP/1.1\r\nHost: virtual.example\r\n"
+    captured += b"X-Tag: one\r\nx-tag: two\r\nContent-Length: 3\r\n\r\n\x00\xffx"
+    original = SimpleNamespace(
+        raw=captured,
+        host="recorded.example",
+        port=8443,
+        is_tls=True,
+    )
+    monkeypatch.setattr(
+        caido_api,
+        "get_request_with_client",
+        AsyncMock(return_value=SimpleNamespace(request=original)),
+    )
+    monkeypatch.setattr(
+        caido_api,
+        "load_egress_policy",
+        lambda: caido_api.EgressPolicy(
+            authorized_hosts=frozenset({"recorded.example", "virtual.example"})
+        ),
+    )
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", lambda _host: ["203.0.113.9"])
+    if public_sink == "api":
+
+        async def call_with_test_client(fn: Any) -> Any:
+            return await fn(replay_client)
+
+        monkeypatch.setattr(caido_api, "call_with_client", call_with_test_client)
+        await caido_api.repeat_request("request-1")
+    else:
+        context = ToolContext(
+            context={"caido_client": replay_client},
+            tool_name="repeat_request",
+            tool_call_id="call-1",
+            tool_arguments='{"request_id":"request-1"}',
+        )
+        await tools.repeat_request.on_invoke_tool(context, '{"request_id":"request-1"}')
+
+    options = replay_client.replay.send.call_args.args[1]
+    assert isinstance(options, ReplaySendOptions)
+    assert options.raw == captured
+    assert options.connection.host == "203.0.113.9"
+    assert options.connection.port == 8443
+    assert options.connection.sni == "recorded.example"
+    assert options.connection.is_tls
+    await replay_client.aclose()
+
+
+def test_replay_parameter_patch_keeps_unmodified_duplicate_query_and_headers() -> None:
+    original = SimpleNamespace(
+        raw=(
+            b"GET /?keep=one&keep=two&replace=old HTTP/1.1\r\n"
+            b"Host: recorded.example\r\nX-Tag: first\r\nx-tag: second\r\n\r\n"
+        ),
+        host="recorded.example",
+        port=443,
+        is_tls=True,
+    )
+
+    _connection, raw = caido_api.build_replay_request(original, {"params": {"replace": "new"}})
+
+    assert b"GET /?keep=one&keep=two&replace=new HTTP/1.1\r\n" in raw
+    assert b"X-Tag: first\r\nx-tag: second\r\n" in raw
+
+
+def test_cross_origin_url_patch_drops_captured_credentials_unless_replaced() -> None:
+    original = SimpleNamespace(
+        raw=(
+            b"GET /private HTTP/1.1\r\nHost: recorded.example\r\n"
+            b"Cookie: session=secret\r\nAuthorization: Bearer old\r\n"
+            b"Proxy-Authorization: Basic old\r\nX-Trace: keep\r\n\r\n"
+        ),
+        host="recorded.example",
+        port=443,
+        is_tls=True,
+    )
+
+    _connection, raw = caido_api.build_replay_request(
+        original,
+        {
+            "url": "https://other.example:443/new",
+            "headers": {
+                "authorization": "Bearer explicit",
+                "proxy-authorization": "Basic explicit",
+            },
+            "cookies": {"mode": "test"},
+        },
+    )
+
+    assert b"Host: other.example:443\r\n" in raw
+    assert b"Authorization: Bearer explicit\r\n" in raw
+    assert b"Proxy-Authorization: Basic explicit\r\n" in raw
+    assert b"Cookie: mode=test\r\n" in raw
+    assert b"session=secret" not in raw
+    assert b"Proxy-Authorization: Basic old\r\n" not in raw
+    assert b"X-Trace: keep\r\n" in raw
+
+
+def test_origin_normalization_keeps_credentials_for_same_origin() -> None:
+    original = SimpleNamespace(
+        raw=(
+            b"GET /private HTTP/1.1\r\nHost: recorded.example\r\n"
+            b"Cookie: session=secret\r\nAuthorization: Bearer old\r\n\r\n"
+        ),
+        host="recorded.example",
+        port=443,
+        is_tls=True,
+    )
+
+    _connection, raw = caido_api.build_replay_request(
+        original, {"url": "HTTPS://RECORDED.EXAMPLE:443/next"}
+    )
+
+    assert b"Cookie: session=secret\r\n" in raw
+    assert b"Authorization: Bearer old\r\n" in raw
+
+
+async def test_public_repeat_request_does_not_forward_credentials_to_new_origin(
+    monkeypatch: pytest.MonkeyPatch, replay_client: Any
+) -> None:
+    original = SimpleNamespace(
+        raw=(
+            b"GET /private HTTP/1.1\r\nHost: recorded.example\r\n"
+            b"Cookie: session=secret\r\nAuthorization: Bearer old\r\n"
+            b"Proxy-Authorization: Basic old\r\n\r\n"
+        ),
+        host="recorded.example",
+        port=443,
+        is_tls=True,
+    )
+    monkeypatch.setattr(
+        caido_api,
+        "get_request_with_client",
+        AsyncMock(return_value=SimpleNamespace(request=original)),
+    )
+    monkeypatch.setattr(
+        caido_api,
+        "load_egress_policy",
+        lambda: caido_api.EgressPolicy(
+            authorized_hosts=frozenset({"recorded.example", "other.example"})
+        ),
+    )
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", lambda _host: ["203.0.113.9"])
+
+    async def call_with_test_client(fn: Any) -> Any:
+        return await fn(replay_client)
+
+    monkeypatch.setattr(caido_api, "call_with_client", call_with_test_client)
+    await caido_api.repeat_request("request-1", modifications={"url": "https://other.example/"})
+
+    options = replay_client.replay.send.call_args.args[1]
+    assert isinstance(options, ReplaySendOptions)
+    assert b"Cookie:" not in options.raw
+    assert b"Authorization:" not in options.raw
+    assert b"Proxy-Authorization:" not in options.raw
+    await replay_client.aclose()
+
+
+@pytest.mark.parametrize(
+    "raw, reason",
+    [
+        (
+            b"GET / HTTP/1.1\r\nHost: outside.example\r\n\r\n",
+            "authorized scope",
+        ),
+        (
+            b"GET http://outside.example/private HTTP/1.1\r\nHost: target.example\r\n\r\n",
+            "authorized scope",
+        ),
+        (
+            b"GET / HTTP/1.1\r\nHost: target.example\r\nHost: outside.example\r\n\r\n",
+            "multiple Host",
+        ),
+        (
+            b"GET / HTTP/1.1\r\nHost: target.example\r\nHost: target.example\r\n\r\n",
+            "multiple Host",
+        ),
+    ],
+)
+async def test_replay_sink_rejects_unscoped_or_ambiguous_http_authority(
+    replay_client: Any, monkeypatch: pytest.MonkeyPatch, raw: bytes, reason: str
+) -> None:
+    caido_api.clear_scope_decisions()
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", lambda _host: ["203.0.113.5"])
+
+    with pytest.raises(ValueError, match=reason):
+        await caido_api.replay_send_raw(
+            replay_client,
+            connection=ConnectionInfoInput(host="target.example", port=443, is_tls=True),
+            raw=raw,
+        )
+
+    replay_client.replay.sessions.create.assert_not_called()
+    replay_client.replay.send.assert_not_called()
+    await replay_client.aclose()
+
+
+async def test_replay_sink_preserves_capture_with_two_authorized_authorities(
+    replay_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = (
+        b"GET http://virtual.example/path HTTP/1.1\r\n"
+        b"Host: target.example\r\nX-Trace: exact\r\n\r\n"
+    )
+    monkeypatch.setattr(
+        caido_api,
+        "load_egress_policy",
+        lambda: caido_api.EgressPolicy(
+            authorized_hosts=frozenset({"target.example", "virtual.example"})
+        ),
+    )
+    monkeypatch.setattr(caido_api, "_resolve_hostname_ips", lambda _host: ["203.0.113.5"])
+
+    await caido_api.replay_send_raw(
+        replay_client,
+        connection=ConnectionInfoInput(host="target.example", port=80, is_tls=False),
+        raw=raw,
+    )
+
+    options = replay_client.replay.send.call_args.args[1]
+    assert options.raw == raw
+    await replay_client.aclose()
+
+
+def test_replay_denies_unspecified_dns_address_even_for_authorized_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        caido_api,
+        "load_egress_policy",
+        lambda: caido_api.EgressPolicy(
+            authorized_hosts=frozenset({"target.example"}),
+            allow_private_egress=True,
+        ),
+    )
+
+    denial = caido_api._replay_denial(
+        "https://target.example/",
+        resolved_ips=["0.0.0.0"],
+    )
+
+    assert denial is not None
+    assert denial[1] == "non_routable_destination"
 
 
 class _Ctx:

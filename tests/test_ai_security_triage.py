@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from agents.usage import Usage
+from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 from lyrashield.lifecycle.hooks import BudgetExceededError
 from lyrashield.triage import service
@@ -264,6 +265,41 @@ async def test_invalid_triage_output_keeps_returned_usage(monkeypatch: pytest.Mo
     assert artifact["llmUsage"]["input_tokens"] == 1_000
     assert artifact["llmUsage"]["output_tokens"] == 100
     assert artifact["llmUsage"]["accountingComplete"] is True
+
+
+@pytest.mark.asyncio
+async def test_triage_rejects_schema_valid_text_in_incomplete_message() -> None:
+    message = ResponseOutputMessage(
+        id="msg-incomplete",
+        content=[
+            ResponseOutputText(
+                type="output_text",
+                annotations=[],
+                text=json.dumps(
+                    {
+                        "disposition": "LIKELY_FALSE_POSITIVE",
+                        "confidence": 0.99,
+                        "explanation": "Apparently safe",
+                    }
+                ),
+            )
+        ],
+        role="assistant",
+        status="incomplete",
+        type="message",
+    )
+
+    async def incomplete_response(**_kwargs: object) -> object:
+        return SimpleNamespace(output=[message], usage=None)
+
+    with pytest.raises(service.TriageOutputError, match="empty structured"):
+        await service._request_judgement(
+            model=SimpleNamespace(get_response=incomplete_response),
+            model_route="azure_ai/gpt-6-luna",
+            model_settings=None,
+            prompt="bounded prompt",
+            limits=service.TriageLimits(),
+        )
 
 
 @pytest.mark.asyncio

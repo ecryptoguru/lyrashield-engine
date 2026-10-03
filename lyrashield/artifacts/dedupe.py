@@ -6,14 +6,25 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from agents.agent_output import AgentOutputSchema
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+)
 
 from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.inputs import make_model_settings
@@ -21,6 +32,8 @@ from lyrashield.policy.loader import load_settings
 from lyrashield.policy.models import (
     StrixProvider,
     configure_sdk_model_defaults,
+    is_gpt6_model,
+    parse_model_route,
 )
 
 
@@ -46,13 +59,123 @@ def resolve_dedupe_model(
     the dedupe endpoint keeps it apart from the main model's process-wide
     defaults.
     """
-    api_key = (dedupe.api_key or "").strip() if dedupe.model else ""
-    api_base = (dedupe.api_base or "").strip() if dedupe.model else ""
-    if not (api_key or api_base):
+    if not dedupe.model:
         return StrixProvider(settings=settings).get_model(model_name)
+
+    settings = settings if settings is not None else load_settings()
+    try:
+        route = parse_model_route(model_name)
+    except ValueError as exc:
+        raise RuntimeError(
+            "Dedicated dedupe model must use a metered OpenAI or Azure/Azure AI GPT-6 route."
+        ) from exc
+    if (
+        not is_gpt6_model(model_name)
+        or route is None
+        or route.provider not in {None, "openai", "azure", "azure_ai"}
+    ):
+        raise RuntimeError(
+            "Dedicated dedupe model must use a metered OpenAI or Azure/Azure AI GPT-6 route."
+        )
+    same_provider = _uses_same_provider(settings.llm.model, model_name)
+    dedupe_provider = route.provider or "openai"
+
+    api_key = (dedupe.api_key or "").strip()
+    api_base = (dedupe.api_base or "").strip()
+    extra_headers = dedupe.extra_headers
+    if same_provider:
+        main_api_base = (settings.llm.api_base or "").strip()
+        dedicated_base_matches_main = _dedupe_endpoint_matches_main(main_api_base, dedupe.api_base)
+        if api_base and not dedicated_base_matches_main and not api_key:
+            raise RuntimeError(
+                "A custom dedupe endpoint requires DEDUPE_LLM_API_KEY; "
+                "the main model key cannot be sent to a different endpoint."
+            )
+        if not api_base:
+            api_base = main_api_base
+        if not api_key and dedicated_base_matches_main:
+            api_key = (settings.llm.api_key or "").strip()
+        if extra_headers is None:
+            extra_headers = settings.llm.extra_headers if dedicated_base_matches_main else {}
+    elif dedupe_provider == "openai":
+        # The main route may use an Azure or proxy key. Only the caller's
+        # OpenAI-specific environment is a safe implicit credential here.
+        if dedupe.api_base and not api_key:
+            raise RuntimeError("A custom OpenAI dedupe endpoint requires DEDUPE_LLM_API_KEY.")
+        api_base = (
+            api_base or (os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or "").strip()
+        )
+        api_key = api_key or (os.getenv("OPENAI_API_KEY") or "").strip()
+        if not api_key:
+            raise RuntimeError(
+                "Cross-provider OpenAI dedupe requires DEDUPE_LLM_API_KEY or OPENAI_API_KEY."
+            )
+    elif dedupe_provider in {"azure", "azure_ai"}:
+        if dedupe.api_base and not api_key:
+            raise RuntimeError("A custom Azure dedupe endpoint requires DEDUPE_LLM_API_KEY.")
+        api_key = (
+            api_key
+            or (os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_AI_API_KEY") or "").strip()
+        )
+        api_base = (
+            api_base
+            or (
+                os.getenv("AZURE_OPENAI_ENDPOINT")
+                or os.getenv("AZURE_OPENAI_API_BASE")
+                or os.getenv("AZURE_AI_API_BASE")
+                or ""
+            ).strip()
+        )
+        if not api_base:
+            raise RuntimeError(
+                "Cross-provider Azure dedupe requires DEDUPE_LLM_API_BASE "
+                "or an Azure-specific endpoint."
+            )
+        if not api_key:
+            raise RuntimeError(
+                "Cross-provider Azure dedupe requires DEDUPE_LLM_API_KEY or an Azure-specific key."
+            )
     return StrixProvider(
-        settings=settings, api_key=api_key or None, base_url=api_base or None
+        settings=settings,
+        api_key=api_key or None,
+        base_url=api_base or None,
+        extra_headers=extra_headers,
     ).get_model(model_name)
+
+
+def _uses_same_provider(main_model: str | None, dedupe_model: str | None) -> bool:
+    main_provider = _provider_for_model(main_model)
+    dedupe_provider = _provider_for_model(dedupe_model)
+    return main_provider == dedupe_provider or {main_provider, dedupe_provider} <= {
+        "azure",
+        "azure_ai",
+    }
+
+
+def _provider_for_model(model_name: str | None) -> str:
+    route = parse_model_route(model_name)
+    return route.provider if route and route.provider else "openai"
+
+
+def _normalize_endpoint(endpoint: str) -> tuple[str, str, str, str, str]:
+    parsed = urlsplit(endpoint.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return ("", "", endpoint.strip().rstrip("/").lower(), "", "")
+    return (
+        parsed.scheme.lower(),
+        parsed.netloc.lower(),
+        parsed.path.rstrip("/"),
+        parsed.query,
+        parsed.fragment,
+    )
+
+
+def _dedupe_endpoint_matches_main(main_api_base: str | None, dedupe_api_base: str | None) -> bool:
+    if not dedupe_api_base:
+        return True
+    if not main_api_base:
+        return False
+    return _normalize_endpoint(dedupe_api_base) == _normalize_endpoint(main_api_base)
 
 
 def _dedupe_model_settings(
@@ -62,17 +185,22 @@ def _dedupe_model_settings(
     settings: Settings | None = None,
 ) -> ModelSettings:
     llm = settings.llm if settings is not None else load_settings().llm
+    extra_headers = dedupe.extra_headers
+    if not dedupe.model or (
+        extra_headers is None
+        and _uses_same_provider(llm.model, model_name)
+        and _dedupe_endpoint_matches_main(llm.api_base, dedupe.api_base)
+    ):
+        extra_headers = llm.extra_headers
     return make_model_settings(
         dedupe.reasoning_effort,
         model_name=model_name,
         max_output_tokens=_DEDUPE_MAX_OUTPUT_TOKENS,
         force_required_tool_choice=False,
         request_timeout=request_timeout,
-        # The main model's headers apply only when dedupe falls back to the main
-        # model; a dedicated dedupe model may route to another provider, which
-        # must never receive the main endpoint's credentials. A dedicated model
-        # gets its own DEDUPE_LLM_EXTRA_HEADERS instead.
-        extra_headers=dedupe.extra_headers if dedupe.model else llm.extra_headers,
+        # A same-provider dedicated model may reuse the main route's headers;
+        # cross-provider routes receive only their own explicit headers.
+        extra_headers=extra_headers,
     )
 
 
@@ -205,10 +333,14 @@ class DedupeJudgement(BaseModel):
     constrained to these fields and no surrounding prose.
     """
 
-    is_duplicate: bool
-    duplicate_id: str = ""
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    reason: str = ""
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    is_duplicate: StrictBool
+    duplicate_id: StrictStr = ""
+    confidence: (
+        Annotated[StrictFloat, Field(ge=0.0, le=1.0)] | Annotated[StrictInt, Field(ge=0, le=1)]
+    ) = 0.0
+    reason: StrictStr = ""
 
 
 _DEDUPE_OUTPUT_SCHEMA: AgentOutputSchema = AgentOutputSchema(
@@ -216,20 +348,9 @@ _DEDUPE_OUTPUT_SCHEMA: AgentOutputSchema = AgentOutputSchema(
     strict_json_schema=True,
 )
 
+
 # Conservative chars-per-token ratio for sizing the reservation. Under-counting
 # would let the reservation understate real spend, so round pessimistically.
-_CHARS_PER_TOKEN = 3.5
-
-
-def _estimate_reservation_tokens(*parts: str) -> int:
-    """Rough upper-bound token count for the reservation.
-
-    The exact count is only known after the provider responds; the reservation
-    just needs to be a safe over-estimate that is released immediately after.
-    """
-    return max(1, math.ceil(sum(len(part) for part in parts) / _CHARS_PER_TOKEN))
-
-
 async def _request_dedupe_judgement(
     *,
     model: Any,
@@ -247,7 +368,10 @@ async def _request_dedupe_judgement(
     ModelSettings.retry belongs to Runner and does not wrap this call.
     """
     # Lazy import avoids the lifecycle-hooks/artifact-state import cycle.
-    from lyrashield.lifecycle.hooks import get_active_hooks
+    from lyrashield.lifecycle.hooks import (
+        _estimate_out_of_band_input_tokens,
+        get_active_hooks,
+    )
 
     hooks = get_active_hooks()
     reservation_key = f"dedupe:{uuid4().hex}"
@@ -255,10 +379,13 @@ async def _request_dedupe_judgement(
         await hooks.reserve_out_of_band_request(
             key=reservation_key,
             model=model_name,
-            input_tokens=_estimate_reservation_tokens(DEDUPE_SYSTEM_PROMPT, user_msg),
+            input_tokens=_estimate_out_of_band_input_tokens(
+                model_name, DEDUPE_SYSTEM_PROMPT, user_msg
+            ),
             max_output_tokens=_DEDUPE_MAX_OUTPUT_TOKENS,
         )
     response: ModelResponse | None = None
+    usage_persisted = False
     try:
         response = await model.get_response(
             system_instructions=DEDUPE_SYSTEM_PROMPT,
@@ -272,6 +399,20 @@ async def _request_dedupe_judgement(
             conversation_id=None,
             prompt=None,
         )
+        report_state = get_global_report_state()
+        if report_state is not None:
+            try:
+                usage_persisted = report_state.record_sdk_usage(
+                    agent_id="dedupe",
+                    agent_name="dedupe",
+                    model=model_name,
+                    usage=response.usage,
+                    response_id=response.response_id,
+                )
+                if not usage_persisted:
+                    logger.error("failed to persist SDK usage for dedupe")
+            except Exception:
+                logger.exception("failed to record SDK usage for dedupe")
     finally:
         # Always release: a failed request must not strand its reservation and
         # shrink the remaining budget for the rest of the scan.
@@ -279,7 +420,7 @@ async def _request_dedupe_judgement(
             await hooks.release_out_of_band_request(
                 key=reservation_key,
                 model=model_name,
-                usage=response.usage if response is not None else None,
+                usage=(response.usage if response is not None and usage_persisted else None),
             )
     if response is None:
         raise RuntimeError("Dedupe model call did not return a response")
@@ -624,27 +765,38 @@ def _extract_balanced_json(text: str) -> str:
 def _parse_dedupe_response(content: str) -> dict[str, Any]:
     """Parse and validate the dedupe model's JSON response.
 
-    First tries strict Pydantic validation against ``DedupeJudgement``. If the
-    provider returned malformed or extra-prose output (e.g. during a fallback
-    path), fall back to the older lenient parser so the scan isn't blocked.
+    Keep the legacy extra-field fallback for provider resilience, but accept a
+    duplicate claim only when its decision is an actual JSON boolean.
     """
-    json_text = _extract_balanced_json(content)
+    parsed: Any = None
     try:
-        judgement = DedupeJudgement.model_validate_json(json_text)
-    except (ValidationError, ValueError):
-        logger.warning("Dedupe response failed schema validation; falling back to lenient parser")
+        json_text = _extract_balanced_json(content)
         parsed = json.loads(json_text)
-        duplicate_id = str(parsed.get("duplicate_id") or "")[:64]
-        reason = str(parsed.get("reason") or "")[:500]
-        try:
-            confidence = float(parsed.get("confidence", 0.0))
-        except (TypeError, ValueError):
+        judgement = DedupeJudgement.model_validate(parsed)
+    except (ValidationError, ValueError):
+        logger.warning("Dedupe response failed schema validation; trying safe lenient parser")
+        if not isinstance(parsed, dict) or type(parsed.get("is_duplicate")) is not bool:
+            return {
+                "is_duplicate": False,
+                "duplicate_id": "",
+                "confidence": 0.0,
+                "reason": "Invalid structured dedupe response; candidate preserved",
+            }
+        duplicate_id = parsed.get("duplicate_id", "")
+        reason = parsed.get("reason", "")
+        confidence = parsed.get("confidence", 0.0)
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not math.isfinite(confidence)
+            or not 0.0 <= confidence <= 1.0
+        ):
             confidence = 0.0
         return {
-            "is_duplicate": bool(parsed.get("is_duplicate", False)),
-            "duplicate_id": duplicate_id,
+            "is_duplicate": parsed["is_duplicate"],
+            "duplicate_id": duplicate_id[:64] if isinstance(duplicate_id, str) else "",
             "confidence": confidence,
-            "reason": reason,
+            "reason": reason[:500] if isinstance(reason, str) else "",
         }
     return {
         "is_duplicate": judgement.is_duplicate,
@@ -659,6 +811,10 @@ def _extract_text(response: ModelResponse) -> str:
     for item in response.output:
         if not isinstance(item, ResponseOutputMessage):
             continue
+        if item.status != "completed" or any(
+            getattr(chunk, "type", None) == "refusal" for chunk in item.content
+        ):
+            return ""
         for chunk in item.content:
             text = getattr(chunk, "text", None)
             if text:
@@ -739,15 +895,6 @@ async def check_duplicate(
             model_settings=dedupe_settings,
             user_msg=user_msg,
         )
-        report_state = get_global_report_state()
-        if report_state is not None:
-            report_state.record_sdk_usage(
-                agent_id="dedupe",
-                agent_name="dedupe",
-                model=resolved_model,
-                usage=response.usage,
-                response_id=response.response_id,
-            )
         content = _extract_text(response)
         if not content:
             return {

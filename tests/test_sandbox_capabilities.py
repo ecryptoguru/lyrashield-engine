@@ -19,6 +19,7 @@ from lyrashield.runtime.capabilities import (
     STATUS_SUPPORTED,
     STATUS_UNPROBED,
     SandboxPreflightError,
+    _probe_network_policy,
     evaluate_preflight,
     probe_session_capabilities,
 )
@@ -68,7 +69,13 @@ class _FakeNetworks:
         self._internal = internal
 
     def get(self, _name: str) -> Any:
-        return SimpleNamespace(attrs={"Internal": self._internal})
+        return SimpleNamespace(
+            attrs={
+                "Internal": self._internal,
+                "Driver": "bridge",
+                "Options": {"com.docker.network.bridge.enable_icc": "false"},
+            }
+        )
 
 
 def _docker_client(attrs: dict[str, Any], *, internal: bool = True) -> Any:
@@ -189,6 +196,19 @@ def test_probe_non_internal_network_is_absent() -> None:
     assert record["capabilities"]["network_policy"]["status"] == STATUS_ABSENT
     controls = {f["control"] for f in record["preflight"]["failures"]}
     assert "deny_by_default_egress" in controls
+
+
+def test_probe_does_not_attest_sibling_isolation_from_internal_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", _NETWORK)
+    attrs = _docker_attrs()
+    client = _docker_client(attrs)
+    client.docker_client.networks = SimpleNamespace(
+        get=lambda _name: SimpleNamespace(attrs={"Internal": True, "Driver": "bridge"})
+    )
+    result = _probe_network_policy("docker", client, _Session())
+    assert result["status"] == STATUS_ABSENT
 
 
 def test_probe_extra_network_attachment_is_absent() -> None:

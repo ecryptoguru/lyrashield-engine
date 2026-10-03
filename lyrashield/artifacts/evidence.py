@@ -29,7 +29,7 @@ import logging
 import os
 import re
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from lyrashield.artifacts.writer import _atomic_write_text
@@ -877,6 +877,106 @@ def build_result_manifest(run_dir: Path) -> dict[str, Any]:
     return {"schema_version": 1, "artifacts": artifacts}
 
 
+def verify_result_manifest(run_dir: Path, manifest: Any) -> None:
+    """Verify every artifact named by a persisted result manifest.
+
+    Older run records without a manifest remain readable; once a manifest is
+    present it is authoritative, and a missing, altered, malformed, or unsafe
+    path fails resume before the caller replaces its in-memory state.
+    """
+    if not isinstance(manifest, dict):
+        raise TypeError("result manifest must be an object")
+    schema_version = manifest.get("schema_version")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != 1
+    ):
+        raise RuntimeError("result manifest is malformed or uses an unsupported schema")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise TypeError("result manifest artifacts must be an object")
+
+    root = run_dir.resolve()
+
+    def resolve_relative(raw_path: Any) -> Path:
+        if not isinstance(raw_path, str) or not raw_path or "\\" in raw_path:
+            raise RuntimeError("result manifest contains an invalid artifact path")
+        relative = PurePosixPath(raw_path)
+        if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+            raise RuntimeError("result manifest contains an unsafe artifact path")
+        candidate = run_dir.joinpath(*relative.parts)
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError(f"result manifest artifact is missing: {raw_path}") from exc
+        if root not in resolved.parents or candidate.is_symlink():
+            raise RuntimeError(
+                f"result manifest artifact path escapes the run directory: {raw_path}"
+            )
+        return candidate
+
+    def verify_file(path: Path, *, digest: Any, size: Any | None, label: str) -> None:
+        if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise RuntimeError(f"result manifest digest is invalid for {label}")
+        if size is not None and (not isinstance(size, int) or isinstance(size, bool) or size < 0):
+            raise RuntimeError(f"result manifest byte length is invalid for {label}")
+        if not path.is_file():
+            raise RuntimeError(f"result manifest artifact is missing: {label}")
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise RuntimeError(f"result manifest artifact cannot be read: {label}") from exc
+        actual_digest = hashlib.sha256(payload).hexdigest()
+        if actual_digest != digest or (size is not None and len(payload) != size):
+            raise RuntimeError(f"result manifest checksum mismatch: {label}")
+
+    for name, raw_entry in artifacts.items():
+        if not isinstance(name, str) or not isinstance(raw_entry, dict):
+            raise TypeError("result manifest contains a malformed artifact entry")
+        if name.endswith("/"):
+            if (
+                name != "vulnerabilities/"
+                or raw_entry.get("path", name) != name
+                or set(raw_entry) not in ({"files"}, {"path", "files"})
+            ):
+                raise RuntimeError(f"result manifest directory entry is unsupported: {name!r}")
+            directory_path = resolve_relative(name[:-1])
+            if not directory_path.is_dir():
+                raise RuntimeError(f"result manifest directory is missing: {name}")
+            files = raw_entry.get("files")
+            if not isinstance(files, dict) or any(
+                not isinstance(filename, str)
+                or Path(filename).name != filename
+                or not filename.endswith(".md")
+                for filename in files
+            ):
+                raise RuntimeError(f"result manifest directory entries are malformed: {name}")
+            present = {path.name for path in directory_path.glob("*.md") if path.is_file()}
+            if present != set(files):
+                raise RuntimeError(f"result manifest directory contents changed: {name}")
+            for filename, digest in files.items():
+                artifact_path = resolve_relative(f"vulnerabilities/{filename}")
+                verify_file(
+                    artifact_path,
+                    digest=digest,
+                    size=None,
+                    label=f"{name}{filename}",
+                )
+            continue
+        if raw_entry.get("path") != name:
+            raise RuntimeError(f"result manifest path does not match its key: {name!r}")
+        if set(raw_entry) != {"path", "sha256", "bytes"}:
+            raise RuntimeError(f"result manifest file entry is malformed: {name!r}")
+        path = resolve_relative(name)
+        verify_file(
+            path,
+            digest=raw_entry.get("sha256"),
+            size=raw_entry.get("bytes"),
+            label=name,
+        )
+
+
 __all__ = [
     "COVERAGE_FILENAME",
     "DEPENDENT_REPORT_FIELDS",
@@ -904,6 +1004,7 @@ __all__ = [
     "record_supports_evidence_v1_1",
     "run_record_schema_version",
     "validate_revised_finding",
+    "verify_result_manifest",
     "write_coverage_artifact",
     "write_threat_model_artifact",
 ]

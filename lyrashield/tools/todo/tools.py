@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import tempfile
 import threading
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,51 +38,105 @@ _todos_storage: dict[str, dict[str, dict[str, Any]]] = {}
 
 _todos_path: Path | None = None
 _todos_io_lock = threading.RLock()
+_todos_store_available = True
 
 
 def hydrate_todos_from_disk(state_dir: Path) -> None:
-    global _todos_path  # noqa: PLW0603
-    _todos_path = state_dir / "todos.json"
+    global _todos_path, _todos_store_available  # noqa: PLW0603
     with _todos_io_lock:
+        _todos_path = state_dir / "todos.json"
         _todos_storage.clear()
-        if not _todos_path.exists():
-            return
+        _todos_store_available = False
         try:
             data = json.loads(_todos_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            _todos_store_available = True
+            return
         except (OSError, json.JSONDecodeError):
             logger.exception(
-                "todos.json at %s is unreadable; starting with empty todos",
+                "todos.json at %s is unreadable; refusing todo mutations",
                 _todos_path,
             )
             return
         if not isinstance(data, dict):
+            _todos_store_available = False
+            logger.error("todos.json at %s is not an object; refusing todo mutations", _todos_path)
             return
-        loaded = 0
+        hydrated: dict[str, dict[str, dict[str, Any]]] = {}
         for aid, by_id in data.items():
-            if not isinstance(aid, str) or not isinstance(by_id, dict):
-                continue
-            cleaned = {
-                str(tid): t
-                for tid, t in by_id.items()
-                if isinstance(tid, str) and isinstance(t, dict)
-            }
-            if cleaned:
-                _todos_storage[aid] = cleaned
-                loaded += len(cleaned)
+            if not isinstance(aid, str) or not aid or not isinstance(by_id, dict):
+                logger.error(
+                    "todos.json at %s has a malformed agent record; refusing mutations",
+                    _todos_path,
+                )
+                return
+            cleaned: dict[str, dict[str, Any]] = {}
+            for tid, todo in by_id.items():
+                if (
+                    not isinstance(tid, str)
+                    or not tid
+                    or not isinstance(todo, dict)
+                    or not isinstance(todo.get("title"), str)
+                    or not todo["title"].strip()
+                ):
+                    logger.error(
+                        "todos.json at %s has a malformed todo record; refusing mutations",
+                        _todos_path,
+                    )
+                    return
+                priority = todo.get("priority", "normal")
+                status = todo.get("status", "pending")
+                description = todo.get("description")
+                if (
+                    not isinstance(priority, str)
+                    or priority not in VALID_PRIORITIES
+                    or not isinstance(status, str)
+                    or status not in VALID_STATUSES
+                    or (description is not None and not isinstance(description, str))
+                ):
+                    logger.error(
+                        "todos.json at %s has invalid todo fields; refusing mutations",
+                        _todos_path,
+                    )
+                    return
+                for field_name in ("created_at", "updated_at"):
+                    if field_name in todo and not isinstance(todo[field_name], str):
+                        logger.error(
+                            "todos.json at %s has malformed timestamps; refusing mutations",
+                            _todos_path,
+                        )
+                        return
+                completed_at = todo.get("completed_at")
+                if completed_at is not None and not isinstance(completed_at, str):
+                    logger.error(
+                        "todos.json at %s has malformed completion timestamp; refusing mutations",
+                        _todos_path,
+                    )
+                    return
+                cleaned[tid] = todo
+            hydrated[aid] = cleaned
+        _todos_storage.clear()
+        _todos_storage.update(hydrated)
+        _todos_store_available = True
         logger.info(
             "todos hydrated from %s (%d agent(s), %d todo(s))",
             _todos_path,
             len(_todos_storage),
-            loaded,
+            sum(len(todos) for todos in _todos_storage.values()),
         )
 
 
-def _persist() -> None:
+def _persist(storage: dict[str, dict[str, dict[str, Any]]] | None = None) -> bool:
     path = _todos_path
     if path is None:
-        return
+        return True
+    if not _todos_store_available:
+        return False
+    tmp_path: Path | None = None
     try:
-        payload = json.dumps(_todos_storage, ensure_ascii=False, default=str)
+        payload = json.dumps(
+            storage if storage is not None else _todos_storage, ensure_ascii=False, default=str
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         with (
             _todos_io_lock,
@@ -93,11 +149,38 @@ def _persist() -> None:
                 delete=False,
             ) as tmp,
         ):
-            tmp.write(payload)
             tmp_path = Path(tmp.name)
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
         tmp_path.replace(path)
+        tmp_path = None
     except Exception:
         logger.exception("todos persist to %s failed", path)
+        return False
+    else:
+        return True
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
+def _persist_candidate(candidate: dict[str, dict[str, dict[str, Any]]]) -> bool:
+    """Persist a complete candidate snapshot before exposing it in memory."""
+    with _todos_io_lock:
+        if not _persist(candidate):
+            return False
+        _todos_storage.clear()
+        _todos_storage.update(candidate)
+        return True
+
+
+def _store_error() -> str:
+    return json.dumps(
+        {"success": False, "error": "Todo changes could not be saved; no changes were applied"},
+        ensure_ascii=False,
+        default=str,
+    )
 
 
 def _agent_id_from(ctx: RunContextWrapper) -> str:
@@ -106,7 +189,7 @@ def _agent_id_from(ctx: RunContextWrapper) -> str:
 
 
 def _get_agent_todos(agent_id: str) -> dict[str, dict[str, Any]]:
-    return _todos_storage.setdefault(agent_id, {})
+    return _todos_storage.get(agent_id, {})
 
 
 def _normalize_priority(priority: str | None, default: str = "normal") -> str:
@@ -221,37 +304,57 @@ def _normalize_bulk_todos(raw_todos: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-def _apply_single_update(
+def _apply_single_update(  # noqa: PLR0912 - validate before mutating any candidate fields.
     agent_todos: dict[str, dict[str, Any]],
     todo_id: str,
-    title: str | None = None,
-    description: str | None = None,
-    priority: str | None = None,
-    status: str | None = None,
+    title: Any = None,
+    description: Any = None,
+    priority: Any = None,
+    status: Any = None,
 ) -> dict[str, Any] | None:
     if todo_id not in agent_todos:
         return {"todo_id": todo_id, "error": f"Todo with ID '{todo_id}' not found"}
     todo = agent_todos[todo_id]
     if title is not None:
+        if not isinstance(title, str):
+            return {"todo_id": todo_id, "error": "Title must be a string"}
         if not title.strip():
             return {"todo_id": todo_id, "error": "Title cannot be empty"}
-        todo["title"] = title.strip()
-    if description is not None:
-        todo["description"] = description.strip() if description else None
+    if description is not None and not isinstance(description, str):
+        return {"todo_id": todo_id, "error": "Description must be a string"}
+
+    normalized_priority: str | None = None
     if priority is not None:
+        if not isinstance(priority, str):
+            return {"todo_id": todo_id, "error": "Priority must be a string"}
         try:
-            todo["priority"] = _normalize_priority(priority, str(todo.get("priority", "normal")))
+            normalized_priority = _normalize_priority(priority, str(todo.get("priority", "normal")))
         except ValueError as exc:
             return {"todo_id": todo_id, "error": str(exc)}
+
+    normalized_status: str | None = None
     if status is not None:
+        if not isinstance(status, str):
+            return {"todo_id": todo_id, "error": "Status must be a string"}
         status_candidate = status.lower()
         if status_candidate not in VALID_STATUSES:
             return {
                 "todo_id": todo_id,
                 "error": f"Invalid status. Must be one of: {', '.join(VALID_STATUSES)}",
             }
-        todo["status"] = status_candidate
-        todo["completed_at"] = datetime.now(UTC).isoformat() if status_candidate == "done" else None
+        normalized_status = status_candidate
+
+    if title is not None:
+        todo["title"] = title.strip()
+    if description is not None:
+        todo["description"] = description.strip() if description else None
+    if normalized_priority is not None:
+        todo["priority"] = normalized_priority
+    if normalized_status is not None:
+        todo["status"] = normalized_status
+        todo["completed_at"] = (
+            datetime.now(UTC).isoformat() if normalized_status == "done" else None
+        )
     todo["updated_at"] = datetime.now(UTC).isoformat()
     return None
 
@@ -292,6 +395,8 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
             {"title": "Check JWT alg=none"}]``.
     """
     agent_id = _agent_id_from(ctx)
+    if not _todos_store_available:
+        return _store_error()
     try:
         tasks = _normalize_bulk_todos(todos)
         if not tasks:
@@ -301,22 +406,28 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
                 default=str,
             )
 
-        agent_todos = _get_agent_todos(agent_id)
-        created: list[dict[str, Any]] = []
-        for task in tasks:
-            task_priority = _normalize_priority(task.get("priority"))
-            todo_id = str(uuid.uuid4())[:6]
-            timestamp = datetime.now(UTC).isoformat()
-            agent_todos[todo_id] = {
-                "title": task["title"],
-                "description": task.get("description"),
-                "priority": task_priority,
-                "status": "pending",
-                "created_at": timestamp,
-                "updated_at": timestamp,
-                "completed_at": None,
-            }
-            created.append({"todo_id": todo_id, "title": task["title"], "priority": task_priority})
+        with _todos_io_lock:
+            candidate = deepcopy(_todos_storage)
+            agent_todos = candidate.setdefault(agent_id, {})
+            created: list[dict[str, Any]] = []
+            for task in tasks:
+                task_priority = _normalize_priority(task.get("priority"))
+                todo_id = str(uuid.uuid4())[:6]
+                timestamp = datetime.now(UTC).isoformat()
+                agent_todos[todo_id] = {
+                    "title": task["title"],
+                    "description": task.get("description"),
+                    "priority": task_priority,
+                    "status": "pending",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                    "completed_at": None,
+                }
+                created.append(
+                    {"todo_id": todo_id, "title": task["title"], "priority": task_priority}
+                )
+            if not _persist_candidate(candidate):
+                return _store_error()
     except (ValueError, TypeError) as e:
         return json.dumps(
             {"success": False, "error": f"Failed to create todo: {e}"},
@@ -324,14 +435,16 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
             default=str,
         )
 
-    _persist()
     return json.dumps(
         {
             "success": True,
             "created": created,
             "created_count": len(created),
-            "todos": _sorted_todos(agent_id),
-            "total_count": len(_get_agent_todos(agent_id)),
+            "todos": sorted(
+                ({**todo, "todo_id": todo_id} for todo_id, todo in agent_todos.items()),
+                key=_todo_sort_key,
+            ),
+            "total_count": len(agent_todos),
         },
         ensure_ascii=False,
         default=str,
@@ -433,8 +546,9 @@ async def update_todo(ctx: RunContextWrapper, updates: str) -> str:
             "priority": "high"}]``.
     """
     agent_id = _agent_id_from(ctx)
+    if not _todos_store_available:
+        return _store_error()
     try:
-        agent_todos = _get_agent_todos(agent_id)
         updates_to_apply = _normalize_bulk_updates(updates)
         if not updates_to_apply:
             return json.dumps(
@@ -443,26 +557,44 @@ async def update_todo(ctx: RunContextWrapper, updates: str) -> str:
                 default=str,
             )
 
-        updated: list[str] = []
-        errors: list[dict[str, Any]] = []
-        for upd in updates_to_apply:
-            err = _apply_single_update(
-                agent_todos,
-                upd["todo_id"],
-                upd.get("title"),
-                upd.get("description"),
-                upd.get("priority"),
-                upd.get("status"),
-            )
-            if err:
-                errors.append(err)
-            else:
-                updated.append(upd["todo_id"])
+        with _todos_io_lock:
+            candidate = deepcopy(_todos_storage)
+            agent_todos = candidate.setdefault(agent_id, {})
+            updated: list[str] = []
+            errors: list[dict[str, Any]] = []
+            for upd in updates_to_apply:
+                err = _apply_single_update(
+                    agent_todos,
+                    upd["todo_id"],
+                    upd.get("title"),
+                    upd.get("description"),
+                    upd.get("priority"),
+                    upd.get("status"),
+                )
+                if err:
+                    errors.append(err)
+                else:
+                    updated.append(upd["todo_id"])
+            if errors:
+                summary = "; ".join(str(item["error"]) for item in errors)
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": summary,
+                        "updated": [],
+                        "updated_count": 0,
+                        "todos": _sorted_todos(agent_id),
+                        "total_count": len(_get_agent_todos(agent_id)),
+                        "errors": errors,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            if updated and not _persist_candidate(candidate):
+                return _store_error()
     except (ValueError, TypeError) as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
-    if updated:
-        _persist()
     response: dict[str, Any] = {
         "success": len(errors) == 0,
         "updated": updated,
@@ -476,30 +608,51 @@ async def update_todo(ctx: RunContextWrapper, updates: str) -> str:
 
 
 def _mark(*, agent_id: str, todo_ids: str, new_status: str) -> str:
+    if not _todos_store_available:
+        return _store_error()
     try:
-        agent_todos = _get_agent_todos(agent_id)
         ids = _normalize_todo_ids(todo_ids)
         if not ids:
             msg = f"Provide a non-empty 'todo_ids' list to mark as {new_status}"
             return json.dumps({"success": False, "error": msg}, ensure_ascii=False, default=str)
 
-        marked: list[str] = []
-        errors: list[dict[str, Any]] = []
-        timestamp = datetime.now(UTC).isoformat()
-        for tid in ids:
-            if tid not in agent_todos:
-                errors.append({"todo_id": tid, "error": f"Todo with ID '{tid}' not found"})
-                continue
-            todo = agent_todos[tid]
-            todo["status"] = new_status
-            todo["completed_at"] = timestamp if new_status == "done" else None
-            todo["updated_at"] = timestamp
-            marked.append(tid)
+        with _todos_io_lock:
+            agent_todos = _get_agent_todos(agent_id)
+            unique_ids = list(dict.fromkeys(ids))
+            errors = [
+                {"todo_id": tid, "error": f"Todo with ID '{tid}' not found"}
+                for tid in unique_ids
+                if tid not in agent_todos
+            ]
+            if errors:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "marked": [],
+                        "marked_count": 0,
+                        "new_status": new_status,
+                        "todos": _sorted_todos(agent_id),
+                        "total_count": len(agent_todos),
+                        "errors": errors,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            candidate = deepcopy(_todos_storage)
+            candidate_agent_todos = candidate[agent_id]
+            timestamp = datetime.now(UTC).isoformat()
+            for tid in unique_ids:
+                todo = candidate_agent_todos[tid]
+                todo["status"] = new_status
+                todo["completed_at"] = timestamp if new_status == "done" else None
+                todo["updated_at"] = timestamp
+            marked = unique_ids
+            agent_todos = candidate_agent_todos
+            if marked and not _persist_candidate(candidate):
+                return _store_error()
     except (ValueError, TypeError) as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
-    if marked:
-        _persist()
     response: dict[str, Any] = {
         "success": len(errors) == 0,
         "marked": marked,
@@ -550,8 +703,9 @@ async def delete_todo(ctx: RunContextWrapper, todo_ids: str) -> str:
             a one-item list.
     """
     agent_id = _agent_id_from(ctx)
+    if not _todos_store_available:
+        return _store_error()
     try:
-        agent_todos = _get_agent_todos(agent_id)
         ids = _normalize_todo_ids(todo_ids)
         if not ids:
             return json.dumps(
@@ -560,19 +714,38 @@ async def delete_todo(ctx: RunContextWrapper, todo_ids: str) -> str:
                 default=str,
             )
 
-        deleted: list[str] = []
-        errors: list[dict[str, Any]] = []
-        for tid in ids:
-            if tid not in agent_todos:
-                errors.append({"todo_id": tid, "error": f"Todo with ID '{tid}' not found"})
-                continue
-            del agent_todos[tid]
-            deleted.append(tid)
+        with _todos_io_lock:
+            agent_todos = _get_agent_todos(agent_id)
+            unique_ids = list(dict.fromkeys(ids))
+            errors = [
+                {"todo_id": tid, "error": f"Todo with ID '{tid}' not found"}
+                for tid in unique_ids
+                if tid not in agent_todos
+            ]
+            if errors:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "deleted": [],
+                        "deleted_count": 0,
+                        "todos": _sorted_todos(agent_id),
+                        "total_count": len(agent_todos),
+                        "errors": errors,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            candidate = deepcopy(_todos_storage)
+            candidate_agent_todos = candidate[agent_id]
+            for tid in unique_ids:
+                del candidate_agent_todos[tid]
+            deleted = unique_ids
+            agent_todos = candidate_agent_todos
+            if deleted and not _persist_candidate(candidate):
+                return _store_error()
     except (ValueError, TypeError) as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
-    if deleted:
-        _persist()
     response: dict[str, Any] = {
         "success": len(errors) == 0,
         "deleted": deleted,

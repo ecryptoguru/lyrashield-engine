@@ -31,11 +31,13 @@ import {
   type RunsPayload,
 } from "@/data/serverSource";
 import { runTitle } from "@/lib/target-utils";
+import { getRunStatusDisplay } from "@/lib/run-status";
 import Sidebar from "@/components/Sidebar";
 import PastRunsView from "@/components/PastRunsView";
 import EmailReportView from "@/components/EmailReportView";
 import { RunDetails } from "@/components/RunDetails";
 import { TrustToast } from "@/components/TrustToast";
+import { ReportLoadError } from "@/components/ReportLoadError";
 
 export type View = "overview" | "issues" | "agents" | "history" | "email";
 
@@ -128,6 +130,7 @@ export default function App() {
           transcript,
           vulnerabilities,
           reportMarkdown: prev?.reportMarkdown ?? null,
+          reportError: prev?.reportError ?? null,
         }));
         setError(null);
         schedule();
@@ -270,7 +273,7 @@ export default function App() {
         <div className="border-b border-[#222]">
           <div className="max-w-[88rem] mx-auto px-3 sm:px-6 py-4 flex items-center gap-1.5">
             <div className="text-base text-white font-medium tracking-tight lg:hidden">LyraShield</div>
-            {run && <LiveIndicator finished={run.finished} />}
+            {run && <LiveIndicator finished={run.finished} status={run.summary.status} />}
             <div className="ml-auto flex items-center gap-3">
               {verified && runs && !runs.locked && runs.runs.length > 0 && (
                 <RunSwitcher
@@ -308,6 +311,8 @@ export default function App() {
           {view === "email" ? (
             <EmailReportView
               markdown={run?.reportMarkdown ?? null}
+              error={run?.reportError ?? null}
+              onRetry={() => setRetryCount((n) => n + 1)}
               onExit={() => setView("overview")}
             />
           ) : view === "history" ? (
@@ -352,9 +357,11 @@ export default function App() {
                   counts={counts}
                   total={run.vulnerabilities.length}
                   reportMarkdown={run.reportMarkdown}
+                  reportError={run.reportError}
                   raw={run.raw}
                   finished={run.finished}
                   onOpenEmail={openEmailFromOverview}
+                  onRetryReport={() => setRetryCount((n) => n + 1)}
                 />
               ) : view === "agents" && agentCount > 0 ? (
                 <AgentsTab run={run} canSteer={canSteer} />
@@ -445,22 +452,27 @@ function RunSwitcher({
   );
 }
 
-function LiveIndicator({ finished }: { finished: boolean }) {
-  if (finished) {
-    return (
-      <span className="ml-3 inline-flex items-center gap-1.5 text-xs text-[#888]">
-        <span className="w-1.5 h-1.5 rounded-full bg-[#555]" />
-        Complete
-      </span>
-    );
-  }
+function LiveIndicator({ finished, status }: { finished: boolean; status: string | null }) {
+  const display = getRunStatusDisplay(status, finished);
+  const color = {
+    live: "text-emerald-400",
+    completed: "text-emerald-400",
+    stopped: "text-amber-400",
+    interrupted: "text-amber-400",
+    failed: "text-red-400",
+    unknown: "text-[#888]",
+  }[display.tone];
   return (
-    <span className="ml-3 inline-flex items-center gap-1.5 text-xs text-emerald-400">
-      <span className="relative flex h-1.5 w-1.5">
-        <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
-        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-      </span>
-      Live
+    <span role="status" className={`ml-3 inline-flex items-center gap-1.5 text-xs ${color}`}>
+      {display.tone === "live" ? (
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="absolute inline-flex h-full w-full rounded-full bg-current opacity-75 animate-ping" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
+        </span>
+      ) : (
+        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+      )}
+      {display.label}
     </span>
   );
 }
@@ -606,17 +618,21 @@ function OverviewTab({
   counts,
   total,
   reportMarkdown,
+  reportError,
   raw,
   finished,
   onOpenEmail,
+  onRetryReport,
 }: {
   summary: ParsedRunSummary;
   counts: Record<VulnerabilitySeverity, number>;
   total: number;
   reportMarkdown: string | null;
+  reportError: string | null;
   raw: Record<string, unknown>;
   finished: boolean;
   onOpenEmail: () => void;
+  onRetryReport: () => void;
 }) {
   const sections = (
     [
@@ -647,6 +663,10 @@ function OverviewTab({
         <div className="animate-card-in">
           <EmailReportCta onOpenEmail={onOpenEmail} />
         </div>
+      )}
+
+      {reportError && (
+        <ReportLoadError message={reportError} onRetry={onRetryReport} />
       )}
 
       {sections.length > 0 ? (

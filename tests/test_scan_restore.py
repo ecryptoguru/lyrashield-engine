@@ -89,7 +89,7 @@ async def test_restore_coordinator_hydrates_resume_and_rederives_budget_pause(
         "reserve_stopped": False,
         "budget_paused": True,
     }
-    assert hydrated == ["coverage", "threats", "todos", "notes"]
+    assert hydrated == ["coverage", "threats", "notes", "todos"]
 
 
 @pytest.mark.asyncio
@@ -129,7 +129,7 @@ async def test_new_scan_uses_fresh_root_id_and_hydrates_shared_ledgers(
     assert root_id
     assert root_id not in {"", "root-1"}
     assert coordinator.max_agents == 4
-    assert hydrated == ["coverage", "threats"]
+    assert hydrated == ["coverage", "threats", "notes"]
 
 
 @pytest.mark.asyncio

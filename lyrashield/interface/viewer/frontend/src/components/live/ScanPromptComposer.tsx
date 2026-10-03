@@ -9,6 +9,7 @@ import {
 import { ArrowUp, ChevronDown, ChevronUp, Loader2, Sparkles } from "lucide-react";
 import { steerAgent, type TranscriptAgent } from "@/data/serverSource";
 import { track } from "@/lib/cta";
+import { attemptSteering } from "@/lib/steering";
 import { cn } from "@/lib/utils";
 
 const ROOT_TARGET_VALUE = "__root__";
@@ -124,17 +125,15 @@ export function ScanPromptComposer({
     setSending(true);
     setFeedback(null);
     const name = targetName;
-    const res = await steerAgent(targetId, message);
-    setSending(false);
-    if (res.ok) {
+    const outcome = await attemptSteering(() => steerAgent(targetId, message), name);
+    if (outcome.sent) {
       setValue("");
-      setFeedback(`Sent to ${name}`);
+      setFeedback(outcome.feedback);
       track("agent_steered");
-    } else if (res.error === "not_delivered") {
-      setFeedback("Could not reach that agent (it may have finished).");
     } else {
-      setFeedback("Could not send that message. Try again.");
+      setFeedback(outcome.feedback);
     }
+    setSending(false);
   }, [sending, value, targetId, targetName]);
 
   if (!expanded) {

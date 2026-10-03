@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from lyrashield.artifacts import evidence as _evidence
 from lyrashield.artifacts.usage import LLMUsageLedger
+from lyrashield.artifacts.writer import validate_finding_id
 
 
 if TYPE_CHECKING:
@@ -126,6 +127,40 @@ def hydrate_from_run_dir(
     run_dir = self.get_run_dir()
 
     data = read_run_record(run_dir)
+    if data is not None and "result_manifest" in data:
+        _evidence.verify_result_manifest(run_dir, data["result_manifest"])
+
+    json_path = run_dir / "vulnerabilities.json"
+    vuln_data: list[Any] | None = None
+    if json_path.exists():
+        try:
+            parsed_vuln_data = json.loads(json_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"vulnerabilities.json at {json_path} is corrupt ({exc}); "
+                f"refusing to start fresh — that would overwrite prior "
+                f"vulnerability MDs on disk. Inspect or delete the run dir.",
+            ) from exc
+        if not isinstance(parsed_vuln_data, list):
+            raise RuntimeError(f"vulnerabilities.json at {json_path} is not a list")
+        if any(not isinstance(report, dict) for report in parsed_vuln_data):
+            raise RuntimeError(f"vulnerabilities.json at {json_path} contains a non-object finding")
+        vuln_data = parsed_vuln_data
+        finding_ids: set[str] = set()
+        for report in vuln_data:
+            try:
+                finding_id = validate_finding_id(report.get("id"))
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"vulnerabilities.json at {json_path} contains an invalid finding id"
+                ) from exc
+            if finding_id in finding_ids:
+                raise RuntimeError(
+                    "vulnerabilities.json at "
+                    f"{json_path} contains duplicate finding id {finding_id!r}"
+                )
+            finding_ids.add(finding_id)
+
     persisted_report_revision: int | None = None
     if data:
         self.run_record.update(data)
@@ -148,23 +183,8 @@ def hydrate_from_run_dir(
             persisted_report_revision = revision
         logger.info("report state hydrated run.json from %s", run_dir)
 
-    json_path = run_dir / "vulnerabilities.json"
-    if json_path.exists():
-        try:
-            vuln_data = json.loads(json_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"vulnerabilities.json at {json_path} is corrupt ({exc}); "
-                f"refusing to start fresh — that would overwrite prior "
-                f"vulnerability MDs on disk. Inspect or delete the run dir.",
-            ) from exc
-        if not isinstance(vuln_data, list):
-            raise RuntimeError(
-                f"vulnerabilities.json at {json_path} is not a list",
-            )
-        self.vulnerability_reports = [
-            cast("dict[str, Any]", r) for r in vuln_data if isinstance(r, dict)
-        ]
+    if vuln_data is not None:
+        self.vulnerability_reports = [cast("dict[str, Any]", report) for report in vuln_data]
         for r in self.vulnerability_reports:
             # A finding written before the class was persisted still carries the
             # metadata of its class, so name the class it always had.

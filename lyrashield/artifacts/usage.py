@@ -71,6 +71,7 @@ class LLMUsageLedger:
         self._request_usage_entries: list[dict[str, Any]] = []
         self._gpt6_accounting_complete = True
         self._gpt6_seen = False
+        self._gpt6_requests = 0
         self._recorded_response_ids: set[str] = set()
         self._total_cost = 0.0
         self._has_cost = False
@@ -120,12 +121,16 @@ class LLMUsageLedger:
             return False
 
         is_subscription = self._is_zero_cost_model(model)
-        is_gpt6 = _normalized_model_key(model) in _METERED_USD_PER_MILLION
+        # A ChatGPT subscription uses a GPT-6 model name but is not a paid
+        # API request. Keep those tokens in aggregate usage without making
+        # their absent provider receipt poison the paid-request ledger.
+        is_gpt6 = not is_subscription and _normalized_model_key(model) in _METERED_USD_PER_MILLION
         if is_gpt6:
             self._gpt6_seen = True
             response_id = provider_receipt.get("response_id") if provider_receipt else None
             if isinstance(response_id, str) and response_id in self._recorded_response_ids:
                 return False
+            self._gpt6_requests += usage.requests
             complete = (
                 provider_receipt is not None
                 and usage.requests == 1
@@ -245,10 +250,12 @@ class LLMUsageLedger:
         if self._gpt6_seen:
             gpt6_receipts = sum(
                 _normalized_model_key(entry.get("model")) in _METERED_USD_PER_MILLION
+                and not self._is_zero_cost_model(entry.get("model"))
                 for entry in self._request_usage_entries
             )
+            record["gpt6_requests"] = self._gpt6_requests
             record["accounting_complete"] = self._gpt6_accounting_complete and (
-                gpt6_receipts == self._total_usage.requests
+                gpt6_receipts == self._gpt6_requests <= self._total_usage.requests
             )
         ancillary_total = sum(self._ancillary_costs.values())
         reconciled = self._total_cost + ancillary_total
@@ -335,6 +342,7 @@ class LLMUsageLedger:
         self._request_usage_entries.clear()
         self._gpt6_accounting_complete = True
         self._gpt6_seen = False
+        self._gpt6_requests = 0
         self._recorded_response_ids.clear()
         self._total_cost = 0.0
         self._has_cost = False
@@ -380,11 +388,24 @@ class LLMUsageLedger:
         self._gpt6_seen = (
             any(
                 _normalized_model_key(entry.get("model")) in _METERED_USD_PER_MILLION
+                and not self._is_zero_cost_model(entry.get("model"))
                 for entry in self._request_usage_entries
             )
             or "accounting_complete" in raw_usage
         )
-        self._gpt6_accounting_complete = raw_usage.get("accounting_complete") is True
+        self._gpt6_accounting_complete = (
+            not self._gpt6_seen or raw_usage.get("accounting_complete") is True
+        )
+        # New records separate paid GPT-6 request count from aggregate usage.
+        # Legacy records lack that count; keep the old conservative comparison.
+        applicable_requests = raw_usage.get("gpt6_requests")
+        self._gpt6_requests = (
+            applicable_requests
+            if type(applicable_requests) is int and applicable_requests >= 0
+            else self._total_usage.requests
+            if self._gpt6_seen
+            else 0
+        )
 
         raw_agents = raw_usage.get("agents")
         if isinstance(raw_agents, list):

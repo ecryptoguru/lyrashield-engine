@@ -99,3 +99,56 @@ def test_paid_ledger_does_not_mark_subscription() -> None:
 
     record = ledger.to_record()
     assert "subscription" not in record
+
+
+def test_subscription_gpt6_request_does_not_invalidate_paid_gpt6_receipts() -> None:
+    ledger = LLMUsageLedger()
+    paid_receipt = {
+        "response_id": "paid-response",
+        "input_tokens": 1000,
+        "output_tokens": 200,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+    }
+    ledger.record(
+        agent_id="root",
+        usage=_usage(),
+        model="chatgpt/gpt-6-luna",
+    )
+    ledger.record(
+        agent_id="delegate",
+        usage=_usage(),
+        model="openai/gpt-6-luna",
+        provider_receipt=paid_receipt,
+    )
+
+    record = ledger.to_record()
+    assert record["subscription"] is True
+    assert record["requests"] == 2
+    assert record["gpt6_requests"] == 1
+    assert record["accounting_complete"] is True
+    paid_entries = [
+        entry
+        for entry in record["request_usage_entries"]
+        if entry.get("model") == "openai/gpt-6-luna"
+    ]
+    assert len(paid_entries) == 1
+
+    restored = LLMUsageLedger()
+    restored.hydrate(record)
+    restored_record = restored.to_record()
+    assert restored_record["gpt6_requests"] == 1
+    assert restored_record["accounting_complete"] is True
+
+
+def test_subscription_only_gpt6_usage_does_not_claim_paid_receipt_accounting() -> None:
+    ledger = LLMUsageLedger()
+    ledger.record(
+        agent_id="root",
+        usage=_usage(),
+        model="chatgpt/gpt-6-luna",
+    )
+
+    record = ledger.to_record()
+    assert record["subscription"] is True
+    assert "gpt6_requests" not in record
+    assert "accounting_complete" not in record

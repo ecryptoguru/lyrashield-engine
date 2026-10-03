@@ -90,6 +90,7 @@ def write_report_projections(
     reports: list[dict[str, Any]],
     saved_vuln_ids: set[str],
     *,
+    require_sarif: bool = False,
     write_vulnerabilities: Callable[..., Any],
     write_sarif: Callable[..., Any],
     tool_version: str | None,
@@ -124,6 +125,8 @@ def write_report_projections(
         )
     except Exception:
         logger.exception("SARIF emit failed (non-fatal; core receipt unaffected)")
+        if require_sarif:
+            raise
         return False
     return True
 
@@ -145,9 +148,13 @@ def write_evidence_artifacts(
     """
     persisted = True
     try:
+        from lyrashield.artifacts.quality import effective_agent_graph
+
         coverage = evidence.build_coverage_document(
             run_record=self.run_record,
-            agent_graph=read_agent_graph(runtime_state_dir(run_dir)),
+            agent_graph=effective_agent_graph(
+                self.run_record, read_agent_graph(runtime_state_dir(run_dir))
+            ),
             vulnerability_reports=self.vulnerability_reports,
             exit_reason=self.scan_ended_exit_reason,
         )

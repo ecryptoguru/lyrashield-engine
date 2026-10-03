@@ -28,7 +28,7 @@ Leave `LYRASHIELD_PROGRAMMATIC_TOOL_CALLING` unset unless the programmatic-tool-
 
 ### `auth`
 
-ChatGPT subscription sign-in helper. It exits without target, Docker, or scan setup. Authenticate with `lyrashield auth login chatgpt`, then configure a `chatgpt/gpt-6-luna` or `chatgpt/gpt-6-sol` main-model route (delegate and dedupe models must use a metered route). Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` only when subscription auth must be disabled.
+ChatGPT subscription sign-in helper. It exits without target, Docker, or scan setup. Authenticate with `lyrashield auth login chatgpt`, then configure a `chatgpt/gpt-6-luna` or `chatgpt/gpt-6-sol` main-model route. Deduplication uses the main route unless a dedicated model override is set; explicit delegate and dedicated dedupe model overrides must use a metered OpenAI or Azure/Azure AI GPT-6 route. Set `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` only when subscription auth must be disabled.
 
 ### `view`
 

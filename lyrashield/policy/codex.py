@@ -251,11 +251,17 @@ def _post_form(payload: dict[str, str]) -> dict[str, Any]:
             headers={"Accept": "application/json"},
             timeout=_TOKEN_TIMEOUT,
         )
-    except requests.RequestException as exc:
-        raise CodexAuthError("unavailable", str(exc)) from exc
+    except requests.RequestException:
+        # Requests may include the token endpoint URL or submitted form data
+        # in its exception text. Keep both the public message and traceback
+        # cause free of provider-supplied credentials.
+        raise CodexAuthError("unavailable", "token endpoint request failed") from None
     if response.status_code >= 400:
-        detail = response.text[:300]
-        raise CodexAuthError("token_http_error", f"HTTP {response.status_code}: {detail}")
+        # OAuth error bodies are untrusted and can echo access or refresh
+        # tokens, so expose only the status code and stable failure category.
+        raise CodexAuthError(
+            "token_http_error", f"HTTP {response.status_code}: token endpoint rejected request"
+        )
     data = json.loads(response.content or b"{}")
     if not isinstance(data, dict):
         raise CodexAuthError("bad_response", "token endpoint returned non-object")

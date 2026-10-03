@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 
 from agents import (
     set_default_openai_api,
@@ -617,10 +618,17 @@ class StrixProvider(MultiProvider):
         settings: Settings | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
+        from openai import AsyncOpenAI
+
         self._settings = settings
         self._override_api_key = api_key
         self._override_base_url = base_url
+        self._override_headers = extra_headers
+        self._explicit_connection = (
+            api_key is not None or base_url is not None or extra_headers is not None
+        )
         llm = settings.llm if settings is not None else None
         configured_models = (
             (getattr(llm, "model", None), getattr(llm, "delegate_model", None))
@@ -632,7 +640,20 @@ class StrixProvider(MultiProvider):
             for model_name in configured_models
         )
 
-        if self._azure_responses_enabled:
+        if self._explicit_connection:
+            client = AsyncOpenAI(
+                # Route-scoped callers resolve a safe credential before this
+                # point. Never pair a caller-selected base URL with the main
+                # process's ambient OpenAI key.
+                api_key=api_key or "not-needed",
+                base_url=base_url,
+                default_headers=dict(extra_headers or {}),
+            )
+            super().__init__(
+                openai_client=client,
+                openai_use_responses=not bool(base_url),
+            )
+        elif self._azure_responses_enabled:
             if llm is None or not llm.api_base:
                 raise RuntimeError(
                     "Azure GPT-6 requires LLM_API_BASE or an Azure endpoint variable."
@@ -652,8 +673,12 @@ class StrixProvider(MultiProvider):
             )
 
     def _create_fallback_provider(self, prefix: str) -> ModelProvider:
-        if prefix == "litellm" and (self._override_api_key or self._override_base_url):
-            return _CredentialedLitellmProvider(self._override_api_key, self._override_base_url)
+        if prefix == "litellm" and self._explicit_connection:
+            api_key = (self._override_api_key or "").strip()
+            base_url = (self._override_base_url or "").strip()
+            if not api_key or not base_url:
+                raise RuntimeError("An explicit LiteLLM route requires its own key and base URL.")
+            return _CredentialedLitellmProvider(api_key, base_url)
         return super()._create_fallback_provider(prefix)
 
     def _resolve_prefixed_model(
@@ -663,7 +688,53 @@ class StrixProvider(MultiProvider):
         prefix: str,
         stripped_model_name: str | None,
     ) -> tuple[ModelProvider, str | None]:
-        if prefix in {"azure", "azure_ai"} and self._azure_responses_enabled:
+        if prefix in {"azure", "azure_ai"} and is_gpt6_model(original_model_name):
+            if self._azure_responses_enabled and not self._explicit_connection:
+                azure_provider = self.openai_provider
+            else:
+                from agents.models.openai_provider import OpenAIProvider
+                from openai import AsyncOpenAI
+
+                llm = self._settings.llm if self._settings is not None else load_settings().llm
+                main_route_is_azure = _is_azure_model(llm.model)
+                base_url = self._override_base_url
+                if base_url is None and main_route_is_azure:
+                    base_url = llm.api_base
+                if base_url is None:
+                    base_url = (
+                        os.getenv("AZURE_OPENAI_ENDPOINT")
+                        or os.getenv("AZURE_OPENAI_API_BASE")
+                        or os.getenv("AZURE_AI_API_BASE")
+                    )
+                if not base_url:
+                    raise RuntimeError(
+                        "Azure GPT-6 requires an Azure endpoint in LLM_API_BASE "
+                        "or DEDUPE_LLM_API_BASE."
+                    )
+                api_key = self._override_api_key
+                main_api_base = llm.api_base
+                same_main_endpoint = self._override_base_url is None or (
+                    main_api_base is not None
+                    and main_api_base != ""
+                    and _same_endpoint(self._override_base_url, main_api_base)
+                )
+                if api_key is None and main_route_is_azure and same_main_endpoint:
+                    api_key = llm.api_key
+                if api_key is None and not self._explicit_connection:
+                    api_key = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_AI_API_KEY")
+                if not api_key:
+                    raise RuntimeError(
+                        "Azure GPT-6 requires an Azure key in LLM_API_KEY or DEDUPE_LLM_API_KEY."
+                    )
+                headers = self._override_headers
+                if headers is None and main_route_is_azure and same_main_endpoint:
+                    headers = llm.extra_headers
+                client = AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=_azure_responses_base_url(base_url),
+                    default_headers=dict(headers or {}),
+                )
+                azure_provider = OpenAIProvider(openai_client=client, use_responses=True)
             # Names like ``azure/eu/gpt-6-sol`` or ``azure_ai/gpt-6-luna``
             # both resolve to the final deployment/model segment for Azure's
             # v1 Responses API.
@@ -672,7 +743,7 @@ class StrixProvider(MultiProvider):
                 if stripped_model_name
                 else stripped_model_name
             )
-            return self.openai_provider, deployment
+            return azure_provider, deployment
         if prefix in {"openai", "litellm", "any-llm"}:
             return super()._resolve_prefixed_model(
                 original_model_name=original_model_name,
@@ -743,6 +814,30 @@ def _azure_responses_base_url(api_base: str) -> str:
     if not base.lower().endswith("/openai/v1"):
         base = f"{base}/openai/v1"
     return f"{base}/"
+
+
+def _same_endpoint(left: str, right: str) -> bool:
+    """Compare full endpoint identity before reusing route credentials/headers."""
+    try:
+        left_parts = urlsplit(left.strip())
+        right_parts = urlsplit(right.strip())
+    except ValueError:
+        return False
+    if not all((left_parts.scheme, left_parts.netloc, right_parts.scheme, right_parts.netloc)):
+        return False
+    return (
+        left_parts.scheme.lower(),
+        left_parts.netloc.lower(),
+        left_parts.path.rstrip("/"),
+        left_parts.query,
+        left_parts.fragment,
+    ) == (
+        right_parts.scheme.lower(),
+        right_parts.netloc.lower(),
+        right_parts.path.rstrip("/"),
+        right_parts.query,
+        right_parts.fragment,
+    )
 
 
 DEFAULT_MODEL_RETRY = ModelRetrySettings(

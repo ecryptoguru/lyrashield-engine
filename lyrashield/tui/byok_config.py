@@ -22,15 +22,23 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlsplit
+from uuid import uuid4
 
 import requests
 
-from lyrashield.tui.results_store import keyring_get, keyring_set
+from lyrashield.tui.results_store import (
+    ResultsStoreKeyError,
+    keyring_delete,
+    keyring_get,
+    keyring_set,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -172,18 +180,123 @@ class ByokConfig:
 # raw credentials).
 # ---------------------------------------------------------------------------
 
-CONFIG_KEY = "byok-config-v1"
+LEGACY_CONFIG_KEY = "byok-config-v1"
+CONFIG_KEY = "byok-config-v2"
+
+
+def azure_endpoints_equivalent(left: str, right: str) -> bool:
+    """Compare Azure resource endpoints while ignoring harmless URL spelling."""
+
+    def normalize(endpoint: str) -> tuple[str, ...]:
+        value = endpoint.strip()
+        if not value:
+            return ("",)
+        try:
+            parsed = urlsplit(value)
+            if not parsed.scheme or not parsed.netloc or not parsed.hostname:
+                return (value.rstrip("/"),)
+            scheme = parsed.scheme.lower()
+            host = parsed.hostname.lower()
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            port = parsed.port
+            if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+                port = None
+            userinfo = parsed.netloc.rsplit("@", 1)[0] if "@" in parsed.netloc else ""
+            authority = f"{userinfo}@" if userinfo else ""
+            authority += host
+            if port is not None:
+                authority += f":{port}"
+            return (
+                scheme,
+                authority,
+                parsed.path.rstrip("/"),
+                parsed.query,
+                parsed.fragment,
+            )
+        except ValueError:
+            return (value.rstrip("/"),)
+
+    return normalize(left) == normalize(right)
+
+
+class ByokConfigError(ValueError):
+    """Persisted setup is malformed or cannot be safely updated."""
+
+
+def _read_previous_azure_binding(
+    raw: str | None, *, is_v2: bool, has_replacement_key: bool
+) -> tuple[str | None, str | None]:
+    if not raw:
+        return None, None
+    try:
+        previous_blob, previous_provider = _read_config_blob(raw)
+    except (TypeError, ValueError) as exc:
+        if has_replacement_key:
+            return None, None
+        raise ByokConfigError(
+            "The saved BYOK setup is malformed. Re-enter the Azure key before saving."
+        ) from exc
+
+    previous_azure = previous_blob.get("azure", {})
+    previous_endpoint = previous_azure.get("endpoint", "")
+    previous_key_id = previous_azure.get("key_id")
+    if previous_key_id:
+        return previous_key_id, previous_endpoint
+    if is_v2 and previous_provider == Provider.AZURE_OPENAI and not has_replacement_key:
+        raise ByokConfigError(
+            "The saved BYOK credential reference is incomplete. Re-enter the Azure key."
+        )
+    if not is_v2 and previous_azure.get("credential_version") is None:
+        # Migrate only a genuine v1 shared-key binding. V2 state with no
+        # reference must never adopt an unrelated legacy key.
+        return KEYCHAIN_AZURE_KEY, previous_endpoint
+    return None, previous_endpoint
+
+
+def _stage_azure_credential(
+    config: ByokConfig, blob: dict[str, Any], previous_key_id: str | None
+) -> tuple[str | None, str]:
+    key_to_store = config.azure.api_key
+    if key_to_store:
+        staged_key_id = f"{KEYCHAIN_AZURE_KEY}-{uuid4().hex}"
+        blob["azure"]["key_id"] = staged_key_id
+        return staged_key_id, key_to_store
+    if previous_key_id == KEYCHAIN_AZURE_KEY:
+        key_to_store = keyring_get(KEYCHAIN_SERVICE, KEYCHAIN_AZURE_KEY) or ""
+        if key_to_store:
+            staged_key_id = f"{KEYCHAIN_AZURE_KEY}-{uuid4().hex}"
+            blob["azure"]["key_id"] = staged_key_id
+            return staged_key_id, key_to_store
+    elif previous_key_id:
+        blob["azure"]["key_id"] = previous_key_id
+    return None, key_to_store
+
+
+def _store_staged_azure_key(key_id: str | None, value: str) -> None:
+    if not key_id:
+        return
+    if not keyring_set(KEYCHAIN_SERVICE, key_id, value):
+        raise RuntimeError("Azure API key could not be saved to the keychain")
+    if keyring_get(KEYCHAIN_SERVICE, key_id) != value:
+        keyring_delete(KEYCHAIN_SERVICE, key_id)
+        raise RuntimeError("Azure API key could not be verified in the keychain")
+
+
+def _write_config_blob(serialized: str, staged_key_id: str | None) -> None:
+    if keyring_set(KEYCHAIN_SERVICE, CONFIG_KEY, serialized):
+        return
+    if staged_key_id:
+        try:
+            if keyring_get(KEYCHAIN_SERVICE, CONFIG_KEY) != serialized:
+                keyring_delete(KEYCHAIN_SERVICE, staged_key_id)
+        except ResultsStoreKeyError:
+            pass  # Keep a possibly published credential if readback is unavailable.
+    raise RuntimeError("BYOK setup could not be saved to the keychain")
 
 
 def save_config(config: ByokConfig) -> None:
     """Persist non-secret BYOK config. Secrets go to the keychain."""
-    # Store the Azure API key in the keychain, not in the config blob.
-    if config.azure.api_key and not keyring_set(
-        KEYCHAIN_SERVICE, KEYCHAIN_AZURE_KEY, config.azure.api_key
-    ):
-        raise RuntimeError("Azure API key could not be saved to the keychain")
-    # ChatGPT token is managed by the engine's own auth flow; we only record
-    # that the provider is enabled.
     blob: dict[str, Any] = {
         "provider": config.provider.value,
         "chatgpt": {
@@ -194,27 +307,102 @@ def save_config(config: ByokConfig) -> None:
             "endpoint": config.azure.endpoint,
             "api_version": config.azure.api_version,
             "deployment": config.azure.deployment,
+            "credential_version": 2,
         },
         "profiles": {
             mode: {"name": p.name, "model": p.model} for mode, p in config.profiles.items()
         },
     }
-    if not keyring_set(KEYCHAIN_SERVICE, CONFIG_KEY, _json_dumps(blob)):
-        raise RuntimeError("BYOK setup could not be saved to the keychain")
+    previous_raw = keyring_get(KEYCHAIN_SERVICE, CONFIG_KEY)
+    previous_is_v2 = bool(previous_raw)
+    if not previous_raw:
+        previous_raw = keyring_get(KEYCHAIN_SERVICE, LEGACY_CONFIG_KEY)
+    previous_key_id, previous_endpoint = _read_previous_azure_binding(
+        previous_raw,
+        is_v2=previous_is_v2,
+        has_replacement_key=bool(config.azure.api_key),
+    )
+    if (
+        previous_key_id
+        and not config.azure.api_key
+        and previous_endpoint is not None
+        and not azure_endpoints_equivalent(config.azure.endpoint, previous_endpoint)
+    ):
+        raise ByokConfigError(
+            "Azure endpoint change requires entering the API key again; "
+            "the existing key remains with the prior endpoint."
+        )
+
+    staged_key_id, key_to_store = _stage_azure_credential(config, blob, previous_key_id)
+    _store_staged_azure_key(staged_key_id, key_to_store)
+    _write_config_blob(_json_dumps(blob), staged_key_id)
+    if (
+        previous_key_id
+        and previous_key_id != KEYCHAIN_AZURE_KEY
+        and previous_key_id != blob["azure"].get("key_id")
+    ):
+        keyring_delete(KEYCHAIN_SERVICE, previous_key_id)
+
+
+def _read_config_blob(raw: str) -> tuple[dict[str, Any], Provider]:
+    blob = _json_loads(raw)
+    provider = Provider(blob.get("provider", Provider.CHATGPT_OAUTH.value))
+    for section in ("chatgpt", "azure", "profiles"):
+        if not isinstance(blob.get(section, {}), dict):
+            raise TypeError(f"{section} must be an object")
+    chatgpt_blob = blob.get("chatgpt", {})
+    if not isinstance(chatgpt_blob.get("enabled", False), bool):
+        raise TypeError("enabled must be a boolean")
+    if not isinstance(chatgpt_blob.get("model", "chatgpt/gpt-6-luna"), str):
+        raise TypeError("model must be text")
+    azure_blob = blob.get("azure", {})
+    if any(
+        not isinstance(value, str)
+        for key, value in azure_blob.items()
+        if key != "credential_version"
+    ):
+        raise TypeError("Azure settings must be text")
+    credential_version = azure_blob.get("credential_version")
+    if credential_version is not None and (
+        type(credential_version) is not int or credential_version != 2
+    ):
+        raise ValueError("Azure credential version is unsupported")
+    key_id = azure_blob.get("key_id")
+    if key_id is not None and credential_version is None:
+        raise ValueError("Azure credential reference is incomplete")
+    if key_id is not None and not re.fullmatch(
+        re.escape(KEYCHAIN_AZURE_KEY) + r"-[0-9a-f]{32}", key_id
+    ):
+        raise ValueError("Azure credential reference is invalid")
+    for profile in blob.get("profiles", {}).values():
+        if not isinstance(profile, dict) or any(
+            not isinstance(value, str) for value in profile.values()
+        ):
+            raise TypeError("model profiles must contain text settings")
+    return blob, provider
 
 
 def load_config() -> ByokConfig:
     """Load persisted BYOK config, pulling secrets back from the keychain."""
     raw = keyring_get(KEYCHAIN_SERVICE, CONFIG_KEY)
+    versioned = bool(raw)
+    if not raw:
+        raw = keyring_get(KEYCHAIN_SERVICE, LEGACY_CONFIG_KEY)
     if not raw:
         return ByokConfig()
     try:
-        blob = _json_loads(raw)
-    except (TypeError, ValueError):
-        logger.warning("BYOK config blob unreadable; returning defaults")
-        return ByokConfig()
-
-    provider = Provider(blob.get("provider", Provider.CHATGPT_OAUTH.value))
+        blob, provider = _read_config_blob(raw)
+        azure_blob = blob.get("azure", {})
+    except (TypeError, ValueError) as exc:
+        raise ByokConfigError(
+            "The saved BYOK setup is malformed or unsupported. Re-enter setup; "
+            "existing credentials have been preserved."
+        ) from exc
+    if versioned and azure_blob.get("credential_version") != 2:
+        raise ByokConfigError(
+            "The saved BYOK setup is malformed or unsupported. Re-enter setup; "
+            "existing credentials have been preserved."
+        )
     chatgpt_model = blob.get("chatgpt", {}).get("model", "chatgpt/gpt-6-luna")
     if isinstance(chatgpt_model, str):
         normalized_model = chatgpt_model.strip().lower()
@@ -224,13 +412,15 @@ def load_config() -> ByokConfig:
         enabled=bool(blob.get("chatgpt", {}).get("enabled", False)),
         model=chatgpt_model,
     )
-    azure_blob = blob.get("azure", {})
     azure = AzureConfig(
         endpoint=azure_blob.get("endpoint", ""),
         api_version=azure_blob.get("api_version", "2024-10-21"),
         deployment=azure_blob.get("deployment", ""),
     )
-    azure_key = keyring_get(KEYCHAIN_SERVICE, KEYCHAIN_AZURE_KEY)
+    key_id = azure_blob.get("key_id")
+    if key_id is None and not versioned and azure_blob.get("credential_version") is None:
+        key_id = KEYCHAIN_AZURE_KEY
+    azure_key = keyring_get(KEYCHAIN_SERVICE, key_id) if key_id else None
     if azure_key:
         azure.api_key = azure_key
 

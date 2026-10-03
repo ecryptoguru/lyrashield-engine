@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 def _parse_repo_full_name(uri: str) -> str | None:
     """Extract ``owner/repo`` from a git URL or slug, else None."""
-    text = uri.strip().removesuffix(".git")
+    text = uri.strip().split("?", 1)[0].split("#", 1)[0].removesuffix(".git")
     if not text:
         return None
     if "@" in text and ":" in text.split("@", 1)[1]:

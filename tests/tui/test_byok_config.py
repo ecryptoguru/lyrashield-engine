@@ -9,6 +9,8 @@ import pytest
 
 from lyrashield.tui.byok_config import (
     CONFIG_KEY,
+    KEYCHAIN_AZURE_KEY,
+    LEGACY_CONFIG_KEY,
     LAUNCH_PROVIDERS,
     PROFILE_FALLBACK,
     PROFILE_LUNA,
@@ -16,6 +18,7 @@ from lyrashield.tui.byok_config import (
     SCAN_MODES,
     AzureConfig,
     ByokConfig,
+    ByokConfigError,
     ChatGptConfig,
     ModelProfile,
     Provider,
@@ -121,10 +124,12 @@ def test_save_load_config_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     save_config(cfg)
 
-    # The Azure key must be in the keychain, not in the config blob.
-    assert store["LyraShield-Local:azure-openai-api-key"] == "secret-key"
-    blob = store["LyraShield-Local:byok-config-v1"]
+    # The Azure key stays in a versioned keychain item, outside the config blob.
+    blob = store[f"LyraShield-Local:{CONFIG_KEY}"]
     assert "secret-key" not in blob
+    azure_blob = json.loads(blob)["azure"]
+    assert azure_blob["credential_version"] == 2
+    assert store[f"LyraShield-Local:{azure_blob['key_id']}"] == "secret-key"
 
     loaded = load_config()
     assert loaded.provider == Provider.AZURE_OPENAI
@@ -132,6 +137,274 @@ def test_save_load_config_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     assert loaded.azure.endpoint == "https://x.openai.azure.com"
     assert loaded.azure.deployment == "dep"
     assert loaded.profiles["DEEP"].name == PROFILE_LUNA
+
+
+def test_save_config_allows_repeated_keyless_chatgpt_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store: dict[str, str] = {}
+    monkeypatch.setattr(
+        "lyrashield.tui.byok_config.keyring_set",
+        lambda service, key, value: store.__setitem__(f"{service}:{key}", value) is None,
+    )
+    monkeypatch.setattr(
+        "lyrashield.tui.byok_config.keyring_get",
+        lambda service, key: store.get(f"{service}:{key}"),
+    )
+    config = ByokConfig(
+        provider=Provider.CHATGPT_OAUTH,
+        chatgpt=ChatGptConfig(enabled=True),
+    )
+
+    save_config(config)
+    save_config(config)
+
+    assert json.loads(store[f"LyraShield-Local:{CONFIG_KEY}"])["provider"] == "chatgpt-oauth"
+
+
+def test_save_config_rejects_incomplete_azure_credential_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = {
+        f"LyraShield-Local:{CONFIG_KEY}": json.dumps(
+            {
+                "provider": Provider.AZURE_OPENAI.value,
+                "azure": {"credential_version": 2},
+            }
+        )
+    }
+    monkeypatch.setattr(
+        "lyrashield.tui.byok_config.keyring_get",
+        lambda service, key: store.get(f"{service}:{key}"),
+    )
+    monkeypatch.setattr(
+        "lyrashield.tui.byok_config.keyring_set",
+        lambda service, key, value: store.__setitem__(f"{service}:{key}", value) is None,
+    )
+
+    with pytest.raises(ByokConfigError, match="credential reference is incomplete"):
+        save_config(ByokConfig(provider=Provider.AZURE_OPENAI))
+
+
+def test_failed_config_write_keeps_old_azure_key_bound_to_old_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_key_id = f"{KEYCHAIN_AZURE_KEY}-{'a' * 32}"
+    old_blob = json.dumps(
+        {
+            "provider": Provider.AZURE_OPENAI.value,
+            "azure": {
+                "endpoint": "https://prior.example",
+                "deployment": "prior",
+                "credential_version": 2,
+                "key_id": old_key_id,
+            },
+        }
+    )
+    store = {
+        f"LyraShield-Local:{CONFIG_KEY}": old_blob,
+        f"LyraShield-Local:{old_key_id}": "prior-api-key",
+        f"LyraShield-Local:{KEYCHAIN_AZURE_KEY}": "prior-api-key",
+    }
+
+    def fake_get(service: str, key: str) -> str | None:
+        return store.get(f"{service}:{key}")
+
+    def fake_set(service: str, key: str, value: str) -> bool:
+        if key == CONFIG_KEY:
+            return False
+        store[f"{service}:{key}"] = value
+        return True
+
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_get", fake_get)
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_set", fake_set)
+
+    with pytest.raises(RuntimeError, match="BYOK setup could not be saved"):
+        save_config(
+            ByokConfig(
+                provider=Provider.AZURE_OPENAI,
+                azure=AzureConfig(
+                    api_key="replacement-api-key",
+                    endpoint="https://replacement.example",
+                    deployment="replacement",
+                ),
+            )
+        )
+
+    assert store[f"LyraShield-Local:{CONFIG_KEY}"] == old_blob
+    loaded = load_config()
+    assert loaded.azure.endpoint == "https://prior.example"
+    assert loaded.azure.api_key == "prior-api-key"
+    assert store[f"LyraShield-Local:{old_key_id}"] == "prior-api-key"
+
+
+def test_missing_versioned_azure_key_does_not_fall_back_to_legacy_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blob = json.dumps(
+        {
+            "provider": Provider.AZURE_OPENAI.value,
+            "azure": {
+                "endpoint": "https://replacement.example",
+                "deployment": "replacement",
+                "credential_version": 2,
+                "key_id": f"{KEYCHAIN_AZURE_KEY}-{'a' * 32}",
+            },
+        }
+    )
+    store = {
+        f"LyraShield-Local:{CONFIG_KEY}": blob,
+        f"LyraShield-Local:{KEYCHAIN_AZURE_KEY}": "prior-endpoint-key",
+    }
+    monkeypatch.setattr(
+        "lyrashield.tui.byok_config.keyring_get",
+        lambda service, key: store.get(f"{service}:{key}"),
+    )
+
+    loaded = load_config()
+
+    assert loaded.azure.endpoint == "https://replacement.example"
+    assert loaded.azure.api_key == ""
+    assert loaded.is_configured() is False
+
+
+def test_legacy_azure_key_is_migrated_to_a_versioned_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = {
+        f"LyraShield-Local:{LEGACY_CONFIG_KEY}": json.dumps(
+            {
+                "provider": Provider.AZURE_OPENAI.value,
+                "azure": {
+                    "endpoint": "https://legacy.example",
+                    "deployment": "legacy-deployment",
+                },
+            }
+        ),
+        f"LyraShield-Local:{KEYCHAIN_AZURE_KEY}": "legacy-endpoint-key",
+    }
+
+    def fake_get(service: str, key: str) -> str | None:
+        return store.get(f"{service}:{key}")
+
+    def fake_set(service: str, key: str, value: str) -> bool:
+        store[f"{service}:{key}"] = value
+        return True
+
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_get", fake_get)
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_set", fake_set)
+
+    save_config(
+        ByokConfig(
+            provider=Provider.AZURE_OPENAI,
+            azure=AzureConfig(endpoint="https://legacy.example", deployment="legacy-deployment"),
+        )
+    )
+
+    blob = json.loads(store[f"LyraShield-Local:{CONFIG_KEY}"])
+    migrated_key_id = blob["azure"]["key_id"]
+    assert migrated_key_id != KEYCHAIN_AZURE_KEY
+    assert blob["azure"]["credential_version"] == 2
+    assert store[f"LyraShield-Local:{migrated_key_id}"] == "legacy-endpoint-key"
+    assert load_config().azure.api_key == "legacy-endpoint-key"
+
+
+def test_changing_azure_endpoint_requires_a_new_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = {}
+
+    def fake_get(service: str, key: str) -> str | None:
+        return store.get(f"{service}:{key}")
+
+    def fake_set(service: str, key: str, value: str) -> bool:
+        store[f"{service}:{key}"] = value
+        return True
+
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_get", fake_get)
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_set", fake_set)
+    save_config(
+        ByokConfig(
+            provider=Provider.AZURE_OPENAI,
+            azure=AzureConfig(
+                api_key="old-endpoint-key",
+                endpoint="https://old.example",
+                deployment="production",
+            ),
+        )
+    )
+    old_blob = store[f"LyraShield-Local:{CONFIG_KEY}"]
+    old_key_id = json.loads(old_blob)["azure"]["key_id"]
+
+    with pytest.raises(
+        ByokConfigError, match="Azure endpoint change requires entering the API key"
+    ):
+        save_config(
+            ByokConfig(
+                provider=Provider.AZURE_OPENAI,
+                azure=AzureConfig(endpoint="https://new.example", deployment="production"),
+            )
+        )
+
+    assert store[f"LyraShield-Local:{CONFIG_KEY}"] == old_blob
+    assert store[f"LyraShield-Local:{old_key_id}"] == "old-endpoint-key"
+
+
+def test_endpoint_trailing_slash_and_deployment_change_reuse_existing_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = {}
+
+    def fake_get(service: str, key: str) -> str | None:
+        return store.get(f"{service}:{key}")
+
+    def fake_set(service: str, key: str, value: str) -> bool:
+        store[f"{service}:{key}"] = value
+        return True
+
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_get", fake_get)
+    monkeypatch.setattr("lyrashield.tui.byok_config.keyring_set", fake_set)
+    save_config(
+        ByokConfig(
+            provider=Provider.AZURE_OPENAI,
+            azure=AzureConfig(
+                api_key="saved-key",
+                endpoint="https://resource.example",
+                deployment="old-deployment",
+            ),
+        )
+    )
+    old_blob = json.loads(store[f"LyraShield-Local:{CONFIG_KEY}"])
+    old_key_id = old_blob["azure"]["key_id"]
+
+    save_config(
+        ByokConfig(
+            provider=Provider.AZURE_OPENAI,
+            azure=AzureConfig(
+                endpoint="https://resource.example/",
+                deployment="new-deployment",
+            ),
+        )
+    )
+
+    new_blob = json.loads(store[f"LyraShield-Local:{CONFIG_KEY}"])
+    assert new_blob["azure"]["key_id"] == old_key_id
+    loaded = load_config()
+    assert loaded.azure.deployment == "new-deployment"
+    assert loaded.azure.api_key == "saved-key"
+
+
+@pytest.mark.parametrize("raw", ["[]", "null", '{"profiles": []}'])
+def test_malformed_saved_config_has_recovery_error(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "lyrashield.tui.byok_config.keyring_get",
+        lambda _service, key: raw if key == CONFIG_KEY else None,
+    )
+
+    with pytest.raises(ValueError, match="saved BYOK setup is malformed"):
+        load_config()
 
 
 @pytest.mark.parametrize(
@@ -145,6 +418,7 @@ def test_load_config_migrates_legacy_chatgpt_model(
         {
             "provider": Provider.CHATGPT_OAUTH.value,
             "chatgpt": {"enabled": True, "model": legacy_model},
+            "azure": {"credential_version": 2},
         }
     )
     monkeypatch.setattr(

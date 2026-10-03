@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
-from lyrashield.interface.tui.history import load_session_history
 from strix.core.paths import runtime_state_dir
+from strix.interface.tui.history import load_session_history
 
 
 class TuiLiveView:

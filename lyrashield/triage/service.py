@@ -22,6 +22,7 @@ from lyrashield.artifacts.usage import LLMUsageLedger
 from lyrashield.lifecycle.hooks import (
     BudgetExceededError,
     ReportUsageHooks,
+    _estimate_out_of_band_input_tokens,
     get_active_hooks,
     set_active_hooks,
 )
@@ -160,6 +161,10 @@ def _extract_text(response: Any) -> str:
     for item in getattr(response, "output", []):
         if not isinstance(item, ResponseOutputMessage):
             continue
+        if item.status != "completed" or any(
+            getattr(chunk, "type", None) == "refusal" for chunk in item.content
+        ):
+            return ""
         for chunk in item.content:
             text = getattr(chunk, "text", None)
             if text:
@@ -192,20 +197,21 @@ async def _request_judgement(
     # This direct call bypasses Runner. On Azure/OpenAI the native HTTP client
     # owns bounded retries (two by default); do not add a second retry loop.
     reservation_key = f"ai-triage:{uuid4().hex}"
+    system_instructions = "You are a bounded security triage assistant. Return only the schema."
     hooks = get_active_hooks()
     if hooks is not None:
         await hooks.reserve_out_of_band_request(
             key=reservation_key,
             model=model_route,
-            input_tokens=max(1, len(prompt) // 3),
+            input_tokens=_estimate_out_of_band_input_tokens(
+                model_route, system_instructions, prompt
+            ),
             max_output_tokens=limits.max_output_tokens,
         )
     response: Any = None
     try:
         response = await model.get_response(
-            system_instructions=(
-                "You are a bounded security triage assistant. Return only the schema."
-            ),
+            system_instructions=system_instructions,
             input=prompt,
             model_settings=model_settings,
             tools=[],

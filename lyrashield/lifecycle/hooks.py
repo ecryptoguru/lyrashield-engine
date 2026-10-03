@@ -363,6 +363,26 @@ def _history_groups(items: list[Any]) -> list[list[Any]]:
 # Bounded so a long scan cannot grow it without limit.
 _ESTIMATE_CACHE_MAX_ENTRIES = 512
 _estimate_cache: dict[tuple[str, str], int] = {}
+_REQUEST_FRAMING_TOKENS = 4_096
+
+
+def _estimate_out_of_band_input_tokens(model: str, *parts: str | None) -> int:
+    """Conservatively estimate a direct model request before reserving spend.
+
+    Out-of-band requests do not pass through ``on_llm_start``. Count their
+    text with LiteLLM when possible, use UTF-8 bytes as the safe fallback and
+    include bounded headroom for message and schema framing.
+    """
+    import litellm
+
+    payload = "".join(part for part in parts if part)
+    bare_model = model.strip().lower().split("/")[-1]
+    try:
+        counter = cast(Callable[..., int], litellm.token_counter)  # noqa: TC006
+        token_count = int(counter(model=bare_model, text=payload))
+    except Exception:  # noqa: BLE001
+        token_count = len(payload.encode("utf-8", "surrogatepass"))
+    return max(1, token_count) + _REQUEST_FRAMING_TOKENS
 
 
 def _estimate_input_tokens(
@@ -399,7 +419,7 @@ def _estimate_input_tokens(
     except Exception:  # noqa: BLE001
         # UTF-8 bytes are a conservative ceiling for BPE token count.
         token_count = len(payload.encode("utf-8"))
-    token_count += 4_096
+    token_count += _REQUEST_FRAMING_TOKENS
     if len(_estimate_cache) >= _ESTIMATE_CACHE_MAX_ENTRIES:
         _estimate_cache.clear()
     _estimate_cache[cache_key] = token_count

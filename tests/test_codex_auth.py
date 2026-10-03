@@ -91,6 +91,41 @@ def test_post_form_returns_parsed_body() -> None:
     assert post.call_args.kwargs["timeout"] == codex._TOKEN_TIMEOUT
 
 
+def test_post_form_redacts_transport_exception_text() -> None:
+    secret = "opaque-refresh-token-7f3cb9"
+    failure = requests.ConnectionError(
+        f"request failed for {codex.TOKEN_URL}?refresh_token={secret}"
+    )
+    payload = {"grant_type": "refresh_token", "refresh_token": secret}
+
+    with (
+        mock.patch.object(requests, "post", side_effect=failure),
+        pytest.raises(codex.CodexAuthError) as caught,
+    ):
+        codex._post_form(payload)
+
+    assert caught.value.code == "unavailable"
+    assert secret not in str(caught.value)
+    assert secret not in repr(caught.value.__cause__)
+    assert caught.value.__suppress_context__ is True
+
+
+def test_post_form_does_not_surface_token_endpoint_error_body() -> None:
+    secret = "opaque-access-token-98ac1d"
+    response = mock.MagicMock()
+    response.status_code = 400
+    response.text = f'{{"error":"invalid_grant","access_token":"{secret}"}}'
+
+    with (
+        mock.patch.object(requests, "post", return_value=response),
+        pytest.raises(codex.CodexAuthError) as caught,
+    ):
+        codex._post_form({"grant_type": "refresh_token"})
+
+    assert caught.value.code == "token_http_error"
+    assert secret not in str(caught.value)
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

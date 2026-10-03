@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
+import time
+import urllib.request
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -34,7 +38,11 @@ def _docker_client(
     """Mock docker client whose networks.get returns a network with the given Internal flag."""
     client = MagicMock()
     network = MagicMock()
-    network.attrs = {"Internal": internal}
+    network.attrs = {
+        "Internal": internal,
+        "Driver": "bridge",
+        "Options": {"com.docker.network.bridge.enable_icc": "false"},
+    }
     network.internal = internal
     client.networks.get.return_value = network
     return client
@@ -127,6 +135,24 @@ def test_named_but_non_internal_network_rejected(monkeypatch: pytest.MonkeyPatch
         _assert_sandbox_network_admission(_container("lyrashield-sandbox"), client)
 
 
+def test_internal_bridge_without_disabled_icc_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Internal blocks outside egress; it does not isolate sibling containers."""
+    monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", "lyrashield-sandbox")
+    client = _docker_client("lyrashield-sandbox")
+    client.networks.get.return_value.attrs = {
+        "Internal": True,
+        "Driver": "bridge",
+        "Options": {"com.docker.network.bridge.enable_icc": "true"},
+    }
+    with pytest.raises(RuntimeError, match="inter-container isolation"):
+        _assert_sandbox_network_admission(
+            _container("lyrashield-sandbox", attached_networks={"lyrashield-sandbox": {}}),
+            client,
+        )
+
+
 def test_network_lookup_failure_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     """When docker network inspect fails (NotFound), admission must fail."""
     monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", "lyrashield-sandbox")
@@ -162,7 +188,12 @@ def test_real_internal_network_admission_passes(monkeypatch: pytest.MonkeyPatch)
     beyond mocks and the CI built-image smoke probe (comment #8)."""
     client = docker_sdk.from_env()
     network_name = f"lyrashield-test-{uuid.uuid4().hex[:8]}"
-    network = client.networks.create(network_name, internal=True)
+    network = client.networks.create(
+        network_name,
+        internal=True,
+        driver="bridge",
+        options={"com.docker.network.bridge.enable_icc": "false"},
+    )
     try:
         container = client.containers.run(
             "kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec7544537bcec1493277096",
@@ -179,3 +210,99 @@ def test_real_internal_network_admission_passes(monkeypatch: pytest.MonkeyPatch)
             container.stop(timeout=5)
     finally:
         network.remove()
+
+
+@pytest.mark.skipif(
+    not _docker_available or os.uname().sysname != "Linux",
+    reason="Requires a live Linux Docker host and bridge routing",
+)
+def test_live_siblings_isolated_while_host_relay_and_readiness_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify sibling denial while loopback and the approved host relay remain usable."""
+    client = docker_sdk.from_env()
+    network_name = f"lyrashield-isolation-{uuid.uuid4().hex[:8]}"
+    network = client.networks.create(
+        network_name,
+        internal=True,
+        driver="bridge",
+        options={"com.docker.network.bridge.enable_icc": "false"},
+    )
+    containers: list[Any] = []
+    server: ThreadingHTTPServer | None = None
+    thread: threading.Thread | None = None
+    try:
+        network.reload()
+        gateway = network.attrs["IPAM"]["Config"][0]["Gateway"]
+
+        class RelayHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"approved-host-relay")
+
+            def log_message(self, _format: str, *_args: Any) -> None:
+                return None
+
+        server = ThreadingHTTPServer((gateway, 0), RelayHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        program = """import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ready")
+    def log_message(self, *args): pass
+servers = [ThreadingHTTPServer(("0.0.0.0", port), Handler) for port in (48080, 48081)]
+for server in servers:
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+threading.Event().wait()
+"""
+        for _ in range(2):
+            container = client.containers.run(
+                "python:3.14-slim",
+                command=["python", "-c", program],
+                network=network_name,
+                detach=True,
+            )
+            containers.append(container)
+            container.reload()
+            monkeypatch.setenv("STRIX_DOCKER_SANDBOX_NETWORK", network_name)
+            _assert_sandbox_network_admission(container, client)
+            address = container.attrs["NetworkSettings"]["Networks"][network_name]["IPAddress"]
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline:
+                try:
+                    with urllib.request.urlopen(f"http://{address}:48080/", timeout=1) as response:
+                        assert response.read() == b"ready"
+                    break
+                except OSError:
+                    # Bridge endpoint and service readiness are asynchronous.
+                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+            else:
+                pytest.fail("Host-to-sandbox readiness/API path unavailable")
+
+        for container, sibling in ((containers[0], containers[1]), (containers[1], containers[0])):
+            sibling_ip = sibling.attrs["NetworkSettings"]["Networks"][network_name]["IPAddress"]
+            probe = f"""import socket, urllib.request
+for port in (48080, 48081):
+    with socket.socket() as connection:
+        connection.settimeout(2)
+        assert connection.connect_ex(({sibling_ip!r}, port)) != 0, "sibling port reachable"
+with urllib.request.urlopen("http://127.0.0.1:48080/", timeout=2) as response:
+    assert response.read() == b"ready"
+with urllib.request.urlopen("http://{gateway}:{server.server_port}/", timeout=2) as response:
+    assert response.read() == b"approved-host-relay"
+"""
+            result = container.exec_run(["python", "-c", probe])
+            assert result.exit_code == 0, result.output.decode()
+    finally:
+        for container in containers:
+            container.remove(force=True)
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None:
+            thread.join(timeout=5)
+        network.remove()
+        client.close()

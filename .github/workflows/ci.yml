@@ -116,6 +116,12 @@ jobs:
         if: steps.changed_paths.outputs.docs_only != 'true'
         run: scripts/verify-controlled-derivative.sh
 
+      - name: Test owned viewer safety and route handling
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        run: >
+          uv run pytest -q tests/test_viewer.py tests/test_viewer_runs_gating.py
+          tests/test_viewer_cli.py tests/test_viewer_safety.py
+
       - name: Report owned/upstream Python twin drift
         if: steps.changed_paths.outputs.docs_only != 'true'
         run: python3 scripts/report_twin_drift.py
@@ -125,7 +131,7 @@ jobs:
         working-directory: lyrashield/interface/viewer/frontend
         run: |
           npm ci
-          node --test tests/run-details-cost.test.mjs
+          node --test --test-concurrency=1 tests/*.mjs
           npm run typecheck
           npm run build
           git diff --exit-code -- ../static
@@ -249,10 +255,15 @@ jobs:
         run: |
           docker run --rm lyrashield-sandbox:ci /app/.venv/bin/python -c "
           import socket
-          from caido_api import _replay_denial as blocked
+          import ipaddress
+          from caido_api import _ip_denial, _replay_denial as blocked
+
+          aws_metadata = _ip_denial(ipaddress.ip_address('fd00:ec2::254'))
+          assert aws_metadata is not None and aws_metadata[1] == 'cloud_metadata'
 
           for url in (
               'http://169.254.169.254/',
+              'http://[fd00:ec2::254]/',
               'http://100.100.100.200/',
               'http://metadata.google.internal/',
               'http://127.0.0.1:8080/',
@@ -299,3 +310,20 @@ jobs:
                    curl --fail -sS -m 5 -o /dev/null http://203.0.113.10/ &&
               echo "network deny probes passed"
           '
+
+  windows-attachment-boundary:
+    name: Native Windows attachment boundary
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: Run attachment tests through native Win32 handles
+        run: |
+          uv sync --frozen --extra viewer
+          uv run pytest -q tests/test_attachments.py

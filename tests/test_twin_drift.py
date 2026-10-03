@@ -1,4 +1,4 @@
-"""Behavior and drift-report coverage for the owned/upstream history seam."""
+"""Behavior and drift-report coverage for owned and upstream twins."""
 
 from __future__ import annotations
 
@@ -9,17 +9,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from lyrashield.interface.tui.history import load_session_history
-from strix.interface.tui.history import load_session_history as upstream_load_session_history
+from strix.interface.tui.history import load_session_history
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_owned_history_uses_pinned_upstream_loader_with_read_only_session_db(
-    tmp_path: Path,
-) -> None:
-    assert load_session_history is upstream_load_session_history
+def test_upstream_history_loader_reads_session_db_read_only(tmp_path: Path) -> None:
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
     agents_db = state_dir / "agents.db"

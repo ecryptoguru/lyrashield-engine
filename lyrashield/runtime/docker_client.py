@@ -30,10 +30,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import io
 import logging
 import os
 import uuid
-from typing import Any, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
 from agents.sandbox.errors import ExposedPortUnavailableError
 from agents.sandbox.manifest import Manifest
@@ -46,13 +48,19 @@ from agents.sandbox.sandboxes.docker import (
     _manifest_requires_sys_admin,
 )
 from agents.sandbox.session.sandbox_session import SandboxSession
-from agents.sandbox.types import ExposedPortEndpoint
+from agents.sandbox.types import ExecResult, ExposedPortEndpoint, User
 from docker import errors as docker_errors
 from docker.models.containers import Container
 from docker.types import LogConfig
 from docker.types import Mount as DockerSDKMount
-from docker.utils import parse_repository_tag
 from requests.exceptions import RequestException
+
+
+if TYPE_CHECKING:
+    from agents.sandbox.files import FileEntry
+    from agents.sandbox.session.base_sandbox_session import BaseSandboxSession
+    from agents.sandbox.session.manager import Instrumentation
+    from agents.sandbox.session.pty_types import PtyExecUpdate
 
 
 logger = logging.getLogger(__name__)
@@ -116,9 +124,9 @@ def _assert_sandbox_network_admission(container: Any, docker_client: Any) -> Non
 
     Deny-by-default egress is supplied by the worker/network setup through
     ``STRIX_DOCKER_SANDBOX_NETWORK``; this check binds admission to the
-    immutable runtime fact — the network mode Docker actually attached and the
-    Docker network object's ``Internal`` flag — not to an environment variable
-    the agent could influence. Proxy environment variables are steering only
+    immutable runtime facts — the network mode Docker actually attached, the
+    Docker network object's ``Internal`` flag and bridge ICC option — not to
+    environment variables the agent could influence. Proxy environment variables are steering only
     and never count as enforcement.
     """
     configured = _sandbox_network()
@@ -162,6 +170,15 @@ def _assert_sandbox_network_admission(container: Any, docker_client: Any) -> Non
             f"sandbox admission failed: network {configured!r} is not internal. "
             "Recreate it with `docker network create --internal` to enforce "
             "deny-by-default egress."
+        )
+    if (
+        net_attrs.get("Driver") != "bridge"
+        or (net_attrs.get("Options") or {}).get("com.docker.network.bridge.enable_icc") != "false"
+    ):
+        raise RuntimeError(
+            f"sandbox admission failed: network {configured!r} lacks verified "
+            "inter-container isolation. Provision an internal bridge with "
+            "`--opt com.docker.network.bridge.enable_icc=false`."
         )
     # Verify actual container attachment: NetworkMode can claim the expected
     # network while NetworkSettings.Networks shows a different (or absent)
@@ -318,8 +335,118 @@ def _apply_run_labels(create_kwargs: dict[str, Any]) -> None:
         labels["strix-run-type"] = run_type
 
 
-class StrixDockerSandboxSession(DockerSandboxSession):
+class LyraShieldSandboxSession(SandboxSession):
+    """Route product sandbox operations through the non-root scan identity."""
+
+    @staticmethod
+    def _execution_user(user: str | User | None) -> str:
+        name = user.name if isinstance(user, User) else user
+        if name is not None and name != "pentester":
+            raise ValueError("Product sandbox operations must run as pentester")
+        return "pentester"
+
+    async def exec(
+        self,
+        *command: str | Path,
+        timeout: float | None = None,
+        shell: bool | list[str] = True,
+        user: str | User | None = None,
+    ) -> ExecResult:
+        return await super().exec(  # nosec B604: agent commands run as pentester inside the isolated scan container
+            *command, timeout=timeout, shell=shell, user=self._execution_user(user)
+        )
+
+    async def pty_exec_start(
+        self,
+        *command: str | Path,
+        timeout: float | None = None,
+        shell: bool | list[str] = True,
+        user: str | User | None = None,
+        tty: bool = False,
+        yield_time_s: float | None = None,
+        max_output_tokens: int | None = None,
+    ) -> PtyExecUpdate:
+        return await super().pty_exec_start(  # nosec B604: PTY commands run as pentester inside the isolated scan container
+            *command,
+            timeout=timeout,
+            shell=shell,
+            user=self._execution_user(user),
+            tty=tty,
+            yield_time_s=yield_time_s,
+            max_output_tokens=max_output_tokens,
+        )
+
+    async def _read(
+        self,
+        path: Path,
+        *,
+        user: str | User | None = None,
+        expected_span_errors: tuple[type[BaseException], ...] = (),
+    ) -> io.IOBase:
+        return await super()._read(
+            path, user=self._execution_user(user), expected_span_errors=expected_span_errors
+        )
+
+    async def write(self, path: Path, data: io.IOBase, *, user: str | User | None = None) -> None:
+        await super().write(path, data, user=self._execution_user(user))
+
+    async def ls(self, path: Path | str, *, user: str | User | None = None) -> list[FileEntry]:
+        return await super().ls(path, user=self._execution_user(user))
+
+    async def rm(
+        self, path: Path | str, *, recursive: bool = False, user: str | User | None = None
+    ) -> None:
+        await super().rm(path, recursive=recursive, user=self._execution_user(user))
+
+    async def mkdir(
+        self, path: Path | str, *, parents: bool = False, user: str | User | None = None
+    ) -> None:
+        await super().mkdir(path, parents=parents, user=self._execution_user(user))
+
+
+class LyraShieldDockerSandboxSession(DockerSandboxSession):
     sandbox_network: str = ""
+
+    async def _exec_checked_nonzero(self, *command: str | Path) -> ExecResult:
+        if command == ("useradd", "-U", "-M", "-s", "/usr/sbin/nologin", "pentester"):
+            # The runtime image owns this account. Verify its UID rather than
+            # trying to mutate the image's account database during startup.
+            result = await super()._exec_checked_nonzero("id", "-u", "pentester")
+            if not result.stdout.strip().isdigit() or int(result.stdout.strip()) == 0:
+                raise RuntimeError("Sandbox pentester account must have a nonzero UID")
+            return result
+        return await super()._exec_checked_nonzero(*command)
+
+    async def _rm_best_effort(self, path: Path) -> None:
+        if path.name.endswith("_pty.pid"):
+            stem = path.name.removesuffix("_pty.pid")
+            if (
+                path.parent != self._ARCHIVE_STAGING_DIR
+                or len(stem) != 32
+                or any(char not in "0123456789abcdef" for char in stem)
+            ):
+                raise ValueError("Invalid SDK PTY PID cleanup path")
+            with contextlib.suppress(Exception):
+                result = await self.exec("rm", "-f", "--", path, shell=False, user="pentester")
+                if not result.ok():
+                    logger.warning("Failed to remove SDK PTY PID file: %s", path)
+            return
+        await super()._rm_best_effort(path)
+
+    async def _kill_pty_pid_path(self, pid_path: Path) -> None:
+        # The pid file is writable by pentester; never interpret it as root.
+        with contextlib.suppress(Exception):
+            await self.exec(
+                "sh",
+                "-lc",
+                'if [ -f "$1" ]; then pid="$(cat "$1" 2>/dev/null || true)"; '
+                'if [ -n "$pid" ]; then kill -KILL "$pid" >/dev/null 2>&1 || true; fi; fi',
+                "sh",
+                pid_path,
+                shell=False,
+                user="pentester",
+            )
+        await self._rm_best_effort(pid_path)
 
     async def _resolve_exposed_port(self, port: int) -> ExposedPortEndpoint:
         try:
@@ -359,15 +486,26 @@ class StrixDockerSandboxSession(DockerSandboxSession):
 
 
 class StrixDockerSandboxClient(DockerSandboxClient):
+    def _wrap_session(
+        self,
+        inner: BaseSandboxSession,
+        *,
+        instrumentation: Instrumentation | None = None,
+    ) -> SandboxSession:
+        if isinstance(inner, DockerSandboxSession):
+            inner.__class__ = LyraShieldDockerSandboxSession
+            cast("LyraShieldDockerSandboxSession", inner).sandbox_network = _sandbox_network() or ""
+        return LyraShieldSandboxSession(
+            inner,
+            instrumentation=instrumentation,
+            dependencies=self._resolve_dependencies(),
+        )
+
     # Host directories to bind-mount into the container, set by the docker
     # backend before ``create()``. Each item is ``{source, target, read_only}``.
     strix_bind_mounts: list[dict[str, Any]]
 
-    def _ensure_image_available(self, image: str) -> None:
-        if not self.image_exists(image):
-            raise docker_errors.DockerException(f"Docker image unavailable after pull: {image}")
-
-    async def _create_container(  # noqa: PLR0912, PLR0915 - mirrors the pinned SDK container builder
+    async def _create_container(  # noqa: PLR0912 - mirrors the pinned SDK container builder
         self,
         image: str,
         *,
@@ -377,17 +515,10 @@ class StrixDockerSandboxClient(DockerSandboxClient):
     ) -> Container:
         # ----- BEGIN VERBATIM COPY of DockerSandboxClient._create_container -----
         # SDK ref: src/agents/sandbox/sandboxes/docker.py:1434-1477 (v0.14.6).
-        if not self.image_exists(image):
-            if os.environ.get("STRIX_IMAGE_DIGEST", "").strip():
-                raise RuntimeError(
-                    f"Sandbox image {image} is not present locally and "
-                    "STRIX_IMAGE_DIGEST is set. Pre-pull the image with the verified digest "
-                    "before starting the scan."
-                )
-            repo, tag = parse_repository_tag(image)
-            self.docker_client.images.pull(repo, tag=tag or None, all_tags=False)
-
-        self._ensure_image_available(image)
+        # Image inspect/pull runs before the scan through the bounded helper in
+        # ``interface.image_pull``. Never repeat those synchronous SDK calls
+        # here; if the preflight did not leave the image available, container
+        # creation fails immediately rather than exceeding the run deadline.
         environment: dict[str, str] | None = None
         if manifest:
             environment = await manifest.environment.resolve()
@@ -494,15 +625,6 @@ class StrixDockerSandboxClient(DockerSandboxClient):
             image,
         )
         return container
-
-    async def create(self, **kwargs: Any) -> SandboxSession:
-        session = await super().create(**kwargs)
-        network = _sandbox_network()
-        inner = getattr(session, "_inner")  # noqa: B009
-        if network and isinstance(inner, DockerSandboxSession):
-            inner.__class__ = StrixDockerSandboxSession
-            cast("StrixDockerSandboxSession", inner).sandbox_network = network
-        return session
 
     async def delete(self, session: SandboxSession) -> SandboxSession:
         inner = getattr(session, "_inner")  # noqa: B009

@@ -1,4 +1,7 @@
 import type {
+  CodeLocation,
+  CVSSBreakdown,
+  FixEffort,
   Vulnerability,
   VulnerabilitySeverity,
   VulnerabilityStatus,
@@ -63,6 +66,102 @@ function asStringOrNull(v: unknown): string | null {
 
 function asNumberOrNull(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const FIX_EFFORTS: FixEffort[] = ["trivial", "low", "medium", "high"];
+const CVSS_METRICS = {
+  attack_vector: ["N", "A", "L", "P"],
+  attack_complexity: ["L", "H"],
+  privileges_required: ["N", "L", "H"],
+  user_interaction: ["N", "R"],
+  scope: ["U", "C"],
+  confidentiality: ["N", "L", "H"],
+  integrity: ["N", "L", "H"],
+  availability: ["N", "L", "H"],
+} as const;
+
+function invalidFindingField(index: number, field: string): never {
+  throw new RunParseError(
+    `vulnerabilities.json entry #${index + 1} has an invalid ${field} value.`
+  );
+}
+
+function parseCodeLocations(raw: unknown, index: number): CodeLocation[] | null {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) invalidFindingField(index, "code_locations");
+
+  const textFields = ["file", "snippet", "label", "fix_before", "fix_after"] as const;
+  return raw.map((value, locationIndex) => {
+    if (!isRecord(value)) {
+      invalidFindingField(index, `code_locations[${locationIndex}]`);
+    }
+    if (typeof value.file !== "string" || !value.file.trim()) {
+      invalidFindingField(index, `code_locations[${locationIndex}].file`);
+    }
+    if (!Number.isSafeInteger(value.start_line) || (value.start_line as number) < 1) {
+      invalidFindingField(index, `code_locations[${locationIndex}].start_line`);
+    }
+
+    const location: CodeLocation = {
+      file: value.file,
+      start_line: value.start_line as number,
+    };
+    for (const field of textFields.slice(1)) {
+      const fieldValue = value[field];
+      if (fieldValue === undefined || fieldValue === null) continue;
+      if (typeof fieldValue !== "string") {
+        invalidFindingField(index, `code_locations[${locationIndex}].${field}`);
+      }
+      location[field] = fieldValue;
+    }
+    if (value.end_line !== undefined && value.end_line !== null) {
+      if (
+        !Number.isSafeInteger(value.end_line) ||
+        (value.end_line as number) < (value.start_line as number)
+      ) {
+        invalidFindingField(index, `code_locations[${locationIndex}].end_line`);
+      }
+      location.end_line = value.end_line as number;
+    }
+    return location;
+  });
+}
+
+function parseFixEffort(raw: unknown, index: number): FixEffort | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "string" || !FIX_EFFORTS.includes(raw as FixEffort)) {
+    invalidFindingField(index, "fix_effort");
+  }
+  return raw as FixEffort;
+}
+
+function parseCvssBreakdown(raw: unknown, index: number): CVSSBreakdown | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isRecord(raw)) invalidFindingField(index, "cvss_breakdown");
+
+  const result: CVSSBreakdown = {
+    attack_vector: null,
+    attack_complexity: null,
+    privileges_required: null,
+    user_interaction: null,
+    scope: null,
+    confidentiality: null,
+    integrity: null,
+    availability: null,
+  };
+  for (const [metric, allowed] of Object.entries(CVSS_METRICS)) {
+    const value = raw[metric];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "string" || !allowed.includes(value as never)) {
+      invalidFindingField(index, `cvss_breakdown.${metric}`);
+    }
+    result[metric as keyof CVSSBreakdown] = value;
+  }
+  return result;
 }
 
 function parseJson(text: string, label: string): unknown {
@@ -217,15 +316,13 @@ function parseOneVulnerability(
     poc_description: asStringOrNull(raw.poc_description),
     poc_script_code: asStringOrNull(raw.poc_script_code),
     cwe,
-    code_locations: Array.isArray(raw.code_locations)
-      ? (raw.code_locations as Vulnerability["code_locations"])
-      : null,
+    code_locations: parseCodeLocations(raw.code_locations, index),
     remediation_steps: asStringOrNull(raw.remediation_steps),
     fix_pr_body: asStringOrNull(raw.fix_pr_body),
     evidence: asStringOrNull(raw.evidence),
     assumptions: asStringOrNull(raw.assumptions),
-    fix_effort: (asStringOrNull(raw.fix_effort) as Vulnerability["fix_effort"]) ?? null,
-    cvss_breakdown: (raw.cvss_breakdown as Vulnerability["cvss_breakdown"]) ?? null,
+    fix_effort: parseFixEffort(raw.fix_effort, index),
+    cvss_breakdown: parseCvssBreakdown(raw.cvss_breakdown, index),
   };
 }
 
@@ -238,10 +335,10 @@ export function parseVulnerabilitiesJson(
     throw new RunParseError("vulnerabilities.json is not a JSON array.");
   }
   return data.map((item, i) => {
-    if (!item || typeof item !== "object") {
+    if (!isRecord(item)) {
       throw new RunParseError(`vulnerabilities.json entry #${i + 1} is not an object.`);
     }
-    return parseOneVulnerability(item as Record<string, unknown>, i, runId);
+    return parseOneVulnerability(item, i, runId);
   });
 }
 

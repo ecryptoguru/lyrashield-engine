@@ -211,6 +211,11 @@ _TOOL_OVERRIDE_SPECS: dict[str, tuple[str, str]] = {
     "mark_todo_done": ("lyrashield.tools.todo.tools", "mark_todo_done"),
     "mark_todo_pending": ("lyrashield.tools.todo.tools", "mark_todo_pending"),
     "delete_todo": ("lyrashield.tools.todo.tools", "delete_todo"),
+    "create_note": ("lyrashield.tools.notes.tools", "create_note"),
+    "list_notes": ("lyrashield.tools.notes.tools", "list_notes"),
+    "get_note": ("lyrashield.tools.notes.tools", "get_note"),
+    "update_note": ("lyrashield.tools.notes.tools", "update_note"),
+    "delete_note": ("lyrashield.tools.notes.tools", "delete_note"),
 }
 
 

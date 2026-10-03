@@ -363,7 +363,12 @@ async def web_search(
                 estimated_cost=estimated_cost,
             )
 
-        search_queries = _query_to_keywords(redacted_query, topic, keywords)
+        redacted_keywords = (
+            [_redact_query(keyword, topic, target_hosts) for keyword in keywords]
+            if keywords
+            else None
+        )
+        search_queries = _query_to_keywords(redacted_query, topic, redacted_keywords)
         objective = _build_objective(topic, redacted_query)
 
         api_base = (web_search_settings.api_base or _DEFAULT_API_BASE).rstrip("/")

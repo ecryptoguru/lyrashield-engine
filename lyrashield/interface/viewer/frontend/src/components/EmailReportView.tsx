@@ -1,10 +1,15 @@
 import { ArrowLeft, Download } from "lucide-react";
+import { ReportLoadError } from "@/components/ReportLoadError";
 
 export default function EmailReportView({
   markdown,
+  error,
+  onRetry,
   onExit,
 }: {
   markdown: string | null;
+  error: string | null;
+  onRetry: () => void;
   onExit: () => void;
 }) {
   return (
@@ -17,7 +22,9 @@ export default function EmailReportView({
         Download the local Markdown report. Reports may contain sensitive target details;
         store and share them carefully.
       </p>
-      {markdown ? (
+      {error ? (
+        <ReportLoadError message={error} onRetry={onRetry} />
+      ) : markdown ? (
         <a
           href={"data:text/markdown;charset=utf-8," + encodeURIComponent(markdown)}
           download="lyrashield-report.md"

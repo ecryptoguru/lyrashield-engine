@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 import stat
+import logging
 
 import pytest
 
@@ -117,6 +118,155 @@ def test_store_payload_is_encrypted_on_disk(
     assert (
         b"secret-target" not in raw or b"secret-target" in raw
     )  # target is a column, not encrypted
+
+
+def test_store_encrypts_sensitive_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _make_store(tmp_path, monkeypatch)
+    target = "https://user:credential-sentinel@example.test/?token=query-sentinel"
+    title = "Authorization: Bearer title-sentinel-secret"
+
+    store.save_scan(
+        RunRecord("r1", target, "QUICK", "azure", 1, "completed", {"target": target}),
+        [FindingRecord("f1", "r1", "HIGH", title, {})],
+    )
+
+    raw = store.path.read_bytes()
+    for sentinel in (b"credential-sentinel", b"query-sentinel", b"title-sentinel-secret"):
+        assert sentinel not in raw
+    assert store.get_run("r1").target == target
+    assert store.list_findings("r1")[0].title == title
+
+
+def test_connections_close_after_reads_writes_and_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lyrashield.tui import results_store
+
+    original_connect = sqlite3.connect
+    handles = []
+
+    class TrackedConnection(sqlite3.Connection):
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+            super().close()
+
+    def tracked_connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs, factory=TrackedConnection)
+        handles.append(conn)
+        return conn
+
+    monkeypatch.setattr(results_store.sqlite3, "connect", tracked_connect)
+    store = _make_store(tmp_path, monkeypatch)
+    store.save_run(RunRecord("r1", "target", "QUICK", "azure", 1, "completed", {}))
+    store.list_runs()
+    store.get_run("r1")
+    store.list_findings("r1")
+    with pytest.raises(sqlite3.OperationalError), store._connect() as conn:
+        conn.execute("SELECT * FROM nonexistent")
+
+    assert handles and all(conn.closed for conn in handles)
+
+
+def test_legacy_sensitive_metadata_migrates_without_changing_read_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cryptography.fernet import Fernet
+    from lyrashield.tui import results_store
+
+    key = Fernet.generate_key()
+    monkeypatch.setattr("lyrashield.tui.results_store.keyring_get", lambda *_: key.decode())
+    path = tmp_path / "legacy.db"
+    target = "https://user:legacy-credential-sentinel@example.test"
+    title = "Authorization: Bearer legacy-title-sentinel"
+    payload = Fernet(key).encrypt(b'{"description":"saved evidence"}').decode()
+    with sqlite3.connect(path) as conn:
+        conn.executescript(results_store._SCHEMA)
+        conn.execute(
+            "INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("r1", target, "QUICK", "azure", 1, "completed", payload),
+        )
+        conn.execute(
+            "INSERT INTO findings VALUES (?, ?, ?, ?, ?)",
+            ("f1", "r1", "HIGH", title, payload),
+        )
+
+    store = ResultsStore(path)
+
+    assert b"legacy-credential-sentinel" not in path.read_bytes()
+    assert b"legacy-title-sentinel" not in path.read_bytes()
+    assert store.get_run("r1").target == target
+    finding = store.list_findings("r1")[0]
+    assert finding.title == title
+    assert finding.payload == {"description": "saved evidence"}
+
+
+def test_legacy_metadata_migration_defers_without_key_and_retries_after_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from cryptography.fernet import Fernet
+    from lyrashield.tui import results_store
+
+    key = Fernet.generate_key()
+    target = "https://user:deferred-credential-sentinel@example.test"
+    title = "Authorization: Bearer deferred-title-sentinel"
+    encrypted = Fernet(key).encrypt(b'{"description":"preserved payload"}').decode()
+    path = tmp_path / "deferred.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(results_store._SCHEMA)
+        conn.execute(
+            "INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("r1", target, "QUICK", "azure", 1, "completed", encrypted),
+        )
+        conn.execute(
+            "INSERT INTO findings VALUES (?, ?, ?, ?, ?)",
+            ("f1", "r1", "HIGH", title, encrypted),
+        )
+
+    def snapshot() -> tuple[tuple[object, ...], tuple[object, ...]]:
+        with sqlite3.connect(path) as conn:
+            run = conn.execute(
+                "SELECT target, encrypted_payload FROM runs WHERE run_id = 'r1'"
+            ).fetchone()
+            finding = conn.execute(
+                "SELECT title, encrypted_payload FROM findings WHERE finding_id = 'f1'"
+            ).fetchone()
+        assert run is not None and finding is not None
+        return run, finding
+
+    unchanged = snapshot()
+
+    def missing_key(*_args: object) -> str | None:
+        raise ResultsStoreKeyError("Local results encryption key is missing")
+
+    monkeypatch.setattr(results_store, "keyring_get", missing_key)
+    with caplog.at_level(logging.WARNING, logger="lyrashield.tui.results_store"):
+        ResultsStore(path)
+
+    assert snapshot() == unchanged
+    assert b"deferred-credential-sentinel" in path.read_bytes()
+    assert b"deferred-title-sentinel" in path.read_bytes()
+    assert "target/title data remains unredacted" in caplog.text
+    assert "retry on next startup" in caplog.text
+
+    restored_reads = 0
+
+    def restored_key(_service: str, key_name: str) -> str | None:
+        nonlocal restored_reads
+        restored_reads += 1
+        return key.decode() if key_name == results_store.KEYCHAIN_DEK else None
+
+    monkeypatch.setattr(results_store, "keyring_get", restored_key)
+    recovered = ResultsStore(path)
+
+    assert restored_reads > 0
+    assert b"deferred-credential-sentinel" not in path.read_bytes()
+    assert b"deferred-title-sentinel" not in path.read_bytes()
+    assert recovered.get_run("r1").target == target
+    finding = recovered.list_findings("r1")[0]
+    assert finding.title == title
+    assert finding.payload == {"description": "preserved payload"}
 
 
 def test_store_list_runs_ordered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

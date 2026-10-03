@@ -9,9 +9,9 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from lyrashield.lifecycle.agents import AgentCoordinator
+from lyrashield.tools.notes.tools import hydrate_notes_from_disk
 from lyrashield.tools.todo.tools import hydrate_todos_from_disk
 from strix.tools.coverage.tools import hydrate_coverage_from_disk
-from strix.tools.notes.tools import hydrate_notes_from_disk
 from strix.tools.threat_model.tools import hydrate_threat_models_from_disk
 
 
@@ -66,11 +66,11 @@ async def restore_coordinator(
     # every run binds them to this run's state dir and clears prior scan state.
     hydrate_coverage_from_disk(state_dir)
     hydrate_threat_models_from_disk(state_dir)
+    hydrate_notes_from_disk(state_dir)
 
     root_id: str | None = None
     if is_resume:
         hydrate_todos_from_disk(state_dir)
-        hydrate_notes_from_disk(state_dir)
         if agents_path.is_symlink() or not agents_path.is_file():
             raise RuntimeError(
                 f"Cannot resume scan {scan_id}: agents.json is not a regular file",

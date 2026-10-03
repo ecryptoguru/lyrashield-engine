@@ -28,8 +28,43 @@ _MAX_SURFACES = 200
 _MAX_SURFACE_CHARS = 200
 _MAX_UNASSESSED = 100
 
-# Agent graph statuses that mean the agent did not finish cleanly.
-_INCOMPLETE_AGENT_STATUSES = frozenset({"crashed", "stopped", "running", "waiting"})
+_SUCCESSFUL_AGENT_STATUSES = frozenset({"completed"})
+
+
+def effective_agent_graph(
+    run_record: dict[str, Any], agent_graph: dict[str, Any]
+) -> dict[str, Any]:
+    """Include unknown agents and recognize a root that durably finished."""
+    graph = dict(agent_graph)
+    raw_statuses = graph.get("statuses")
+    statuses = dict(raw_statuses) if isinstance(raw_statuses, dict) else {}
+    raw_parents = graph.get("parent_of")
+    parents = raw_parents if isinstance(raw_parents, dict) else {}
+
+    identities = set(statuses)
+    for key in ("names", "metadata", "parent_of"):
+        value = graph.get(key)
+        if isinstance(value, dict):
+            identities.update(value)
+    identities.update(parent for parent in parents.values() if parent)
+    for identity in identities:
+        status = statuses.get(identity)
+        if not isinstance(status, str) or not status.strip():
+            statuses[identity] = "unknown"
+
+    roots = [identity for identity in identities if not parents.get(identity)]
+    results = run_record.get("scan_results")
+    finalized = (
+        run_record.get("status") == "completed"
+        and isinstance(results, dict)
+        and results.get("success") is True
+        and results.get("scan_completed") is True
+        and run_record.get("receipt_persisted") is True
+    )
+    if finalized and len(roots) == 1 and statuses.get(roots[0]) in {"running", "waiting"}:
+        statuses[roots[0]] = "completed"
+    graph["statuses"] = statuses
+    return graph
 
 
 def _surface_key(value: Any) -> str | None:
@@ -139,10 +174,12 @@ def build_scan_quality(
     upgrades a model-declared claim to an observation, and leaves every
     unexercised surface explicitly ``unassessed``.
     """
+    agent_graph = effective_agent_graph(run_record, agent_graph)
     agents = agents_from_graph(agent_graph)
-    agents_incomplete = sum(
-        1 for agent in agents if agent.get("status") in _INCOMPLETE_AGENT_STATUSES
-    )
+    incomplete_agents = [
+        agent for agent in agents if agent.get("status") not in _SUCCESSFUL_AGENT_STATUSES
+    ]
+    agents_incomplete = len(incomplete_agents)
 
     decisions = scope_decisions if isinstance(scope_decisions, dict) else {}
     violations = [v for v in decisions.get("violations") or [] if isinstance(v, dict)]
@@ -215,6 +252,25 @@ def build_scan_quality(
         if verdict == "unassessed" and len(unassessed) < _MAX_UNASSESSED:
             unassessed.append(key)
 
+    assessment_reasons: list[str] = []
+    if not vulnerability_reports:
+        assessment_reasons.append("no_findings_recorded")
+    results = run_record.get("scan_results")
+    if (
+        run_record.get("status") != "completed"
+        or not isinstance(results, dict)
+        or results.get("success") is not True
+        or results.get("scan_completed") is not True
+        or run_record.get("receipt_persisted") is not True
+    ):
+        assessment_reasons.append("finalization_incomplete")
+    if agents_incomplete:
+        assessment_reasons.append("agent_work_incomplete")
+    if unassessed:
+        assessment_reasons.append("surfaces_unassessed")
+    if any(entry.get("outcome") == "needs_follow_up" for entry in coverage_entries):
+        assessment_reasons.append("coverage_needs_follow_up")
+
     web_search_usage = run_record.get("web_search_usage")
     export = run_record.get("evidence_export")
     document: dict[str, Any] = {
@@ -225,6 +281,10 @@ def build_scan_quality(
             "agents_total": len(agents),
             "agents_finished": len(agents) - agents_incomplete,
             "agents_incomplete": agents_incomplete,
+            "agents_incomplete_statuses": {
+                status: sum(1 for agent in incomplete_agents if agent.get("status") == status)
+                for status in sorted({str(agent.get("status")) for agent in incomplete_agents})
+            },
             "findings_filed": len(vulnerability_reports),
             "web_search_calls": len(web_search_usage) if isinstance(web_search_usage, list) else 0,
             "proxy_requests_admitted": sum(admitted_hosts.values()),
@@ -240,11 +300,14 @@ def build_scan_quality(
         },
         "surfaces": surface_rows,
         "unassessed": unassessed,
+        "assessment": "inconclusive" if assessment_reasons else "findings_recorded",
+        "assessment_reasons": assessment_reasons,
         "note": (
             "Counts derive only from observed runtime activity and the "
             "model-declared coverage ledger. 'declared' surfaces are "
             "agent-reported, not machine-verified; 'unassessed' surfaces "
-            "were in scope but have no recorded exercise."
+            "were in scope but have no recorded exercise. Zero findings do "
+            "not demonstrate that the target is secure."
         ),
     }
     if dropped_violations:
@@ -255,4 +318,5 @@ def build_scan_quality(
 __all__ = [
     "SCAN_QUALITY_SCHEMA",
     "build_scan_quality",
+    "effective_agent_graph",
 ]

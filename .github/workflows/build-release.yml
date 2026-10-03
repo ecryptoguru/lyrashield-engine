@@ -68,12 +68,6 @@ jobs:
           fi
           uv run pyinstaller strix.spec --noconfirm
 
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            dist/strix.exe --version
-          else
-            dist/strix --version
-          fi
-
           if [[ "${{ matrix.target }}" == "linux-arm64" ]]; then
             file dist/strix
             file dist/strix | grep -q "ARM aarch64" || {
@@ -87,12 +81,17 @@ jobs:
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cp dist/strix.exe "dist/release/strix-${VERSION}-${{ matrix.target }}.exe"
+            BINARY_PATH="dist/release/strix-${VERSION}-${{ matrix.target }}.exe"
             (cd dist/release && 7z a "strix-${VERSION}-${{ matrix.target }}.zip" "strix-${VERSION}-${{ matrix.target }}.exe")
           else
             cp dist/strix "dist/release/strix-${VERSION}-${{ matrix.target }}"
+            BINARY_PATH="dist/release/strix-${VERSION}-${{ matrix.target }}"
             chmod +x "dist/release/strix-${VERSION}-${{ matrix.target }}"
             tar -C dist/release -czvf "dist/release/strix-${VERSION}-${{ matrix.target }}.tar.gz" "strix-${VERSION}-${{ matrix.target }}"
           fi
+
+          # Smoke the exact renamed binary that is included in the uploaded archive.
+          uv run python scripts/smoke_release.py "$BINARY_PATH" "$VERSION"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

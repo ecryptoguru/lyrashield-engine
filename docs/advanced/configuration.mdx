@@ -6,7 +6,7 @@ description: "Environment variables and config file for LyraShield Engine"
 Configure LyraShield Engine with environment variables or a JSON config file. The `lyrashield` entry point (`lyrashield_adapter`) accepts `LYRASHIELD_*` aliases for every `STRIX_*` setting; either form works, but `LYRASHIELD_*` is the preferred product spelling. The adapter also forces `STRIX_TELEMETRY=0`, sets `STRIX_NO_UPDATE_CHECK=1`, sets `LYRASHIELD_PRODUCT_BOUNDARY=1`, and admits GPT-6 Sol or Luna deployments from OpenAI or Azure/Azure AI.
 
 <Warning>
-Only approved GPT-6 Sol or Luna deployments are accepted as scan routes. The current allow-list is OpenAI, Azure/Azure AI, and the authenticated `chatgpt/` subscription route — admitted for the main model only; delegate and dedupe models must use a metered OpenAI or Azure/Azure AI route. `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION` defaults to enabled for the standalone engine and can be set to `0` to refuse subscription routes outright; the production worker disables it. Older GPT-5 deployments and other provider markers (OpenRouter, Bedrock, Vertex, Novita, local) are not admitted to new scans.
+Only approved GPT-6 Sol or Luna deployments are accepted as scan routes. The current allow-list is OpenAI, Azure/Azure AI, and the authenticated `chatgpt/` subscription route. Deduplication uses the main model when `LYRASHIELD_DEDUPE_MODEL` is unset, so it can also use the main ChatGPT subscription route; an explicit delegate or dedicated dedupe model override must use a metered OpenAI or Azure/Azure AI route. `LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION` defaults to enabled for the standalone engine and can be set to `0` to refuse subscription routes outright; the production worker disables it. Older GPT-5 deployments and other provider markers (OpenRouter, Bedrock, Vertex, Novita, local) are not admitted to new scans.
 
 Parallel Search may be used as an optional `web_search` tool when explicitly enabled with `LYRASHIELD_WEB_SEARCH_ENABLED=1` and `PARALLEL_API_KEY` or `LYRASHIELD_WEB_SEARCH_API_KEY`. It is not a model route and never replaces the GPT-6 main model.
 
@@ -148,8 +148,11 @@ hypothetical repricings of complete receipts, not measured savings.
 Finding deduplication is a cheap, structured classification task. By default it runs on the main model, but you can route it to a smaller/cheaper model without affecting the agents that do the actual testing.
 
 <ParamField path="LYRASHIELD_DEDUPE_MODEL" type="string">
-  Model used to judge whether a candidate finding duplicates an existing report.
-  Falls back to `LYRASHIELD_LLM` when unset. Alias of `STRIX_DEDUPE_MODEL`.
+  Optional model override used to judge whether a candidate finding duplicates
+  an existing report. When unset, deduplication uses `LYRASHIELD_LLM`, including
+  an authenticated ChatGPT subscription route. An explicit override must use a
+  metered OpenAI or Azure/Azure AI GPT-6 route. The legacy environment alias
+  is also supported.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_API_KEY" type="string">
@@ -162,7 +165,7 @@ Finding deduplication is a cheap, structured classification task. By default it 
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_EXTRA_HEADERS" type="string">
-  Optional JSON object of extra HTTP headers sent on every deduplication-model request, e.g. `{"X-Feature-Key":"value"}`. A dedicated dedupe model never inherits `LLM_EXTRA_HEADERS`; set this when its endpoint needs custom headers.
+  Optional JSON object of extra HTTP headers sent on every deduplication-model request, e.g. `{"X-Feature-Key":"value"}`. A dedicated model reuses `LLM_EXTRA_HEADERS` only when it uses the same provider and normalized API endpoint as the main model (scheme, authority, path, query and fragment; a trailing path slash is ignored). A different dedicated endpoint never inherits the main model's headers; set this when that endpoint needs custom headers.
 </ParamField>
 
 <ParamField path="LYRASHIELD_DEDUPE_REASONING_EFFORT" type="string">
@@ -325,13 +328,24 @@ The optional `web_search` tool queries Parallel Search for real-time public secu
   required
 >
   Name of the Docker network the engine attaches sandboxes to. The network
-  must exist, must be created with `docker network create --internal` (deny-by-
-  default egress), and must not be `bridge`, `host`, `default`, or empty. The
-  engine both uses this value itself for container creation and injects it into
+  must be an internal Docker bridge with inter-container communication disabled
+  (`com.docker.network.bridge.enable_icc=false`), and must not be `bridge`,
+  `host`, `default`, or empty. This blocks both external egress and sandbox
+  sibling-to-sibling traffic. The engine verifies the live Docker network
+  settings before admitting a scan. The engine both uses this value itself for container creation and injects it into
   the sandbox environment as `STRIX_DOCKER_SANDBOX_NETWORK` so in-container
   tooling sees the same boundary. Worker deployments must set this variable
   before invoking `lyrashield` and pass it through to any engine-side process.
 </ParamField>
+
+Run `bash scripts/provision-sandbox-network.sh` to create or verify the network.
+If it reports that an existing network lacks the internal bridge or disabled
+ICC settings, first drain and stop all workers and sandbox containers attached
+to that network. Confirm there are no remaining attachments with
+`docker network inspect "$STRIX_DOCKER_SANDBOX_NETWORK"`, remove the old network
+with `docker network rm "$STRIX_DOCKER_SANDBOX_NETWORK"`, then rerun the
+provisioning script. Network removal is an operator-controlled downtime step;
+the script never disconnects or deletes a network that may still be in use.
 
 ### Sandbox capabilities and image pinning
 

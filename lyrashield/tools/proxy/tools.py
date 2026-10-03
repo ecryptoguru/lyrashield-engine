@@ -451,16 +451,7 @@ async def repeat_request(
         if result is None or result.request.raw is None:
             return None
         original = result.request
-        raw_str = result.request.raw.decode("utf-8", errors="replace")
-        components = caido_api.parse_raw_request(raw_str)
-        full_url = caido_api.full_url_from_components(original, components, mods)
-        modified = caido_api.apply_modifications(components, mods, full_url)
-        connection, raw = caido_api.build_raw_request(
-            method=modified["method"],
-            url=modified["url"],
-            headers=modified["headers"],
-            body=modified["body"],
-        )
+        connection, raw = caido_api.build_replay_request(original, mods)
         return await caido_api.replay_send_raw(client, raw=raw, connection=connection)
 
     try:

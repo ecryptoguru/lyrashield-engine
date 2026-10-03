@@ -175,7 +175,7 @@ def test_write_vulnerabilities_makes_formula_like_cells_spreadsheet_safe(
     formula = f'{prefix}1+1,"quoted"'
     reports = [
         _sample_report(
-            id=formula,
+            id="vuln-0001",
             title=f" \t{formula}",
             severity=formula,
             timestamp=f"\n{formula}",
@@ -190,11 +190,11 @@ def test_write_vulnerabilities_makes_formula_like_cells_spreadsheet_safe(
     assert csv_path.read_bytes().startswith(b"\xef\xbb\xbf")
     csv_text = csv_path.read_text(encoding="utf-8-sig")
     row = next(csv.DictReader(io.StringIO(csv_text)))
-    assert row["id"] == f"\u200b{formula}"
+    assert row["id"] == "vuln-0001"
     assert row["title"] == f"\u200b \\t{formula}"
     assert row["severity"] == f"\u200b{formula.upper()}"
     assert row["timestamp"] == f"\u200b\\n{formula}"
-    assert row["file"] == f"vulnerabilities/{formula}.md"
+    assert row["file"] == "vulnerabilities/vuln-0001.md"
 
 
 def test_spreadsheet_safe_cell_escapes_the_complete_c0_range() -> None:

@@ -77,6 +77,10 @@ def test_generate_report_pdf_has_pdf_header(tmp_path: Path) -> None:
     pdf = generate_report_pdf(run_dir)
     assert pdf.startswith(b"%PDF-")
     assert len(pdf) > 1000
+    reader = PdfReader(BytesIO(pdf))
+    assert reader.metadata.title == "LyraShield Security Report"
+    assert reader.metadata.author == "LyraShield"
+    assert "LyraShield" in _pdf_text(pdf)
 
 
 def test_generate_password_is_long_and_random() -> None:

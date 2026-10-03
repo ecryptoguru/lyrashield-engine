@@ -70,6 +70,7 @@
       "Signing in only stores OAuth tokens (``~/.strix/subscription-auth.json``); model",
       "selection stays with ``STRIX_LLM``. A ``chatgpt/<model>`` STRIX_LLM runs on the",
       "from strix.config import load_settings",
+      "from strix.interface.auth_cli import _CallbackServer, _first",
       "        console.print(f\"  Runs use the subscription (STRIX_LLM=[bold]{settings.llm.model}[/]).\")",
       "            \"  [yellow]Note:[/] set [cyan]STRIX_LLM[/] to e.g. [cyan]chatgpt/gpt-6-luna[/] \"",
       "    text.append(\"STRIX_LLM\", style=\"bold white\")",
@@ -203,16 +204,19 @@
       "    \"\"\"Relay a feedback message + email to Strix. No verification is required;"
     ],
     "lyrashield/interface/viewer/report_pdf.py": [
+      "from strix.interface.viewer import report_pdf as _layout",
       "The layout mirrors the Strix cloud pentest report (cover page, executive",
       "the user's own hands. Strix cannot read the delivered report.",
       "    \"\"\"The rounded-square Strix mark drawn inline (no raster asset to ship).\"\"\""
     ],
     "lyrashield/interface/tui/live_view.py": [
-      "from strix.core.paths import runtime_state_dir"
+      "from strix.core.paths import runtime_state_dir",
+      "from strix.interface.tui.history import load_session_history"
     ],
     "lyrashield/interface/viewer/transcript.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from strix.core.paths import run_record_path",
+      "from strix.core.paths import run_record_path, runtime_state_dir",
       "    # Imported lazily so importing strix.interface.viewer does not eagerly pull the TUI."
     ],
     "lyrashield/interface/viewer/frontend/src/components/AddRepositoryDialog.tsx": [
@@ -444,7 +448,7 @@
     ],
     "lyrashield/runtime/backends.py": [
       "        StrixDockerSandboxClient,",
-      "    client = StrixDockerSandboxClient(docker.from_env())",
+      "    client = StrixDockerSandboxClient(transport)",
       "    client.strix_bind_mounts = bind_mounts or []",
       "from strix.runtime.backends import SandboxBackend",
       "from strix.runtime.backends import get_backend as get_upstream_backend"
@@ -453,12 +457,10 @@
       "                    \"STRIX_IMAGE_DIGEST is set. Pre-pull the image with the verified digest \"",
       "                \"(default; set STRIX_SANDBOX_ENABLE_NETWORK_CAPABILITIES=1 to enable)\"",
       "            \"sandbox admission failed: STRIX_DOCKER_SANDBOX_NETWORK is not set. \"",
-      "            cast(\"StrixDockerSandboxSession\", inner).sandbox_network = network",
       "            env.append(f\"STRIX_DOCKER_SANDBOX_NETWORK={network}\")",
       "            env[\"STRIX_DOCKER_SANDBOX_NETWORK\"] = network",
       "            f\"sandbox admission failed: STRIX_DOCKER_SANDBOX_NETWORK={configured!r} \"",
       "            if os.environ.get(\"STRIX_IMAGE_DIGEST\", \"\").strip():",
-      "            inner.__class__ = StrixDockerSandboxSession",
       "        \"STRIX_SANDBOX_CPUS\", str(_DEFAULT_SANDBOX_CPUS_NANO // 1_000_000_000)",
       "        # Strix delta from the SDK body: drop ``entrypoint`` override and",
       "        # Strix injection: host bind mounts (e.g. large repos passed via --mount)",
@@ -488,8 +490,7 @@
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "_SANDBOX_HOST_GATEWAY_ENV = \"STRIX_SANDBOX_ALLOW_HOST_GATEWAY\"",
       "_SANDBOX_NETWORK_ENV = \"STRIX_DOCKER_SANDBOX_NETWORK\"",
-      "class StrixDockerSandboxClient(DockerSandboxClient):",
-      "class StrixDockerSandboxSession(DockerSandboxSession):"
+      "class StrixDockerSandboxClient(DockerSandboxClient):"
     ],
     "lyrashield/runtime/local_dir_staging.py": [
       "_STAGING_PREFIX = \"strix-localdir-\""
@@ -531,6 +532,7 @@
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "# drowned in their internals when STRIX_DEBUG=1.",
       "_AGENT_ID: ContextVar[str | None] = ContextVar(\"strix_agent_id\", default=None)",
+      "_TRACKED_ROOTS: tuple[str, ...] = (\"strix\", \"openai.agents\", \"lyrashield\")",
       "_HANDLER_TAG = \"_strix_scan_handler\"",
       "_SCAN_ID: ContextVar[str | None] = ContextVar(\"strix_scan_id\", default=None)",
       "_TRACKED_ROOTS: tuple[str, ...] = (\"strix\", \"openai.agents\")",
@@ -553,6 +555,10 @@
     ],
     "lyrashield/tools/agents_graph/tools.py": [
       "from strix.skills import validate_requested_skills"
+    ],
+    "lyrashield/tools/notes/tools.py": [
+      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
+      "from strix.tools.nullish import clean_optional"
     ],
     "lyrashield/tools/output_store.py": [
       "WORKSPACE_SPILL_DIR = \"/workspace/.strix/tool-output\"",
@@ -592,7 +598,6 @@
       "  Docker image to use for the sandbox container. Alias of `STRIX_IMAGE`. In",
       "  Enable automatic history compaction. Alias of `STRIX_CONTEXT_AUTO_COMPACT`.",
       "  Enable implicit prompt caching. Defaults to on. Alias of `STRIX_PROMPT_CACHE`.",
-      "  Falls back to `LYRASHIELD_LLM` when unset. Alias of `STRIX_DEDUPE_MODEL`.",
       "  Maximum results returned per search. Alias of `STRIX_WEB_SEARCH_MAX_RESULTS`.",
       "  Per-tool-output line cap. Alias of `STRIX_TOOL_OUTPUT_MAX_LINES`.",
       "  Per-tool-output token cap. Alias of `STRIX_TOOL_OUTPUT_MAX_TOKENS`.",
@@ -632,7 +637,9 @@
       "| `STRIX_SANDBOX_MEM_LIMIT`                    | `2g`    | Container memory cap. Opt-out token restores docker's unbounded default.                                                                                                                                                    |",
       "| `STRIX_SANDBOX_PIDS_LIMIT`                   | `512`   | Process-count cap (fork-bomb bound).                                                                                                                                                                                          |",
       "| `STRIX_SANDBOX_SHM_SIZE`                     | `512m`  | `/dev/shm` size (docker's 64m default OOMs Chromium/headless tools).                                                                                                                                                          |",
-      "  Controls `chatgpt/gpt-6-*` subscription-backed scans for the main model. Enabled by default; set to `0`/`false`/`no` to disable. When enabled, `lyrashield auth login chatgpt` is available and the scan is recorded with `auth_mode: \"subscription\"` and `llm_usage.cost: 0` (ancillary charges such as paid web search remain metered). Also accepted: `STRIX_ALLOW_CHATGPT_SUBSCRIPTION`."
+      "  Controls `chatgpt/gpt-6-*` subscription-backed scans for the main model. Enabled by default; set to `0`/`false`/`no` to disable. When enabled, `lyrashield auth login chatgpt` is available and the scan is recorded with `auth_mode: \"subscription\"` and `llm_usage.cost: 0` (ancillary charges such as paid web search remain metered). Also accepted: `STRIX_ALLOW_CHATGPT_SUBSCRIPTION`.",
+      "`docker network inspect \"$STRIX_DOCKER_SANDBOX_NETWORK\"`, remove the old network",
+      "with `docker network rm \"$STRIX_DOCKER_SANDBOX_NETWORK\"`, then rerun the"
     ],
     "docs/advanced/skills.mdx": [
       "- Do not modify `strix/skills/**` directly; add or override skills in `lyrashield/skills/` instead.",
@@ -739,9 +746,6 @@
     ],
     "lyrashield/artifacts/quality.py": [
       "from strix.report.coverage import agents_from_graph"
-    ],
-    "docs/llm-providers/overview.mdx": [
-      "Subscription notes: the `chatgpt/` route is enabled by default in the standalone engine (`LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` disables it), restricted to `STRIX_LLM`/`LYRASHIELD_LLM` \u2014 delegate and dedupe models must use a metered OpenAI or Azure/Azure AI route \u2014 and records `auth_mode: \"subscription\"` with `llm_usage.cost: 0`. The production worker disables subscription routing."
     ],
     "docs/superpowers/plans/2026-09-25-deep-code-review.md": [
       "`build_env()` copies the entire parent environment and overlays only provider-specific variables. Existing generic variables have higher alias priority. Existing `STRIX_LLM` also outranks the selected `LYRASHIELD_LLM`. The UI can consequently name one provider while the subprocess uses another model, endpoint or key.",

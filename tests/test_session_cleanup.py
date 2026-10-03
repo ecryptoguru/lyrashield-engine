@@ -24,8 +24,12 @@ def _clean_tracking(monkeypatch: pytest.MonkeyPatch):
     # (pytest-asyncio creates a loop per test) fresh locks and clean maps.
     original_cache_lock = session_manager._CACHE_LOCK
     original_creation_lock = session_manager._CREATION_LOCK
+    original_pending_deletes = dict(session_manager._PENDING_SANDBOX_DELETES)
+    original_pending_steps = dict(session_manager._PENDING_CLEANUP_STEPS)
     session_manager._SESSION_CACHE.clear()
     session_manager._CLEANUP_RECEIPTS.clear()
+    session_manager._PENDING_SANDBOX_DELETES.clear()
+    session_manager._PENDING_CLEANUP_STEPS.clear()
     session_manager._CACHE_LOCK = asyncio.Lock()
     session_manager._CREATION_LOCK = asyncio.Lock()
     monkeypatch.delenv("STRIX_TARGET_RELAY_URL", raising=False)
@@ -33,6 +37,10 @@ def _clean_tracking(monkeypatch: pytest.MonkeyPatch):
     yield
     session_manager._SESSION_CACHE.clear()
     session_manager._CLEANUP_RECEIPTS.clear()
+    session_manager._PENDING_SANDBOX_DELETES.clear()
+    session_manager._PENDING_SANDBOX_DELETES.update(original_pending_deletes)
+    session_manager._PENDING_CLEANUP_STEPS.clear()
+    session_manager._PENDING_CLEANUP_STEPS.update(original_pending_steps)
     session_manager._CACHE_LOCK = original_cache_lock
     session_manager._CREATION_LOCK = original_creation_lock
 
@@ -122,6 +130,157 @@ async def test_cleanup_reports_sandbox_delete_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_cleanup_keeps_delete_owned_for_retry() -> None:
+    """Cancelling the waiter must not cancel or duplicate an in-flight delete."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    delete_calls = 0
+
+    async def delete(_session: Any) -> None:
+        nonlocal delete_calls
+        delete_calls += 1
+        started.set()
+        await release.wait()
+
+    scan_id = "cleanup-cancelled"
+    bundle = {
+        "client": SimpleNamespace(delete=delete, docker_client=None),
+        "session": object(),
+        "caido_client": None,
+    }
+    session_manager._SESSION_CACHE[scan_id] = bundle
+
+    cleanup_task = asyncio.create_task(session_manager.cleanup(scan_id))
+    await started.wait()
+    cleanup_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup_task
+
+    assert session_manager._SESSION_CACHE[scan_id] is bundle
+    assert session_manager._CLEANUP_RECEIPTS[scan_id]["status"] == "failed"
+    assert not session_manager._CREATION_LOCK.locked()
+
+    release.set()
+    assert await session_manager.cleanup(scan_id) == session_manager.CLEANUP_REMOVED
+    assert delete_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_timed_out_cleanup_keeps_delete_owned_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow delete releases the lifecycle lock and can be joined on retry."""
+    monkeypatch.setattr(session_manager, "_CLEANUP_STEP_TIMEOUT", 0.01)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    delete_calls = 0
+
+    async def delete(_session: Any) -> None:
+        nonlocal delete_calls
+        delete_calls += 1
+        started.set()
+        await release.wait()
+
+    scan_id = "cleanup-timeout"
+    session_manager._SESSION_CACHE[scan_id] = {
+        "client": SimpleNamespace(delete=delete, docker_client=None),
+        "session": object(),
+        "caido_client": None,
+    }
+    task = asyncio.create_task(session_manager.cleanup(scan_id))
+    await started.wait()
+    try:
+        done, _ = await asyncio.wait({task}, timeout=0.1)
+        assert task in done, "cleanup exceeded its configured bound"
+        assert task.result() == session_manager.CLEANUP_FAILED
+        assert session_manager._CLEANUP_RECEIPTS[scan_id]["status"] == "failed"
+        assert not session_manager._CREATION_LOCK.locked()
+        release.set()
+        assert await session_manager.cleanup(scan_id) == session_manager.CLEANUP_REMOVED
+        assert delete_calls == 1
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_caido_close_records_cleanup_failure() -> None:
+    """Cancellation during transport close keeps the bundle visibly owned."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    close_calls = 0
+    client = SimpleNamespace(delete=AsyncMock(), docker_client=None)
+
+    async def close() -> None:
+        nonlocal close_calls
+        close_calls += 1
+        if close_calls == 1:
+            started.set()
+            await release.wait()
+
+    scan_id = "cleanup-caido-cancelled"
+    bundle = {
+        "client": client,
+        "session": object(),
+        "caido_client": SimpleNamespace(aclose=close),
+    }
+    session_manager._SESSION_CACHE[scan_id] = bundle
+    task = asyncio.create_task(session_manager.cleanup(scan_id))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert session_manager._SESSION_CACHE[scan_id] is bundle
+    assert session_manager._CLEANUP_RECEIPTS[scan_id]["status"] == "failed"
+    client.delete.assert_not_awaited()
+    release.set()
+    assert await session_manager.cleanup(scan_id) == session_manager.CLEANUP_REMOVED
+
+
+@pytest.mark.asyncio
+async def test_bounded_cleanup_returns_when_backend_resists_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancellation-resistant SDK call cannot turn a cleanup timeout into a hang."""
+    monkeypatch.setattr(session_manager, "_CLEANUP_STEP_TIMEOUT", 0.01)
+    release = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def cancellation_resistant_delete() -> None:
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+        completed.set()
+
+    task = asyncio.create_task(
+        session_manager._bounded_cleanup_step(
+            cancellation_resistant_delete(), scan_id="resistant", step="sandbox delete"
+        )
+    )
+    try:
+        done, _ = await asyncio.wait({task}, timeout=0.1)
+        assert task in done, "bounded cleanup hung after the backend resisted cancellation"
+        with pytest.raises(TimeoutError):
+            task.result()
+        assert not completed.is_set()
+        assert session_manager._get_pending_cleanup_step("resistant", "sandbox delete") is not None
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        pending = session_manager._get_pending_cleanup_step("resistant", "sandbox delete")
+        if pending is not None:
+            await pending
+    assert completed.is_set()
+    await session_manager._bounded_cleanup_step(
+        cancellation_resistant_delete(), scan_id="resistant", step="sandbox delete"
+    )
+    assert session_manager._get_pending_cleanup_step("resistant", "sandbox delete") is None
+
+
+@pytest.mark.asyncio
 async def test_cancelled_startup_deletes_created_sandbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -139,6 +298,28 @@ async def test_cancelled_startup_deletes_created_sandbox(
     mocks.rmtree.assert_any_call("/mock/policy", ignore_errors=True)
     mocks.rmtree.assert_any_call("/mock/staging", ignore_errors=True)
     assert "cancelled-startup" not in session_manager._SESSION_CACHE
+
+
+@pytest.mark.asyncio
+async def test_caido_client_created_during_bootstrap_is_closed_once_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caido_client = SimpleNamespace(aclose=AsyncMock())
+
+    async def fail_after_client_creation(
+        *_args: Any,
+        on_client_created: Any,
+        **_kwargs: Any,
+    ) -> None:
+        on_client_created(caido_client)
+        raise RuntimeError("connect failed after client creation")
+
+    mocks = _stub_startup(monkeypatch, bootstrap=fail_after_client_creation, environment={})
+    with pytest.raises(RuntimeError, match="connect failed after client creation"):
+        await session_manager.create_or_reuse("caido-client-owned", image="img", local_sources=[])
+
+    caido_client.aclose.assert_awaited_once_with()
+    mocks.client.delete.assert_awaited_once_with(mocks.session)
 
 
 @pytest.mark.asyncio

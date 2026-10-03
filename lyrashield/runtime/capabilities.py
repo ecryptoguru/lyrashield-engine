@@ -139,7 +139,8 @@ def _probe_network_policy(
         )
     try:
         network = client.docker_client.networks.get(configured)
-        internal = bool(cast("dict[str, Any]", getattr(network, "attrs", {}) or {}).get("Internal"))
+        net_attrs = cast("dict[str, Any]", getattr(network, "attrs", {}) or {})
+        internal = bool(net_attrs.get("Internal"))
     except Exception:  # introspection failure means unprobed
         return _cap(
             STATUS_UNPROBED,
@@ -153,9 +154,20 @@ def _probe_network_policy(
             f"network {configured!r} is not internal",
             **evidence,
         )
+    isolated = (
+        net_attrs.get("Driver") == "bridge"
+        and (net_attrs.get("Options") or {}).get("com.docker.network.bridge.enable_icc") == "false"
+    )
+    evidence["inter_container_isolation"] = isolated
+    if not isolated:
+        return _cap(
+            STATUS_ABSENT,
+            "sandbox network lacks verified inter-container isolation",
+            **evidence,
+        )
     return _cap(
         STATUS_SUPPORTED,
-        "container is attached exclusively to an internal (deny-by-default) network",
+        "container is attached exclusively to an internal bridge with ICC disabled",
         **evidence,
     )
 

@@ -399,8 +399,8 @@ class ReportState:
         agent_name: str | None = None,
         model: str | None = None,
         response_id: str | None = None,
-    ) -> None:
-        """Record SDK-native token usage for one completed model run/cycle."""
+    ) -> bool:
+        """Record SDK-native token usage and return whether it was persisted."""
         self._llm_usage.record(
             agent_id=agent_id,
             agent_name=agent_name,
@@ -412,7 +412,7 @@ class ReportState:
         )
         self._turn_count += 1
         self._set_phase("running")
-        self.save_run_data()
+        return self.save_run_data()
 
     def capture_provider_usage(self, response: Any) -> None:
         """Capture raw numeric buckets before the SDK fills absent fields with zero."""
@@ -677,11 +677,14 @@ class ReportState:
         self,
         reports: list[dict[str, Any]],
         saved_vuln_ids: set[str],
+        *,
+        require_sarif: bool = False,
     ) -> bool:
         return _project_report_projections(
             self,
             reports,
             saved_vuln_ids,
+            require_sarif=require_sarif,
             write_vulnerabilities=write_vulnerabilities,
             write_sarif=write_sarif,
             tool_version=_strix_version(),

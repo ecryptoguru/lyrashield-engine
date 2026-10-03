@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from litellm.exceptions import BadRequestError, ContextWindowExceededError, RateLimitError
-from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+from openai.types.responses import (
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
+)
 
 from lyrashield.lifecycle import compaction
+from lyrashield.lifecycle.sessions import replace_session_items
 from lyrashield.policy.settings import ContextSettings
 
 
@@ -214,6 +220,83 @@ async def test_maybe_compact_rewrites_and_keeps_pairs(monkeypatch: pytest.Monkey
     assert "SUMMARY BODY" in items[0]["content"]
     assert len(items) < len(_turns(12))
     assert not _has_orphan_tool_output(items)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        ResponseOutputMessage(
+            id="msg-incomplete",
+            content=[
+                ResponseOutputText(annotations=[], text="partial summary", type="output_text")
+            ],
+            role="assistant",
+            status="incomplete",
+            type="message",
+        ),
+        ResponseOutputMessage(
+            id="msg-refused",
+            content=[
+                ResponseOutputText(annotations=[], text="partial summary", type="output_text"),
+                ResponseOutputRefusal(type="refusal", refusal="summary refused"),
+            ],
+            role="assistant",
+            status="completed",
+            type="message",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_maybe_compact_preserves_history_for_incomplete_or_refused_summary(
+    monkeypatch: pytest.MonkeyPatch, message: ResponseOutputMessage
+) -> None:
+    _patch_budget(monkeypatch, keep_tokens=30, window=4_000)
+    session = FakeSession(_turns(12))
+    before = await session.get_items()
+
+    class FakeModel:
+        async def get_response(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(output=[message], usage=None, response_id="summary-response")
+
+    class FakeProvider:
+        def get_model(self, _model_name: str | None) -> FakeModel:
+            return FakeModel()
+
+    assert (
+        await compaction.maybe_compact(
+            session, model="m", force=True, model_provider=FakeProvider()
+        )
+        is False
+    )
+    assert await session.get_items() == before
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_skips_same_length_history_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_budget(monkeypatch, keep_tokens=30, window=4_000)
+    session = FakeSession(_turns(12))
+    summary_started = asyncio.Event()
+    release_summary = asyncio.Event()
+
+    async def _delayed_summary(*_args: Any, **_kwargs: Any) -> str:
+        summary_started.set()
+        await release_summary.wait()
+        return "SUMMARY"
+
+    monkeypatch.setattr(compaction, "_summarize", _delayed_summary)
+    task = asyncio.create_task(compaction.maybe_compact(session, model="m", force=True))
+    await summary_started.wait()
+
+    current = await session.get_items()
+    current[0] = _user("same length replacement")
+    assert await replace_session_items(session, current)
+    changed_items = await session.get_items()
+
+    release_summary.set()
+    assert await task is False
+    assert await session.get_items() == changed_items
 
 
 @pytest.mark.asyncio
