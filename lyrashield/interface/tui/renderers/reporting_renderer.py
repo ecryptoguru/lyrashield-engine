@@ -1,13 +1,12 @@
-from functools import cache
 from typing import Any, ClassVar
 
-from pygments.styles import get_style_by_name
 from rich.text import Text
 from textual.widgets import Static
 
 from lyrashield.artifacts.writer import parse_fenced_code, resolve_lexer
 
 from .base_renderer import BaseToolRenderer
+from .pygments_color import token_color
 from .registry import register_tool_renderer
 
 
@@ -23,12 +22,6 @@ def _coerce_list_of_dicts(value: Any) -> list[dict[str, Any]]:
     return []
 
 
-@cache
-def _get_style_colors() -> dict[Any, str]:
-    style = get_style_by_name("native")
-    return {token: f"#{style_def['color']}" for token, style_def in style if style_def["color"]}
-
-
 FIELD_STYLE = "bold #4ade80"
 DIM_STYLE = "dim"
 FILE_STYLE = "bold #60a5fa"
@@ -38,28 +31,33 @@ CODE_STYLE = "#e2e8f0"
 BEFORE_STYLE = "#ef4444"
 AFTER_STYLE = "#22c55e"
 
+_SEVERITY_COLORS = {
+    "critical": "#dc2626",
+    "high": "#ea580c",
+    "medium": "#d97706",
+    "low": "#65a30d",
+    "info": "#0284c7",
+}
+
+
+def _cvss_color(score: float) -> str:
+    if score >= 9.0:
+        return "#dc2626"
+    if score >= 7.0:
+        return "#ea580c"
+    if score >= 4.0:
+        return "#d97706"
+    if score >= 0.1:
+        return "#65a30d"
+    return "#6b7280"
+
 
 @register_tool_renderer
 class CreateVulnerabilityReportRenderer(BaseToolRenderer):
     tool_name: ClassVar[str] = "create_vulnerability_report"
     css_classes: ClassVar[list[str]] = ["tool-call", "reporting-tool"]
 
-    SEVERITY_COLORS: ClassVar[dict[str, str]] = {
-        "critical": "#dc2626",
-        "high": "#ea580c",
-        "medium": "#d97706",
-        "low": "#65a30d",
-        "info": "#0284c7",
-    }
-
-    @classmethod
-    def _get_token_color(cls, token_type: Any) -> str | None:
-        colors = _get_style_colors()
-        while token_type:
-            if token_type in colors:
-                return colors[token_type]
-            token_type = token_type.parent
-        return None
+    SEVERITY_COLORS: ClassVar[dict[str, str]] = _SEVERITY_COLORS
 
     @classmethod
     def _highlight_code(cls, code: str, language: str | None) -> Text:
@@ -69,22 +67,10 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
         for token_type, token_value in lexer.get_tokens(code):
             if not token_value:
                 continue
-            color = cls._get_token_color(token_type)
+            color = token_color(token_type)
             text.append(token_value, style=color)
 
         return text
-
-    @classmethod
-    def _get_cvss_color(cls, cvss_score: float) -> str:
-        if cvss_score >= 9.0:
-            return "#dc2626"
-        if cvss_score >= 7.0:
-            return "#ea580c"
-        if cvss_score >= 4.0:
-            return "#d97706"
-        if cvss_score >= 0.1:
-            return "#65a30d"
-        return "#6b7280"
 
     @classmethod
     def render(cls, tool_data: dict[str, Any]) -> Static:
@@ -132,7 +118,7 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
         if cvss_score is not None:
             text.append("\n\n")
             text.append("CVSS Score: ", style=FIELD_STYLE)
-            cvss_color = cls._get_cvss_color(cvss_score)
+            cvss_color = _cvss_color(cvss_score)
             text.append(str(cvss_score), style=f"bold {cvss_color}")
 
         if target:
@@ -265,25 +251,7 @@ class CreateDependencyReportRenderer(BaseToolRenderer):
     tool_name: ClassVar[str] = "create_dependency_report"
     css_classes: ClassVar[list[str]] = ["tool-call", "reporting-tool"]
 
-    SEVERITY_COLORS: ClassVar[dict[str, str]] = {
-        "critical": "#dc2626",
-        "high": "#ea580c",
-        "medium": "#d97706",
-        "low": "#65a30d",
-        "info": "#0284c7",
-    }
-
-    @classmethod
-    def _get_cvss_color(cls, cvss_score: float) -> str:
-        if cvss_score >= 9.0:
-            return "#dc2626"
-        if cvss_score >= 7.0:
-            return "#ea580c"
-        if cvss_score >= 4.0:
-            return "#d97706"
-        if cvss_score >= 0.1:
-            return "#65a30d"
-        return "#6b7280"
+    SEVERITY_COLORS: ClassVar[dict[str, str]] = _SEVERITY_COLORS
 
     @classmethod
     def _render_unsuccessful(cls, args: dict[str, Any], result: dict[str, Any]) -> Static:
@@ -367,7 +335,7 @@ class CreateDependencyReportRenderer(BaseToolRenderer):
             text.append("Advisory CVSS: ", style=FIELD_STYLE)
             try:
                 score = float(advisory_cvss)
-                text.append(str(score), style=f"bold {cls._get_cvss_color(score)}")
+                text.append(str(score), style=f"bold {_cvss_color(score)}")
             except (TypeError, ValueError):
                 text.append(str(advisory_cvss), style=DIM_STYLE)
 

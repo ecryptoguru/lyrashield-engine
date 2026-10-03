@@ -1,7 +1,9 @@
 import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
+from zipfile import ZipFile
 
 import yaml
 
@@ -118,6 +120,90 @@ def test_built_source_archive_excludes_test_and_frontend_source(tmp_path: Path) 
 
     forbidden = ("/tests/", "/interface/viewer/frontend/", "/.env", "/.worktrees/", "/desktop/")
     assert not [name for name in names if any(marker in name for marker in forbidden)]
+    assert any(name.endswith("/strix/interface/tui/cmd/strix-tui/main.go") for name in names)
+
+
+def test_wheel_excludes_go_sources_and_installs_from_base_dependencies(tmp_path: Path) -> None:
+    uv = shutil.which("uv")
+    assert uv is not None
+    dist_dir = tmp_path / "dist"
+    subprocess.run(  # noqa: S603 - fixed local build command
+        [uv, "build", "--wheel", "--out-dir", str(dist_dir)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheel = next(dist_dir.glob("*.whl"))
+
+    with ZipFile(wheel) as package:
+        names = package.namelist()
+        go_sources = [
+            name
+            for name in names
+            if name.startswith("strix/interface/tui/")
+            and name.endswith((".go", "go.mod", "go.sum"))
+        ]
+        assert not go_sources
+        assert "strix/interface/tui/history.py" in names
+        metadata_path = next(name for name in names if name.endswith(".dist-info/METADATA"))
+        metadata = package.read(metadata_path).decode()
+        assert "Requires-Dist: mcp<2,>=1.28.1" in metadata
+        assert "Requires-Dist: pypdf>=6.19.0; extra == 'viewer'" in metadata
+
+    environment = tmp_path / "base-install"
+    subprocess.run(  # noqa: S603 - fixed local venv creation
+        [uv, "venv", "--python", sys.executable, str(environment)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    python = environment / "bin" / "python"
+    if sys.platform == "win32":
+        python = environment / "Scripts" / "python.exe"
+    subprocess.run(  # noqa: S603 - install the freshly built local wheel in a clean venv
+        [uv, "pip", "install", "--python", str(python), str(wheel)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    cli = environment / "bin" / "lyrashield"
+    if sys.platform == "win32":
+        cli = environment / "Scripts" / "lyrashield.exe"
+    subprocess.run(  # noqa: S603 - exercise the installed product CLI without dev extras
+        [str(cli), "--help"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    subprocess.run(  # noqa: S603 - install the same wheel with its declared optional extra
+        [uv, "pip", "install", "--python", str(python), f"{wheel}[viewer]"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    subprocess.run(  # noqa: S603 - exercise the optional PDF parser and writer end to end
+        [
+            str(python),
+            "-c",
+            "from io import BytesIO; from reportlab.pdfgen import canvas; "
+            "from pypdf import PdfReader; stream = BytesIO(); "
+            "writer = canvas.Canvas(stream); writer.drawString(10, 10, 'viewer'); "
+            "writer.showPage(); writer.save(); stream.seek(0); "
+            "assert len(PdfReader(stream).pages) == 1",
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
 
 
 def test_product_adapter_can_run_as_a_script() -> None:

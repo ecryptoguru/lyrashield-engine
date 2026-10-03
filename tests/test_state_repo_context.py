@@ -21,6 +21,16 @@ def test_parse_repo_full_name_handles_common_forms() -> None:
     assert _parse_repo_full_name("nothost") is None
 
 
+def test_parse_repo_full_name_ignores_credentials_query_and_fragment() -> None:
+    assert (
+        _parse_repo_full_name(
+            "https://user:opaque-password@github.com/acme/widget.git"
+            "?access_token=opaque-token#private-fragment"
+        )
+        == "acme/widget"
+    )
+
+
 def test_repository_context_none_for_non_repository_targets() -> None:
     state = ReportState(run_name="t")
     state.run_record["targets_info"] = [

@@ -1,11 +1,11 @@
 import re
-from functools import cache
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from pygments.lexers import get_lexer_by_name, guess_lexer
-from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
 from rich.text import Text
+
+from .pygments_color import token_color
 
 
 _BLANK_LINE_RUNS = re.compile(r"\n\s*\n")
@@ -21,21 +21,6 @@ _HEADER_STYLES = [
 ]
 
 
-@cache
-def _get_style_colors() -> dict[Any, str]:
-    style = get_style_by_name("native")
-    return {token: f"#{style_def['color']}" for token, style_def in style if style_def["color"]}
-
-
-def _get_token_color(token_type: Any) -> str | None:
-    colors = _get_style_colors()
-    while token_type:
-        if token_type in colors:
-            return colors[token_type]
-        token_type = token_type.parent
-    return None
-
-
 def _highlight_code(code: str, language: str | None = None) -> Text:
     text = Text()
 
@@ -48,7 +33,7 @@ def _highlight_code(code: str, language: str | None = None) -> Text:
     for token_type, token_value in lexer.get_tokens(code):
         if not token_value:
             continue
-        color = _get_token_color(token_type)
+        color = token_color(token_type)
         text.append(token_value, style=color)
 
     return text

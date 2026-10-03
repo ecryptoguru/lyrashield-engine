@@ -18,11 +18,15 @@ import os
 import secrets
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from lyrashield.utils.redaction import redact_text, redact_url
 
 
 if TYPE_CHECKING:
@@ -78,6 +82,17 @@ def keyring_get(service: str, key: str) -> str | None:
         raise ResultsStoreKeyError("Local keychain is unavailable") from exc
 
 
+def keyring_delete(service: str, key: str) -> bool:
+    """Delete a staged keychain item, returning false when cleanup is unavailable."""
+    try:
+        import keyring  # noqa: PLC0415 - load optional OS keychain backend lazily
+
+        keyring.delete_password(service, key)
+    except Exception:  # noqa: BLE001 - backends expose platform-specific failure types
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Envelope encryption: a single DEK stored in the keychain wraps row payloads.
 # ---------------------------------------------------------------------------
@@ -114,6 +129,28 @@ def _decrypt(ciphertext: str) -> str:
         return _fernet().decrypt(ciphertext.encode()).decode()
     except InvalidToken as exc:
         raise ResultsStoreKeyError("Local results cannot be decrypted with this key") from exc
+
+
+def _encode_record(cipher: Fernet, payload: dict[str, Any], metadata: dict[str, str]) -> str:
+    record = json.dumps({"payload": payload, "metadata": metadata}, separators=(",", ":"))
+    return "v2:" + cipher.encrypt(record.encode()).decode()
+
+
+def _decode_record(encrypted: str) -> tuple[dict[str, Any], dict[str, str]]:
+    try:
+        versioned = encrypted.startswith("v2:")
+        record = json.loads(_decrypt(encrypted[3:] if versioned else encrypted))
+        payload = record["payload"] if versioned else record
+        metadata = record["metadata"] if versioned else {}
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ResultsStoreKeyError("Local results payload is malformed") from exc
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(metadata, dict)
+        or any(not isinstance(value, str) for value in metadata.values())
+    ):
+        raise ResultsStoreKeyError("Local results payload is malformed")
+    return payload, metadata
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +214,16 @@ class ResultsStore:
             self.path.chmod(0o600)
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         # check_same_thread=False so the TUI's async loop can share the handle.
-        return sqlite3.connect(str(self.path), check_same_thread=False)
+        conn = sqlite3.connect(str(self.path), check_same_thread=False)
+        try:
+            conn.execute("PRAGMA secure_delete = ON")
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
@@ -209,6 +253,45 @@ class ResultsStore:
                 conn.execute("CREATE INDEX idx_findings_run ON findings(run_id)")
                 conn.execute("PRAGMA user_version = 2")
             conn.commit()
+        try:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._migrate_metadata(conn)
+        except ResultsStoreKeyError as exc:
+            logger.warning(
+                "Local results metadata migration deferred (%s); no rows were changed in this "
+                "attempt and unmigrated target/title data remains unredacted. The migration "
+                "will retry on next startup after keychain access is restored.",
+                exc,
+            )
+
+    @staticmethod
+    def _migrate_metadata(conn: sqlite3.Connection) -> None:
+        for run_id, target, encrypted in conn.execute(
+            "SELECT run_id, target, encrypted_payload FROM runs"
+        ).fetchall():
+            redacted_target = redact_text(redact_url(target))
+            if redacted_target == target:
+                continue
+            payload, metadata = _decode_record(encrypted)
+            metadata.setdefault("target", target)
+            conn.execute(
+                "UPDATE runs SET target = ?, encrypted_payload = ? WHERE run_id = ?",
+                (redacted_target, _encode_record(_fernet(), payload, metadata), run_id),
+            )
+
+        for row_id, title, encrypted in conn.execute(
+            "SELECT rowid, title, encrypted_payload FROM findings"
+        ).fetchall():
+            redacted_title = redact_text(title)
+            if redacted_title == title:
+                continue
+            payload, metadata = _decode_record(encrypted)
+            metadata.setdefault("title", title)
+            conn.execute(
+                "UPDATE findings SET title = ?, encrypted_payload = ? WHERE rowid = ?",
+                (redacted_title, _encode_record(_fernet(), payload, metadata), row_id),
+            )
 
     @staticmethod
     def _has_encrypted_rows(conn: sqlite3.Connection) -> bool:
@@ -225,16 +308,14 @@ class ResultsStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             cipher = _fernet(allow_create=not self._has_encrypted_rows(conn))
-            payload = cipher.encrypt(
-                json.dumps(run.payload, separators=(",", ":")).encode()
-            ).decode()
+            payload = _encode_record(cipher, run.payload, {"target": run.target})
             conn.execute(
                 "INSERT OR REPLACE INTO runs "
                 "(run_id, target, scan_mode, provider, created_at, status, encrypted_payload) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     run.run_id,
-                    run.target,
+                    redact_text(redact_url(run.target)),
                     run.scan_mode,
                     run.provider,
                     run.created_at,
@@ -246,9 +327,7 @@ class ResultsStore:
             for finding in findings:
                 if finding.run_id != run.run_id:
                     raise ValueError("Finding belongs to a different run")
-                encrypted = cipher.encrypt(
-                    json.dumps(finding.payload, separators=(",", ":")).encode()
-                ).decode()
+                encrypted = _encode_record(cipher, finding.payload, {"title": finding.title})
                 conn.execute(
                     "INSERT OR REPLACE INTO findings "
                     "(finding_id, run_id, severity, title, encrypted_payload) "
@@ -257,7 +336,7 @@ class ResultsStore:
                         finding.finding_id,
                         finding.run_id,
                         finding.severity,
-                        finding.title,
+                        redact_text(finding.title),
                         encrypted,
                     ),
                 )
@@ -274,9 +353,10 @@ class ResultsStore:
     def save_finding(self, finding: FindingRecord) -> None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            payload = _encrypt(
-                json.dumps(finding.payload, separators=(",", ":")),
-                allow_create=not self._has_encrypted_rows(conn),
+            payload = _encode_record(
+                _fernet(allow_create=not self._has_encrypted_rows(conn)),
+                finding.payload,
+                {"title": finding.title},
             )
             conn.execute(
                 "INSERT OR REPLACE INTO findings "
@@ -286,7 +366,7 @@ class ResultsStore:
                     finding.finding_id,
                     finding.run_id,
                     finding.severity,
-                    finding.title,
+                    redact_text(finding.title),
                     payload,
                 ),
             )
@@ -330,10 +410,10 @@ class ResultsStore:
     @staticmethod
     def _row_to_run(row: tuple[Any, ...]) -> RunRecord:
         run_id, target, scan_mode, provider, created_at, status, encrypted = row
-        payload: dict[str, Any] = json.loads(_decrypt(encrypted))
+        payload, metadata = _decode_record(encrypted)
         return RunRecord(
             run_id=run_id,
-            target=target,
+            target=metadata.get("target", target),
             scan_mode=scan_mode,
             provider=provider,
             created_at=created_at,
@@ -344,12 +424,12 @@ class ResultsStore:
     @staticmethod
     def _row_to_finding(row: tuple[Any, ...]) -> FindingRecord:
         finding_id, run_id, severity, title, encrypted = row
-        payload: dict[str, Any] = json.loads(_decrypt(encrypted))
+        payload, metadata = _decode_record(encrypted)
         return FindingRecord(
             finding_id=finding_id,
             run_id=run_id,
             severity=severity,
-            title=title,
+            title=metadata.get("title", title),
             payload=payload,
         )
 

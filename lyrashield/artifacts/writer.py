@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import logging
+import os
 import re
 import tempfile
 from datetime import UTC, datetime
@@ -41,6 +42,26 @@ _SPREADSHEET_CONTROL_ESCAPES = str.maketrans(
         "\f": r"\f",
     }
 )
+
+_REVISION_ARTIFACT_FILES = (
+    "run.json",
+    "resume.json",
+    "vulnerabilities.json",
+    "vulnerabilities.csv",
+    "findings.sarif",
+    "penetration_test_report.md",
+    "coverage.json",
+    "threat_model.json",
+    "http_exchanges.json",
+)
+FINDING_ID_RE = re.compile(r"vuln-([0-9]{4,})")
+
+
+def validate_finding_id(value: object) -> str:
+    """Return a canonical finding ID or reject it before it reaches a path."""
+    if not isinstance(value, str) or FINDING_ID_RE.fullmatch(value) is None:
+        raise ValueError("finding ID must be canonical finding ID vuln-<4+ digits>")
+    return value
 
 
 def _spreadsheet_safe_cell(value: object) -> str:
@@ -146,6 +167,56 @@ def write_run_record(run_dir: Path, run_record: dict[str, Any]) -> None:
     )
 
 
+def snapshot_revision_artifacts(run_dir: Path) -> dict[str, bytes | None]:
+    """Snapshot report outputs that a finding revision can replace.
+
+    This is a bounded rollback aid for caught write failures, not a crash-atomic
+    transaction. Inputs under ``.state`` and unrelated run files are excluded.
+    """
+    paths = [run_dir / name for name in _REVISION_ARTIFACT_FILES]
+    vuln_dir = run_dir / "vulnerabilities"
+    if vuln_dir.is_dir():
+        paths.extend(sorted(vuln_dir.glob("*.md")))
+    snapshot: dict[str, bytes | None] = {}
+    for path in paths:
+        relative = path.relative_to(run_dir).as_posix()
+        snapshot[relative] = path.read_bytes() if path.is_file() else None
+    return snapshot
+
+
+def restore_revision_artifacts(run_dir: Path, snapshot: dict[str, bytes | None]) -> None:
+    """Restore a prior report projection snapshot after a caught failure."""
+    vuln_dir = run_dir / "vulnerabilities"
+    if vuln_dir.is_dir():
+        for path in vuln_dir.glob("*.md"):
+            relative = path.relative_to(run_dir).as_posix()
+            if relative not in snapshot:
+                path.unlink(missing_ok=True)
+    for relative, content in snapshot.items():
+        path = run_dir / relative
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            _atomic_write_bytes(path, content)
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp", delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        tmp_path.replace(path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
 # Resume state is a private, non-contract file that preserves host filesystem
 # paths and other execution fields that must not appear in the public worker
 # contract (run.json) but are needed to resume a local scan. It lives in the
@@ -216,6 +287,9 @@ def write_vulnerabilities(
     vulnerability_reports: list[dict[str, Any]],
     saved_vuln_ids: set[str],
 ) -> int:
+    for report in vulnerability_reports:
+        validate_finding_id(report.get("id"))
+
     vuln_dir = run_dir / "vulnerabilities"
     vuln_dir.mkdir(exist_ok=True)
 
@@ -268,17 +342,22 @@ def write_vulnerabilities(
 
 def _atomic_write_text(path: Path, payload: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=str(path.parent),
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as tmp:
-        tmp.write(payload)
-        tmp_path = Path(tmp.name)
-    tmp_path.replace(path)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(payload)
+        tmp_path.replace(path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def render_vulnerability_md(report: dict[str, Any]) -> str:

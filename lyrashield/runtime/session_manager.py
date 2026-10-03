@@ -59,6 +59,8 @@ _CREATION_LOCK = asyncio.Lock()
 # recorded failure stays failed (and retryable) until a real deletion
 # succeeds — a later cache miss can never rewrite it to success.
 _CLEANUP_RECEIPTS: dict[str, dict[str, Any]] = {}
+_PENDING_SANDBOX_DELETES: dict[str, asyncio.Future[Any]] = {}
+_PENDING_CLEANUP_STEPS: dict[tuple[str, str], asyncio.Future[Any]] = {}
 
 # Manifest root inside the container; entry keys hang off this path.
 _WORKSPACE_ROOT = "/workspace"
@@ -86,37 +88,93 @@ def _sanitize_startup_error(exc: BaseException) -> str:
 async def _bounded_cleanup_step(awaitable: Any, *, scan_id: str, step: str) -> None:
     """Await one startup-cleanup step shielded and time-bounded.
 
-    The step runs on a task whose handle is retained until it reaches a
-    terminal state: cancellation delivered to the caller while a delete or
-    close is in flight can never orphan that work, and a timed-out step is
-    cancelled and drained instead of becoming untracked background cleanup.
+    The task handle remains registered after timeout or caller cancellation.
+    A retry joins the same operation instead of starting a second cleanup
+    request while the backend may still be working on the first.
     """
-    task = asyncio.ensure_future(awaitable)
+    task = _get_pending_cleanup_step(scan_id, step)
+    if task is not None and task.done():
+        _pop_pending_cleanup_step(scan_id, step, task)
+        _close_unused_cleanup_awaitable(awaitable)
+        if task.cancelled():
+            task = None
+        else:
+            task.result()
+            return
+
+    if task is None:
+        task = asyncio.ensure_future(awaitable)
+        _set_pending_cleanup_step(scan_id, step, task)
+        task.add_done_callback(_observe_sandbox_delete)
+    else:
+        _close_unused_cleanup_awaitable(awaitable)
+
     try:
         await asyncio.wait_for(asyncio.shield(task), _CLEANUP_STEP_TIMEOUT)
-    except asyncio.CancelledError:
-        # The wait — not the shielded step — was cancelled. Keep the handle
-        # and drain within the same bound so the step still completes
-        # before the cancellation propagates.
-        if not task.done():
-            with contextlib.suppress(BaseException):
-                await asyncio.wait_for(asyncio.shield(task), _CLEANUP_STEP_TIMEOUT)
-            if not task.done():
-                logger.debug(
-                    "Startup cleanup(%s): %s still pending after re-cancellation drain",
-                    scan_id,
-                    step,
-                )
+    except BaseException:
+        if task.done() and (task.cancelled() or task.exception() is not None):
+            _pop_pending_cleanup_step(scan_id, step, task)
         raise
-    finally:
-        if not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        if task.done() and not task.cancelled():
-            # Retrieve the outcome so a failed step is never reported as an
-            # unretrieved task exception.
-            task.exception()
+    else:
+        _pop_pending_cleanup_step(scan_id, step, task)
+
+
+def _get_pending_cleanup_step(scan_id: str, step: str) -> asyncio.Future[Any] | None:
+    if step == "sandbox delete":
+        return _PENDING_SANDBOX_DELETES.get(scan_id)
+    return _PENDING_CLEANUP_STEPS.get((scan_id, step))
+
+
+def _set_pending_cleanup_step(scan_id: str, step: str, task: asyncio.Future[Any]) -> None:
+    if step == "sandbox delete":
+        _PENDING_SANDBOX_DELETES[scan_id] = task
+    else:
+        _PENDING_CLEANUP_STEPS[(scan_id, step)] = task
+
+
+def _pop_pending_cleanup_step(scan_id: str, step: str, expected_task: asyncio.Future[Any]) -> None:
+    if step == "sandbox delete":
+        if _PENDING_SANDBOX_DELETES.get(scan_id) is expected_task:
+            _PENDING_SANDBOX_DELETES.pop(scan_id, None)
+    elif _PENDING_CLEANUP_STEPS.get((scan_id, step)) is expected_task:
+        _PENDING_CLEANUP_STEPS.pop((scan_id, step), None)
+
+
+def _close_unused_cleanup_awaitable(awaitable: Any) -> None:
+    if asyncio.iscoroutine(awaitable):
+        awaitable.close()
+
+
+def _observe_sandbox_delete(task: asyncio.Future[Any]) -> None:
+    """Retrieve late delete failures when the original cleanup waiter left."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _delete_sandbox(scan_id: str, client: Any, session: Any) -> None:
+    """Run one bounded delete per scan and retain it across cancellation/timeouts."""
+    task = _PENDING_SANDBOX_DELETES.get(scan_id)
+    if task is not None and task.done():
+        _PENDING_SANDBOX_DELETES.pop(scan_id, None)
+        if not task.cancelled():
+            task.result()
+        else:
+            task = None
+
+    if task is None:
+        task = asyncio.ensure_future(client.delete(session))
+        _PENDING_SANDBOX_DELETES[scan_id] = task
+        task.add_done_callback(_observe_sandbox_delete)
+
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=_CLEANUP_STEP_TIMEOUT)
+    except BaseException:
+        if task.done() and _PENDING_SANDBOX_DELETES.get(scan_id) is task:
+            _PENDING_SANDBOX_DELETES.pop(scan_id, None)
+        raise
+    else:
+        if _PENDING_SANDBOX_DELETES.get(scan_id) is task:
+            _PENDING_SANDBOX_DELETES.pop(scan_id, None)
 
 
 async def _reap_stranded_bundle(scan_id: str, bundle: dict[str, Any]) -> bool:
@@ -129,9 +187,7 @@ async def _reap_stranded_bundle(scan_id: str, bundle: dict[str, Any]) -> bool:
     """
     client = bundle["client"]
     try:
-        await _bounded_cleanup_step(
-            client.delete(bundle["session"]), scan_id=scan_id, step="sandbox delete"
-        )
+        await _delete_sandbox(scan_id, client, bundle["session"])
     except Exception as exc:
         _record_cleanup_receipt(scan_id, CLEANUP_FAILED, last_error=_sanitize_startup_error(exc))
         return False
@@ -299,8 +355,9 @@ def build_session_entries(
                 staged: Path | None
                 if source_snapshots is not None:
                     upload_path = stage_frozen_dir(resolved)
-                    staged = upload_path
-                    staged_dirs.append(staged)
+                    staged = upload_path if upload_path != resolved else None
+                    if staged is not None:
+                        staged_dirs.append(staged)
                     source_snapshots.append(
                         {
                             "workspace_subdir": ws_subdir,
@@ -620,12 +677,17 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
             host_caido_url = f"{scheme}://{sandbox_host}:{sandbox_port}"
             logger.debug("Caido host endpoint resolved: %s", host_caido_url)
 
+            def own_caido_client(created_client: Any) -> None:
+                nonlocal caido_client
+                caido_client = created_client
+
             caido_client = await bootstrap_caido(
                 session,
                 scan_id=scan_id,
                 host_url=host_caido_url,
                 container_url=container_caido_url,
                 target_relay=bool(environment.get("STRIX_TARGET_RELAY")),
+                on_client_created=own_caido_client,
             )
 
             default_scope_id, default_scope_allowlist = await _create_default_scope(
@@ -782,13 +844,27 @@ async def cleanup(scan_id: str) -> str:
         if caido_client is not None:
             try:
                 await caido_client.aclose()
+            except asyncio.CancelledError:
+                _record_cleanup_receipt(
+                    scan_id,
+                    CLEANUP_FAILED,
+                    last_error="cleanup cancelled while closing the Caido transport",
+                )
+                raise
             except Exception:
                 logger.debug("cleanup(%s): caido_client.aclose() raised", scan_id, exc_info=True)
 
         client = bundle["client"]
         try:
-            await client.delete(bundle["session"])
+            await _delete_sandbox(scan_id, client, bundle["session"])
             logger.info("Cleaned up sandbox session for scan %s", scan_id)
+        except asyncio.CancelledError:
+            _record_cleanup_receipt(
+                scan_id,
+                CLEANUP_FAILED,
+                last_error="cleanup cancelled while sandbox deletion remained owned",
+            )
+            raise
         except Exception as exc:
             logger.exception(
                 "cleanup(%s): client.delete raised; container may need manual reaping",

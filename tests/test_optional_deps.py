@@ -24,7 +24,7 @@ def test_viewer_extra_pins_reportlab_pypdf_and_markdown_it() -> None:
     extras = _optional_dependencies()
     assert "viewer" in extras
     assert any(req == "reportlab>=4.0" for req in extras["viewer"])
-    assert any(req == "pypdf>=5.0" for req in extras["viewer"])
+    assert any(req == "pypdf>=6.19.0" for req in extras["viewer"])
     assert any(req == "markdown-it-py>=3.0.0" for req in extras["viewer"])
 
 

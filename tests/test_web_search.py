@@ -417,3 +417,52 @@ async def test_web_search_payload_includes_advanced_settings(
     del os.environ["LYRASHIELD_WEB_SEARCH_MODE"]
     del os.environ["LYRASHIELD_WEB_SEARCH_MAX_RESULTS"]
     set_global_report_state(None)
+
+
+@pytest.mark.asyncio
+async def test_provider_payload_redacts_explicit_keywords(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit search keywords receive the same redaction as the query."""
+    _clear_settings_cache()
+    monkeypatch.setenv("LYRASHIELD_WEB_SEARCH_ENABLED", "1")
+    monkeypatch.setenv("PARALLEL_API_KEY", "pk_test")
+
+    report_state = ReportState(run_name="test")
+    set_global_report_state(report_state)
+    captured_payload: dict[str, Any] = {}
+
+    class FakeResponse:
+        def json(self) -> dict[str, Any]:
+            return {"results": []}
+
+        def raise_for_status(self) -> None:
+            pass
+
+    class FakeClient:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def post(self, _url: str, *, json: dict[str, Any], **_: object) -> FakeResponse:
+            captured_payload.update(json)
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    args = {
+        "query": "Find public CVEs for Django",
+        "keywords": ["api_key=sk-explicit-secret", "alice@example.com"],
+    }
+    try:
+        result = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
+        assert result["success"] is True
+        search_queries = captured_payload["search_queries"]
+        assert "sk-explicit-secret" not in " ".join(search_queries)
+        assert "alice@example.com" not in " ".join(search_queries)
+        assert "[SECRET]" in search_queries[0]
+        assert "[EMAIL]" in search_queries[1]
+    finally:
+        set_global_report_state(None)

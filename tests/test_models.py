@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
+import litellm
 import pytest
 from agents.extensions.models.litellm_model import LitellmModel
 from agents.model_settings import ModelSettings
+from agents.models.interface import ModelTracing
 from agents.models.openai_responses import OpenAIResponsesModel
 
 from lyrashield.policy.models import (
@@ -327,6 +330,127 @@ def test_azure_gpt6_route_fails_closed_without_endpoint() -> None:
 
     with pytest.raises(RuntimeError, match="requires LLM_API_BASE"):
         StrixProvider(settings=settings)
+
+
+@pytest.mark.parametrize(
+    "explicit_connection",
+    [
+        {"base_url": "https://dedupe.example/v1"},
+        {"api_key": "dedupe-key"},
+        {"extra_headers": {"X-Dedupe-Auth": "dedupe-header"}},
+    ],
+)
+def test_explicit_litellm_connection_rejects_incomplete_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_connection: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(litellm, "api_key", "ambient-main-secret")
+    monkeypatch.setattr(litellm, "api_base", "https://main.example/v1")
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(
+            _env_file=None,
+            model="openai/gpt-6-sol",
+            api_key="main-key",
+            api_base="https://main.example/v1",
+        ),
+    )
+
+    provider = StrixProvider(settings=settings, **explicit_connection)
+    with pytest.raises(RuntimeError, match="explicit LiteLLM route requires its own key and base"):
+        provider.get_model("anthropic/claude-sonnet-4-5")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "explicit_connection",
+    [
+        {"base_url": "https://dedupe.example/v1"},
+        {"api_key": "dedupe-key"},
+        {"extra_headers": {"X-Dedupe-Auth": "dedupe-header"}},
+    ],
+)
+async def test_incomplete_explicit_litellm_credentials_raise_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_connection: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(litellm, "api_key", "ambient-main-secret")
+    monkeypatch.setattr(litellm, "api_base", "https://main.example/v1")
+    request = AsyncMock(side_effect=AssertionError("unexpected LiteLLM request"))
+    monkeypatch.setattr(litellm, "acompletion", request)
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(
+            _env_file=None,
+            model="openai/gpt-6-sol",
+            api_key="main-key",
+            api_base="https://main.example/v1",
+        ),
+    )
+    provider = StrixProvider(settings=settings, **explicit_connection)
+
+    with pytest.raises(RuntimeError, match="explicit LiteLLM route requires its own key and base"):
+        model: Any = provider.get_model("anthropic/claude-sonnet-4-5")
+        while hasattr(model, "_inner"):
+            model = model._inner
+        await model.get_response(
+            None,
+            "Check this input.",
+            ModelSettings(),
+            [],
+            None,
+            [],
+            ModelTracing.DISABLED,
+        )
+
+    request.assert_not_awaited()
+
+
+def test_explicit_litellm_connection_uses_its_own_complete_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "api_key", "ambient-main-secret")
+    monkeypatch.setattr(litellm, "api_base", "https://main.example/v1")
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-sol"),
+    )
+
+    model: Any = StrixProvider(
+        settings=settings,
+        api_key="dedupe-key",
+        base_url="https://dedupe.example/v1",
+    ).get_model("anthropic/claude-sonnet-4-5")
+    while hasattr(model, "_inner"):
+        model = model._inner
+
+    assert isinstance(model, LitellmModel)
+    assert model.api_key == "dedupe-key"
+    assert model.base_url == "https://dedupe.example/v1"
+
+
+def test_azure_custom_endpoint_does_not_inherit_main_headers() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(
+            _env_file=None,
+            model="azure_ai/gpt-6-sol",
+            api_key="main-azure-key",
+            api_base="https://main.azure.example",
+            extra_headers={"X-Main-Secret": "main-tenant"},
+        ),
+    )
+
+    guarded_model = StrixProvider(
+        settings=settings,
+        api_key="dedupe-azure-key",
+        base_url="https://dedupe.azure.example",
+    ).get_model("azure_ai/gpt-6-luna")
+    while hasattr(guarded_model, "_inner"):
+        guarded_model = guarded_model._inner
+
+    assert isinstance(guarded_model, _AzureUsageResponsesModel)
+    assert "X-Main-Secret" not in guarded_model._client.default_headers
 
 
 def test_azure_gpt6_keeps_json_tools_without_programmatic_opt_in() -> None:

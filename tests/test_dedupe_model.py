@@ -7,7 +7,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx
 import pytest
+from agents.model_settings import ModelSettings
+from agents.models.interface import ModelTracing
+from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+from agents.models.openai_responses import OpenAIResponsesModel
+from openai import AsyncOpenAI, OpenAIError
+from openai.types.responses import (
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
+)
+from pydantic import ValidationError
 
 from lyrashield.artifacts import dedupe as dedupe_module
 from lyrashield.artifacts.dedupe import (
@@ -24,7 +36,30 @@ from lyrashield.artifacts.dedupe import (
 )
 from lyrashield.lifecycle import hooks as hooks_module
 from lyrashield.policy import loader
-from lyrashield.policy.settings import DedupeSettings
+from lyrashield.policy.models import StrixProvider, _AzureUsageResponsesModel
+from lyrashield.policy.settings import DedupeSettings, LlmSettings, Settings
+
+
+def test_dedupe_output_schema_uses_supported_numeric_keywords() -> None:
+    schema = DedupeJudgement.model_json_schema()
+    confidence = schema["properties"]["confidence"]
+
+    branches = confidence["anyOf"]
+    assert [branch["type"] for branch in branches] == ["number", "integer"]
+    assert all(set(branch) <= {"type", "minimum", "maximum"} for branch in branches)
+    assert all(branch["minimum"] == 0 and branch["maximum"] == 1 for branch in branches)
+    for value in (0, 1, 0.0, 1.0):
+        assert (
+            DedupeJudgement.model_validate({"is_duplicate": False, "confidence": value}).confidence
+            == value
+        )
+    for value in (True, False, "0", "0.5", "1"):
+        with pytest.raises(ValidationError):
+            DedupeJudgement.model_validate({"is_duplicate": False, "confidence": value})
+    with pytest.raises(ValidationError):
+        DedupeJudgement.model_validate({"is_duplicate": False, "confidence": -0.1})
+    with pytest.raises(ValidationError):
+        DedupeJudgement.model_validate({"is_duplicate": False, "confidence": 1.1})
 
 
 def _unwrap(model: object) -> object:
@@ -34,13 +69,17 @@ def _unwrap(model: object) -> object:
 
 
 def test_dedupe_key_bound_to_model_client_not_global_env() -> None:
-    dedupe = DedupeSettings(STRIX_DEDUPE_MODEL="deepseek/cheap", DEDUPE_LLM_API_KEY="dedupe-key")
-    model = _unwrap(resolve_dedupe_model(dedupe, "deepseek/cheap"))
+    dedupe = DedupeSettings(_env_file=None, model="openai/gpt-6-luna", api_key="dedupe-key")
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-luna"),
+    )
+    model = _unwrap(resolve_dedupe_model(dedupe, "openai/gpt-6-luna", settings=settings))
     # The key is bound to the dedupe model's own client, so a shared-provider
     # main key can't clobber it (and vice versa) through the process globals —
     # and it never rides on the request, where every model implementation's own
     # api_key kwarg would collide with it.
-    assert model.api_key == "dedupe-key"  # type: ignore[attr-defined]
+    assert model._client.api_key == "dedupe-key"  # type: ignore[attr-defined]
 
 
 def test_dedupe_settings_carry_no_request_credentials() -> None:
@@ -56,20 +95,28 @@ def test_dedupe_settings_carry_no_request_credentials() -> None:
 
 def test_dedupe_endpoint_bound_to_model_client() -> None:
     dedupe = DedupeSettings(
-        STRIX_DEDUPE_MODEL="openai/cheap",
+        STRIX_DEDUPE_MODEL="openai/gpt-6-luna",
         DEDUPE_LLM_API_KEY="dedupe-key",
         DEDUPE_LLM_API_BASE="https://dedupe.example/v1",
     )
-    model = _unwrap(resolve_dedupe_model(dedupe, "openai/cheap"))
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-sol"),
+    )
+    model = _unwrap(resolve_dedupe_model(dedupe, "openai/gpt-6-luna", settings=settings))
     client = model._client  # type: ignore[attr-defined]
     assert client.api_key == "dedupe-key"
     assert str(client.base_url).startswith("https://dedupe.example/v1")
 
 
-def test_dedupe_without_credentials_uses_default_provider() -> None:
-    dedupe = DedupeSettings(STRIX_DEDUPE_MODEL="deepseek/cheap")
-    model = _unwrap(resolve_dedupe_model(dedupe, "deepseek/cheap"))
-    assert model.api_key is None  # type: ignore[attr-defined]
+def test_dedupe_without_any_openai_credentials_fails_closed() -> None:
+    dedupe = DedupeSettings(_env_file=None, model="openai/gpt-6-luna")
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-luna"),
+    )
+    with pytest.raises(OpenAIError, match="Missing credentials"):
+        resolve_dedupe_model(dedupe, "openai/gpt-6-luna", settings=settings)
 
 
 def test_dedupe_omits_parallel_tool_setting_for_azure_gpt6() -> None:
@@ -113,6 +160,470 @@ def test_fallback_dedupe_inherits_main_headers(monkeypatch: pytest.MonkeyPatch) 
         assert settings.extra_headers == {"X-Main": "svc"}
     finally:
         loader._cached = None
+
+
+def test_cross_provider_openai_dedupe_uses_openai_connection_not_main_azure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "caller-openai-key")
+    settings = Settings(
+        llm=LlmSettings(
+            model="azure_ai/gpt-6-sol",
+            api_key="main-azure-key",
+            api_base="https://main.azure.example",
+            extra_headers={"X-Main": "private"},
+        )
+    )
+    dedupe = DedupeSettings(model="openai/gpt-6-luna")
+
+    model = _unwrap(resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings))
+
+    assert isinstance(model, OpenAIResponsesModel)
+    assert model._client.api_key == "caller-openai-key"
+    assert str(model._client.base_url) == "https://api.openai.com/v1/"
+    assert "X-Main" not in model._client.default_headers
+
+
+def test_cross_provider_azure_dedupe_uses_its_own_responses_connection() -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="openai/gpt-6-sol",
+            api_key="main-openai-key",
+            api_base="https://main.openai.example/v1",
+            extra_headers={"X-Main": "private"},
+        )
+    )
+    dedupe = DedupeSettings(
+        model="litellm/azure-ai/Region/GPT-6-Luna",
+        api_key="dedupe-azure-key",
+        api_base="https://dedupe.azure.example",
+        extra_headers={"X-Dedupe": "own"},
+    )
+
+    model = _unwrap(resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings))
+
+    assert isinstance(model, _AzureUsageResponsesModel)
+    assert model.model == "GPT-6-Luna"
+    assert model._client.api_key == "dedupe-azure-key"
+    assert str(model._client.base_url) == "https://dedupe.azure.example/openai/v1/"
+    assert model._client.default_headers["X-Dedupe"] == "own"
+    assert "X-Main" not in model._client.default_headers
+
+
+def test_dedicated_dedupe_rejects_anthropic_route() -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="openai/gpt-6-sol",
+            api_key="main-openai-key",
+            api_base="https://main.openai.example/v1",
+        )
+    )
+    dedupe = DedupeSettings(model="anthropic/claude-sonnet-4-5")
+
+    with pytest.raises(RuntimeError, match="metered OpenAI or Azure/Azure AI GPT-6"):
+        resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings)
+
+
+@pytest.mark.parametrize(
+    ("main_route", "dedupe_route", "main_key", "dedupe_base", "provider_env"),
+    [
+        (
+            "azure_ai/gpt-6-sol",
+            "openai/gpt-6-luna",
+            "main-azure-sentinel",
+            "https://custom.openai.example/v1",
+            "OPENAI_API_KEY",
+        ),
+        (
+            "openai/gpt-6-sol",
+            "openai/gpt-6-luna",
+            "main-openai-sentinel",
+            "https://custom.openai.example/v1",
+            "OPENAI_API_KEY",
+        ),
+        (
+            "openai/gpt-6-sol",
+            "azure_ai/gpt-6-luna",
+            "main-openai-sentinel",
+            "https://custom.azure.example",
+            "AZURE_OPENAI_API_KEY",
+        ),
+    ],
+)
+def test_custom_dedupe_endpoint_never_inherits_a_process_or_main_key(
+    monkeypatch: pytest.MonkeyPatch,
+    main_route: str,
+    dedupe_route: str,
+    main_key: str,
+    dedupe_base: str,
+    provider_env: str,
+) -> None:
+    monkeypatch.setenv(provider_env, "provider-env-sentinel")
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(
+            _env_file=None,
+            model=main_route,
+            api_key=main_key,
+            api_base="https://main.example/v1",
+        ),
+    )
+    dedupe = DedupeSettings(
+        _env_file=None,
+        model=dedupe_route,
+        api_base=dedupe_base,
+    )
+
+    with pytest.raises(RuntimeError, match=r"custom .* endpoint requires DEDUPE_LLM_API_KEY"):
+        resolve_dedupe_model(dedupe, dedupe_route, settings=settings)
+
+
+def test_custom_same_provider_endpoint_does_not_inherit_main_headers() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(
+            _env_file=None,
+            model="openai/gpt-6-sol",
+            api_key="main-openai-key",
+            api_base="https://main.openai.example/v1",
+            extra_headers={
+                "X-Main-Secret": "main-tenant",
+                "Cookie": "session=main-secret",
+            },
+        ),
+    )
+    dedupe = DedupeSettings(
+        _env_file=None,
+        model="openai/gpt-6-luna",
+        api_key="dedupe-openai-key",
+        api_base="https://dedupe.openai.example/v1",
+    )
+
+    model = _unwrap(resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings))
+    model_settings = _dedupe_model_settings(dedupe, dedupe.model or "", 30, settings=settings)
+
+    assert model._client.api_key == "dedupe-openai-key"
+    assert str(model._client.base_url) == "https://dedupe.openai.example/v1/"
+    assert "X-Main-Secret" not in model._client.default_headers
+    assert "Cookie" not in model._client.default_headers
+    assert model_settings.extra_headers is None
+
+
+def test_explicit_openai_base_does_not_use_ambient_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-main-key")
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-luna"),
+    )
+
+    model = _unwrap(
+        StrixProvider(settings=settings, base_url="https://custom.openai.example/v1").get_model(
+            "openai/gpt-6-luna"
+        )
+    )
+
+    assert model._client.api_key == "not-needed"
+
+
+def test_same_provider_dedupe_inherits_main_connection_and_headers() -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="openai/gpt-6-sol",
+            api_key="main-openai-key",
+            api_base="https://main.openai.example/v1",
+            extra_headers={"X-Main": "tenant"},
+        )
+    )
+    dedupe = DedupeSettings(model="openai/gpt-6-luna")
+
+    model = _unwrap(resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings))
+    model_settings = _dedupe_model_settings(dedupe, dedupe.model or "", 30, settings=settings)
+
+    assert model._client.api_key == "main-openai-key"
+    assert str(model._client.base_url) == "https://main.openai.example/v1/"
+    assert model._client.default_headers["X-Main"] == "tenant"
+    assert model_settings.extra_headers == {"X-Main": "tenant"}
+
+
+def test_same_provider_dedupe_headers_override_main_headers() -> None:
+    settings = Settings(
+        llm=LlmSettings(
+            model="openai/gpt-6-sol",
+            api_key="main-openai-key",
+            extra_headers={"X-Main": "tenant"},
+        )
+    )
+    dedupe = DedupeSettings(
+        model="openai/gpt-6-luna",
+        extra_headers={"X-Dedupe": "judge"},
+    )
+
+    model = _unwrap(resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings))
+    model_settings = _dedupe_model_settings(dedupe, dedupe.model or "", 30, settings=settings)
+
+    assert model._client.default_headers["X-Dedupe"] == "judge"
+    assert "X-Main" not in model._client.default_headers
+    assert model_settings.extra_headers == {"X-Dedupe": "judge"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("main_route", "dedupe_route", "dedupe_key", "dedupe_base", "expected_url"),
+    [
+        (
+            "azure_ai/gpt-6-sol",
+            "openai/gpt-6-luna",
+            "caller-openai-key",
+            None,
+            "https://api.openai.com/v1/responses",
+        ),
+        (
+            "openai/gpt-6-sol",
+            "litellm/azure-ai/Region/GPT-6-Luna",
+            "dedupe-azure-key",
+            "https://dedupe.azure.example",
+            "https://dedupe.azure.example/openai/v1/responses",
+        ),
+    ],
+)
+async def test_dedicated_dedupe_sdk_request_uses_only_its_provider_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    main_route: str,
+    dedupe_route: str,
+    dedupe_key: str,
+    dedupe_base: str | None,
+    expected_url: str,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setenv(
+        "OPENAI_API_KEY", dedupe_key if main_route.startswith("azure") else "caller-openai-key"
+    )
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(
+            _env_file=None,
+            model=main_route,
+            api_key="main-route-secret",
+            api_base="https://main-route.example/v1",
+            extra_headers={"X-Main": "private"},
+        ),
+    )
+    dedupe = DedupeSettings(
+        _env_file=None,
+        model=dedupe_route,
+        api_key=None if main_route.startswith("azure") else dedupe_key,
+        api_base=dedupe_base,
+        extra_headers={"X-Dedupe": "own"},
+    )
+    model = _unwrap(resolve_dedupe_model(dedupe, dedupe_route, settings=settings))
+    captured: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_dedupe_test",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-6-luna",
+                "output": [],
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 1,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    route_client = model._client
+    mock_http = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    model._client = AsyncOpenAI(
+        api_key=route_client.api_key,
+        base_url=route_client.base_url,
+        default_headers=route_client.default_headers,
+        http_client=mock_http,
+    )
+    try:
+        result = await model.get_response(
+            None,
+            "Compare these reports.",
+            ModelSettings(),
+            [],
+            None,
+            [],
+            ModelTracing.DISABLED,
+        )
+    finally:
+        await model._client.close()
+        await route_client.close()
+
+    assert result.response_id == "resp_dedupe_test"
+    assert len(captured) == 1
+    request = captured[0]
+    assert str(request.url) == expected_url
+    assert request.headers["authorization"] == f"Bearer {dedupe_key}"
+    assert request.headers["x-dedupe"] == "own"
+    assert "x-main" not in request.headers
+
+
+@pytest.mark.asyncio
+async def test_custom_azure_dedupe_request_does_not_inherit_main_headers() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(
+            _env_file=None,
+            model="azure_ai/gpt-6-sol",
+            api_key="main-azure-key",
+            api_base="https://main.azure.example",
+            extra_headers={"X-Main-Secret": "main-tenant"},
+        ),
+    )
+    dedupe = DedupeSettings(
+        _env_file=None,
+        model="azure_ai/gpt-6-luna",
+        api_key="dedupe-azure-key",
+        api_base="https://dedupe.azure.example",
+    )
+    model = _unwrap(resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings))
+    assert isinstance(model, _AzureUsageResponsesModel)
+    route_client = model._client
+    captured: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_azure_dedupe_test",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-6-luna",
+                "output": [],
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 1,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    model._client = AsyncOpenAI(
+        api_key=route_client.api_key,
+        base_url=route_client.base_url,
+        default_headers=route_client.default_headers,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    )
+    try:
+        result = await model.get_response(
+            None,
+            "Compare these reports.",
+            ModelSettings(),
+            [],
+            None,
+            [],
+            ModelTracing.DISABLED,
+        )
+    finally:
+        await model._client.close()
+        await route_client.close()
+
+    assert result.response_id == "resp_azure_dedupe_test"
+    assert len(captured) == 1
+    request = captured[0]
+    assert str(request.url) == "https://dedupe.azure.example/openai/v1/responses"
+    assert request.headers["authorization"] == "Bearer dedupe-azure-key"
+    assert "x-main-secret" not in request.headers
+
+
+@pytest.mark.asyncio
+async def test_custom_openai_dedupe_endpoint_sends_only_dedupe_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-openai-sentinel")
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(
+            _env_file=None,
+            model="openai/gpt-6-sol",
+            api_key="main-openai-sentinel",
+            api_base="https://main.openai.example/v1",
+            extra_headers={"X-Main": "private"},
+        ),
+    )
+    dedupe = DedupeSettings(
+        _env_file=None,
+        model="openai/gpt-6-luna",
+        api_key="dedupe-openai-key",
+        api_base="https://dedupe.openai.example/v1",
+    )
+    model = _unwrap(resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings))
+    assert isinstance(model, OpenAIChatCompletionsModel)
+    captured: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_dedupe_test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-6-luna",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "OK"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    route_client = model._client
+    mock_http = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    model._client = AsyncOpenAI(
+        api_key=route_client.api_key,
+        base_url=route_client.base_url,
+        default_headers=route_client.default_headers,
+        http_client=mock_http,
+    )
+    try:
+        result = await model.get_response(
+            None,
+            "Compare these reports.",
+            ModelSettings(),
+            [],
+            None,
+            [],
+            ModelTracing.DISABLED,
+        )
+    finally:
+        await model._client.close()
+        await route_client.close()
+
+    assert result.response_id is None
+    assert getattr(result.output[0].content[0], "text", None) == "OK"
+    assert len(captured) == 1
+    request = captured[0]
+    assert str(request.url) == "https://dedupe.openai.example/v1/chat/completions"
+    assert request.headers["authorization"] == "Bearer dedupe-openai-key"
+    assert "x-main" not in request.headers
+    assert "ambient-openai-sentinel" not in request.headers["authorization"]
 
 
 def test_dedupe_defaults_are_empty() -> None:
@@ -413,20 +924,21 @@ def test_extract_balanced_json_rejects_unbalanced_object() -> None:
         _extract_balanced_json('{"is_duplicate": true')
 
 
-def test_parse_dedupe_response_coerces_fields_and_truncates() -> None:
+def test_parse_dedupe_response_fails_open_on_invalid_schema() -> None:
     payload = json.dumps(
         {
-            "is_duplicate": True,
+            "is_duplicate": "false",
             "duplicate_id": "x" * 100,
-            "confidence": "bad",
+            "confidence": 0.99,
             "reason": "y" * 1000,
+            "extra_field": "ignored",
         }
     )
     parsed = _parse_dedupe_response(payload)
-    assert parsed["is_duplicate"] is True
-    assert len(parsed["duplicate_id"]) <= 64
+    assert parsed["is_duplicate"] is False
+    assert parsed["duplicate_id"] == ""
     assert parsed["confidence"] == 0.0
-    assert len(parsed["reason"]) <= 500
+    assert parsed["reason"]
 
 
 def test_parse_dedupe_response_validates_via_schema() -> None:
@@ -446,8 +958,28 @@ def test_parse_dedupe_response_validates_via_schema() -> None:
     assert parsed["reason"] == "Same endpoint and payload"
 
 
-def test_parse_dedupe_response_falls_back_on_invalid_schema() -> None:
-    """A response with extra fields or wrong types should fall back to lenient parser."""
+def test_parse_dedupe_response_keeps_narrow_lenient_fallback() -> None:
+    """An extra provider field should not discard an otherwise valid verdict."""
+    payload = json.dumps(
+        {
+            "is_duplicate": True,
+            "duplicate_id": "vuln-0001",
+            "confidence": 0.95,
+            "reason": "Same endpoint and payload",
+            "provider_metadata": {"trace": "ignored"},
+        }
+    )
+
+    parsed = _parse_dedupe_response(payload)
+
+    assert parsed["is_duplicate"] is True
+    assert parsed["duplicate_id"] == "vuln-0001"
+    assert parsed["confidence"] == 0.95
+    assert parsed["reason"] == "Same endpoint and payload"
+
+
+def test_parse_dedupe_response_does_not_coerce_invalid_duplicate_claims() -> None:
+    """Invalid model output must preserve the candidate instead of suppressing it."""
     payload = json.dumps(
         {
             "is_duplicate": "yes",
@@ -458,10 +990,30 @@ def test_parse_dedupe_response_falls_back_on_invalid_schema() -> None:
         }
     )
     parsed = _parse_dedupe_response(payload)
-    assert parsed["is_duplicate"] is True
-    assert parsed["duplicate_id"] == "vuln-0002"
+    assert parsed["is_duplicate"] is False
+    assert parsed["duplicate_id"] == ""
     assert parsed["confidence"] == 0.0
-    assert parsed["reason"] == "Similar finding"
+
+
+def test_dedupe_ignores_incomplete_or_refused_output_messages() -> None:
+    incomplete = ResponseOutputMessage(
+        id="msg-incomplete",
+        content=[
+            ResponseOutputText(type="output_text", annotations=[], text='{"is_duplicate":true}')
+        ],
+        role="assistant",
+        status="incomplete",
+        type="message",
+    )
+    refused = ResponseOutputMessage(
+        id="msg-refused",
+        content=[ResponseOutputRefusal(type="refusal", refusal="not allowed")],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    assert dedupe_module._extract_text(SimpleNamespace(output=[incomplete])) == ""
+    assert dedupe_module._extract_text(SimpleNamespace(output=[refused])) == ""
 
 
 def test_dedupe_judgement_schema_validates_correct_fields() -> None:

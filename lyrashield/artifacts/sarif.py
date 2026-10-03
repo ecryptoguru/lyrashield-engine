@@ -52,6 +52,10 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
+from urllib.parse import urlsplit, urlunsplit
+
+from lyrashield.artifacts.repo_context import parse_repo_full_name
+from lyrashield.utils.redaction import redact_text, redact_url
 
 
 logger = logging.getLogger(__name__)
@@ -361,11 +365,17 @@ def _apply_repository_context(run: dict[str, Any], context: dict[str, Any]) -> N
     the findings came from. Both are omitted when the corresponding context
     fields are absent (e.g. DAST-only scans).
     """
-    full_name = _string_value(context.get("repositoryFullName"))
-    uri = _string_value(context.get("repositoryUri"))
-    commit = _string_value(context.get("commitSha"))
-    branch = _string_value(context.get("branch"))
-    ref = _string_value(context.get("ref"))
+    raw_uri = _string_value(context.get("repositoryUri"))
+    raw_full_name = _string_value(context.get("repositoryFullName"))
+    full_name = parse_repo_full_name(raw_full_name) if raw_full_name else None
+    if full_name:
+        full_name = redact_text(full_name, include_internal_paths=False)
+    uri = _safe_repository_uri(raw_uri)
+    commit = redact_text(
+        _string_value(context.get("commitSha")) or "", include_internal_paths=False
+    )
+    branch = redact_text(_string_value(context.get("branch")) or "", include_internal_paths=False)
+    ref = redact_text(_string_value(context.get("ref")) or "", include_internal_paths=False)
 
     if full_name:
         run["automationDetails"] = {"id": f"lyrashield/{full_name}"}
@@ -387,6 +397,28 @@ def _apply_repository_context(run: dict[str, Any], context: dict[str, Any]) -> N
         properties["commit_sha"] = commit
     if not properties:
         run.pop("properties", None)
+
+
+def _safe_repository_uri(value: str | None) -> str:
+    """Keep repository identity while dropping all URL credential/query data."""
+    if not value:
+        return ""
+    sanitized = value.strip()
+    scp_remote = re.fullmatch(
+        r"[^/@:\s]+@(?P<host>[^/:\s]+):(?P<path>[^?#\s]+)(?:[?#].*)?", sanitized
+    )
+    if scp_remote:
+        sanitized = f"ssh://{scp_remote.group('host')}/{scp_remote.group('path')}"
+    try:
+        parsed = urlsplit(sanitized)
+    except ValueError:
+        parsed = None
+    if parsed and parsed.scheme and parsed.netloc:
+        host = parsed.netloc.rsplit("@", 1)[-1]
+        sanitized = urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+    else:
+        sanitized = redact_url(sanitized).split("?", 1)[0].split("#", 1)[0]
+    return redact_text(sanitized, include_internal_paths=False)
 
 
 # ---------------------------------------------------------------------------

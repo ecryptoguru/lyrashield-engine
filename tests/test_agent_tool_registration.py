@@ -15,6 +15,7 @@ from lyrashield.policy.models import (
     model_supports_programmatic_tool_calling as product_policy,
 )
 from lyrashield_adapter.cli import _register_lyrashield_tool_overrides
+from strix.tools.notes import tools as upstream_notes_tools
 
 
 if TYPE_CHECKING:
@@ -152,6 +153,32 @@ def test_report_review_tools_are_root_only() -> None:
     assert {"list_reports", "get_report"}.isdisjoint(child_names)
 
 
+def test_root_and_child_agents_use_the_pentester_sandbox_identity() -> None:
+    root = factory.build_strix_agent(is_root=True)
+    child = factory.build_strix_agent(is_root=False)
+    spawned = factory.make_child_factory()(name="spawned", skills=[])
+
+    assert root.run_as == child.run_as == spawned.run_as == "pentester"
+
+
+def test_product_tool_overrides_do_not_add_root_only_tools_to_children() -> None:
+    """An override may replace an allowlisted tool but must not expand authority."""
+    _register_lyrashield_tool_overrides()
+    factory.resolve_product_overrides()
+
+    child = factory.build_strix_agent(is_root=False)
+    child_names = {tool.name for tool in child.tools}
+
+    root_only_tools = {
+        "create_agent",
+        "stop_agent",
+        "view_agent_graph",
+        "list_reports",
+        "get_report",
+    }
+    assert root_only_tools.isdisjoint(child_names)
+
+
 def test_register_tool_override_replaces_base_tool() -> None:
     """A product tool can replace an upstream base tool by name."""
     override = _tool("web_search")
@@ -249,6 +276,31 @@ def test_adapter_registers_lyrashield_todo_tools() -> None:
         assert factory._TOOL_OVERRIDES[name].name == name
 
 
+def test_adapter_registers_lyrashield_notes_tools() -> None:
+    """The product entry point replaces every upstream note persistence tool."""
+    _register_lyrashield_tool_overrides()
+    factory.resolve_product_overrides()
+
+    names = ("create_note", "list_notes", "get_note", "update_note", "delete_note")
+    for name in names:
+        assert name in factory._TOOL_OVERRIDES
+        assert factory._TOOL_OVERRIDES[name].name == name
+
+        product_schema = factory._TOOL_OVERRIDES[name].params_json_schema
+        upstream_schema = getattr(upstream_notes_tools, name).params_json_schema
+        assert product_schema.get("required", []) == upstream_schema.get("required", [])
+        assert set(product_schema["properties"]) == set(upstream_schema["properties"])
+        for field, expected in upstream_schema["properties"].items():
+            actual = product_schema["properties"][field]
+            for key in ("type", "items", "anyOf", "default"):
+                if key in expected:
+                    assert actual.get(key) == expected[key]
+
+    for is_root in (True, False):
+        agent_names = [tool.name for tool in factory.build_strix_agent(is_root=is_root).tools]
+        assert all(agent_names.count(name) == 1 for name in names)
+
+
 def test_agent_build_resolves_deferred_overrides() -> None:
     """A scan-path agent build materializes overrides registered after import."""
     _register_lyrashield_tool_overrides()
@@ -287,8 +339,10 @@ def test_product_scan_build_resolves_lyrashield_agent_graph_tools() -> None:
     )
     root_names = [tool.name for tool in root.tools]
     child_names = [tool.name for tool in child.tools]
-    assert all(root_names.count(name) == 1 for name in overridden_names if name != "agent_finish")
-    assert all(child_names.count(name) == 1 for name in overridden_names)
+    root_only = {"create_agent", "stop_agent", "view_agent_graph"}
+    assert all(root_names.count(name) == 1 for name in set(overridden_names) - {"agent_finish"})
+    assert all(child_names.count(name) == 1 for name in set(overridden_names) - root_only)
+    assert root_only.isdisjoint(child_names)
     assert all(
         tool is not getattr(product_graph_tools, tool.name)
         for tool in (*root.tools, *child.tools)

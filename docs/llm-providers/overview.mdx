@@ -9,11 +9,11 @@ LyraShield Engine accepts only deployment names recognized as GPT-6 Sol or Luna,
 | --- | --- |
 | OpenAI-compatible | Approved GPT-6 deployment with `LLM_API_KEY` and optional `LLM_API_BASE` |
 | Azure AI / Azure OpenAI-compatible | Approved GPT-6 deployment with Azure endpoint, credential, and API-version aliases |
-| ChatGPT subscription | Authenticate with `lyrashield auth login chatgpt`, then select `chatgpt/gpt-6-luna` or `chatgpt/gpt-6-sol` for the main model only |
+| ChatGPT subscription | Authenticate with `lyrashield auth login chatgpt`, then select `chatgpt/gpt-6-luna` or `chatgpt/gpt-6-sol` for the main model; deduplication uses that route when no dedicated dedupe model is configured |
 
 Anthropic, Bedrock (including `bedrock_mantle`), Vertex, OpenRouter, Novita, local models, and subscription-backed models outside `chatgpt/*` are unsupported as LLM endpoints and rejected. Perplexity and Parallel are not supported as LLM endpoints. Parallel Search may be used as an optional `web_search` tool when explicitly enabled; see Configuration.
 
-Subscription notes: the `chatgpt/` route is enabled by default in the standalone engine (`LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` disables it), restricted to `STRIX_LLM`/`LYRASHIELD_LLM` — delegate and dedupe models must use a metered OpenAI or Azure/Azure AI route — and records `auth_mode: "subscription"` with `llm_usage.cost: 0`. The production worker disables subscription routing.
+Subscription notes: the `chatgpt/` route is enabled by default in the standalone engine (`LYRASHIELD_ALLOW_CHATGPT_SUBSCRIPTION=0` disables it). It can be selected for `LYRASHIELD_LLM`; deduplication uses the main route when no dedicated dedupe model is configured. Explicit delegate and dedicated dedupe model overrides must use a metered OpenAI or Azure/Azure AI route. The route records `auth_mode: "subscription"` with `llm_usage.cost: 0`. The production worker disables subscription routing.
 
 The application worker resolves the preset before spawning the engine: Safe/Quick/Standard use Luna with medium reasoning throughout. Deep/Custom use Sol with medium reasoning for the root coordinator and Luna with high reasoning for focused child specialists. The route is deterministic: only the root can create or stop specialists, child agents cannot promote themselves or recursively fan out, and Sol retains final cross-file judgment. `LYRASHIELD_LLM` remains the explicit primary fallback; `LYRASHIELD_DELEGATE_LLM` configures the bounded specialist tier.
 

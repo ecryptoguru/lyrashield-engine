@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Any
@@ -15,6 +16,200 @@ from lyrashield.lifecycle.agents import coordinator_from_context
 logger = logging.getLogger(__name__)
 
 
+def _finish_assessment(
+    *,
+    report_state: Any,
+    agent_graph: dict[str, Any],
+) -> dict[str, Any]:
+    """Derive finish caveats from observed graph, coverage and scan records."""
+    from lyrashield.artifacts import evidence, quality
+    from lyrashield.artifacts import state as state_module
+
+    candidate_record = dict(report_state.run_record)
+    candidate_record["status"] = "completed"
+    candidate_record["receipt_persisted"] = True
+    candidate_record["scan_results"] = {"success": True, "scan_completed": True}
+    graph = quality.effective_agent_graph(candidate_record, agent_graph)
+    coverage = evidence.build_coverage_document(
+        run_record=candidate_record,
+        agent_graph=graph,
+        vulnerability_reports=report_state.vulnerability_reports,
+    )
+    violations = candidate_record.get("scope_violations")
+    violations = violations if isinstance(violations, dict) else {}
+    quality_record = quality.build_scan_quality(
+        run_record=candidate_record,
+        agent_graph=graph,
+        coverage_entries=state_module._coverage_ledger_entries(),
+        vulnerability_reports=report_state.vulnerability_reports,
+        scope_decisions={
+            "violations": violations.get("entries") or [],
+            "dropped": violations.get("dropped") or 0,
+        },
+    )
+
+    observed = coverage.get("machine_observed")
+    raw_agents = observed.get("agents") if isinstance(observed, dict) else []
+    incomplete_agents = [
+        {"agent_name": agent.get("agent_name", "unknown"), "status": agent.get("status", "unknown")}
+        for agent in raw_agents or []
+        if isinstance(agent, dict) and agent.get("status") != "completed"
+    ]
+    coverage_gaps = coverage.get("gaps")
+    coverage_gaps = coverage_gaps if isinstance(coverage_gaps, list) else []
+    completeness = coverage.get("completeness")
+    coverage_complete = bool(
+        isinstance(completeness, dict)
+        and completeness.get("complete") is True
+        and not coverage_gaps
+    )
+    reasons = {
+        str(reason)
+        for reason in quality_record.get("assessment_reasons", [])
+        if isinstance(reason, str)
+    }
+    if coverage_gaps:
+        reasons.add("coverage_gaps_present")
+    if not coverage_complete:
+        reasons.add("coverage_incomplete")
+    ordered_reasons = sorted(reasons)
+    return {
+        "assessment": "inconclusive" if ordered_reasons else "findings_recorded",
+        "assessment_reasons": ordered_reasons,
+        "coverage_complete": coverage_complete,
+        "coverage_gaps": coverage_gaps,
+        "incomplete_agents": incomplete_agents,
+    }
+
+
+def _assessment_note(*, assessment: dict[str, Any], report_section: str) -> str:
+    """Keep limitations visible in the customer-facing final report."""
+    details: list[str] = []
+    if "no_findings_recorded" in assessment["assessment_reasons"]:
+        details.append(
+            "No vulnerabilities were filed. This does not demonstrate that the target is secure."
+        )
+    incomplete = assessment["incomplete_agents"]
+    if incomplete:
+        statuses: dict[str, int] = {}
+        for agent in incomplete:
+            status = str(agent.get("status") or "unknown")
+            statuses[status] = statuses.get(status, 0) + 1
+        details.append(
+            "Incomplete agent work: "
+            + ", ".join(f"{count} {status}" for status, count in sorted(statuses.items()))
+            + "."
+        )
+    if assessment["coverage_gaps"]:
+        details.append(
+            f"Coverage has {len(assessment['coverage_gaps'])} unresolved gap(s); "
+            "see the coverage record."
+        )
+    if not assessment["coverage_complete"]:
+        details.append(
+            "Coverage or finalization is incomplete; unresolved work remains inconclusive."
+        )
+    details = [line for line in details if line.casefold() not in report_section.casefold()]
+    if not details:
+        return report_section
+    heading = (
+        "" if "### Assessment limitations" in report_section else "### Assessment limitations\n\n"
+    )
+    return f"{report_section.rstrip()}\n\n{heading}" + "\n".join(f"- {line}" for line in details)
+
+
+def _final_evidence_is_durable(report_state: Any) -> bool:
+    """Confirm the successful finish and its companion artifacts are durable."""
+    from lyrashield.artifacts import evidence
+    from lyrashield.artifacts.quality import SCAN_QUALITY_SCHEMA
+    from lyrashield.artifacts.writer import read_run_record
+
+    current_revision = getattr(report_state, "_report_artifacts_revision", None)
+    if (
+        not isinstance(current_revision, int)
+        or isinstance(current_revision, bool)
+        or report_state.receipt_persisted is not True
+        or report_state.run_record.get("report_artifacts_revision") != current_revision
+    ):
+        return False
+    try:
+        run_dir = report_state.get_run_dir()
+        persisted = read_run_record(run_dir)
+    except Exception:
+        logger.exception("finish_scan: unable to read persisted final evidence")
+        return False
+    results = persisted.get("scan_results") if isinstance(persisted, dict) else None
+    if (
+        not isinstance(persisted, dict)
+        or persisted.get("status") != "completed"
+        or persisted.get("receipt_persisted") is not True
+        or persisted.get("report_artifacts_revision") != current_revision
+        or not isinstance(results, dict)
+        or results.get("success") is not True
+        or results.get("scan_completed") is not True
+    ):
+        return False
+    if not evidence.record_supports_evidence_v1_1(persisted):
+        return True
+
+    quality_record = persisted.get("scan_quality")
+    if (
+        not isinstance(quality_record, dict)
+        or quality_record.get("schema") != SCAN_QUALITY_SCHEMA
+        or quality_record.get("run_id") != persisted.get("run_id")
+        or quality_record.get("assessment") not in {"inconclusive", "findings_recorded"}
+        or not isinstance(quality_record.get("assessment_reasons"), list)
+    ):
+        return False
+    try:
+        coverage_bytes = (run_dir / "coverage.json").read_bytes()
+        coverage = json.loads(coverage_bytes)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if (
+        not isinstance(coverage, dict)
+        or coverage.get("run_id") != persisted.get("run_id")
+        or not isinstance(coverage.get("completeness"), dict)
+        or coverage["completeness"].get("scan_status") != "completed"
+    ):
+        return False
+    manifest = persisted.get("result_manifest")
+    artifacts = manifest.get("artifacts") if isinstance(manifest, dict) else None
+    coverage_manifest = artifacts.get("coverage.json") if isinstance(artifacts, dict) else None
+    if (
+        not isinstance(coverage_manifest, dict)
+        or coverage_manifest.get("path") != "coverage.json"
+        or coverage_manifest.get("bytes") != len(coverage_bytes)
+        or coverage_manifest.get("sha256") != hashlib.sha256(coverage_bytes).hexdigest()
+    ):
+        return False
+    try:
+        evidence.verify_result_manifest(run_dir, manifest)
+    except Exception:
+        logger.exception("finish_scan: persisted result manifest verification failed")
+        return False
+    return True
+
+
+def _leave_finish_unresolved(report_state: Any) -> None:
+    """Persist a retryable state after final evidence fails verification."""
+    results = report_state.run_record.get("scan_results")
+    results = dict(results) if isinstance(results, dict) else {}
+    results.update(success=False, scan_completed=False)
+    report_state.scan_results = results
+    report_state.run_record["scan_results"] = results
+    report_state.run_record["status"] = "running"
+    report_state.run_record["phase"] = "finalizing"
+    report_state.run_record["end_time"] = None
+    report_state.run_record["terminal_reason"] = "final_evidence_not_persisted"
+    report_state.end_time = None
+    try:
+        if not report_state.save_run_data():
+            logger.error("finish_scan: unresolved state receipt did not persist")
+    except Exception:
+        logger.exception("finish_scan: failed to persist unresolved finalization state")
+
+
 def _do_finish(
     *,
     parent_id: str | None,
@@ -22,6 +217,7 @@ def _do_finish(
     methodology: str,
     technical_analysis: str,
     recommendations: str,
+    agent_graph: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if parent_id is not None:
         return {
@@ -55,15 +251,30 @@ def _do_finish(
             return {
                 "success": False,
                 "scan_completed": False,
+                "assessment": "inconclusive",
+                "assessment_reasons": ["report_state_unavailable"],
+                "coverage_complete": False,
+                "coverage_gaps": [],
+                "incomplete_agents": [],
                 "error": (
                     "Scan completion not persisted: report state unavailable. "
                     "The scan was NOT finalized."
                 ),
             }
+        assessment = _finish_assessment(
+            report_state=report_state,
+            agent_graph=agent_graph or {},
+        )
         report_state.update_scan_final_fields(
-            executive_summary=executive_summary.strip(),
+            executive_summary=_assessment_note(
+                assessment=assessment,
+                report_section=executive_summary.strip(),
+            ),
             methodology=methodology.strip(),
-            technical_analysis=technical_analysis.strip(),
+            technical_analysis=_assessment_note(
+                assessment=assessment,
+                report_section=technical_analysis.strip(),
+            ),
             recommendations=recommendations.strip(),
         )
         if not report_state.receipt_persisted:
@@ -73,8 +284,31 @@ def _do_finish(
             return {
                 "success": False,
                 "scan_completed": False,
+                **assessment,
+                "assessment": "inconclusive",
+                "assessment_reasons": sorted(
+                    {*assessment["assessment_reasons"], "finalization_not_persisted"}
+                ),
+                "coverage_complete": False,
                 "error": (
                     "Scan completion could not be persisted (run.json write failed); "
+                    "the scan was NOT finalized. Retry finish_scan."
+                ),
+            }
+        if not _final_evidence_is_durable(report_state):
+            logger.error("finish_scan: final quality and coverage evidence is not durable")
+            _leave_finish_unresolved(report_state)
+            return {
+                "success": False,
+                "scan_completed": False,
+                **assessment,
+                "assessment": "inconclusive",
+                "assessment_reasons": sorted(
+                    {*assessment["assessment_reasons"], "final_evidence_not_persisted"}
+                ),
+                "coverage_complete": False,
+                "error": (
+                    "Final quality or coverage evidence was not durably persisted; "
                     "the scan was NOT finalized. Retry finish_scan."
                 ),
             }
@@ -92,6 +326,7 @@ def _do_finish(
             "scan_completed": True,
             "message": "Scan completed successfully",
             "vulnerabilities_found": vuln_count,
+            **assessment,
         }
 
 
@@ -127,9 +362,11 @@ async def finish_scan(
        summary. If ANY agent is in ``running`` / ``waiting`` state,
        you MUST NOT call ``finish_scan`` yet —
        wrap them up first via ``send_message_to_agent`` (ask them to
-       finish), ``wait_for_agents`` (block until their report
-       arrives), or ``stop_agent`` (graceful cancel). Only ``completed``
-       / ``crashed`` / ``stopped`` agents are safe to leave behind.
+       finish), ``wait_for_agents`` (block until their report arrives),
+       or ``stop_agent`` (graceful cancel). Only ``completed`` agents
+       count as finished. Failed, crashed, stopped, budget-paused,
+       unknown, or missing statuses remain incomplete and must be disclosed;
+       they do not justify a positive security conclusion.
        Calling ``finish_scan`` while children are alive orphans their
        work and produces an incomplete report.
     2. It's a good idea to call ``list_reports`` before finishing to
@@ -196,9 +433,10 @@ async def finish_scan(
       numbered lists for enumerations, and fenced code blocks
       (```` ```language ````) for any code/payload excerpts. Never emit
       one flat wall of prose or leave code unformatted.
-    - If **zero** vulnerabilities were found, say so plainly. Characterize
-      only completed coverage positively; describe unassessed or stopped work
-      as incomplete and never turn it into a clean result.
+    - If **zero** vulnerabilities were filed, say so plainly. Do not
+      characterize the target as secure or clean from that result alone;
+      the runtime appends an assessment limitation and returns unresolved
+      coverage and incomplete agent work.
 
     Example (abbreviated — mirror this structure, not the wording)::
 
@@ -288,6 +526,7 @@ async def finish_scan(
             default=str,
         )
 
+    agent_graph = await coordinator.snapshot() if coordinator is not None else {}
     result = await asyncio.to_thread(
         _do_finish,
         parent_id=parent_id,
@@ -295,6 +534,7 @@ async def finish_scan(
         methodology=methodology,
         technical_analysis=technical_analysis,
         recommendations=recommendations,
+        agent_graph=agent_graph,
     )
     if (
         result.get("success")

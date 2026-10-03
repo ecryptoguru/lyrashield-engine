@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 from importlib import import_module
@@ -27,6 +28,7 @@ from lyrashield.agents.prompt import render_system_prompt
 from lyrashield.artifacts.state import ReportState, sanitize_attachments
 from lyrashield.artifacts.writer import read_resume_record, write_resume_record
 from lyrashield.lifecycle.inputs import build_root_task, build_scope_context
+from lyrashield.runtime import attachments as attachments_module
 from lyrashield.runtime import session_manager
 from lyrashield.runtime.attachments import (
     ATTACHMENT_MANIFEST_NAME,
@@ -62,6 +64,36 @@ def _spec(tmp_path: Path, name: str = "api.yaml", content: str = "openapi: 3.0.0
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _simulate_windows_nofollow_handles(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    before_open: Any = None,
+) -> list[int]:
+    """Exercise the Windows CreateFile contract with POSIX no-follow fds."""
+    flags_seen: list[int] = []
+
+    def create_handle(path: Path, flags: int) -> int:
+        flags_seen.append(flags)
+        if before_open is not None:
+            before_open(Path(path))
+        open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        open_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        return os.open(path, open_flags)
+
+    monkeypatch.setattr(attachments_module, "_is_windows_platform", lambda: True, raising=False)
+    monkeypatch.setattr(
+        attachments_module, "_safe_attachment_open_supported", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        attachments_module, "_create_windows_file_handle", create_handle, raising=False
+    )
+    monkeypatch.setattr(
+        attachments_module, "_windows_handle_to_fd", lambda handle: handle, raising=False
+    )
+    monkeypatch.setattr(attachments_module, "_close_windows_handle", os.close, raising=False)
+    return flags_seen
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +152,235 @@ def test_validate_attachment_rejects_symlink(tmp_path: Path) -> None:
     link.symlink_to(real)
     with pytest.raises(AttachmentInputError, match="symlink"):
         validate_attachment(str(link))
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not hasattr(os, "O_NOFOLLOW"),
+    reason="requires POSIX no-follow file opens",
+)
+def test_validate_attachment_rejects_symlink_replacement_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "source.txt", "approved")
+    outside = _write(tmp_path / "outside.txt", "private")
+    replacement = tmp_path / "replacement.txt"
+    replacement.symlink_to(outside)
+    original_open = os.open
+    replaced = False
+
+    def replace_then_open(path: str | Path, flags: int, *args: Any, **kwargs: Any) -> int:
+        nonlocal replaced
+        if Path(path) == source and not replaced:
+            replaced = True
+            replacement.replace(source)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", replace_then_open)
+    with pytest.raises(AttachmentInputError):
+        validate_attachment(str(source))
+    assert replaced
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not hasattr(os, "O_NOFOLLOW"),
+    reason="requires POSIX no-follow file opens",
+)
+def test_validate_attachment_rejects_regular_file_replacement_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "source.txt", "approved")
+    replacement = _write(tmp_path / "replacement.txt", "approved")
+    original_open = os.open
+    replaced = False
+
+    def replace_then_open(path: str | Path, flags: int, *args: Any, **kwargs: Any) -> int:
+        nonlocal replaced
+        if Path(path) == source and not replaced:
+            replaced = True
+            replacement.replace(source)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", replace_then_open)
+    with pytest.raises(AttachmentInputError, match="source_changed"):
+        validate_attachment(str(source))
+    assert replaced
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not hasattr(os, "O_NOFOLLOW"),
+    reason="requires POSIX no-follow file opens",
+)
+def test_validate_attachment_bounds_read_when_source_grows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "growing.txt", "1234")
+    original_read = os.read
+    read_sizes: list[int] = []
+    grew = False
+
+    def forbid_unbounded_path_read(path: Path) -> bytes:
+        if path == source:
+            pytest.fail("attachment validation used an unbounded Path.read_bytes call")
+        return original_path_read_bytes(path)
+
+    original_path_read_bytes = Path.read_bytes
+
+    def grow_then_read(fd: int, size: int) -> bytes:
+        nonlocal grew
+        if not grew:
+            grew = True
+            with source.open("ab") as stream:
+                stream.write(b"56789")
+        read_sizes.append(size)
+        return original_read(fd, size)
+
+    monkeypatch.setattr(Path, "read_bytes", forbid_unbounded_path_read)
+    monkeypatch.setattr(os, "read", grow_then_read)
+    with pytest.raises(AttachmentInputError, match="file_too_large"):
+        validate_attachment(str(source), max_file_bytes=4)
+    assert grew
+    assert read_sizes == [5]
+
+
+def test_validate_attachment_fails_closed_without_safe_nofollow_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "notes.txt")
+    monkeypatch.setattr(
+        "lyrashield.runtime.attachments._safe_attachment_open_supported", lambda: False
+    )
+
+    with pytest.raises(AttachmentInputError, match="unsupported_platform"):
+        validate_attachment(str(source))
+
+
+def test_windows_attachment_validation_and_staging_use_nofollow_handles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _spec(tmp_path, "windows-api.yaml", "openapi: 3.0.0")
+    flags_seen = _simulate_windows_nofollow_handles(monkeypatch)
+
+    entries = collect_attachments([str(source)])
+    _mount, host_dir = stage_attachments("windows-api", entries)
+    try:
+        assert len(flags_seen) == 2
+        assert all(flags & 0x00200000 for flags in flags_seen)
+        assert _sha256(Path(host_dir) / entries[0]["staged_name"]) == entries[0]["sha256"]
+    finally:
+        shutil.rmtree(host_dir, ignore_errors=True)
+
+
+def test_windows_attachment_validation_binds_opened_file_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "windows-race.txt", "approved")
+    replacement = _write(tmp_path / "replacement.txt", "approved")
+    swapped = False
+
+    def replace_before_open(path: Path) -> None:
+        nonlocal swapped
+        if path == source and not swapped:
+            swapped = True
+            replacement.replace(source)
+
+    flags_seen = _simulate_windows_nofollow_handles(
+        monkeypatch,
+        before_open=replace_before_open,
+    )
+    with pytest.raises(AttachmentInputError, match="source_changed"):
+        validate_attachment(str(source))
+    assert swapped
+    assert flags_seen == [0x00200000]
+
+
+def test_windows_attachment_rejects_reparse_attribute_on_open_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "reparse-candidate.txt", "approved")
+    _simulate_windows_nofollow_handles(monkeypatch)
+    original_fstat = os.fstat
+    opened_fd = [-1]
+
+    class ReparseStat:
+        st_file_attributes = 0x00000400
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(original_fstat(opened_fd[0]), name)
+
+    def reparse_fstat(file_descriptor: int) -> ReparseStat:
+        opened_fd[0] = file_descriptor
+        return ReparseStat()
+
+    monkeypatch.setattr(os, "fstat", reparse_fstat)
+    with pytest.raises(AttachmentInputError, match="reparse point"):
+        validate_attachment(str(source))
+
+
+def test_windows_attachment_fails_closed_without_file_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "no-file-id.txt", "approved")
+    monkeypatch.setattr(attachments_module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(attachments_module, "_safe_attachment_open_supported", lambda: True)
+    original_lstat = os.lstat
+
+    class MissingIdentityStat:
+        st_ino = 0
+
+        def __init__(self, file_stat: os.stat_result) -> None:
+            self._file_stat = file_stat
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._file_stat, name)
+
+    monkeypatch.setattr(os, "lstat", lambda path: MissingIdentityStat(original_lstat(path)))
+    with pytest.raises(AttachmentInputError, match="unsupported_identity"):
+        validate_attachment(str(source))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="exercises native Win32 file handles")
+def test_native_windows_attachment_handles_validate_stage_and_cleanup(tmp_path: Path) -> None:
+    source = _spec(tmp_path, "native-windows-api.yaml", "openapi: 3.0.0")
+    entries = collect_attachments([str(source)])
+
+    mount, host_dir = stage_attachments("native-windows", entries)
+    staged_path = Path(host_dir) / entries[0]["staged_name"]
+    try:
+        assert mount["read_only"] is True
+        assert staged_path.read_bytes() == source.read_bytes()
+        assert entries[0]["sha256"] == _sha256(staged_path)
+    finally:
+        shutil.rmtree(host_dir)
+
+    assert not Path(host_dir).exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="exercises native Win32 no-follow handles")
+def test_native_windows_attachment_rejects_symlink_swap_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "native-swap.txt", "approved")
+    outside = _write(tmp_path / "native-outside.txt", "private")
+    replacement = tmp_path / "native-replacement.txt"
+    try:
+        replacement.symlink_to(outside)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"Windows runner cannot create file symlinks: {exc}")
+
+    native_open = attachments_module._create_windows_file_handle
+    swapped = False
+
+    def swap_then_open(path: Path, flags: int) -> int:
+        nonlocal swapped
+        if path == source and not swapped:
+            swapped = True
+            replacement.replace(source)
+        return native_open(path, flags)
+
+    monkeypatch.setattr(attachments_module, "_create_windows_file_handle", swap_then_open)
+    with pytest.raises(AttachmentInputError):
+        validate_attachment(str(source))
+    assert swapped
 
 
 def test_validate_attachment_rejects_directory(tmp_path: Path) -> None:
@@ -223,7 +484,8 @@ def test_stage_attachments_mounts_read_only_digest_named_dir(tmp_path: Path) -> 
 
         staged = Path(host_dir) / entries[0]["staged_name"]
         assert staged.is_file()
-        assert staged.stat().st_mode & 0o222 == 0  # no write bits
+        if os.name != "nt":
+            assert staged.stat().st_mode & 0o222 == 0  # POSIX host mode is read-only
         assert staged.read_bytes() == source.read_bytes()
 
         manifest = json.loads((Path(host_dir) / ATTACHMENT_MANIFEST_NAME).read_text())
@@ -231,6 +493,25 @@ def test_stage_attachments_mounts_read_only_digest_named_dir(tmp_path: Path) -> 
         assert "source_path" not in manifest[0]
     finally:
         shutil.rmtree(host_dir, ignore_errors=True)
+
+
+def test_windows_staging_uses_readonly_mount_and_keeps_host_cleanup_possible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _spec(tmp_path, "windows-api.yaml", "openapi: 3.0.0")
+    _simulate_windows_nofollow_handles(monkeypatch)
+
+    entries = collect_attachments([str(source)])
+    mount, host_dir = stage_attachments("windows-api-cleanup", entries)
+    staged = Path(host_dir) / entries[0]["staged_name"]
+    manifest = Path(host_dir) / ATTACHMENT_MANIFEST_NAME
+    try:
+        assert mount["read_only"] is True
+        assert staged.stat().st_mode & 0o222 != 0
+        assert manifest.stat().st_mode & 0o222 != 0
+    finally:
+        shutil.rmtree(host_dir)
+    assert not Path(host_dir).exists()
 
 
 def test_stage_attachments_fails_closed_on_checksum_drift(tmp_path: Path) -> None:
@@ -246,6 +527,7 @@ def test_replaced_attachment_does_not_follow_symlink(tmp_path: Path) -> None:
     source = _write(tmp_path / "note.txt", "same bytes")
     outside = _write(tmp_path / "private.txt", "same bytes")
     outside.chmod(0o600)
+    outside_mode = outside.stat().st_mode & 0o777
     entry = validate_attachment(str(source))
     source.unlink()
     source.symlink_to(outside)
@@ -254,7 +536,7 @@ def test_replaced_attachment_does_not_follow_symlink(tmp_path: Path) -> None:
 
     with pytest.raises(AttachmentInputError):
         _stage_one_attachment(entry, str(staging))
-    assert outside.stat().st_mode & 0o777 == 0o600
+    assert outside.stat().st_mode & 0o777 == outside_mode
 
 
 def test_stage_attachments_rejects_unvalidated_entries() -> None:
@@ -263,7 +545,7 @@ def test_stage_attachments_rejects_unvalidated_entries() -> None:
 
 
 def test_validate_rejects_line_terminator_in_name(tmp_path: Path) -> None:
-    source = _write(tmp_path / "report\n.md", "x")
+    source = tmp_path / "report\n.md"
     with pytest.raises(AttachmentInputError, match="invalid_name"):
         validate_attachment(str(source))
 
@@ -442,7 +724,7 @@ class _FakeSession:
         self.writes: dict[str, bytes] = {}
 
     async def write(self, path: Path, data: io.BytesIO) -> None:
-        self.writes[str(path)] = data.getvalue()
+        self.writes[path.as_posix()] = data.getvalue()
 
 
 @pytest.mark.asyncio
@@ -469,7 +751,8 @@ async def test_scratch_copy_links_to_original_and_never_modifies_it(
         # The staged original is untouched — same bytes, still read-only.
         assert staged.read_bytes() == original_bytes
         assert staged.stat().st_mode == original_mode
-        assert original_mode & 0o222 == 0
+        if os.name != "nt":
+            assert original_mode & 0o222 == 0
     finally:
         shutil.rmtree(host_dir, ignore_errors=True)
 

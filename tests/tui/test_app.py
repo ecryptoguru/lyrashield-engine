@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 from textual.widgets import Input, Select, Static
 
 from lyrashield.tui.app import LyraShieldLocalApp
-from lyrashield.tui.byok_config import ByokConfig, ChatGptConfig, Provider
+from lyrashield.tui.byok_config import (
+    AzureConfig,
+    ByokConfig,
+    ByokConfigError,
+    ChatGptConfig,
+    Provider,
+)
 from lyrashield.tui.results_store import FindingRecord, ResultsStore, ResultsStoreKeyError
 from lyrashield.tui.scan_flow import ScanResult
 
@@ -75,6 +82,110 @@ def test_setup_requires_auth_and_azure_fields(
             assert saved == [Provider.AZURE_OPENAI]
             assert app.config.is_configured()
             await pilot.pause()
+
+    asyncio.run(exercise())
+
+
+def test_malformed_saved_byok_keeps_tui_open_with_recovery_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lyrashield.tui import app as tui_app
+
+    def malformed_config():
+        raise ByokConfigError("The saved BYOK setup is malformed; re-enter setup.")
+
+    monkeypatch.setattr(tui_app, "load_config", malformed_config)
+    app = LyraShieldLocalApp(store=ResultsStore(tmp_path / "results.db"))
+
+    async def exercise() -> None:
+        async with app.run_test(size=(80, 24)):
+            message = str(app.query_one("#byok-status", Static).render())
+            assert "saved BYOK setup is malformed" in message
+            assert "re-enter setup" in message
+
+    asyncio.run(exercise())
+
+
+def test_missing_saved_azure_key_keeps_endpoint_and_shows_recovery_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lyrashield.tui import app as tui_app
+
+    monkeypatch.setattr(
+        tui_app,
+        "load_config",
+        lambda: ByokConfig(
+            provider=Provider.AZURE_OPENAI,
+            azure=AzureConfig(endpoint="https://example.openai.azure.com", deployment="prod"),
+        ),
+    )
+    app = LyraShieldLocalApp(store=ResultsStore(tmp_path / "results.db"))
+
+    async def exercise() -> None:
+        async with app.run_test(size=(80, 24)):
+            message = str(app.query_one("#byok-status", Static).render())
+            assert "saved Azure key is unavailable" in message
+            assert "enter it again" in message
+            assert app.config.azure.endpoint == "https://example.openai.azure.com"
+
+    asyncio.run(exercise())
+
+
+def test_setup_requires_new_key_before_switching_azure_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lyrashield.tui import byok_config
+
+    keyring = {}
+
+    def fake_get(service: str, key: str) -> str | None:
+        return keyring.get(f"{service}:{key}")
+
+    def fake_set(service: str, key: str, value: str) -> bool:
+        keyring[f"{service}:{key}"] = value
+        return True
+
+    def fake_delete(service: str, key: str) -> bool:
+        keyring.pop(f"{service}:{key}", None)
+        return True
+
+    monkeypatch.setattr(byok_config, "keyring_get", fake_get)
+    monkeypatch.setattr(byok_config, "keyring_set", fake_set)
+    monkeypatch.setattr(byok_config, "keyring_delete", fake_delete)
+    byok_config.save_config(
+        ByokConfig(
+            provider=Provider.AZURE_OPENAI,
+            azure=AzureConfig(
+                api_key="old-endpoint-key",
+                endpoint="https://old.example",
+                deployment="production",
+            ),
+        )
+    )
+    saved_blob = keyring[f"{byok_config.KEYCHAIN_SERVICE}:{byok_config.CONFIG_KEY}"]
+    old_key_id = json.loads(saved_blob)["azure"]["key_id"]
+    app = LyraShieldLocalApp(store=ResultsStore(tmp_path / "results.db"))
+
+    async def exercise() -> None:
+        async with app.run_test(size=(100, 35)):
+            app.query_one("#provider", Select).value = Provider.AZURE_OPENAI.value
+            app.query_one("#azure-endpoint", Input).value = "https://new.example/"
+            app.query_one("#azure-deployment", Input).value = "replacement"
+            await app._on_save_byok(None)  # type: ignore[arg-type]
+
+            message = str(app.query_one("#byok-status", Static).render())
+            assert "endpoint change requires entering the API key" in message
+            assert keyring[f"{byok_config.KEYCHAIN_SERVICE}:{byok_config.CONFIG_KEY}"] == saved_blob
+            assert keyring[f"{byok_config.KEYCHAIN_SERVICE}:{old_key_id}"] == "old-endpoint-key"
+            assert app.config.azure.endpoint == "https://old.example"
+
+            app.query_one("#azure-key", Input).value = "new-endpoint-key"
+            await app._on_save_byok(None)  # type: ignore[arg-type]
+
+            loaded = byok_config.load_config()
+            assert loaded.azure.endpoint == "https://new.example/"
+            assert loaded.azure.api_key == "new-endpoint-key"
+            assert old_key_id not in keyring
 
     asyncio.run(exercise())
 

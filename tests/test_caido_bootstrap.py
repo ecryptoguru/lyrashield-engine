@@ -32,9 +32,13 @@ class _FakeClient:
         self.args = args
         self.kwargs = kwargs
         self.project = _FakeProjectManager()
+        self.close_count = 0
 
     async def connect(self) -> None:
         return None
+
+    async def aclose(self) -> None:
+        self.close_count = getattr(self, "close_count", 0) + 1
 
 
 class _FakeTokenAuth:
@@ -66,6 +70,82 @@ async def test_bootstrap_caido_uses_per_scan_project_name(monkeypatch: pytest.Mo
     assert client.project.created[0]["name"].startswith("sandbox-scan-123")
     assert client.project.created[0]["name"] == "sandbox-scan-123"
     assert client.project.created[0]["temporary"] is True
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_transfers_client_before_connect_and_leaves_cleanup_to_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered: list[_FakeClient] = []
+
+    class ConnectingClient(_FakeClient):
+        async def connect(self) -> None:
+            assert registered == [self]
+            raise RuntimeError("connect failed")
+
+    monkeypatch.setattr(caido_bootstrap, "Client", ConnectingClient)
+    monkeypatch.setattr(caido_bootstrap, "TokenAuthOptions", _FakeTokenAuth)
+
+    async def _fake_login(*_args: Any, **_kwargs: Any) -> str:
+        return "guest-token"
+
+    monkeypatch.setattr(caido_bootstrap, "_login_as_guest", _fake_login)
+
+    class _FakeSession:
+        pass
+
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await caido_bootstrap.bootstrap_caido(
+            _FakeSession(),  # type: ignore[arg-type]
+            scan_id="scan-ownership",
+            host_url="http://localhost:48080",
+            container_url="http://127.0.0.1:48080",
+            on_client_created=registered.append,
+        )
+
+    assert len(registered) == 1
+    assert registered[0].close_count == 0
+    await registered[0].aclose()
+    assert registered[0].close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_closes_client_on_connect_failure_without_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ConnectingClient(_FakeClient):
+        async def connect(self) -> None:
+            raise RuntimeError("connect failed")
+
+    monkeypatch.setattr(caido_bootstrap, "Client", ConnectingClient)
+    monkeypatch.setattr(caido_bootstrap, "TokenAuthOptions", _FakeTokenAuth)
+
+    async def _fake_login(*_args: Any, **_kwargs: Any) -> str:
+        return "guest-token"
+
+    monkeypatch.setattr(caido_bootstrap, "_login_as_guest", _fake_login)
+
+    class _FakeSession:
+        pass
+
+    clients: list[ConnectingClient] = []
+
+    def make_client(*args: Any, **kwargs: Any) -> ConnectingClient:
+        client = ConnectingClient(*args, **kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(caido_bootstrap, "Client", make_client)
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await caido_bootstrap.bootstrap_caido(
+            _FakeSession(),  # type: ignore[arg-type]
+            scan_id="scan-local-cleanup",
+            host_url="http://localhost:48080",
+            container_url="http://127.0.0.1:48080",
+        )
+
+    assert len(clients) == 1
+    assert clients[0].close_count == 1
 
 
 @pytest.mark.asyncio

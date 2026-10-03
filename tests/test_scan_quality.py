@@ -79,7 +79,7 @@ def test_quality_distinguishes_observed_declared_unassessed() -> None:
     }
     doc = build_scan_quality(
         run_record=run_record,
-        agent_graph=_agent_graph(("a1", "finished"), ("a2", "crashed")),
+        agent_graph=_agent_graph(("a1", "completed"), ("a2", "crashed")),
         coverage_entries=entries,
         vulnerability_reports=reports,
         scope_decisions=decisions,
@@ -122,6 +122,32 @@ def test_quality_without_observations_marks_scope_unassessed() -> None:
     assert doc["observed"]["agents_total"] == 0
     assert doc["unassessed"] == ["a.example.com"]
     assert doc["surfaces"][0]["assessment"] == "unassessed"
+
+
+def test_quality_treats_missing_agent_status_and_zero_findings_as_inconclusive() -> None:
+    doc = build_scan_quality(
+        run_record={
+            "run_id": "q3",
+            "status": "completed",
+            "receipt_persisted": True,
+            "scan_results": {"success": True, "scan_completed": True},
+        },
+        agent_graph={
+            "statuses": {"root": "running"},
+            "names": {"root": "root", "worker": "worker"},
+            "parent_of": {"root": None, "worker": "root"},
+        },
+        coverage_entries=[],
+        vulnerability_reports=[],
+    )
+
+    assert doc["observed"]["agents_total"] == 2
+    assert doc["observed"]["agents_finished"] == 1
+    assert doc["observed"]["agents_incomplete"] == 1
+    assert doc["observed"]["agents_incomplete_statuses"] == {"unknown": 1}
+    assert doc["assessment"] == "inconclusive"
+    assert "no_findings_recorded" in doc["assessment_reasons"]
+    assert "agent_work_incomplete" in doc["assessment_reasons"]
 
 
 # ---------------------------------------------------------------------------

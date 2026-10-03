@@ -14,9 +14,11 @@ import types
 from typing import Any, cast
 
 import pytest
-from agents import ModelSettings, RunConfig, Runner
+from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.exceptions import ModelBehaviorError
+from agents.items import MessageOutputItem
 from agents.memory import SQLiteSession
+from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 import lyrashield.tools.todo.tools as todo_tools
 import strix.tools.notes.tools as notes_tools
@@ -256,6 +258,54 @@ async def test_sanitize_session_redacts_api_key_in_message_output(
     assert "sk-1234567890abcdef" not in block["text"]
     assert "[SECRET]" in block["text"]
     session.close()
+
+
+@pytest.mark.asyncio
+async def test_sanitize_session_redacts_real_sdk_assistant_message_only(
+    tmp_path: Any,
+) -> None:
+    response_message = ResponseOutputMessage(
+        id="msg-sdk-redaction",
+        type="message",
+        role="assistant",
+        status="completed",
+        content=[
+            ResponseOutputText(
+                type="output_text",
+                text="The api_key=sk-sdk-secret-123456 is exposed",
+                annotations=[],
+            ),
+        ],
+    )
+    assistant_item = MessageOutputItem(
+        agent=Agent(name="fixture"), raw_item=response_message
+    ).to_input_item()
+    tool_call_item = {
+        "type": "function_call",
+        "call_id": "call-secret-args",
+        "name": "fixture_tool",
+        "arguments": '{"api_key":"sk-tool-args-secret-123456"}',
+    }
+    session = SQLiteSession("sdk-assistant", tmp_path / "sdk-assistant.db")
+    try:
+        await session.add_items([assistant_item, tool_call_item])
+
+        sanitized = await sanitize_session_secrets(session)
+
+        assert sanitized is True
+        items = await session.get_items()
+        assistant = items[0]
+        assert assistant["type"] == "message"
+        assert assistant["role"] == "assistant"
+        assert assistant["id"] == "msg-sdk-redaction"
+        assert assistant["status"] == "completed"
+        assert assistant["content"][0]["type"] == "output_text"
+        assert "sk-sdk-secret-123456" not in assistant["content"][0]["text"]
+        assert "[SECRET]" in assistant["content"][0]["text"]
+        assert items[1] == tool_call_item
+        assert await sanitize_session_secrets(session) is False
+    finally:
+        session.close()
 
 
 @pytest.mark.asyncio

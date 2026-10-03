@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -7,6 +8,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from lyrashield.artifacts import evidence as _evidence
+from lyrashield.artifacts.writer import (
+    FINDING_ID_RE,
+    restore_revision_artifacts,
+    snapshot_revision_artifacts,
+)
 from lyrashield.telemetry import posthog, scarf
 from lyrashield.utils.redaction import is_sensitive_key, redact_text, redact_url
 
@@ -78,6 +84,22 @@ _MAX_COLLECTION_SIZE = 1_000
 _MAX_METADATA_DEPTH = 10
 
 _MAX_FINDING_SERIALIZED_SIZE = 1_000_000
+
+
+def _next_finding_id(self: ReportState) -> str:
+    """Allocate after every report and Markdown artifact already on disk."""
+    highest = 0
+    for report in self.vulnerability_reports:
+        match = FINDING_ID_RE.fullmatch(str(report.get("id", "")))
+        if match:
+            highest = max(highest, int(match.group(1)))
+    vuln_dir = self.get_run_dir() / "vulnerabilities"
+    if vuln_dir.is_dir():
+        for path in vuln_dir.glob("vuln-*.md"):
+            match = FINDING_ID_RE.fullmatch(path.stem)
+            if match:
+                highest = max(highest, int(match.group(1)))
+    return f"vuln-{highest + 1:04d}"
 
 
 def _truncate_text(value: str, max_length: int = _MAX_TEXT_LENGTH) -> str:
@@ -306,7 +328,41 @@ def add_vulnerability_report(
     agent_id: str | None = None,
     agent_name: str | None = None,
 ) -> str:
-    report_id = f"vuln-{len(self.vulnerability_reports) + 1:04d}"
+    report_id = _next_finding_id(self)
+    prior_artifacts = snapshot_revision_artifacts(self.get_run_dir())
+    prior_reports = list(self.vulnerability_reports)
+    prior_saved_ids = set(self._saved_vuln_ids)
+    prior_revision = self._report_artifacts_revision
+    prior_persisted_revision = self._persisted_report_artifacts_revision
+    prior_run_record = copy.deepcopy(self.run_record)
+    prior_save_seq = self._save_seq
+    prior_turn_count = self._turn_count
+    prior_end_time = self.end_time
+    prior_scope_violations_seen = self._scope_violations_seen
+    prior_scope_dropped_seen = self._scope_dropped_seen
+    prior_receipt_persisted = self.receipt_persisted
+
+    def rollback_unpersisted_report() -> None:
+        self.vulnerability_reports[:] = prior_reports
+        self._saved_vuln_ids = prior_saved_ids
+        self._report_artifacts_revision = prior_revision
+        self._persisted_report_artifacts_revision = prior_persisted_revision
+        self.run_record.clear()
+        self.run_record.update(prior_run_record)
+        self._save_seq = prior_save_seq
+        self._turn_count = prior_turn_count
+        self.end_time = prior_end_time
+        self._scope_violations_seen = prior_scope_violations_seen
+        self._scope_dropped_seen = prior_scope_dropped_seen
+        self.receipt_persisted = prior_receipt_persisted
+        try:
+            restore_revision_artifacts(self.get_run_dir(), prior_artifacts)
+        except Exception as recovery_error:
+            self.receipt_persisted = False
+            self.run_record["receipt_persisted"] = False
+            raise RuntimeError(
+                f"finding {report_id} persistence rollback failed"
+            ) from recovery_error
 
     report: dict[str, Any] = {
         "id": report_id,
@@ -435,14 +491,17 @@ def add_vulnerability_report(
         self.vulnerability_found_callback(sanitized)
 
     self._set_phase("running")
-    persisted = self.save_run_data()
+    try:
+        persisted = self.save_run_data()
+    except Exception:
+        rollback_unpersisted_report()
+        raise
     if not persisted:
         # The report was broadcast to the callback but not durably
         # persisted. Remove the in-memory report and the durable ID marker
         # so the next report does not reuse the same ID or skip its
         # Markdown artifact (comment #16).
-        self.vulnerability_reports.pop()
-        self._saved_vuln_ids.discard(report_id)
+        rollback_unpersisted_report()
         raise RuntimeError(
             f"Vulnerability report {report_id} was not durably persisted; "
             "artifact write failed and the report has been rolled back."
@@ -602,9 +661,54 @@ def update_vulnerability_report(
         candidate[index] = revised
         saved_ids = set(self._saved_vuln_ids)
         saved_ids.discard(report_id)
+        prior_artifacts = snapshot_revision_artifacts(self.get_run_dir())
+        prior_saved_ids = set(self._saved_vuln_ids)
+        prior_revision = self._report_artifacts_revision
+        prior_persisted_revision = self._persisted_report_artifacts_revision
+        prior_run_record = copy.deepcopy(self.run_record)
+        prior_save_seq = self._save_seq
+        prior_turn_count = self._turn_count
+        prior_end_time = self.end_time
+        prior_scope_violations_seen = self._scope_violations_seen
+        prior_scope_dropped_seen = self._scope_dropped_seen
+        prior_receipt_persisted = self.receipt_persisted
+
+        def rollback_revision() -> None:
+            self.vulnerability_reports[index] = original
+            self._saved_vuln_ids = prior_saved_ids
+            self._report_artifacts_revision = prior_revision
+            self._persisted_report_artifacts_revision = prior_persisted_revision
+            if any(
+                not isinstance(report.get("id"), str)
+                or report["id"] not in prior_saved_ids
+                or prior_artifacts.get(f"vulnerabilities/{report['id']}.md") is None
+                for report in self.vulnerability_reports
+            ):
+                # The prior state already had a projection gap (for example,
+                # a missing Markdown file discovered during this write). Force
+                # the next ordinary save to repair it after rolling back.
+                self._persisted_report_artifacts_revision = -1
+            self.run_record.clear()
+            self.run_record.update(prior_run_record)
+            self._save_seq = prior_save_seq
+            self._turn_count = prior_turn_count
+            self.end_time = prior_end_time
+            self._scope_violations_seen = prior_scope_violations_seen
+            self._scope_dropped_seen = prior_scope_dropped_seen
+            self.receipt_persisted = prior_receipt_persisted
+            try:
+                restore_revision_artifacts(self.get_run_dir(), prior_artifacts)
+            except Exception as recovery_error:
+                self.receipt_persisted = False
+                self.run_record["receipt_persisted"] = False
+                raise RuntimeError(
+                    f"finding revision recovery failed for {report_id}"
+                ) from recovery_error
+
         try:
-            self._write_report_projections(candidate, saved_ids)
-        except (OSError, RuntimeError):
+            self._write_report_projections(candidate, saved_ids, require_sarif=True)
+        except Exception:
+            rollback_revision()
             logger.exception(
                 "revision of %s failed to persist; original evidence kept",
                 report_id,
@@ -614,13 +718,17 @@ def update_vulnerability_report(
         self.vulnerability_reports[index] = revised
         self._saved_vuln_ids = saved_ids
         self._report_artifacts_revision += 1
-        persisted = self.save_run_data()
+        # The projections above are complete and required for a revision.
+        # Mark them current so save_run_data writes the receipt without a
+        # second best-effort projection pass that could diverge from run.json.
+        self._persisted_report_artifacts_revision = self._report_artifacts_revision
+        try:
+            persisted = self.save_run_data()
+        except Exception:
+            rollback_revision()
+            raise
         if not persisted:
-            # run.json could not be written even though the finding
-            # projections were. The evidence itself is durable; roll back
-            # the in-memory swap so a later save retries the full record.
-            self.vulnerability_reports[index] = original
-            self._report_artifacts_revision -= 1
+            rollback_revision()
             raise RuntimeError(
                 f"Vulnerability report {report_id} revision could not be "
                 "recorded in run.json; rolled back."

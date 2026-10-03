@@ -4,17 +4,22 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib
 import logging
 import os
+import traceback
 import warnings
 from contextvars import ContextVar
-from pathlib import Path  # noqa: TC003  used at runtime by ``setup_scan_logging``
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, override
+
+from lyrashield.utils.redaction import redact_text
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
 
 _SCAN_ID: ContextVar[str | None] = ContextVar("strix_scan_id", default=None)
@@ -36,6 +41,53 @@ _FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-7s %(scan_id)s %(agent_id)s %(na
 _DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
+class _RedactingFormatter(logging.Formatter):
+    """Redact credentials from scan messages and omit exception messages."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        safe_record = copy.copy(record)
+        safe_record.msg = redact_text(safe_record.getMessage())
+        safe_record.args = ()
+        safe_record.exc_text = None
+        return super().format(safe_record)
+
+    @override
+    def formatException(
+        self,
+        exc_info: tuple[type[BaseException], BaseException, TracebackType | None]
+        | tuple[None, None, None],
+    ) -> str:
+        exc_type, _exc_value, tb = exc_info
+        if exc_type is None:
+            return "Exception details unavailable."
+
+        # Provider exception messages and response bodies can contain arbitrary
+        # customer data or credentials without recognizable labels. Preserve
+        # traceback locations and the exception class, but never serialize the
+        # exception value or source lines into the durable scan log.
+        frames: list[tuple[str, int, str]] = []
+        if tb is not None:
+            for frame, lineno in traceback.walk_tb(tb):
+                frames.append(
+                    (
+                        Path(frame.f_code.co_filename).name,
+                        lineno,
+                        frame.f_code.co_name,
+                    )
+                )
+                if len(frames) == 64:
+                    break
+
+        details = ["Traceback (most recent call last):"]
+        details.extend(
+            f'  File "{filename}", line {lineno}, in {name}' for filename, lineno, name in frames
+        )
+        if tb is not None and len(frames) == 64:
+            details.append("  ... traceback truncated after 64 frames")
+        details.append(f"{exc_type.__name__}: [exception message omitted]")
+        return "\n".join(details)
+
+
 # Third-party loggers that get noisy at DEBUG. Capped so the file isn't
 # drowned in their internals when STRIX_DEBUG=1.
 _NOISY_LIBS: tuple[str, ...] = (
@@ -52,7 +104,7 @@ _HANDLER_TAG = "_strix_scan_handler"
 
 
 # ``openai.agents`` is the openai-agents SDK's canonical logger root.
-_TRACKED_ROOTS: tuple[str, ...] = ("strix", "openai.agents")
+_TRACKED_ROOTS: tuple[str, ...] = ("strix", "openai.agents", "lyrashield")
 
 _STDOUT_QUIET_ROOTS: frozenset[str] = frozenset({"openai.agents"})
 
@@ -109,7 +161,7 @@ def setup_scan_logging(run_dir: Path, *, debug: bool | None = None) -> Callable[
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / "strix.log"
 
-    formatter = logging.Formatter(_FORMAT, datefmt=_DATEFMT)
+    formatter = _RedactingFormatter(_FORMAT, datefmt=_DATEFMT)
     context_filter = _StrixContextFilter()
 
     file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")

@@ -193,15 +193,17 @@ def test_docker_adapter_rejects_an_incompatible_sdk_signature(
 
 
 @pytest.mark.asyncio
-async def test_docker_client_rejects_an_image_unavailable_after_pull() -> None:
+async def test_docker_client_does_not_pull_image_during_container_creation() -> None:
     client = StrixDockerSandboxClient.__new__(StrixDockerSandboxClient)
     client.docker_client = MagicMock()
-    client.image_exists = MagicMock(side_effect=[False, False])
+    client.docker_client.containers.create.side_effect = docker_errors.ImageNotFound(
+        "missing:latest"
+    )
 
-    with pytest.raises(docker_errors.DockerException, match="unavailable after pull"):
+    with pytest.raises(docker_errors.ImageNotFound):
         await client._create_container("missing:latest")
 
-    client.docker_client.images.pull.assert_called_once()
+    client.docker_client.images.pull.assert_not_called()
 
 
 def test_strix_version_reports_installed_lyrashield_distribution(

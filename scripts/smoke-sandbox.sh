@@ -3,6 +3,7 @@ set -euo pipefail
 
 image=${1:?usage: smoke-sandbox.sh <image> [platform]}
 platform=${2:-}
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 docker_args=(--rm)
 if [[ -n "$platform" ]]; then
   docker_args+=(--platform "$platform")
@@ -28,3 +29,11 @@ docker run "${docker_args[@]}" "$image" sh -lc '
   status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
   case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
 '
+
+docker run "${docker_args[@]}" \
+  --network none \
+  --read-only \
+  --tmpfs /tmp \
+  --volume "$repo_root/tests/test_reviewed_sandbox_npm.cjs:/tmp/test_reviewed_sandbox_npm.cjs:ro" \
+  --entrypoint node \
+  "$image" --test /tmp/test_reviewed_sandbox_npm.cjs

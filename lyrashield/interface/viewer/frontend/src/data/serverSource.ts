@@ -46,6 +46,7 @@ export interface LoadedRun {
   finished: boolean;
   vulnerabilities: Vulnerability[];
   reportMarkdown: string | null;
+  reportError: string | null;
   transcript: Transcript;
 }
 
@@ -96,12 +97,22 @@ export async function fetchTranscript(runName?: string | null): Promise<Transcri
 /** One-shot fetch of every endpoint (used on mount and on final settle). */
 export async function fetchAll(runName?: string | null): Promise<LoadedRun> {
   const { summary, raw, finished } = await fetchRunSummary(runName);
-  const [vulnerabilities, reportMarkdown, transcript] = await Promise.all([
+  const [vulnerabilities, reportResult, transcript] = await Promise.all([
     fetchVulnerabilities(summary.runId, runName),
-    fetchReportMarkdown(runName).catch(() => null),
+    fetchReportMarkdown(runName)
+      .then((markdown) => ({ markdown, error: null }))
+      .catch(() => ({ markdown: null, error: "The report could not be loaded." })),
     fetchTranscript(runName).catch(() => ({ agents: [], events: [] }) as Transcript),
   ]);
-  return { summary, raw, finished, vulnerabilities, reportMarkdown, transcript };
+  return {
+    summary,
+    raw,
+    finished,
+    vulnerabilities,
+    reportMarkdown: reportResult.markdown,
+    reportError: reportResult.error,
+    transcript,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -153,6 +153,11 @@ def test_policy_opt_in_allows_private_but_metadata_stays_blocked(
     _trusted_policy(monkeypatch, path)
     assert caido_api._replay_denial("http://10.0.0.5/") is None
     assert caido_api._replay_denial("http://169.254.169.254/") is not None
+    assert caido_api._replay_denial("http://[fd00:ec2::254]/") is not None
+    assert (
+        caido_api._replay_denial("http://metadata.aws.internal/", resolved_ips=["fd00:ec2::254"])
+        is not None
+    )
     assert caido_api._replay_denial("http://metadata.google.internal/") is not None
 
 

@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from caido_sdk_client import Client, TokenAuthOptions
@@ -128,6 +129,7 @@ async def bootstrap_caido(
     host_url: str,
     container_url: str,
     target_relay: bool = False,
+    on_client_created: Callable[[Client], None] | None = None,
 ) -> Client:
     """Connect to the in-container Caido sidecar and select a fresh project."""
     logger.info(
@@ -140,10 +142,16 @@ async def bootstrap_caido(
     access_token = await _login_as_guest(session, container_url=container_url)
 
     client = Client(host_url, auth=TokenAuthOptions(token=access_token))
-    await client.connect()
-
-    project_name = f"sandbox-{scan_id[:8]}"
+    ownership_transferred = False
     try:
+        if on_client_created is not None:
+            # Transfer the handle to the startup owner before connect's first
+            # await, so cancellation or a transport failure can close it.
+            on_client_created(client)
+            ownership_transferred = True
+        await client.connect()
+
+        project_name = f"sandbox-{scan_id[:8]}"
         project = await client.project.create(
             CreateProjectOptions(name=project_name, temporary=True),
         )
@@ -151,10 +159,12 @@ async def bootstrap_caido(
         if target_relay:
             await configure_target_relay(client)
     except BaseException:
-        # The connected client never reaches the session bundle if project
-        # setup fails, so close it here to avoid leaking the transport.
-        with contextlib.suppress(Exception):
-            await client.aclose()
+        # Once transferred, the outer startup owner closes this handle with
+        # the other resources. Without a callback, preserve the old local
+        # cleanup behavior for standalone callers.
+        if not ownership_transferred:
+            with contextlib.suppress(Exception):
+                await client.aclose()
         raise
     logger.info("Caido project selected: %s", project.id)
     return client

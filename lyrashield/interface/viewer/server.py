@@ -20,8 +20,11 @@ import json
 import logging
 import mimetypes
 import secrets
+import socket
 import threading
+import time
 import webbrowser
+from contextlib import suppress
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,6 +49,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+POST_BODY_MAX_BYTES = 64 * 1024
+POST_BODY_TIMEOUT_SECONDS = 5.0
+REQUEST_HEADER_TIMEOUT_SECONDS = 5.0
+
+
+class _PostBodyError(Exception):
+    def __init__(self, status: HTTPStatus, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
 
 def bundle_dir() -> Path:
     """Directory holding the committed, prebuilt SPA (index.html + assets)."""
@@ -60,7 +74,20 @@ def _iter_run_dirs(base_dir: Path) -> list[Path]:
     """Every run directory under ``base_dir``, newest first by record mtime."""
     if not base_dir.is_dir():
         return []
-    run_dirs = [child for child in base_dir.iterdir() if run_record_path(child).is_file()]
+    base = base_dir.resolve()
+    run_dirs: list[Path] = []
+    for child in base_dir.iterdir():
+        # Run history may contain customer data. Do not follow a linked child
+        # directory or a linked run.json record outside the selected root.
+        if child.is_symlink() or not child.is_dir():
+            continue
+        record = run_record_path(child)
+        if record.is_symlink() or not record.is_file():
+            continue
+        resolved = child.resolve()
+        if resolved.parent != base:
+            continue
+        run_dirs.append(child)
     run_dirs.sort(key=lambda child: run_record_path(child).stat().st_mtime, reverse=True)
     return run_dirs
 
@@ -100,12 +127,14 @@ def resolve_run_dir(base_dir: Path, run_param: str | None, default_run_dir: Path
     Returns ``default_run_dir`` when no run is requested. Rejects traversal and
     unknown runs (returns None) so the caller can answer 404.
     """
-    if not run_param:
-        return default_run_dir
     base = base_dir.resolve()
-    candidate = (base / run_param).resolve()
+    requested = default_run_dir if not run_param else base / run_param
+    if requested.is_symlink():
+        return None
+    candidate = requested.resolve()
     # Only direct children of the runs base that actually hold a run record.
-    if candidate.parent != base or not run_record_path(candidate).is_file():
+    record = run_record_path(candidate)
+    if candidate.parent != base or record.is_symlink() or not record.is_file():
         return None
     return candidate
 
@@ -150,6 +179,33 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
     class ViewerHandler(BaseHTTPRequestHandler):
         server_version = "LyraShieldViewer/1.0"
 
+        def setup(self) -> None:
+            super().setup()
+            self.connection.settimeout(REQUEST_HEADER_TIMEOUT_SECONDS)
+            self._header_timeout_timer = threading.Timer(
+                REQUEST_HEADER_TIMEOUT_SECONDS, self._expire_header_read
+            )
+            self._header_timeout_timer.daemon = True
+            self._header_timeout_timer.start()
+
+        def finish(self) -> None:
+            self._header_timeout_timer.cancel()
+            super().finish()
+
+        def _expire_header_read(self) -> None:
+            # BaseHTTPRequestHandler reads the request line and headers before
+            # dispatching to do_GET/do_POST. A total deadline closes sockets
+            # whose peer keeps trickling bytes just before the idle timeout.
+            self.close_connection = True
+            with suppress(OSError):
+                self.connection.shutdown(socket.SHUT_RDWR)
+
+        def parse_request(self) -> bool:
+            try:
+                return super().parse_request()
+            finally:
+                self._header_timeout_timer.cancel()
+
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             logger.debug("viewer %s - %s", self.address_string(), format % args)
 
@@ -187,21 +243,57 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
             except BrokenPipeError:
                 logger.debug("viewer client disconnected during POST %s", path)
+            except _PostBodyError as exc:
+                self.close_connection = True
+                self._send_json(exc.status, {"error": exc.message})
             except Exception:
                 # A bad request must never kill the worker thread.
                 logger.exception("viewer request failed: POST %s", path)
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
 
         def _read_body(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length else b""
+            content_lengths = self.headers.get_all("Content-Length", [])
+            if len(content_lengths) > 1:
+                raise _PostBodyError(HTTPStatus.BAD_REQUEST, "invalid_content_length")
+            transfer_encoding = self.headers.get("Transfer-Encoding")
+            if transfer_encoding:
+                raise _PostBodyError(HTTPStatus.BAD_REQUEST, "unsupported_transfer_encoding")
+            raw_length = content_lengths[0].strip() if content_lengths else "0"
+            if not raw_length or not raw_length.isascii() or not raw_length.isdecimal():
+                raise _PostBodyError(HTTPStatus.BAD_REQUEST, "invalid_content_length")
+            # Bound the decimal conversion too, so attacker-controlled headers
+            # cannot trigger Python's huge-integer parsing limit or allocation.
+            if len(raw_length) > 10:
+                raise _PostBodyError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "body_too_large")
+            length = int(raw_length)
+            if length > POST_BODY_MAX_BYTES:
+                raise _PostBodyError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "body_too_large")
+
+            raw = bytearray()
+            deadline = time.monotonic() + POST_BODY_TIMEOUT_SECONDS
+            previous_timeout = self.connection.gettimeout()
+            try:
+                while len(raw) < length:
+                    remaining_time = deadline - time.monotonic()
+                    if remaining_time <= 0:
+                        raise _PostBodyError(HTTPStatus.REQUEST_TIMEOUT, "body_timeout")
+                    self.connection.settimeout(remaining_time)
+                    try:
+                        chunk = self.rfile.read1(min(length - len(raw), 8192))
+                    except TimeoutError as exc:
+                        raise _PostBodyError(HTTPStatus.REQUEST_TIMEOUT, "body_timeout") from exc
+                    if not chunk:
+                        raise _PostBodyError(HTTPStatus.BAD_REQUEST, "incomplete_body")
+                    raw.extend(chunk)
+            finally:
+                self.connection.settimeout(previous_timeout)
             try:
                 body = json.loads(raw or b"{}")
-            except json.JSONDecodeError:
-                return cast("dict[str, Any]", {})
-            if isinstance(body, dict):
-                return cast("dict[str, Any]", body)
-            return cast("dict[str, Any]", {})
+            except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+                raise _PostBodyError(HTTPStatus.BAD_REQUEST, "invalid_json") from None
+            if not isinstance(body, dict):
+                raise _PostBodyError(HTTPStatus.BAD_REQUEST, "body_must_be_object")
+            return cast("dict[str, Any]", body)
 
         # Funnel events the viewer is allowed to forward. This handler is the
         # trust boundary: only these event names, with only their known props,
@@ -556,18 +648,33 @@ def serve(
     state = _ViewerState(run_dir=run_dir, assets_dir=assets_dir, steer_handler=steer_handler)
     handler = _make_handler(state)
 
+    server_class: type[ThreadingHTTPServer] = ThreadingHTTPServer
     try:
-        httpd = ThreadingHTTPServer((host, port), handler)
+        parsed_host = ipaddress.ip_address(normalized_host)
+    except ValueError:
+        parsed_host = None
+    if parsed_host is not None and parsed_host.version == 6:
+
+        class IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+
+        server_class = IPv6ThreadingHTTPServer
+
+    try:
+        httpd = server_class((normalized_host, port), handler)
     except OSError:
         if port == 0:
             raise
         logger.info("viewer port %s unavailable, falling back to an ephemeral port", port)
-        httpd = ThreadingHTTPServer((host, 0), handler)
+        httpd = server_class((normalized_host, 0), handler)
 
     httpd.daemon_threads = True
     bound_port = int(httpd.server_address[1])
     state.cookie_name = f"{SESSION_COOKIE_PREFIX}_{bound_port}"
-    url = f"http://{host}:{bound_port}"
+    url_host = (
+        f"[{normalized_host}]" if parsed_host is not None and parsed_host.version == 6 else host
+    )
+    url = f"http://{url_host}:{bound_port}"
 
     thread = threading.Thread(target=httpd.serve_forever, name="strix-viewer", daemon=True)
     thread.start()

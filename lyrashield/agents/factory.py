@@ -648,22 +648,9 @@ def resolve_product_overrides() -> None:
 
 
 def _apply_tool_overrides(tools: list[Tool]) -> list[Tool]:
-    """Replace any tool whose name is registered as an override."""
+    """Replace tools only within the current agent's preselected authority."""
     resolve_product_overrides()
-    if not _TOOL_OVERRIDES:
-        return tools
-    updated: list[Tool] = []
-    replaced: set[str] = set()
-    for tool in tools:
-        if tool.name in _TOOL_OVERRIDES:
-            updated.append(_TOOL_OVERRIDES[tool.name])
-            replaced.add(tool.name)
-        else:
-            updated.append(tool)
-    for key, tool in _TOOL_OVERRIDES.items():
-        if key not in replaced:
-            updated.append(tool)
-    return updated
+    return [_TOOL_OVERRIDES.get(tool.name, tool) for tool in tools]
 
 
 _MODEL_POLICY: dict[str, Callable[..., Any]] = {}
@@ -790,6 +777,7 @@ def build_strix_agent(
         name=name,
         instructions=instructions,
         tools=tools,
+        run_as="pentester",
         tool_use_behavior=_finish_tool_use_behavior,
         **agent_model_options,
         capabilities=[

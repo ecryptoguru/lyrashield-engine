@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from lyrashield.artifacts.sarif import write_sarif
+from lyrashield.artifacts.sarif import build_sarif_report, write_sarif
 
 
 if TYPE_CHECKING:
@@ -221,6 +221,58 @@ def test_write_sarif_emits_version_control_provenance(tmp_path: Path) -> None:
     assert run["properties"]["repository"] == "acme/widget"
     assert run["properties"]["commit_sha"] == "abc123def456"
     assert run["properties"]["ref"] == "refs/heads/main"
+
+
+def test_sarif_repository_context_redacts_credentials_without_changing_fingerprints() -> None:
+    report = _finding()
+    without_context = build_sarif_report([report])
+    with_context = build_sarif_report(
+        [report],
+        repository_context={
+            "repositoryUri": (
+                "https://repo-user:repo-password@git.example/acme/widget.git"
+                "?access_token=repo-access-secret&mode=tree#repo-fragment-secret"
+            ),
+            "repositoryFullName": "acme/widget?access_token=repo-access-secret",
+            "commitSha": "abc123def456",
+            "branch": "token=branch-secret",
+            "ref": "refs/heads/token=ref-secret",
+        },
+    )
+
+    blob = json.dumps(with_context)
+    for secret in (
+        "repo-user",
+        "repo-password",
+        "repo-access-secret",
+        "repo-fragment-secret",
+        "branch-secret",
+        "ref-secret",
+    ):
+        assert secret not in blob
+    run = with_context["runs"][0]
+    assert run["properties"]["repository"] == "acme/widget"
+    assert run["versionControlProvenance"][0]["repositoryUri"] == (
+        "https://git.example/acme/widget.git"
+    )
+    assert (
+        run["results"][0]["partialFingerprints"]
+        == without_context["runs"][0]["results"][0]["partialFingerprints"]
+    )
+
+
+def test_sarif_repository_uri_redacts_scp_remote_username() -> None:
+    sarif = build_sarif_report(
+        [_finding()],
+        repository_context={"repositoryUri": "deploy-secret@git.example:acme/widget.git"},
+    )
+
+    run = sarif["runs"][0]
+    serialized = json.dumps(sarif)
+    assert "deploy-secret" not in serialized
+    assert run["versionControlProvenance"][0]["repositoryUri"] == (
+        "ssh://git.example/acme/widget.git"
+    )
 
 
 def test_write_sarif_omits_provenance_when_no_repository_context(tmp_path: Path) -> None:

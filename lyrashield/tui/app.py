@@ -38,7 +38,9 @@ from lyrashield.tui.byok_config import (
     LAUNCH_PROVIDERS,
     SCAN_MODES,
     ByokConfig,
+    ByokConfigError,
     Provider,
+    azure_endpoints_equivalent,
     load_config,
     provider_label,
     save_config,
@@ -87,9 +89,20 @@ class LyraShieldLocalApp(App[None]):
         self._startup_error = ""
         try:
             self.config = config if config is not None else load_config()
+        except ByokConfigError as exc:
+            self.config = ByokConfig()
+            self._startup_error = str(exc)
         except ResultsStoreKeyError:
             self.config = ByokConfig()
             self._startup_error = "Local keychain is unavailable; BYOK setup cannot be loaded."
+        if (
+            self.config.provider == Provider.AZURE_OPENAI
+            and self.config.azure.endpoint
+            and self.config.azure.deployment
+            and not self.config.azure.api_key
+            and not self._startup_error
+        ):
+            self._startup_error = "The saved Azure key is unavailable; enter it again to continue."
         self.store = store or ResultsStore()
         self._scan_task: asyncio.Task[None] | None = None
         self._doctor_task: asyncio.Task[None] | None = None
@@ -128,7 +141,7 @@ class LyraShieldLocalApp(App[None]):
             Input(placeholder="https://your-resource.openai.azure.com", id="azure-endpoint"),
             Input(placeholder="Azure deployment name", id="azure-deployment"),
             Input(
-                placeholder="Azure API key (leave blank to keep saved key)",
+                placeholder="Azure API key (leave blank to keep key for this endpoint)",
                 password=True,
                 id="azure-key",
             ),
@@ -197,16 +210,27 @@ class LyraShieldLocalApp(App[None]):
                 status.update("[red]Sign in first: `lyrashield auth login chatgpt`[/]")
                 return
         else:
-            self.config.azure.endpoint = (
+            endpoint = (
                 self.query_one("#azure-endpoint", Input).value.strip() or self.config.azure.endpoint
             )
-            self.config.azure.deployment = (
+            deployment = (
                 self.query_one("#azure-deployment", Input).value.strip()
                 or self.config.azure.deployment
             )
-            self.config.azure.api_key = (
-                self.query_one("#azure-key", Input).value.strip() or self.config.azure.api_key
-            )
+            entered_api_key = self.query_one("#azure-key", Input).value.strip()
+            if (
+                self.config.azure.api_key
+                and not entered_api_key
+                and not azure_endpoints_equivalent(endpoint, self.config.azure.endpoint)
+            ):
+                status.update(
+                    "[red]Azure endpoint change requires entering the API key again; "
+                    "the existing key remains with the prior endpoint.[/]"
+                )
+                return
+            self.config.azure.endpoint = endpoint
+            self.config.azure.deployment = deployment
+            self.config.azure.api_key = entered_api_key or self.config.azure.api_key
             if not self.config.azure.is_complete():
                 status.update("[red]Enter an Azure endpoint, deployment and API key.[/]")
                 return

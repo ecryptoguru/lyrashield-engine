@@ -28,6 +28,7 @@ from lyrashield.policy.settings import (
     is_lyrashield_product,
 )
 from strix.config import load_settings
+from strix.interface.auth_cli import _CallbackServer, _first
 
 
 if TYPE_CHECKING:
@@ -195,30 +196,6 @@ def _finish(
     return codex.exchange_code(code, verifier)
 
 
-class _CallbackServer:
-    """A one-shot local HTTP server that catches the OAuth redirect."""
-
-    def __init__(self, httpd: HTTPServer, event: threading.Event, holder: dict[str, Any]) -> None:
-        self._httpd = httpd
-        self._event = event
-        self._holder = holder
-        self._thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        self._thread.start()
-
-    def wait(self, timeout: float) -> tuple[str | None, str | None, str | None] | None:
-        if not self._event.wait(timeout):
-            return None
-        return (
-            self._holder.get("code"),
-            self._holder.get("state"),
-            self._holder.get("error"),
-        )
-
-    def shutdown(self) -> None:
-        self._httpd.shutdown()
-        self._httpd.server_close()
-
-
 def _try_start_callback_server() -> _CallbackServer | None:
     event = threading.Event()
     holder: dict[str, Any] = {}
@@ -251,11 +228,6 @@ def _try_start_callback_server() -> _CallbackServer | None:
         logger.debug("could not bind callback port %d", codex.CALLBACK_PORT, exc_info=True)
         return None
     return _CallbackServer(httpd, event, holder)
-
-
-def _first(query: dict[str, list[str]], key: str) -> str | None:
-    values = query.get(key)
-    return values[0] if values else None
 
 
 def _status(console: Console) -> int:

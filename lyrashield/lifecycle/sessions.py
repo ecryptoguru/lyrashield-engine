@@ -139,15 +139,18 @@ async def replace_session_items(
     new_items: list[Any],
     *,
     expected_len: int | None = None,
+    expected_items: list[Any] | None = None,
 ) -> bool:
     """Overwrite the session's items, restoring the originals on failure.
 
-    When ``expected_len`` is given, the rewrite is skipped if the session no
-    longer has that many items (a concurrent writer changed it), so a slow
-    compaction summary can't clobber newer turns.
+    Expected values prevent a slow compaction summary from clobbering changes
+    made after its input snapshot was captured.
     """
     async with session_write_lock(session):
         original = list(await session.get_items())
+        if expected_items is not None and original != expected_items:
+            logger.warning("skipping session rewrite: history changed since its snapshot")
+            return False
         if expected_len is not None and len(original) != expected_len:
             logger.warning(
                 "skipping session rewrite: expected %d items, found %d",
@@ -228,27 +231,42 @@ def _redact_output_secrets(item_dict: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _message_has_text(item_dict: dict[str, Any]) -> bool:
-    """Return True if a message_output item carries output_text content."""
-    if item_dict.get("type") != "message_output":
+    """Recognize persisted SDK assistant messages and legacy message outputs."""
+    item_type = item_dict.get("type")
+    if item_type == "message_output":
+        # Keep compatibility with the legacy session shape, which has no role.
+        pass
+    elif item_type in {None, "message"}:
+        if item_dict.get("role") != "assistant":
+            return False
+    else:
+        # In particular, never inspect function-call arguments as message text.
         return False
+
     content = item_dict.get("content")
+    if isinstance(content, str):
+        return bool(content)
     if not isinstance(content, list):
         return False
     return any(
-        isinstance(block, dict) and cast("dict[str, Any]", block).get("type") == "output_text"
+        isinstance(block, dict)
+        and cast("dict[str, Any]", block).get("type") in {"output_text", "input_text"}
         for block in content
     )
 
 
 def _redact_message_secrets(item_dict: dict[str, Any]) -> dict[str, Any] | None:
-    """Redact secrets in a message_output item; return None if unchanged."""
+    """Redact assistant text while preserving message metadata and nontext blocks."""
     content = item_dict.get("content")
+    if isinstance(content, str):
+        redacted = redact_secrets(content)
+        return {**item_dict, "content": redacted} if redacted != content else None
     if not isinstance(content, list):
         return None
     new_blocks: list[Any] = []
     changed = False
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "output_text":
+        if isinstance(block, dict) and block.get("type") in {"output_text", "input_text"}:
             text = block.get("text", "")
             if isinstance(text, str):
                 redacted = redact_secrets(text)

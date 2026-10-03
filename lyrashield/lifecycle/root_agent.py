@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, cast
 from agents import RunConfig
 from agents.sandbox import SandboxRunConfig
 
+from lyrashield.tools.notes.tools import get_notes_store
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -315,6 +317,7 @@ async def build_root_runtime(
 
     root_runtime_context: dict[str, Any] = {
         "coordinator": coordinator,
+        "notes_store": get_notes_store(scan_context.paths.state_dir),
         "sandbox_session": bundle["session"],
         "caido_client": bundle["caido_client"],
         "agent_id": root_id,

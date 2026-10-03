@@ -46,7 +46,9 @@ dependencies = [
   "jinja2>=3.1.6",
   "pyyaml>=6.0.3",
   "httpx>=0.28.1",
-  "mcp>=1.28.1",
+  # The engine imports `McpError`, retained through MCP SDK 1.x but renamed in
+  # 2.x. Keep fresh wheel installs within the API line verified by the lock.
+  "mcp>=1.28.1,<2",
   "python-dotenv>=1.2.2",
   "pygments>=2.20.0",
   "pydantic>=2.11.3",
@@ -71,7 +73,7 @@ dependencies = [
 # Encrypted PDF export for the local viewer (`strix view`). Imported lazily by
 # strix/viewer/server.py, and the LyraShield worker never runs the viewer, so
 # these stay out of the base install rather than shipping in every scan image.
-viewer = ["reportlab>=4.0", "pypdf>=5.0", "markdown-it-py>=3.0.0"]
+viewer = ["reportlab>=4.0", "pypdf>=6.19.0", "markdown-it-py>=3.0.0"]
 
 [project.scripts]
 lyrashield = "lyrashield_adapter.cli:main"
@@ -113,14 +115,31 @@ packages = ["strix", "lyrashield_adapter", "lyrashield"]
 # (hatchling includes non-.py files under the package). The Vite SOURCE lives
 # under the package dir too but must never ship in the wheel.
 exclude = [
+    "/.coverage*",
+    "/.superpowers/**",
+    "/reports/**",
+    "/coverage/**",
+    "/coverage.xml",
+    "/coverage.json",
+    "/htmlcov/**",
     "strix/interface/viewer/frontend",
     "strix/interface/viewer/frontend/**",
     "lyrashield/interface/viewer/frontend",
     "lyrashield/interface/viewer/frontend/**",
+    "strix/interface/tui/**/*.go",
+    "strix/interface/tui/go.mod",
+    "strix/interface/tui/go.sum",
 ]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
+    "/.coverage*",
+    "/.superpowers/**",
+    "/reports/**",
+    "/coverage/**",
+    "/coverage.xml",
+    "/coverage.json",
+    "/htmlcov/**",
     "/.worktrees",
     "/tests/**",
     "/strix/interface/viewer/frontend/**",

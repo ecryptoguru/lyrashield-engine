@@ -9,15 +9,19 @@ pairing so the trimmed history is still valid provider input.
 
 from __future__ import annotations
 
+import copy
 import logging
-import math
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from litellm.exceptions import BadRequestError, ContextWindowExceededError
-from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+from openai.types.responses import (
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
+)
 
 from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.inputs import make_model_settings
@@ -311,6 +315,15 @@ def _checkpoint_item(summary: str) -> dict[str, Any]:
 
 
 def _extract_text(response: ModelResponse) -> str:
+    # Validate the whole response before text can replace retained evidence.
+    for item in response.output:
+        if getattr(item, "status", None) not in (None, "completed"):
+            return ""
+        if isinstance(item, ResponseOutputMessage) and any(
+            isinstance(chunk, ResponseOutputRefusal) for chunk in item.content
+        ):
+            return ""
+
     parts: list[str] = []
     for item in response.output:
         if not isinstance(item, ResponseOutputMessage):
@@ -351,6 +364,7 @@ async def _summarize(
     from lyrashield.lifecycle.hooks import (
         BudgetExceededError,
         BudgetPausedError,
+        _estimate_out_of_band_input_tokens,
         get_active_hooks,
     )
 
@@ -360,7 +374,7 @@ async def _summarize(
         await hooks.reserve_out_of_band_request(
             key=reservation_key,
             model=model,
-            input_tokens=max(1, math.ceil(len(prompt) / 3.5)),
+            input_tokens=_estimate_out_of_band_input_tokens(model, prompt),
             max_output_tokens=max_tokens,
         )
     response: ModelResponse | None = None
@@ -377,6 +391,18 @@ async def _summarize(
             conversation_id=None,
             prompt=None,
         )
+        report_state = get_global_report_state()
+        if report_state is not None:
+            try:
+                report_state.record_sdk_usage(
+                    agent_id="compaction",
+                    agent_name="compaction",
+                    model=model,
+                    usage=response.usage,
+                    response_id=response.response_id,
+                )
+            except Exception:
+                logger.exception("failed to record SDK usage for compaction")
     except (BudgetExceededError, BudgetPausedError):
         # A budget rejection from the reservation is not a generic compaction
         # failure — it must propagate so the interactive pause handler (or the
@@ -394,21 +420,9 @@ async def _summarize(
                 model=model,
                 usage=response.usage if response is not None else None,
             )
-    report_state = get_global_report_state()
-    if report_state is not None and response is not None:
-        try:
-            report_state.record_sdk_usage(
-                agent_id="compaction",
-                agent_name="compaction",
-                model=model,
-                usage=response.usage,
-                response_id=response.response_id,
-            )
-        except Exception:
-            logger.exception("failed to record SDK usage for compaction")
     content = _extract_text(response).strip()
     if not content:
-        logger.warning("compaction summary returned no content")
+        logger.warning("compaction summary returned no usable completed content")
         return None
     return content
 
@@ -435,7 +449,7 @@ async def maybe_compact(
         return False
 
     async with session_write_lock(session):
-        items = list(await session.get_items())
+        items = copy.deepcopy(await session.get_items())
     if len(items) < _MIN_ITEMS_TO_COMPACT:
         return False
 
@@ -473,7 +487,7 @@ async def maybe_compact(
     redacted_summary = redact_text(summary)
 
     new_items = [_checkpoint_item(redacted_summary), *recent]
-    rewritten = await replace_session_items(session, new_items, expected_len=len(items))
+    rewritten = await replace_session_items(session, new_items, expected_items=items)
     if rewritten:
         logger.info(
             "compacted %s: %d items (~%d tok) -> %d items (summary + %d recent)",

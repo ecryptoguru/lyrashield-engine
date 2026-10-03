@@ -24,7 +24,7 @@ jobs:
     # dispatch from main. Dispatch from any other ref fails closed so an
     # arbitrary unreviewed checkout can never publish a sandbox image.
     if: >-
-      github.event_name == 'push' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/sandbox-v')) ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

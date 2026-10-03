@@ -15,11 +15,13 @@ Guarantees enforced here:
 * Staging: validated originals are copied into a per-run host directory under
   digest-prefixed names (``<sha256[:16]>-<basename>``), so two attachments
   sharing a basename can never collide and identical content dedupes to one
-  staged file. Staged bytes are re-hashed against the recorded digest, made
-  read-only (``0o444``), and bind-mounted read-only at
+  staged file. Staged bytes are re-hashed against the recorded digest and
+  bind-mounted read-only at
   :data:`ATTACHMENTS_CONTAINER_DIR` — separate from the ``/workspace`` source
-  tree. A ``manifest.json`` of the staged originals rides the same mount so
-  in-sandbox tools can map names to digests.
+  tree. POSIX host files also use mode ``0o444``; Windows relies on the
+  read-only mount so ordinary sandbox cleanup can remove the files. A
+  ``manifest.json`` of the staged originals rides the same mount so in-sandbox
+  tools can map names to digests.
 * Scratch-copy helper (currently used only by tests; no tool calls it):
   :func:`create_scratch_copy` re-verifies the staged digest, then
   writes a bounded copy into the writable in-container scratch area and
@@ -28,7 +30,9 @@ Guarantees enforced here:
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
+import importlib
 import io
 import json
 import logging
@@ -37,8 +41,10 @@ import re
 import shutil
 import stat
 import tempfile
+from collections.abc import Callable
+from ctypes import wintypes
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 
 if TYPE_CHECKING:
@@ -104,6 +110,12 @@ _BASENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 # and is never recorded in the public worker contract.
 _PUBLIC_FIELDS = ("name", "staged_name", "sha256", "size", "content_type", "container_path")
 
+# Win32 CreateFileW flag used to open the final path component itself when it
+# is a reparse point. The handle is inspected and rejected before any bytes
+# are read, matching POSIX O_NOFOLLOW semantics.
+_WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+
 
 class AttachmentInputError(ValueError):
     """Named admission/staging failure for a supporting-file input.
@@ -140,6 +152,207 @@ def _declared_content_type(name: str) -> str:
     return "text/plain"
 
 
+def _is_windows_platform() -> bool:
+    return os.name == "nt"
+
+
+def _safe_attachment_open_supported() -> bool:
+    if _is_windows_platform():
+        try:
+            msvcrt = importlib.import_module("msvcrt")
+        except ImportError:
+            return False
+        return hasattr(ctypes, "WinDLL") and hasattr(msvcrt, "open_osfhandle")
+    return hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_NONBLOCK")
+
+
+def _safe_read_open_flags() -> int:
+    """Return flags that refuse links and special-file blocking."""
+    if _is_windows_platform() or not _safe_attachment_open_supported():
+        raise AttachmentInputError(
+            "unsupported_platform",
+            "Safe attachment reads require a supported no-follow file-open strategy.",
+        )
+    return os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+
+
+def _create_windows_file_handle(path: Path, flags: int) -> int:
+    """Open an existing Windows path without following its final reparse point."""
+    if not _is_windows_platform():
+        raise OSError("Windows file handles are only available on Windows.")
+
+    win_dll = cast("Callable[..., Any]", ctypes.WinDLL)  # type: ignore[attr-defined]
+    kernel32 = win_dll("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(path),
+        0x80000000,  # GENERIC_READ
+        0x00000001 | 0x00000002 | 0x00000004,  # FILE_SHARE_READ | WRITE | DELETE
+        None,
+        3,  # OPEN_EXISTING
+        0x00000080 | flags,  # FILE_ATTRIBUTE_NORMAL | caller-supplied flags
+        None,
+    )
+    handle_value = getattr(handle, "value", handle)
+    if handle_value in (None, -1, ctypes.c_void_p(-1).value):
+        get_last_error = cast("Callable[[], int]", ctypes.get_last_error)  # type: ignore[attr-defined]
+        error = get_last_error()
+        raise OSError(error, "CreateFileW failed to open attachment", str(path))
+    return int(handle_value)
+
+
+def _windows_handle_to_fd(handle: int) -> int:
+    """Transfer a Win32 handle to a binary CRT descriptor."""
+    msvcrt = importlib.import_module("msvcrt")
+    open_osfhandle = cast("Callable[[int, int], int]", msvcrt.open_osfhandle)
+    return open_osfhandle(handle, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+
+
+def _close_windows_handle(handle: int) -> None:
+    """Close a Win32 handle that was not transferred to a CRT descriptor."""
+    win_dll = cast("Callable[..., Any]", ctypes.WinDLL)  # type: ignore[attr-defined]
+    kernel32 = win_dll("kernel32", use_last_error=True)
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    if not close_handle(handle):
+        get_last_error = cast("Callable[[], int]", ctypes.get_last_error)  # type: ignore[attr-defined]
+        error = get_last_error()
+        raise OSError(error, "CloseHandle failed for attachment")
+
+
+def _open_attachment_fd(path: str | Path) -> int:
+    """Open a regular-file candidate through a no-follow descriptor/handle."""
+    if _is_windows_platform():
+        if not _safe_attachment_open_supported():
+            raise AttachmentInputError(
+                "unsupported_platform", "Safe Windows attachment handles are unavailable."
+            )
+        handle = _create_windows_file_handle(Path(path), _WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT)
+        try:
+            return _windows_handle_to_fd(handle)
+        except Exception:
+            _close_windows_handle(handle)
+            raise
+    return os.open(path, _safe_read_open_flags())
+
+
+def _is_reparse_point(file_stat: os.stat_result) -> bool:
+    return bool(getattr(file_stat, "st_file_attributes", 0) & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _attachment_file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    """Return a usable device/file identity, rejecting missing Windows IDs."""
+    identity = (file_stat.st_dev, file_stat.st_ino)
+    if _is_windows_platform() and (identity[0] == 0 or identity[1] == 0):
+        raise AttachmentInputError(
+            "unsupported_identity",
+            "This Windows filesystem does not expose a stable attachment file identity.",
+        )
+    return identity
+
+
+def _open_staged_attachment(path: Path) -> int:
+    """Create a new staged file without following an attacker-chosen entry."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    if not _is_windows_platform():
+        if not hasattr(os, "O_NOFOLLOW"):
+            raise AttachmentInputError(
+                "unsupported_platform", "Safe attachment staging requires no-follow file opens."
+            )
+        flags |= os.O_NOFOLLOW
+    # O_EXCL makes the generated leaf create-only on Windows too, so a
+    # pre-existing reparse point can never be opened for writing.
+    return os.open(path, flags, 0o600)
+
+
+def _make_staged_attachment_readonly(fd: int) -> None:
+    if _is_windows_platform():
+        # The bind mount is the Windows immutability boundary. Setting the
+        # read-only attribute would prevent session cleanup from unlinking it.
+        return
+    os.fchmod(fd, 0o444)
+
+
+def _read_attachment_bytes(source_fd: int, max_file_bytes: int, name: str) -> bytes:
+    """Read no more than the configured limit plus one detection byte."""
+    chunks: list[bytes] = []
+    size = 0
+    while size <= max_file_bytes:
+        chunk = os.read(source_fd, min(64 * 1024, max_file_bytes + 1 - size))
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_file_bytes:
+            raise AttachmentInputError(
+                "file_too_large",
+                f"Attachment '{name}' grew past the {max_file_bytes}-byte limit while reading.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _read_open_attachment(
+    path: Path,
+    raw: str,
+    name: str,
+    inspected_stat: os.stat_result,
+    max_file_bytes: int,
+) -> bytes:
+    """Read the inspected inode through a bounded no-follow descriptor."""
+    inspected_identity = _attachment_file_identity(inspected_stat)
+    try:
+        source_fd = _open_attachment_fd(path)
+    except OSError as exc:
+        raise AttachmentInputError(
+            "unreadable", f"Attachment '{raw}' could not be opened safely: {exc!s}"
+        ) from exc
+    try:
+        opened_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(opened_stat.st_mode):
+            raise AttachmentInputError(
+                "not_regular_file",
+                f"Attachment '{raw}' changed to a non-regular file while being opened.",
+            )
+        if _is_reparse_point(opened_stat):
+            raise AttachmentInputError(
+                "symlink", f"Attachment '{raw}' changed to a reparse point while being opened."
+            )
+        if _attachment_file_identity(opened_stat) != inspected_identity:
+            raise AttachmentInputError(
+                "source_changed",
+                f"Attachment '{raw}' changed between inspection and read.",
+            )
+        if opened_stat.st_mode & 0o111:
+            raise AttachmentInputError(
+                "executable_file", f"Attachment '{raw}' became executable while being opened."
+            )
+        if opened_stat.st_size > max_file_bytes:
+            raise AttachmentInputError(
+                "file_too_large",
+                f"Attachment '{name}' is {opened_stat.st_size} bytes; the per-file limit is "
+                f"{max_file_bytes} bytes.",
+            )
+        try:
+            return _read_attachment_bytes(source_fd, max_file_bytes, name)
+        except OSError as exc:
+            raise AttachmentInputError(
+                "unreadable", f"Attachment '{raw}' could not be read: {exc!s}"
+            ) from exc
+    finally:
+        os.close(source_fd)
+
+
 def validate_attachment(
     path_str: str,
     *,
@@ -165,7 +378,16 @@ def validate_attachment(
             f"Attachment path '{raw}' contains a '..' segment; declare the file directly.",
         )
 
-    path = Path(raw).expanduser()
+    # Make the path absolute but retain the final component so the no-follow
+    # open can bind the opened file identity to the lstat result below.
+    path = Path(raw).expanduser().absolute()
+    name = path.name
+    if any(c in name for c in "\r\n\x85\u2028\u2029"):
+        raise AttachmentInputError(
+            "invalid_name",
+            f"Attachment '{raw}' has a line terminator in its filename; names must be single-line.",
+        )
+
     # lstat first: the final component itself must be a plain file, not a link.
     try:
         st = os.lstat(path)
@@ -176,6 +398,10 @@ def validate_attachment(
     if stat.S_ISLNK(st.st_mode):
         raise AttachmentInputError(
             "symlink", f"Attachment '{raw}' is a symlink; only regular files are accepted."
+        )
+    if _is_reparse_point(st):
+        raise AttachmentInputError(
+            "symlink", f"Attachment '{raw}' is a reparse point; only regular files are accepted."
         )
     if not stat.S_ISREG(st.st_mode):
         raise AttachmentInputError(
@@ -190,12 +416,6 @@ def validate_attachment(
             "passive text evidence, not programs.",
         )
 
-    name = path.name
-    if any(c in name for c in "\r\n\x85\u2028\u2029"):
-        raise AttachmentInputError(
-            "invalid_name",
-            f"Attachment '{raw}' has a line terminator in its filename; names must be single-line.",
-        )
     if not _allowed_suffix(name):
         allowed = ", ".join(s.lstrip(".") for s in ALLOWED_SUFFIXES)
         raise AttachmentInputError(
@@ -211,18 +431,7 @@ def validate_attachment(
             f"{max_file_bytes} bytes.",
         )
 
-    try:
-        resolved = path.resolve()
-        content = resolved.read_bytes()
-    except OSError as exc:
-        raise AttachmentInputError(
-            "unreadable", f"Attachment '{raw}' could not be read: {exc!s}"
-        ) from exc
-    if len(content) > max_file_bytes:
-        raise AttachmentInputError(
-            "file_too_large",
-            f"Attachment '{name}' grew past the {max_file_bytes}-byte limit while reading.",
-        )
+    content = _read_open_attachment(path, raw, name, st, max_file_bytes)
     try:
         content.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -236,7 +445,7 @@ def validate_attachment(
     staged_name = f"{digest[:_STAGED_DIGEST_PREFIX_LEN]}-{_sanitize_basename(name)}"
     return {
         "name": name,
-        "source_path": str(resolved),
+        "source_path": str(path),
         "sha256": digest,
         "size": len(content),
         "content_type": _declared_content_type(name),
@@ -371,11 +580,15 @@ def _stage_one_attachment(entry: dict[str, Any], host_dir: str) -> None:
     try:
         # O_NOFOLLOW binds the check to the opened inode, not a path that can
         # change between validation, copying, and chmod.
-        source_fd = os.open(source_value, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        source_fd = _open_attachment_fd(source_value)
         source_stat = os.fstat(source_fd)
         if not stat.S_ISREG(source_stat.st_mode):
             raise AttachmentInputError(
                 "not_regular_file", "Attachment source is not a regular file."
+            )
+        if _is_reparse_point(source_stat):
+            raise AttachmentInputError(
+                "symlink", "Attachment source changed to a reparse point before staging."
             )
         if source_stat.st_mode & 0o111:
             raise AttachmentInputError("executable_file", "Attachment source became executable.")
@@ -383,11 +596,7 @@ def _stage_one_attachment(entry: dict[str, Any], host_dir: str) -> None:
             raise AttachmentInputError(
                 "file_too_large", "Attachment source grew past the file limit."
             )
-        staged_fd = os.open(
-            staged,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o600,
-        )
+        staged_fd = _open_staged_attachment(staged)
         size, digest = _copy_attachment_bytes(source_fd, staged_fd)
         if size != size_expected or digest != digest_expected:
             raise AttachmentInputError(
@@ -395,7 +604,7 @@ def _stage_one_attachment(entry: dict[str, Any], host_dir: str) -> None:
                 f"Attachment '{name}' changed between validation and staging; "
                 "refusing to mount content under a stale digest.",
             )
-        os.fchmod(staged_fd, 0o444)
+        _make_staged_attachment_readonly(staged_fd)
         complete = True
     except OSError as exc:
         raise AttachmentInputError(
@@ -430,7 +639,8 @@ def stage_attachments(
             json.dumps(public_manifest(attachments), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        manifest_path.chmod(0o444)
+        if not _is_windows_platform():
+            manifest_path.chmod(0o444)
     except Exception:
         shutil.rmtree(host_dir, ignore_errors=True)
         raise
