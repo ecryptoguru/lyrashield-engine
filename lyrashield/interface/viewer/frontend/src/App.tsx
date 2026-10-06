@@ -217,13 +217,15 @@ export default function App() {
   }, []);
 
   const selectRun = useCallback((directoryName: string | null) => {
+    userSetView("overview");
+    if (directoryName === activeRun) return;
     setActiveRun(directoryName);
     setSelectedId(null);
     setRun(null);
     setError(null);
     // Reset the guard so the per-run default applies to the newly selected run.
     initialViewAppliedRef.current = false;
-  }, []);
+  }, [activeRun, userSetView]);
 
   const openEmail = useCallback(() => userSetView("email"), [userSetView]);
   const openEmailFromOverview = openEmail;
