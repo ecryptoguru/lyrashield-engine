@@ -58,6 +58,20 @@ def test_runs_payload_lists_when_verified(tmp_path: Path) -> None:
     assert beta["severity_counts"]["low"] == 1
 
 
+def test_history_selection_uses_directory_identity_not_display_name(tmp_path: Path) -> None:
+    run_dir = _make_run(tmp_path, "stored-directory")
+    record_path = run_dir / "run.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["run_name"] = "Friendly display name"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    payload = build_runs_payload(tmp_path / "strix_runs", verified=True)
+    entry = payload["runs"][0]
+    assert entry["name"] == "Friendly display name"
+    assert entry["directory_name"] == "stored-directory"
+    assert resolve_run_dir(tmp_path / "strix_runs", entry["directory_name"], run_dir) == run_dir
+
+
 def test_runs_payload_keeps_history_when_one_findings_artifact_is_corrupt(tmp_path: Path) -> None:
     base = tmp_path / "strix_runs"
     broken = _make_run(tmp_path, "broken")

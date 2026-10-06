@@ -183,6 +183,7 @@ export default function App() {
   const selected = run?.vulnerabilities.find((v) => v.id === selectedId) ?? null;
   const agentCount = run?.transcript.agents.length ?? 0;
   const verified = auth?.verified === true;
+  const canViewRuns = runs !== null && !runs.locked;
 
   // Per-run guard for the default view: land on Agents while a scan is live,
   // Overview once it finishes. Applied at most once per run and never once the
@@ -215,8 +216,8 @@ export default function App() {
     setView(v);
   }, []);
 
-  const selectRun = useCallback((name: string) => {
-    setActiveRun(name);
+  const selectRun = useCallback((directoryName: string | null) => {
+    setActiveRun(directoryName);
     setSelectedId(null);
     setRun(null);
     setError(null);
@@ -271,11 +272,11 @@ export default function App() {
       <div className="flex-1 min-w-0">
         {/* Top bar */}
         <div className="border-b border-[#222]">
-          <div className="max-w-[88rem] mx-auto px-3 sm:px-6 py-4 flex items-center gap-1.5">
+          <div className="max-w-[88rem] mx-auto px-3 sm:px-6 py-4 flex flex-wrap items-center gap-x-1.5 gap-y-2">
             <div className="text-base text-white font-medium tracking-tight lg:hidden">LyraShield</div>
             {run && <LiveIndicator finished={run.finished} status={run.summary.status} />}
-            <div className="ml-auto flex items-center gap-3">
-              {verified && runs && !runs.locked && runs.runs.length > 0 && (
+            <div className="ml-auto flex min-w-0 max-w-full items-center gap-3">
+              {canViewRuns && runs.runs.length > 0 && (
                 <RunSwitcher
                   runs={runs}
                   activeRun={activeRun}
@@ -317,6 +318,13 @@ export default function App() {
             />
           ) : view === "history" ? (
             <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => selectRun(null)}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm text-[#888] transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 lg:hidden"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Back to current run
+              </button>
               <div className="flex items-center gap-2">
                 <History className="w-5 h-5 text-[#888]" aria-hidden="true" />
                 <h1 className="text-2xl font-semibold text-white">Past runs</h1>
@@ -337,7 +345,7 @@ export default function App() {
               <SummaryHeader summary={run.summary} />
 
               {/* Tab strip: shown on small screens where the sidebar is hidden. */}
-              <div className="flex gap-5 border-b border-[#2a2a2a] lg:hidden">
+              <div className="flex gap-5 overflow-x-auto whitespace-nowrap border-b border-[#2a2a2a] lg:hidden">
                 <TabButton active={view === "overview"} onClick={() => userSetView("overview")}>
                   Pentest Overview
                 </TabButton>
@@ -347,6 +355,11 @@ export default function App() {
                 {agentCount > 0 && (
                   <TabButton active={view === "agents"} onClick={() => userSetView("agents")}>
                     Agents ({agentCount})
+                  </TabButton>
+                )}
+                {canViewRuns && (
+                  <TabButton active={false} onClick={openHistory}>
+                    Past runs
                   </TabButton>
                 )}
               </div>
@@ -402,53 +415,27 @@ function RunSwitcher({
   runs: RunsPayload;
   activeRun: string | null;
   launchedName: string;
-  onSelect: (name: string) => void;
+  onSelect: (directoryName: string | null) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const activeEntry = runs.runs.find((r) => r.name === activeRun);
-  const current = activeEntry ? runTitle(activeEntry.target, activeEntry.name) : launchedName;
   return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        aria-label="Switch pentest"
-        className="flex items-center gap-2 rounded-lg border border-[#3a3a3a] bg-[rgba(255,255,255,0.05)] px-3 py-2 text-sm text-white transition-colors hover:border-[#555] hover:bg-[rgba(255,255,255,0.09)]"
-      >
+    <label className="flex min-w-0 items-center gap-2 rounded-lg border border-[#3a3a3a] bg-[rgba(255,255,255,0.05)] px-3 py-2 text-sm text-white transition-colors hover:border-[#555] focus-within:ring-2 focus-within:ring-white/20">
         <History className="h-4 w-4 flex-shrink-0 text-[#888]" aria-hidden="true" />
         <span className="flex-shrink-0 text-[#888]">Pentest</span>
-        <span className="max-w-[260px] truncate font-medium">{current}</span>
-        <ChevronDown className="h-4 w-4 flex-shrink-0 text-[#aaa]" aria-hidden="true" />
-      </button>
-      {open && (
-        <div
-          className="absolute right-0 z-50 mt-2 max-h-96 w-96 overflow-y-auto rounded-xl py-1.5 shadow-2xl"
-          style={{ border: "1px solid #3a3a3a", background: "#0a0a0a" }}
+        <select
+          value={activeRun ?? ""}
+          onChange={(event) => onSelect(event.target.value || null)}
+          aria-label="Switch pentest"
+          className="min-w-0 max-w-[min(42vw,260px)] cursor-pointer appearance-none truncate bg-transparent font-medium text-white focus-visible:outline-none"
         >
-          <div className="border-b border-[#222] px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#666]">
-            Switch pentest
-          </div>
-          {runs.runs.map((r) => {
-            const active = r.name === activeRun;
-            return (
-              <button
-                key={r.name}
-                onMouseDown={() => onSelect(r.name)}
-                className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-[rgba(255,255,255,0.06)] ${
-                  active ? "bg-[rgba(255,255,255,0.04)] text-white" : "text-[#aaa]"
-                }`}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{runTitle(r.target, r.name)}</span>
-                  {r.target && <span className="block truncate font-mono text-xs text-[#666]">{r.target}</span>}
-                </span>
-                {active && <span className="h-2 w-2 flex-shrink-0 rounded-full bg-emerald-400" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
+          <option value="">Current run: {launchedName}</option>
+          {runs.runs.map((r) => (
+            <option key={r.directory_name} value={r.directory_name}>
+              {runTitle(r.target, r.name)}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="h-4 w-4 flex-shrink-0 text-[#aaa]" aria-hidden="true" />
+    </label>
   );
 }
 
