@@ -132,6 +132,7 @@ export interface RunSeverityCounts {
 
 export interface RunListEntry {
   name: string;
+  directory_name: string;
   target: string | null;
   scan_mode: string | null;
   status: string | null;

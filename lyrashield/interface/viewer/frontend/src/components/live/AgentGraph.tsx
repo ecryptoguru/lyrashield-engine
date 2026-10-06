@@ -159,7 +159,9 @@ export default function AgentGraph({
   const nodeClickedRef = useRef(false);
 
   const onNodeClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
+    (event: React.MouseEvent, node: Node) => {
+      const trigger = (event.target as Element).closest<HTMLElement>(".react-flow__node");
+      trigger?.focus();
       nodeClickedRef.current = true;
       onSelectAgent(node.id);
     },

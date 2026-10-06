@@ -131,6 +131,7 @@ jobs:
         working-directory: lyrashield/interface/viewer/frontend
         run: |
           npm ci
+          npx playwright install --with-deps chromium
           node --test --test-concurrency=1 tests/*.mjs
           npm run typecheck
           npm run build

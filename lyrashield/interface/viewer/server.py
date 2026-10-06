@@ -102,6 +102,7 @@ def run_list_entry(run_dir: Path) -> dict[str, Any]:
         findings = None
     return {
         "name": record.get("run_name") or run_dir.name,
+        "directory_name": run_dir.name,
         "target": primary_target(record),
         "scan_mode": record.get("scan_mode"),
         "status": record.get("status"),
