@@ -106,7 +106,7 @@ targets. The flag validates the input's shape and errors actionably on a
 kind/input mismatch; it never authorizes fetching private or internal addresses,
 and repository acquisition still uses the existing guarded clone path. The
 upstream-retained `strix.interface` copy is unreachable from the shipped
-`lyrashield`/`lyrashield-local` entry points and remains pinned by the
+`lyrashield` entry point and remains pinned by the
 controlled-derivative gate.
 
 ## Security dependency audit and Intel macOS packaging

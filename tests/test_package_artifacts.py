@@ -13,7 +13,7 @@ GO_TUI_PREFIX = "strix/interface/tui/"
 PRODUCT_IMPORTS = (
     "lyrashield_adapter.cli",
     "lyrashield.interface.main",
-    "lyrashield.tui.app",
+    "lyrashield.interface.tui.app",
     "lyrashield.interface.viewer.server",
     "strix.interface.tui.runtime",
 )
@@ -92,7 +92,7 @@ def test_wheels_exclude_go_inputs_and_retain_product_python_imports(tmp_path: Pa
     for path in (
         "lyrashield_adapter/cli.py",
         "lyrashield/interface/main.py",
-        "lyrashield/tui/app.py",
+        "lyrashield/interface/tui/app.py",
         "lyrashield/interface/viewer/server.py",
         "strix/interface/tui/runtime.py",
         "strix/interface/tui/sidecar.py",
@@ -138,7 +138,7 @@ def test_wheels_exclude_go_inputs_and_retain_product_python_imports(tmp_path: Pa
     assert not [name for name in sdist_wheel_files if _is_go_build_input(name)]
     for path in (
         "lyrashield_adapter/cli.py",
-        "lyrashield/tui/app.py",
+        "lyrashield/interface/tui/app.py",
         "lyrashield/interface/viewer/server.py",
         "strix/interface/tui/runtime.py",
     ):
