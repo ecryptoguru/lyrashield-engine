@@ -4,10 +4,11 @@ from __future__ import annotations
 import logging
 import platform
 import sys
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
+
+from lyrashield.version import engine_version
 
 
 logger = logging.getLogger(__name__)
@@ -33,11 +34,11 @@ _first_run_cached: bool | None = None
 
 
 def get_version() -> str:
-    try:
-        return version("strix-agent")
-    except PackageNotFoundError:
-        logger.debug("strix-agent version lookup failed", exc_info=True)
+    resolved = engine_version()
+    if resolved is None:
+        logger.debug("engine version lookup failed", exc_info=True)
         return "unknown"
+    return resolved
 
 
 def is_first_run() -> bool:

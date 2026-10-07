@@ -1,7 +1,9 @@
 repos:
-  # Ruff for fast linting and formatting
+  # Ruff for fast linting and formatting.
+  # rev is the version uv.lock and CI resolve, so a local hook cannot pass
+  # formatting or lint that the locked gate rejects.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.13
+    rev: v0.15.20
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
@@ -32,12 +34,12 @@ repos:
       - id: check-case-conflict
       - id: check-docstring-first
 
-  # Security checks with bandit
+  # Security checks with bandit, pinned to the locked version.
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.8.3
+    rev: 1.9.4
     hooks:
       - id: bandit
-        args: [-c, pyproject.toml]
+        args: [-c, pyproject.toml, -l]
 
   # Additional Python code quality checks
   - repo: https://github.com/asottile/pyupgrade

@@ -179,7 +179,6 @@
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from lyrashield.lifecycle.runner import run_strix_scan",
       "from strix.config import load_settings",
-      "        return pkg_version(\"strix-agent\")",
       "        self._app_reference: StrixTUIApp | None = None",
       "    def set_app_reference(self, app: \"StrixTUIApp\") -> None:",
       "        if event.button.id == \"stop_agent\" and isinstance(app, StrixTUIApp):",
@@ -331,7 +330,6 @@
     ],
     "lyrashield/artifacts/state.py": [
       "                    tool_version=_strix_version(),",
-      "        return version(\"strix-agent\")",
       "    persistence. This store keeps only Strix-owned scan artifacts and",
       "    scan streams, so the OpenRouter streaming handler (see strix.config.models)",
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
@@ -517,8 +515,6 @@
     ],
     "lyrashield/telemetry/_common.py": [
       "        \"strix_version\": get_version(),",
-      "        logger.debug(\"strix-agent version lookup failed\", exc_info=True)",
-      "        return version(\"strix-agent\")",
       "    marker = Path.home() / \".strix\" / \".seen\"",
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],

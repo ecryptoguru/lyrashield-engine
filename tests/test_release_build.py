@@ -2,6 +2,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -226,8 +227,47 @@ def test_binary_does_not_request_missing_hidden_imports() -> None:
         "strix.interface.tui.renderers.registry",
         "strix.tools.proxy._calls",
         "strix.tools.python.tool",
+        "tenacity",
     ):
         assert f"'{module}'" not in spec
+
+
+def test_every_spec_hidden_import_is_a_declared_or_installed_distribution() -> None:
+    """A frozen build must not request a hidden import nothing provides.
+
+    The spec listed ``tenacity`` while it is absent from pyproject, uv.lock and
+    the installed environment, so a frozen build would carry a dead entry.
+    """
+    # Pre-existing pydantic optional extra, absent from the lock and the
+    # installed environment. It predates this change and is not part of the
+    # reviewed deletion set, so it is recorded rather than removed. Anything
+    # outside this set fails the test.
+    known_absent = {"email_validator"}
+
+    spec = (ROOT / "strix.spec").read_text()
+    block = spec[spec.index("hiddenimports = [") :]
+    block = block[: block.index("]")]
+    requested = {
+        line.strip().strip("',").strip()
+        for line in block.splitlines()
+        if line.strip().startswith("'") and line.strip().endswith("',")
+    }
+    # Only bare top-level third-party distributions are checked; the spec also
+    # lists strix/lyrashield modules and stdlib-adjacent names.
+    first_party_prefixes = ("strix", "lyrashield", "agents", "litellm", "tiktoken", "pygments")
+    third_party = {
+        name
+        for name in requested
+        if name and "." not in name and not name.startswith(first_party_prefixes)
+    }
+
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = {package["name"].lower().replace("-", "_") for package in lock["package"]}
+
+    missing = {
+        name for name in third_party if name.lower().replace("-", "_") not in locked
+    } - known_absent
+    assert not missing, f"strix.spec hidden imports missing from the lock: {sorted(missing)}"
 
 
 def test_build_script_fails_when_binary_smoke_test_fails() -> None:
