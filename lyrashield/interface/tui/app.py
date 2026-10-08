@@ -9,8 +9,6 @@ import sys
 import threading
 import webbrowser
 from collections.abc import Callable
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -51,6 +49,7 @@ from lyrashield.lifecycle.inputs import DEFAULT_MAX_TURNS
 from lyrashield.lifecycle.runner import run_strix_scan
 from lyrashield.policy.models import is_recommended_or_frontier_model
 from lyrashield.runtime import session_manager
+from lyrashield.version import engine_version
 from strix.config import load_settings
 
 
@@ -58,10 +57,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_package_version() -> str:
-    try:
-        return pkg_version("strix-agent")
-    except PackageNotFoundError:
-        return "dev"
+    return engine_version() or "dev"
 
 
 class ChatTextArea(TextArea):

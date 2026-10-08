@@ -6,7 +6,6 @@ import logging
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Optional, cast
 
@@ -149,6 +148,7 @@ from lyrashield.artifacts.writer import (
 from lyrashield.runtime.session_manager import CLEANUP_FAILED, CLEANUP_REMOVED
 from lyrashield.telemetry import posthog, scarf
 from lyrashield.utils.redaction import redact_text
+from lyrashield.version import engine_version
 from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for, runtime_state_dir
@@ -192,10 +192,7 @@ _ALLOWED_PHASES = frozenset({"setup", "running", "finalizing", "completed", "sto
 
 def _strix_version() -> str | None:
     """Best-effort package version for the SARIF tool.driver.version field."""
-    try:
-        return version("strix-agent")
-    except PackageNotFoundError:
-        return None
+    return engine_version()
 
 
 def get_global_report_state() -> Optional["ReportState"]:
@@ -629,10 +626,6 @@ class ReportState:
         """Record a machine-readable non-completion reason for worker callers."""
         if self.run_record.get("status") != "completed":
             self.run_record["terminal_reason"] = reason
-
-    def set_sandbox_cleanup_status(self, sandbox_removed: bool) -> None:
-        """Backward-compatible boolean wrapper around :meth:`set_cleanup_outcome`."""
-        self.set_cleanup_outcome(CLEANUP_REMOVED if sandbox_removed else CLEANUP_FAILED)
 
     def set_cleanup_outcome(
         self,

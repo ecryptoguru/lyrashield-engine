@@ -83,3 +83,59 @@ def test_npm_lock_meets_the_reviewed_parser_and_address_floors() -> None:
         if Version(actual[name]) < Version(minimum)
     }
     assert not below_floor, f"sandbox npm packages below reviewed security floors: {below_floor}"
+
+
+def _locked_version(name: str) -> str:
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    return next(package["version"] for package in lock["package"] if package["name"] == name)
+
+
+def test_precommit_hooks_use_the_locked_tool_versions() -> None:
+    """A local hook must not run a different ruff or bandit than CI does.
+
+    Ruff 0.11.13 and 0.15.20 disagree on formatter and lint output, so an
+    unaligned rev lets a commit pass locally and fail the locked CI gate.
+    """
+    config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    revs = {
+        repository["repo"]: str(repository["rev"])
+        for repository in config["repos"]
+        if "rev" in repository
+    }
+
+    assert revs["https://github.com/astral-sh/ruff-pre-commit"] == f"v{_locked_version('ruff')}"
+    assert revs["https://github.com/PyCQA/bandit"] == _locked_version("bandit")
+
+
+def test_bandit_severity_floor_is_enforced_by_the_invocation() -> None:
+    """Bandit reads no severity floor from pyproject.toml; the flag must carry it.
+
+    The config previously said ``severity = "medium"``, which bandit accepts and
+    never applies. The enforced floor is LOW (bandit's default) and every
+    invocation states it with ``-l``. A medium floor is rejected here because it
+    would drop B311/B403/B405-B409 while their ruff equivalents (S403, S405-S409)
+    are preview-only and inactive, so medium would weaken the gate.
+    """
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    bandit_config = config["tool"]["bandit"]
+
+    assert "severity" not in bandit_config
+    assert "B101" in bandit_config["skips"]
+
+    invocations = {
+        "Makefile": "uv run bandit -r strix lyrashield_adapter lyrashield -q -c pyproject.toml -l",
+        "scripts/verify-controlled-derivative.sh": (
+            "uv run bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q -l"
+        ),
+    }
+    for relative, expected in invocations.items():
+        assert expected in (ROOT / relative).read_text(encoding="utf-8")
+
+    hook_config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    bandit_hook = next(
+        hook
+        for repository in hook_config["repos"]
+        for hook in repository["hooks"]
+        if hook["id"] == "bandit"
+    )
+    assert bandit_hook["args"] == ["-c", "pyproject.toml", "-l"]

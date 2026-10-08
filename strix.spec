@@ -96,9 +96,6 @@ hiddenimports = [
     'tiktoken_ext',
     'tiktoken_ext.openai_public',
 
-    # Tenacity retry
-    'tenacity',
-
     # CVSS scoring
     'cvss',
 

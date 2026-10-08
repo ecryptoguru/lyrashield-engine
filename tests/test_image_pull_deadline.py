@@ -16,6 +16,14 @@ from lyrashield.interface.image_pull import _run_bounded_docker_operation, _stop
 from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
 
 
+# The fake daemon sets its event from a request the spawned worker makes, so the
+# assertion that it was reached races the worker's import and connect time. The
+# wait is bounded (it can never hang) but generous enough to absorb that startup
+# jitter: the daemon only blocks for 12s, well beyond this window, so a healthy
+# run still reaches it long before the timeout.
+_DAEMON_REACH_TIMEOUT_SECONDS = 2.0
+
+
 def _blocked_docker_worker(sender: Any, _image: str, _expected_digest: str) -> None:
     sender.send(("pulling", None))
     time.sleep(2)
@@ -165,7 +173,9 @@ def test_docker_connection_inspect_and_pull_are_deadline_bound(
         server.shutdown()
         server.server_close()
 
-    assert reached.wait(timeout=0.1), f"fake Docker daemon did not reach {stage}"
+    assert reached.wait(timeout=_DAEMON_REACH_TIMEOUT_SECONDS), (
+        f"fake Docker daemon did not reach {stage} within {_DAEMON_REACH_TIMEOUT_SECONDS}s"
+    )
     assert time.monotonic() - started < 6.5
     assert {process.pid for process in multiprocessing.active_children()} <= active_before
 
