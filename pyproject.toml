@@ -77,9 +77,6 @@ viewer = ["reportlab>=4.0", "pypdf>=6.19.0", "markdown-it-py>=3.0.0"]
 
 [project.scripts]
 lyrashield = "lyrashield_adapter.cli:main"
-# LyraShield Local TUI — a desktop-friendly terminal UI that shells into the
-# engine CLI. Lives outside the lyrashield_adapter/ and strix/** boundary.
-lyrashield-local = "lyrashield.tui:run_tui"
 
 [dependency-groups]
 audit = [
@@ -408,8 +405,6 @@ ignore = [
 "lyrashield/interface/tui/renderers/*.py" = ["PLC0415"]
 "lyrashield/tools/agents_graph/tools.py" = ["PLR0911", "PLC0415"]
 "lyrashield/tools/output_store.py" = ["PLC0415"]
-# The results store tests use fixed test keys for its envelope-encryption helpers.
-"tests/tui/*.py" = ["S101", "S105", "S106", "SLF001", "PLC0415", "T201", "ARG001", "ARG005", "BLE001", "S603", "S607", "F401", "E501", "I001", "RUF100", "TC001", "TC002", "TC003", "FBT003", "SIM105"]
 
 [tool.ruff.lint.isort]
 force-single-line = false

@@ -58,13 +58,6 @@
       "  \"name\": \"strix-viewer\",",
       "      \"name\": \"strix-viewer\","
     ],
-    "lyrashield/tui/scan_flow.py": [
-      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
-      "from strix.core.paths import run_dir_for",
-      "    \"STRIX_LLM\",",
-      "    \"STRIX_DELEGATE_LLM\",",
-      "    \"STRIX_DEDUPE_MODEL\","
-    ],
     "lyrashield/interface/auth_cli.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "Signing in only stores OAuth tokens (``~/.strix/subscription-auth.json``); model",
@@ -77,25 +70,8 @@
       "    \"\"\"Return an ``<img>`` for the Strix logo as an inline data URI, or \"\".",
       "    \"Strix\" wordmark."
     ],
-    "lyrashield/tui/app.py": [
-      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
-    ],
-    "lyrashield/tui/byok_config.py": [
-      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
-      "            # The engine resolves ``STRIX_LLM``/``LYRASHIELD_LLM``; an Azure"
-    ],
-    "lyrashield/tui/doctor.py": [
-      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
-    ],
-    "lyrashield/tui/__init__.py": [
-      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
-      "``lyrashield_adapter/`` or ``strix/**``. Flows:"
-    ],
     "lyrashield/skills/__init__.py": [
       "\"\"\"LyraShield-specific skill overlays that shadow built-in strix/skills/.\"\"\""
-    ],
-    "lyrashield/tui/results_store.py": [
-      "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)"
     ],
     "lyrashield/interface/tui/history.py": [
       "from strix.interface.tui.history import load_session_history"
