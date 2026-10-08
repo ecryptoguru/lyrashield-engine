@@ -126,6 +126,15 @@ jobs:
         if: steps.changed_paths.outputs.docs_only != 'true'
         run: python3 scripts/report_twin_drift.py
 
+      - name: Cache Playwright browser download
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('lyrashield/interface/viewer/frontend/package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+
       - name: Verify owned viewer source and committed build
         if: steps.changed_paths.outputs.docs_only != 'true'
         working-directory: lyrashield/interface/viewer/frontend

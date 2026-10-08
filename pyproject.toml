@@ -428,4 +428,11 @@ line-ending = "auto"
 [tool.bandit]
 exclude_dirs = ["docs", "build", "dist"]
 skips = ["B101", "B105", "B601", "B404", "B603", "B607"]  # Skip assert, hardcoded-password false positives, shell injection, subprocess import and partial path checks
-severity = "medium"
+# Bandit reads no severity floor from this file. Only the `-l/--level` CLI flag
+# filters, so a `severity = "medium"` key here was inert and misdescribed the
+# gate. It is deliberately absent: the enforced floor is LOW, and the
+# invocations (Makefile `security`, .pre-commit-config.yaml, and
+# scripts/verify-controlled-derivative.sh) carry the explicit `-l` flag that
+# enforces it. A medium floor would drop B311, B403 and B405-B409, and the ruff
+# equivalents of B403/B405-B409 (S403, S405-S409) are preview-only and inactive
+# in this repo, so enforcing medium would silently weaken the security gate.

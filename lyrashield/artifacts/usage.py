@@ -226,10 +226,6 @@ class LLMUsageLedger:
             )
 
     @property
-    def ancillary_cost_total(self) -> float:
-        return _round_cost(sum(self._ancillary_costs.values()))
-
-    @property
     def total_cost(self) -> float:
         return _round_cost(self._total_cost + sum(self._ancillary_costs.values()))
 

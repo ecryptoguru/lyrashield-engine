@@ -58,7 +58,7 @@ type-check:
 
 security:
 	@echo "🔒 Running security checks with bandit..."
-	uv run bandit -r strix lyrashield_adapter lyrashield -q -c pyproject.toml
+	uv run bandit -r strix lyrashield_adapter lyrashield -q -c pyproject.toml -l
 	@echo "✅ Security checks complete!"
 
 check-all:

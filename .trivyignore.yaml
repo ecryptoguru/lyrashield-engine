@@ -12,5 +12,4 @@ misconfigurations:
   - id: AVD-DS-0002
     paths:
       - containers/Dockerfile
-      - Dockerfile
     statement: Container starts as root then immediately drops to unprivileged pentester user via setpriv; no sudo or docker socket is available to the agent.
