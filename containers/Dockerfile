@@ -14,9 +14,12 @@ ARG KALI_APT_SUITE=kali-last-snapshot
 # refresh and cannot be pinned durably. The trust anchor is instead the pinned
 # base image's own Kali keyring, whose content hash is fixed by the
 # digest-pinned FROM above; the apt signature verification that keyring
-# performs is enforced fail-closed in the RUN below.
+# performs is enforced fail-closed in the RUN below. The `deb` line names that
+# same keyring with `signed-by`, so the file the hash check below pins is
+# exactly the file apt trusts to authenticate the index; without it apt would
+# fall back to whatever trusted key is present in the image.
 ARG KALI_APT_KEYRING_SHA256=42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f
-RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
     printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
     printf 'APT::Get::AllowUnauthenticated "false";\nAcquire::AllowInsecureRepositories "false";\nAcquire::AllowDowngradeToInsecureRepositories "false";\n' > /etc/apt/apt.conf.d/99lyrashield-signature-required && \
@@ -52,7 +55,7 @@ LABEL description="AI Agent Penetration Testing Environment with Comprehensive A
 
 ARG KALI_APT_SUITE=kali-last-snapshot
 ARG KALI_APT_KEYRING_SHA256=42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f
-RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
     printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
     printf 'APT::Get::AllowUnauthenticated "false";\nAcquire::AllowInsecureRepositories "false";\nAcquire::AllowDowngradeToInsecureRepositories "false";\n' > /etc/apt/apt.conf.d/99lyrashield-signature-required && \

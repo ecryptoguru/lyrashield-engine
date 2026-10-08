@@ -28,12 +28,27 @@ service at `snapshot.kali.org` is not serving.
 The durable anchor is the Kali keyring shipped by the digest-pinned base image
 (`usr/share/keyrings/kali-archive-keyring.gpg`, currently
 `42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f`, holding key
-`827C8569F2518CC677FECA1AED65462EC8D5E4C5`). The build verifies that file's hash
-and apt then verifies the index against it, fail-closed via
+`827C8569F2518CC677FECA1AED65462EC8D5E4C5`). The `deb` line names that exact
+file with `[signed-by=/usr/share/keyrings/kali-archive-keyring.gpg]`, so the
+keyring whose sha256 the build checks is the same file apt is told to
+authenticate the index with; without `signed-by` apt would fall back to
+whatever trusted key the image happens to carry. The build verifies that
+file's hash and apt then verifies the index against it, fail-closed via
 `/etc/apt/apt.conf.d/99lyrashield-signature-required`
 (`AllowUnauthenticated`, `AllowInsecureRepositories` and
 `AllowDowngradeToInsecureRepositories` all `false`). Package selection stays
 pinned by the `Pin-Priority: 1001` snapshot pin and `--allow-downgrades`.
+
+The later `apt-get install -y kali-archive-keyring` in the same RUN does not
+disturb that file: the package ships the same keyring at the same path
+(`kali-archive-keyring_2025.2_all.deb` unpacks
+`./usr/share/keyrings/kali-archive-keyring.gpg`, 3464 bytes, sha256
+`42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f` — identical
+to the pin). If a future package version rotated the key or changed the path,
+the hash check would still pass (it runs before the install) but `signed-by`
+would point at a key apt could no longer match, and `apt-get update` after the
+install would fail closed rather than silently trust a different key. Refresh
+the pin and the `signed-by` path together if that ever happens.
 
 To refresh the pin, when the base image digest advances or Kali rotates its
 signing key:

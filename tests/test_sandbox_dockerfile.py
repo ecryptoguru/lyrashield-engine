@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 
 DOCKERFILE = Path(__file__).parents[1] / "containers" / "Dockerfile"
 DOCKERIGNORE = Path(__file__).parents[1] / ".dockerignore"
@@ -69,6 +71,54 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
     assert "containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify_semgrep_pyjwt.py" in content
     assert "npm ci --omit=dev" in content
     assert "npm install -g" not in content
+
+
+KALI_KEYRING_PATH = "/usr/share/keyrings/kali-archive-keyring.gpg"
+KALI_DEB_RE = re.compile(r"^.*printf 'deb (?P<opts>\[[^\]]*\])? ?[^\s']+ .*$", re.MULTILINE)
+
+
+def assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(content: str) -> None:
+    """Every Kali `deb` line must name the hashed keyring with `signed-by`.
+
+    `signed-by` is what makes the file whose sha256 the build checks the same
+    file apt verifies the index against. Without it apt falls back to whatever
+    trusted key the image happens to carry, so the hash check would be pinning
+    a file that nothing forces apt to consult.
+    """
+    deb_lines = [
+        line
+        for line in content.splitlines()
+        if "printf 'deb " in line and "archive.kali.org/kali" in line
+    ]
+    assert len(deb_lines) == 2, f"expected one Kali deb line per stage, found {len(deb_lines)}"
+    for line in deb_lines:
+        match = KALI_DEB_RE.match(line)
+        assert match is not None, f"unparsable Kali deb line: {line}"
+        opts = match.group("opts") or ""
+        assert f"signed-by={KALI_KEYRING_PATH}" in opts, (
+            f"Kali deb line is not signed by the pinned keyring: {line}"
+        )
+
+
+def test_every_kali_deb_line_is_signed_by_the_pinned_keyring() -> None:
+    content = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(content)
+
+    # Negative control: the invariant must be load-bearing. Dropping the
+    # `signed-by` option from a copy of the real content has to fail it, both
+    # when the option is removed outright and when it points at another key.
+    unsigned = content.replace(f"deb [signed-by={KALI_KEYRING_PATH}] http://", "deb http://")
+    assert unsigned != content, "negative control did not modify the content"
+    with pytest.raises(AssertionError):
+        assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(unsigned)
+
+    wrong_key = content.replace(
+        f"deb [signed-by={KALI_KEYRING_PATH}] http://",
+        "deb [signed-by=/etc/apt/trusted.gpg.d/other.gpg] http://",
+    )
+    with pytest.raises(AssertionError):
+        assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(wrong_key)
 
 
 def test_caido_download_retries_transient_server_errors() -> None:
