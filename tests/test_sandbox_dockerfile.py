@@ -27,12 +27,24 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
 
     assert "FROM kalilinux/kali-rolling@sha256:" in content
     assert "ARG KALI_APT_SUITE=kali-last-snapshot" in content
-    assert "ARG KALI_APT_INRELEASE_SHA256=" in content
-    kali_index_pins = re.findall(
-        r"^ARG KALI_APT_INRELEASE_SHA256=([0-9a-f]{64})$", content, flags=re.MULTILINE
+    # The Kali apt trust anchor is the keyring shipped by the digest-pinned base
+    # image, not the InRelease bytes. `kali-last-snapshot` is a rolling pointer
+    # that Kali re-signs on every archive refresh, so an index-hash pin broke the
+    # build on each re-sign; the keyring is the part that stays fixed.
+    assert "ARG KALI_APT_INRELEASE_SHA256=" not in content
+    kali_keyring_pins = re.findall(
+        r"^ARG KALI_APT_KEYRING_SHA256=([0-9a-f]{64})$", content, flags=re.MULTILINE
     )
-    assert len(kali_index_pins) == 2
-    assert kali_index_pins[0] == kali_index_pins[1]
+    assert len(kali_keyring_pins) == 2
+    assert kali_keyring_pins[0] == kali_keyring_pins[1]
+    assert "sha256sum -c -" in content
+    # Signature verification must fail closed: no fallback to an unauthenticated
+    # or insecure repository, and no opt-out flags anywhere in the image.
+    assert 'APT::Get::AllowUnauthenticated "false"' in content
+    assert 'Acquire::AllowInsecureRepositories "false"' in content
+    assert 'Acquire::AllowDowngradeToInsecureRepositories "false"' in content
+    assert "--allow-unauthenticated" not in content
+    assert "trusted=yes" not in content
     assert "Pin-Priority: 1001" in content
     assert "apt-get full-upgrade -y --allow-downgrades" in content
     assert "archive.kali.org/kali" in content

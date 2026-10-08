@@ -17,6 +17,37 @@ states, not the current patch inventory.
 
 ## History
 
+## Sandbox apt trust anchor: keyring pin replaces the InRelease hash pin (2026-10-09)
+
+`containers/Dockerfile` pinned `KALI_APT_INRELEASE_SHA256` against the
+`kali-last-snapshot` suite. That suite is a rolling pointer: Kali re-signs its
+`InRelease` on every archive refresh, so the pin failed the build on each
+re-sign. The archive carries no immutable dated suite, and the dated-snapshot
+service at `snapshot.kali.org` is not serving.
+
+The durable anchor is the Kali keyring shipped by the digest-pinned base image
+(`usr/share/keyrings/kali-archive-keyring.gpg`, currently
+`42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f`, holding key
+`827C8569F2518CC677FECA1AED65462EC8D5E4C5`). The build verifies that file's hash
+and apt then verifies the index against it, fail-closed via
+`/etc/apt/apt.conf.d/99lyrashield-signature-required`
+(`AllowUnauthenticated`, `AllowInsecureRepositories` and
+`AllowDowngradeToInsecureRepositories` all `false`). Package selection stays
+pinned by the `Pin-Priority: 1001` snapshot pin and `--allow-downgrades`.
+
+To refresh the pin, when the base image digest advances or Kali rotates its
+signing key:
+
+1. Read the keyring hash from the pinned base image:
+   `docker run --rm --entrypoint sha256sum kalilinux/kali-rolling@sha256:<digest> /usr/share/keyrings/kali-archive-keyring.gpg`
+2. Update both `ARG KALI_APT_KEYRING_SHA256=` lines in `containers/Dockerfile`
+   to that value.
+3. Rebuild the sandbox image (`ci.yml` job `docker-smoke`) and confirm the
+   `sha256sum -c -` step and both `apt-get update` calls still pass.
+
+The archive key rotation itself is the normal Kali maintenance path and needs
+no code change beyond step 2.
+
 ## DG-16 owned/upstream twin disposition (2026-09-28)
 
 CI now prints a sorted, informational CSV inventory of same-path Python modules
