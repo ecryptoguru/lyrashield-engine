@@ -282,10 +282,6 @@ class AgentCoordinator:
                 self.wait_kinds[agent_id] = wait_kind
         await self.set_status(agent_id, "waiting")
 
-    async def wait_kind_of(self, agent_id: str) -> WaitKind | None:
-        async with self._lock:
-            return self.wait_kinds.get(agent_id)
-
     async def record_recovery(self, agent_id: str) -> int:
         """Count a turn that ended without a lifecycle tool call; return the new total.
 

@@ -583,14 +583,6 @@ def update_layer_status(layers_info: dict[str, str], layer_id: str, layer_status
     _update_layer_status(layers_info, layer_id, layer_status)
 
 
-def process_pull_line(
-    line: dict[str, Any], layers_info: dict[str, str], status: Any, last_update: str
-) -> str:
-    from lyrashield.interface.image_pull import process_pull_line as _process_pull_line
-
-    return _process_pull_line(line, layers_info, status, last_update)
-
-
 def validate_config_file(config_path: str) -> Path:
     console = Console()
     path = Path(config_path)
