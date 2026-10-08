@@ -9,14 +9,22 @@
 FROM kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec7544537bcec1493277096 AS gobuilder
 
 ARG KALI_APT_SUITE=kali-last-snapshot
-ARG KALI_APT_INRELEASE_SHA256=5bc9a9bf729d7f9a0c360afe66488379a04d809cbaa7ad4fcefe1704266f5f51
-# The pinned InRelease hash and its APT signature authenticate this immutable
-# archive snapshot; the base image predates the archive's current TLS chain.
-RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+# Supply-chain anchor for the Kali apt index. `kali-last-snapshot` is a
+# re-signed rolling pointer, so its InRelease bytes change on every archive
+# refresh and cannot be pinned durably. The trust anchor is instead the pinned
+# base image's own Kali keyring, whose content hash is fixed by the
+# digest-pinned FROM above; the apt signature verification that keyring
+# performs is enforced fail-closed in the RUN below. The `deb` line names that
+# same keyring with `signed-by`, so the file the hash check below pins is
+# exactly the file apt trusts to authenticate the index; without it apt would
+# fall back to whatever trusted key is present in the image.
+ARG KALI_APT_KEYRING_SHA256=42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f
+RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
     printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
+    printf 'APT::Get::AllowUnauthenticated "false";\nAcquire::AllowInsecureRepositories "false";\nAcquire::AllowDowngradeToInsecureRepositories "false";\n' > /etc/apt/apt.conf.d/99lyrashield-signature-required && \
+    echo "${KALI_APT_KEYRING_SHA256}  /usr/share/keyrings/kali-archive-keyring.gpg" | sha256sum -c - && \
     apt-get update && \
-    echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
     apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
@@ -46,12 +54,13 @@ FROM kalilinux/kali-rolling@sha256:f49124869e4eee549315879c3bd7ef92f23b8753fec75
 LABEL description="AI Agent Penetration Testing Environment with Comprehensive Automated Tools"
 
 ARG KALI_APT_SUITE=kali-last-snapshot
-ARG KALI_APT_INRELEASE_SHA256=5bc9a9bf729d7f9a0c360afe66488379a04d809cbaa7ad4fcefe1704266f5f51
-RUN printf 'deb http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+ARG KALI_APT_KEYRING_SHA256=42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f
+RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
     printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
+    printf 'APT::Get::AllowUnauthenticated "false";\nAcquire::AllowInsecureRepositories "false";\nAcquire::AllowDowngradeToInsecureRepositories "false";\n' > /etc/apt/apt.conf.d/99lyrashield-signature-required && \
+    echo "${KALI_APT_KEYRING_SHA256}  /usr/share/keyrings/kali-archive-keyring.gpg" | sha256sum -c - && \
     apt-get update && \
-    echo "${KALI_APT_INRELEASE_SHA256}  /var/lib/apt/lists/archive.kali.org_kali_dists_${KALI_APT_SUITE}_InRelease" | sha256sum -c - && \
     apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring && \
     apt-get update
