@@ -72,6 +72,9 @@ def test_guest_simultaneous_large_request_and_response_make_progress():
     received = []
     errors = []
     with socket.socket() as server:
+        # Negotiate the small receive window in the handshake. Shrinking it
+        # afterwards can stall Linux TCP window updates independently of the relay.
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8192)
         server.bind(("127.0.0.1", 0))
         server.listen(1)
         server.settimeout(5)
@@ -96,12 +99,13 @@ def test_guest_simultaneous_large_request_and_response_make_progress():
         worker = threading.Thread(target=peer)
         worker.start()
         bootstrap = f"""import socket
-original = socket.create_connection
 def connect(address, timeout):
     assert address == ('127.0.0.1', 48080)
-    connection = original(('127.0.0.1', {port}), timeout)
+    connection = socket.socket()
     connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8192)
     connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8192)
+    connection.settimeout(timeout)
+    connection.connect(('127.0.0.1', {port}))
     return connection
 socket.create_connection = connect
 exec({tunnel._FORWARDER!r})
@@ -134,11 +138,8 @@ async def test_stalled_draining_client_cannot_block_container_delete(monkeypatch
     client.settimeout(0)
     loop = asyncio.get_running_loop()
     await loop.sock_connect(client, (relay.endpoint.host, relay.endpoint.port))
-    sending = asyncio.create_task(
-        loop.sock_sendall(peer, struct.pack("!BxxxI", 1, 1024 * 1024) + b"x" * 1024 * 1024)
-    )
-    killed = Mock()
-    removed = AsyncMock()
+    sending = None
+    killed, removed = Mock(), AsyncMock()
     owner = StrixDockerSandboxClient(
         SimpleNamespace(
             containers=SimpleNamespace(get=lambda _id: SimpleNamespace(kill=killed)), close=Mock()
@@ -154,11 +155,19 @@ async def test_stalled_draining_client_cannot_block_container_delete(monkeypatch
     scan_id = "pressure-bundle-delete"
     try:
         async with asyncio.timeout(2):
+            while not relay._writers:
+                await asyncio.sleep(0)
+            # Linux's default send buffer can absorb this entire frame. Bound
+            # both ends so the fixture actually exercises asyncio backpressure.
+            writer = next(iter(relay._writers))
+            writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8192)
+            sending = asyncio.create_task(
+                loop.sock_sendall(peer, struct.pack("!BxxxI", 1, 1024 * 1024) + b"x" * 1024 * 1024)
+            )
             while not relay._writers or not any(
                 writer.transport.get_write_buffer_size() > 65536 for writer in relay._writers
             ):
                 await asyncio.sleep(0.005)
-        writer = next(iter(relay._writers))
         # Start the relay's graceful finalizer before session cleanup. It must
         # stay owned while a non-reading peer prevents its output from draining.
         for task in tuple(relay._tasks):
@@ -181,8 +190,9 @@ async def test_stalled_draining_client_cannot_block_container_delete(monkeypatch
     finally:
         client.close()
         peer.close()
-        sending.cancel()
-        await asyncio.gather(sending, return_exceptions=True)
+        if sending is not None:
+            sending.cancel()
+            await asyncio.gather(sending, return_exceptions=True)
         await asyncio.wait_for(relay.aclose(), 2)
         session_manager._SESSION_CACHE.pop(scan_id, None)
         session_manager._CLEANUP_RECEIPTS.pop(scan_id, None)
@@ -213,6 +223,8 @@ async def test_draining_connection_keeps_its_admission_slot(monkeypatch):
         async with asyncio.timeout(1):
             while not peers:
                 await asyncio.sleep(0)
+        for writer in relay._writers:
+            writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8192)
         sending = asyncio.create_task(
             loop.sock_sendall(peers[0], struct.pack("!BxxxI", 1, 1024 * 1024) + b"x" * 1024 * 1024)
         )
@@ -379,6 +391,10 @@ def test_late_failed_worker_releases_slot_after_loop_close(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_eight_slow_opens_admit_eight_slots_and_hold_orphans(monkeypatch):
+    # The default executor may have fewer than eight workers on small Linux
+    # runners. This fixture deliberately starts eight concurrent blocked opens.
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    asyncio.get_running_loop().set_default_executor(executor)
     release = threading.Event()
     lock = threading.Lock()
     channels = []
@@ -437,3 +453,4 @@ async def test_eight_slow_opens_admit_eight_slots_and_hold_orphans(monkeypatch):
         await relay.aclose()
         for peer in peers:
             peer.close()
+        executor.shutdown(wait=True)
