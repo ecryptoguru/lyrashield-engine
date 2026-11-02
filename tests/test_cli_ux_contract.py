@@ -13,6 +13,7 @@ import pytest
 from lyrashield.agents.prompt import render_system_prompt
 from lyrashield.interface import arg_parser
 from lyrashield_adapter.cli import _register_lyrashield_skills
+from tests.test_finish_gate_provenance import finish_run_result
 
 
 if TYPE_CHECKING:
@@ -65,7 +66,9 @@ def test_opt_in_threshold_only_changes_completed_finding_exit(
         "assessment_reasons": [],
     }
     assert (
-        main_module._non_interactive_exit_code(state, fail_on="high", finish_result=qualified)
+        main_module._non_interactive_exit_code(
+            state, fail_on="high", finish_result=finish_run_result(qualified)
+        )
         == expected
     )
     assert main_module._non_interactive_exit_code(state) == 2
@@ -128,7 +131,10 @@ def test_no_findings_alone_does_not_fabricate_incompleteness() -> None:
         "assessment_reasons": ["no_findings_recorded"],
     }
     assert (
-        main_module._non_interactive_exit_code(state, fail_on="high", finish_result=qualified) == 0
+        main_module._non_interactive_exit_code(
+            state, fail_on="high", finish_result=finish_run_result(qualified)
+        )
+        == 0
     )
 
 

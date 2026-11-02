@@ -517,7 +517,7 @@ def main(
         exit_code = _non_interactive_exit_code(
             get_global_report_state(),
             fail_on=getattr(args, "fail_on", None),
-            finish_result=getattr(scan_result, "final_output", None),
+            finish_result=scan_result,
         )
         if exit_code:
             sys.exit(exit_code)
@@ -537,6 +537,55 @@ def findings_fail_build(reports: list[dict[str, Any]], fail_on: str | None) -> b
     return False
 
 
+def _current_root_finish_output(run_result: Any) -> str | None:
+    """Read only paired SDK tool items from this root invocation, never model text."""
+    from agents.items import ToolCallItem, ToolCallOutputItem
+    from agents.result import RunResultBase
+    from agents.tool import FunctionTool
+    from openai.types.responses import ResponseFunctionToolCall
+
+    if not isinstance(run_result, RunResultBase):
+        return None
+    context = run_result.context_wrapper.context
+    if (
+        not isinstance(context, dict)
+        or "parent_id" not in context
+        or context["parent_id"] is not None
+        or not isinstance(context.get("agent_id"), str)
+    ):
+        return None
+    root = run_result.last_agent
+    if not any(
+        isinstance(tool, FunctionTool) and tool.name == "finish_scan" for tool in root.tools
+    ):
+        return None
+    calls: dict[str, str] = {}
+    outputs: set[str] = set()
+    finish_output: str | None = None
+    for item in run_result.new_items:
+        if item.agent is not root:
+            continue
+        if isinstance(item, ToolCallItem) and isinstance(item.raw_item, ResponseFunctionToolCall):
+            call_id = item.raw_item.call_id
+            if not call_id or call_id in calls:
+                return None
+            calls[call_id] = item.raw_item.name
+        elif isinstance(item, ToolCallOutputItem) and isinstance(item.raw_item, dict):
+            if item.raw_item.get("type") != "function_call_output":
+                continue
+            output_id = item.raw_item.get("call_id")
+            if not isinstance(output_id, str) or output_id not in calls or output_id in outputs:
+                return None
+            outputs.add(output_id)
+            if calls[output_id] == "finish_scan":
+                if not isinstance(item.output, str) or item.raw_item.get("output") != item.output:
+                    return None
+                finish_output = item.output
+    if any(name == "finish_scan" and call_id not in outputs for call_id, name in calls.items()):
+        return None
+    return finish_output
+
+
 def _non_interactive_exit_code(
     report_state: Any | None, *, fail_on: str | None = None, finish_result: Any = None
 ) -> int:
@@ -553,6 +602,7 @@ def _non_interactive_exit_code(
             # never turn known unfinished coverage into a passing result.
             quality = report_state.run_record.get("scan_quality")
             assessments = [quality] if isinstance(quality, dict) else []
+            finish_result = _current_root_finish_output(finish_result)
             if isinstance(finish_result, str):
                 try:
                     finish_result = json.loads(finish_result)

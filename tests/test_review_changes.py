@@ -1017,7 +1017,7 @@ def test_snapshot_cli_uses_saved_revision_after_branch_moves(
         observed["input"] = (source / "app.py").read_text(encoding="utf-8")
 
     _stub_main_env(monkeypatch, inspect_cli)
-    monkeypatch.setattr(cli_main, "_non_interactive_exit_code", lambda _s: 0)
+    monkeypatch.setattr(cli_main, "_non_interactive_exit_code", lambda _s, **_kwargs: 0)
     real_clone = cli_main.clone_repository
 
     def clone_local(_url: str, *args: Any, **kwargs: Any) -> str:
@@ -1069,7 +1069,7 @@ def test_repository_revision_and_diff_flags_reach_guarded_clone(
     clone = Mock(return_value=str(diff_repo["path"]))
     mocks = _stub_main_env(monkeypatch, AsyncMock())
     monkeypatch.setattr(cli_main, "clone_repository", clone)
-    monkeypatch.setattr(cli_main, "_non_interactive_exit_code", lambda _s: 0)
+    monkeypatch.setattr(cli_main, "_non_interactive_exit_code", lambda _s, **_kwargs: 0)
     monkeypatch.setattr(cli_main, "get_global_report_state", lambda: None)
     monkeypatch.setattr(
         sys,

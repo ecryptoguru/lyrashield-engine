@@ -28,6 +28,7 @@ from lyrashield.tools.finish.tool import _do_finish
 from lyrashield_adapter.cli import _register_lyrashield_skills
 from strix import skills
 from strix.tools.coverage.tools import _record_impl, hydrate_coverage_from_disk
+from tests.test_finish_gate_provenance import finish_run_result
 from tests.test_runtime_budget_preprocessing import _stub_scan_environment
 
 
@@ -68,7 +69,7 @@ def test_default_schema_threshold_uses_actual_finish_assessment(
     assert "scan_quality" not in state.run_record
     assert result["coverage_complete"] is (not incomplete)
     assert main_module._non_interactive_exit_code(
-        state, fail_on="high", finish_result=json.dumps(result)
+        state, fail_on="high", finish_result=finish_run_result(result)
     ) == (5 if incomplete else 0)
     assert main_module._non_interactive_exit_code(state) == 0
     hydrate_coverage_from_disk(tmp_path / "cleared")
@@ -210,7 +211,7 @@ def test_main_passes_finish_result_to_explicit_gate(tmp_path, monkeypatch, incom
     monkeypatch.setattr(
         main_module,
         "run_cli",
-        AsyncMock(return_value=SimpleNamespace(final_output=json.dumps(result))),
+        AsyncMock(return_value=finish_run_result(result)),
     )
     if incomplete:
         with pytest.raises(SystemExit) as exit_info:
@@ -320,7 +321,9 @@ async def test_registered_finish_respects_explicit_gate_under_output_bound(
     else:
         assert json.loads(bounded)["coverage_complete"] is True
         assert (
-            main_module._non_interactive_exit_code(state, fail_on="high", finish_result=bounded)
+            main_module._non_interactive_exit_code(
+                state, fail_on="high", finish_result=finish_run_result(bounded)
+            )
             == 0
         )
     for final_output in (
