@@ -28,23 +28,26 @@ RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://
     apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
-    apt-get install -y --no-install-recommends golang-go git ca-certificates
+    apt-get install -y --no-install-recommends curl tar git patch ca-certificates
 
-ENV GOBIN=/out/bin
-ARG HTTPX_COMMIT=811409809ea2b1706c49452149ab454861543138
-ARG KATANA_COMMIT=e82a2b803d9a9703b614fae492f648cca926b15b
-ARG CVEMAP_COMMIT=08c124da690a5c6acba802998931be13d6ca78ba
-ARG GOSPIDER_COMMIT=f6cc9a78d709e088e55ce62e5e92ab063f1a184b
-ARG INTERACTSH_COMMIT=810180a230fe2265385ed45695a6635b5026452a
-RUN mkdir -p /out/bin && \
-    go install -v github.com/projectdiscovery/httpx/cmd/httpx@${HTTPX_COMMIT} && \
-    go install -v github.com/projectdiscovery/katana/cmd/katana@${KATANA_COMMIT} && \
-    go install -v github.com/jaeles-project/gospider@${GOSPIDER_COMMIT} && \
-    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@${INTERACTSH_COMMIT} && \
-    git clone --filter=blob:none https://github.com/projectdiscovery/cvemap.git /tmp/cvemap && \
-    git -C /tmp/cvemap checkout --detach "${CVEMAP_COMMIT}" && \
-    cd /tmp/cvemap && go build -o /out/bin/vulnx ./cmd/vulnx && \
-    rm -rf /tmp/cvemap
+# Official compiler archives are pinned independently of the rolling apt suite.
+# GOTOOLCHAIN=local prevents a dependency from downloading a different compiler.
+ARG GO_VERSION=1.27.3
+ARG GO_LINUX_AMD64_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+ARG GO_LINUX_ARM64_SHA256=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
+RUN set -eux; \
+    case "$(uname -m)" in \
+        x86_64) GO_ARCH=amd64; GO_SHA256="$GO_LINUX_AMD64_SHA256" ;; \
+        aarch64|arm64) GO_ARCH=arm64; GO_SHA256="$GO_LINUX_ARM64_SHA256" ;; \
+        *) echo "Unsupported architecture" >&2; exit 1 ;; \
+    esac; \
+    curl --retry 5 --retry-delay 2 --retry-max-time 120 -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o /tmp/go.tgz; \
+    echo "${GO_SHA256}  /tmp/go.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/go.tgz -C /usr/local; \
+    rm /tmp/go.tgz
+ENV PATH="/usr/local/go/bin:${PATH}" GOTOOLCHAIN=local GOSUMDB=sum.golang.org
+COPY containers/go-tools/ /opt/lyrashield/go-tools/
+RUN sh /opt/lyrashield/go-tools/build.sh /out/bin
 
 # ---------------------------------------------------------------------------
 # Runtime stage
@@ -130,8 +133,11 @@ RUN cp /app/certs/ca.crt /usr/local/share/ca-certificates/ca.crt && \
 USER pentester
 WORKDIR /tmp
 
+COPY containers/verify_go_tools.py /opt/lyrashield/verify_go_tools.py
+
 # Go tools are built in the gobuilder stage; copy the static binaries only.
 COPY --from=gobuilder --chown=pentester:pentester /out/bin/ /home/pentester/go/bin/
+COPY --from=gobuilder /out/share/go-tools/ /usr/local/share/lyrashield/go-tools/
 
 ARG NUCLEI_TEMPLATES_COMMIT=166dcb625c297785f461a567e73885e8c1ae5cf3
 RUN mkdir -p /home/pentester/.local && \
@@ -205,52 +211,13 @@ RUN git clone --depth 1 https://github.com/aravind0x7/JS-Snooper.git && \
 
 USER root
 
-ARG TRUFFLEHOG_VERSION=3.99.2
-ARG TRUFFLEHOG_LINUX_X64_SHA256=3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4
-ARG TRUFFLEHOG_LINUX_ARM64_SHA256=929b81efffca752eafd58bf6f17bf725d354f338636a7bbbee65c086d2f9ddf3
-RUN set -eux; \
-    ARCH="$(uname -m)"; \
-    case "$ARCH" in \
-        x86_64) TRUFFLEHOG_ARCH="amd64"; TRUFFLEHOG_SHA256="$TRUFFLEHOG_LINUX_X64_SHA256" ;; \
-        aarch64|arm64) TRUFFLEHOG_ARCH="arm64"; TRUFFLEHOG_SHA256="$TRUFFLEHOG_LINUX_ARM64_SHA256" ;; \
-        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${TRUFFLEHOG_ARCH}.tar.gz" -o /tmp/trufflehog.tgz; \
-    echo "${TRUFFLEHOG_SHA256}  /tmp/trufflehog.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/trufflehog.tgz -C /tmp; \
-    install -m 0755 /tmp/trufflehog /usr/local/bin/trufflehog; \
-    rm -f /tmp/trufflehog /tmp/trufflehog.tgz
-ARG GITLEAKS_VERSION=8.30.1
-ARG GITLEAKS_LINUX_X64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-ARG GITLEAKS_LINUX_ARM64_SHA256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
-RUN set -eux; \
-    ARCH="$(uname -m)"; \
-    case "$ARCH" in \
-        x86_64) GITLEAKS_ARCH="x64"; GITLEAKS_SHA256="$GITLEAKS_LINUX_X64_SHA256" ;; \
-        aarch64|arm64) GITLEAKS_ARCH="arm64"; GITLEAKS_SHA256="$GITLEAKS_LINUX_ARM64_SHA256" ;; \
-        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GITLEAKS_ARCH}.tar.gz" -o /tmp/gitleaks.tgz; \
-    echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/gitleaks.tgz -C /tmp; \
-    install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks; \
-    rm -f /tmp/gitleaks /tmp/gitleaks.tgz
-
-ARG TRIVY_VERSION=0.73.0
-ARG TRIVY_LINUX_X64_SHA256=2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b
-ARG TRIVY_LINUX_ARM64_SHA256=13833d97e8a1a5367471c372a173180157f593bece570e20d5d925fef552f5dd
-RUN set -eux; \
-    ARCH="$(uname -m)"; \
-    case "$ARCH" in \
-        x86_64) TRIVY_ARCH="64bit"; TRIVY_SHA256="$TRIVY_LINUX_X64_SHA256" ;; \
-        aarch64|arm64) TRIVY_ARCH="ARM64"; TRIVY_SHA256="$TRIVY_LINUX_ARM64_SHA256" ;; \
-        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" -o /tmp/trivy.tgz; \
-    echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/trivy.tgz -C /tmp; \
-    install -m 0755 /tmp/trivy /usr/local/bin/trivy; \
-    rm -f /tmp/trivy /tmp/trivy.tgz
+# Gitleaks, Trivy and TruffleHog are rebuilt from the same pinned release
+# sources in gobuilder, with the reviewed security graph. Unpacked executables
+# retain Go build metadata so the release image audit can inspect every tool.
+RUN install -m 0755 /home/pentester/go/bin/gitleaks /usr/local/bin/gitleaks && \
+    install -m 0755 /home/pentester/go/bin/trivy /usr/local/bin/trivy && \
+    install -m 0755 /home/pentester/go/bin/trufflehog /usr/local/bin/trufflehog && \
+    rm /home/pentester/go/bin/gitleaks /home/pentester/go/bin/trivy /home/pentester/go/bin/trufflehog
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends wapiti

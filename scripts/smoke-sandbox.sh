@@ -29,6 +29,7 @@ docker run "${docker_args[@]}" --network none "$image" sh -lc '
   /app/.venv/bin/python /opt/lyrashield/verify_brotli.py &&
   /app/.venv/bin/python /opt/lyrashield/verify_pip_vendors.py &&
   /usr/bin/python3 /opt/lyrashield/system-python-security/verify_runtime.py &&
+  /app/.venv/bin/python /opt/lyrashield/verify_go_tools.py &&
   status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
   case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
 '

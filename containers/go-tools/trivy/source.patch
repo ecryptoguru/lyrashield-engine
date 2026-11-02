@@ -1,0 +1,63 @@
+--- a/pkg/x/json/json.go
++++ b/pkg/x/json/json.go
+@@ -4,6 +4,7 @@
+ 	"bytes"
+ 	"encoding/json/jsontext"
+ 	"encoding/json/v2"
++	"errors"
+ 	"io"
+ 
+ 	"golang.org/x/xerrors"
+@@ -106,7 +107,7 @@
+ 
+ 		// Check visited set to avoid infinity loops
+ 		if visited.Contains(start) {
+-			return json.SkipFunc
++			return errors.ErrUnsupported
+ 		}
+ 		visited.Append(start)
+ 
+--- a/pkg/iac/scanners/cloudformation/parser/parameter.go
++++ b/pkg/iac/scanners/cloudformation/parser/parameter.go
+@@ -54,7 +54,7 @@
+ 		}
+ 		return nil
+ 	}
+-	return json.SkipFunc
++	return errors.ErrUnsupported
+ }
+ 
+ func (p *Parameter) Type() cftypes.CfType {
+--- /dev/null
++++ b/pkg/iac/scanners/cloudformation/parser/parameter_skip_test.go
+@@ -0,0 +1,30 @@
++package parser
++
++import (
++	"errors"
++	"strings"
++	"testing"
++
++	"encoding/json/jsontext"
++)
++
++// The Go1.27 replacement for SkipFunc must leave the decoder input untouched.
++func TestUnmarshalIntFirstUnsupportedPreservesInput(t *testing.T) {
++	for _, input := range []string{`"text"`, `true`, `null`, `[1,2]`, `{"key":"value"}`} {
++		t.Run(input, func(t *testing.T) {
++			dec := jsontext.NewDecoder(strings.NewReader(input))
++			before := dec.InputOffset()
++			var value any
++			if err := unmarshalIntFirst(dec, &value); !errors.Is(err, errors.ErrUnsupported) {
++				t.Fatalf("expected fallback, got %v", err)
++			}
++			if dec.InputOffset() != before || value != nil {
++				t.Fatalf("fallback consumed input or changed target: offset=%d value=%v", dec.InputOffset(), value)
++			}
++			raw, err := dec.ReadValue()
++			if err != nil || string(raw) != input {
++				t.Fatalf("fallback altered next value: %s, %v", raw, err)
++			}
++		})
++	}
++}

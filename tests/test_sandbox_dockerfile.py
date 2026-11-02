@@ -14,12 +14,12 @@ DOCKERIGNORE = Path(__file__).parents[1] / ".dockerignore"
 NPM_TOOLS = Path(__file__).parents[1] / "containers" / "npm-tools"
 
 
-def test_gitleaks_install_is_version_and_checksum_pinned() -> None:
+def test_gitleaks_install_is_source_and_checksum_pinned() -> None:
     content = DOCKERFILE.read_text(encoding="utf-8")
 
-    assert "ARG GITLEAKS_VERSION=" in content
-    assert "ARG GITLEAKS_LINUX_X64_SHA256=" in content
-    assert "ARG GITLEAKS_LINUX_ARM64_SHA256=" in content
+    sources = (DOCKERFILE.parent / "go-tools" / "sources.tsv").read_text()
+    assert "gitleaks|gitleaks/gitleaks|83d9cd684c87d95d656c1458ef04895a7f1cbd8e|" in sources
+    assert "version.Version=8.30.1" in sources
     assert "sha256sum -c -" in content
     assert "api.github.com/repos/gitleaks/gitleaks/releases/latest" not in content
 
@@ -56,8 +56,8 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
     assert "trivy/main/contrib/install.sh" not in content
     assert "nuclei -update-templates" not in content
     assert 'git clone --depth 1 "${repo_url}"' not in content
-    assert "ARG TRUFFLEHOG_VERSION=" in content
-    assert "ARG TRIVY_VERSION=" in content
+    assert "COPY containers/go-tools/ /opt/lyrashield/go-tools/" in content
+    assert "sh /opt/lyrashield/go-tools/build.sh /out/bin" in content
     assert "ARG CAIDO_LINUX_X64_SHA256=" in content
     assert "ARG CAIDO_LINUX_ARM64_SHA256=" in content
     assert "--require-hashes" in content

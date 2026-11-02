@@ -91,3 +91,78 @@ Raw PEM payload hashes alone cannot attest root absence. The installer also
 requires the current versioned pip launcher and its canonical hashed RECORD row,
 admitted source and mode0755. Existing multiply linked mutation targets are
 rejected before any writes, preserving files outside the environment.
+
+## Go tool security rebuilds
+
+The eight Go executables are rebuilt from the same application revisions in
+`go-tools/sources.tsv`. Every source archive is SHA256-verified before extraction.
+The builder uses the official Go 1.27.3 Linux archive, independently SHA256-pinned
+for amd64 and arm64, with `GOTOOLCHAIN=local`. The compiler and module caches stay
+in the builder stage. Official compiler provenance: [Go downloads](https://go.dev/dl/)
+and [release security fixes](https://go.dev/doc/devel/release#go1.27.3).
+
+Each tool has a complete reviewed `go.mod`/`go.sum` pair overlaid on its immutable
+upstream source. `go mod download`, `go mod verify`, `go build -mod=readonly` and
+an unchanged-lock checksum check enforce the resolved graph. Go's public checksum
+database remains enabled; no module checksum exclusions or audit ignores are
+introduced. Preserve upstream replacements when refreshing these graphs. The
+security changes are limited to the affected dependency graph:
+
+- Where already present, x/net 0.62.0 (including its required crypto 0.58.0,
+  text 0.43.0 and system dependencies), and compress 1.18.7. Gitleaks has no
+  x/net dependency added merely to match the other tools.
+- Gospider: xmlquery 1.3.1, xpath 1.3.6, logrus 1.8.3 and protobuf 1.33.0.
+- Katana: pgx 5.12.0, covering the reported critical protocol-decoding issues and
+  the later authentication/batch fixes; see the
+  [upstream changelog](https://github.com/jackc/pgx/blob/v5.12.0/CHANGELOG.md).
+- Vulnx: jsonparser 1.1.2.
+- Gitleaks: rardecode 2.2.1 and xz 0.5.15, retaining the original archives
+  0.1.2 adapter and the upstream `gore2regex`
+  release tag and 8.30.1 version identifier.
+- Trivy: containerd 2.3.6, go-git 5.19.2, go-jose 4.1.6, grpc 1.83.2,
+  oras-go 2.6.2, moby/sys/user 0.4.1 and OpenTelemetry 1.45.0. Keep its upstream
+  `jsonv2` experiment, static build, and 0.73.0 version identifier.
+- TruffleHog: go-jose 4.1.6, grpc 1.83.2, edwards25519 1.1.1,
+  amqp091-go 1.14.0 and OpenTelemetry SDK 1.45.0. Preserve its source replacements
+  and 3.99.2 version identifier. The binary is deliberately unpacked: upstream
+  UPX packaging hides build metadata from ordinary image scans. Source rebuilding
+  preserves the scanner-visible Go module metadata.
+
+The image retains upstream LICENSE/NOTICE files and each tool's source URL/SHA,
+resolved module locks, compatibility patch and binary build metadata under
+`/usr/local/share/lyrashield/go-tools/`, including the Go license/patent notices.
+
+`verify_go_tools.py` checks CLI compatibility, crawls a loopback HTML fixture
+using httpx/Katana/Gospider, and detects a synthetic GitHub token using
+Gitleaks/TruffleHog/Trivy. It also checks a benign Gitleaks fixture and a secret
+inside gzip/tar, Zstandard and XZ inputs. These run in
+both sandbox smoke gates without credentials or external target traffic;
+TruffleHog verification/updates and Trivy database downloads are disabled.
+Compilation and local fixtures are compatibility evidence, separate from the
+mandatory final image audit. Preserve raw advisory rows when a package has no
+fixed version; package names alone do not prove reachable vulnerable symbols.
+
+Gospider's original publicsuffix call accepted IPv4 targets indirectly. Fixed
+x/net 0.62.0 rejects IP literals, so `gospider/source.patch` explicitly recognizes
+IP targets before the domain lookup. It changes no domain-target scope behavior.
+The patch applies only to the archive-verified original source with zero fuzz;
+the direct loopback crawl fixture proves the preserved behavior.
+
+Trivy's `source.patch` replaces the removed experimental `json.SkipFunc` with
+Go1.27's documented `errors.ErrUnsupported` when no decoder input was consumed.
+This preserves its location-tracking fallback behavior while using the fixed
+compiler. Both skip sites are patched (location tracking and CloudFormation parameter
+fallback). A dedicated upstream-package regression checks that string, boolean,
+null, array and object fallbacks leave the next decoder value untouched.
+The upstream JSON helper tests and local JSON scanner output remain
+required compatibility checks. See [Go1.27 JSON unmarshaler semantics](https://pkg.go.dev/encoding/json/v2@go1.27.3#UnmarshalerFrom).
+
+Trivy's module Go directive is raised to 1.27.0 to match its patched JSON API
+contract; the exact compiler remains 1.27.3. The source package tests keep Go
+vet enabled and verify fallback input preservation.
+
+Independent govulncheck adds Goldmark 1.7.17 (GO-2026-5320/CVE-2026-5160)
+where already imported. `verify_goldmark.go` checks escaped links, autolinks,
+images and a benign HTTPS link against each actual selected graph during the
+build. The old 1.7.13 renderer fails the same regression. See
+https://pkg.go.dev/vuln/GO-2026-5320 and the upstream fixed renderer.
