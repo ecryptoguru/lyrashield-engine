@@ -26,25 +26,39 @@ export async function startPythonServer(script, args = [], {
   const server = spawn(executable, [resolve(root, script), ...args], {
     cwd: root, env: { ...process.env, PYTHONPATH: root }, stdio: ["ignore", "pipe", "pipe"],
   });
-  let stderr = "", stdout = "", timer;
+  let stderr = "", stdout = Buffer.alloc(0), timer;
   server.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-4096); });
   const ready = new Promise((resolveReady, reject) => {
-    server.on("error", reject);
-    server.once("exit", (code, signal) => reject(new Error(`exited before readiness (${signal ?? code})`)));
-    server.stdout.on("data", chunk => {
-      stdout += chunk;
-      if (stdout.length > 16_384) {
-        reject(new Error("oversized readiness record"));
+    let decided = false;
+    const finish = (error, record) => {
+      if (decided) return;
+      decided = true;
+      server.stdout.off("data", onData);
+      stdout = Buffer.alloc(0);
+      server.stdout.resume();
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolveReady(record);
+    };
+    function onData(chunk) {
+      const newline = chunk.indexOf(10);
+      const line = newline === -1 ? chunk : chunk.subarray(0, newline);
+      if (stdout.length + line.length > 16_384) {
+        finish(new Error("oversized readiness record"));
         return;
       }
-      if (!stdout.includes("\n")) return;
+      stdout = Buffer.concat([stdout, line]);
+      if (newline === -1) return;
       try {
-        const record = JSON.parse(stdout.split("\n", 1)[0]);
+        const record = JSON.parse(stdout.toString("utf8"));
         if (typeof record.url !== "string") throw new Error("readiness record has no URL");
-        resolveReady(record);
-      } catch (error) { reject(error); }
-    });
-    timer = setTimeout(() => reject(new Error(`no readiness record within ${startupTimeout}ms`)), startupTimeout);
+        finish(null, record);
+      } catch (error) { finish(error); }
+    }
+    server.on("error", error => finish(error));
+    server.once("exit", (code, signal) => finish(new Error(`exited before readiness (${signal ?? code})`)));
+    server.stdout.on("data", onData);
+    timer = setTimeout(() => finish(new Error(`no readiness record within ${startupTimeout}ms`)), startupTimeout);
   });
   try {
     const record = await ready;
