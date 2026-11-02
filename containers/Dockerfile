@@ -277,7 +277,8 @@ RUN apt-get autoremove -y && \
 # Apply qualified distro leaves/backports after every APT operation. Keep the
 # verifier and provenance available for final non-root, offline image smoke.
 COPY containers/system-python-security /opt/lyrashield/system-python-security
-RUN /usr/bin/python3 /opt/lyrashield/system-python-security/install_leaves.py && \
+RUN /usr/bin/python3 /opt/lyrashield/system-python-security/install_leaves.py \
+    --cache /opt/lyrashield/system-python-security/cache && \
     /usr/bin/python3 /opt/lyrashield/system-python-security/amend_sources.py && \
     /usr/bin/python3 /opt/lyrashield/system-python-security/verify_runtime.py
 
