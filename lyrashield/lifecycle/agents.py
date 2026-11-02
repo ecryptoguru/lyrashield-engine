@@ -51,6 +51,8 @@ _SNAPSHOT_SCHEMA: dict[str, type] = {
     "mailboxes": dict,
     "errors": dict,
     "conversation_ids": dict,
+    "operator_stopped": list,
+    "user_wake_required": dict,
 }
 
 
@@ -86,6 +88,7 @@ class AgentCoordinator:
         self.wait_kinds: dict[str, WaitKind] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
         self._parent_notified: set[str] = set()
+        self._operator_stopped: set[str] = set()
         self._lock = asyncio.Lock()
         self._snapshot_lock = asyncio.Lock()
         self._snapshot_path: Path | None = None
@@ -172,7 +175,8 @@ class AgentCoordinator:
             "paused": self._budget_paused,
         }
 
-    async def pause_for_budget(self, agent_id: str) -> None:
+    async def pause_for_budget(self, agent_id: str, *, interrupted: bool = False) -> None:
+        """Close spending permission without inventing work for parked agents."""
         async with self._lock:
             if (
                 agent_id not in self.statuses
@@ -182,12 +186,14 @@ class AgentCoordinator:
             ):
                 return
             self._budget_paused = True
-            # A global pause also invalidates timers already running in other
-            # agents. Wake them to recheck the gate without leaving their loops.
-            for aid, status in self.statuses.items():
-                if status in _ACTIVE_STATUSES or aid == agent_id:
-                    self.statuses[aid] = "budget_paused"
-                    self.runtimes.setdefault(aid, AgentRuntime()).wake.set()
+            # Spending permission is global, while each parked agent keeps its
+            # own reason for waiting. Only interrupted running work needs a
+            # budget-resume nudge; terminal and user waits are not new tasks.
+            status = self.statuses[agent_id]
+            if status == "running" or (interrupted and status == "waiting"):
+                self.statuses[agent_id] = "budget_paused"
+            for runtime in self.runtimes.values():
+                runtime.wake.set()
         await self._maybe_snapshot()
 
     async def operator_control(self, action: str, submission_id: str) -> bool:
@@ -245,6 +251,9 @@ class AgentCoordinator:
                         }
                     )
                     self.pending_counts[aid] = self.pending_counts.get(aid, 0) + 1
+                # Recheck timers and pending mail for other parked agents, but
+                # do not inject work into their preserved waiting/terminal state.
+                for runtime in self.runtimes.values():
                     runtime.wake.set()
             self._operator_submissions[submission_id] = fingerprint
         await self._maybe_snapshot()
@@ -295,6 +304,8 @@ class AgentCoordinator:
         skills: list[str] | None = None,
     ) -> None:
         async with self._lock:
+            if agent_id in self._operator_stopped:
+                return
             if (
                 parent_id is not None
                 and self.run_deadline is not None
@@ -354,7 +365,7 @@ class AgentCoordinator:
             if agent_id not in self.statuses or self.statuses[agent_id] == "stopped":
                 return
             self.wait_kinds[agent_id] = wait_kind
-            self.statuses[agent_id] = "budget_paused" if self._budget_paused else "waiting"
+            self.statuses[agent_id] = "waiting"
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.user_wake_required = False
             runtime.wake.set()
@@ -410,7 +421,7 @@ class AgentCoordinator:
 
     async def set_status(self, agent_id: str, status: Status, *, error: str | None = None) -> None:
         async with self._lock:
-            if agent_id not in self.statuses:
+            if agent_id not in self.statuses or agent_id in self._operator_stopped:
                 return
             self.statuses[agent_id] = status
             if error is not None:
@@ -666,7 +677,8 @@ class AgentCoordinator:
             },
         )
 
-    async def request_stop(self, agent_id: str) -> None:
+    async def request_stop(self, agent_id: str, *, preserve_terminal: bool = False) -> None:
+        """Make explicit stops sticky; cancellation cleanup can retain settled evidence."""
         parent_id: str | None = None
         was_active = False
         async with self._lock:
@@ -674,7 +686,8 @@ class AgentCoordinator:
             if status is None:
                 return
             was_active = status in _ACTIVE_STATUSES or status == "budget_paused"
-            if was_active:
+            if not preserve_terminal or was_active or status == "stopped":
+                self._operator_stopped.add(agent_id)
                 self.statuses[agent_id] = "stopped"
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.wake.set()
@@ -834,6 +847,10 @@ class AgentCoordinator:
                 "budget_stopped": self._budget_stopped,
                 "reserve_stopped": self._reserve_stopped,
                 "budget_paused": self._budget_paused,
+                "operator_stopped": sorted(self._operator_stopped),
+                "user_wake_required": {
+                    aid: runtime.user_wake_required for aid, runtime in self.runtimes.items()
+                },
             }
 
     async def restore(self, snap: dict[str, Any]) -> None:
@@ -866,8 +883,21 @@ class AgentCoordinator:
             self._budget_stopped = bool(snap.get("budget_stopped", False))
             self._reserve_stopped = bool(snap.get("reserve_stopped", False))
             self._budget_paused = bool(snap.get("budget_paused", False))
-            for aid in self.statuses:
-                self.runtimes.setdefault(aid, AgentRuntime())
+            self._operator_stopped.update(
+                aid
+                for aid in (snap.get("operator_stopped") or [])
+                if isinstance(aid, str) and aid in self.statuses
+            )
+            wake_gates = snap.get("user_wake_required") or {}
+            for aid, status in self.statuses.items():
+                runtime = self.runtimes.setdefault(aid, AgentRuntime())
+                saved_gate = wake_gates.get(aid)
+                runtime.user_wake_required = (
+                    saved_gate if isinstance(saved_gate, bool) else status in {"failed", "crashed"}
+                )
+                if aid in self._operator_stopped:
+                    self.statuses[aid] = "stopped"
+                    runtime.wake.set()
 
     async def _maybe_snapshot(self) -> None:
         path = self._snapshot_path

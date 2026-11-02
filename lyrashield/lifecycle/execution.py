@@ -311,7 +311,8 @@ async def run_agent_loop(
 
     deferred_input: Any = []
     if interactive and coordinator.budget_paused:
-        await coordinator.pause_for_budget(agent_id)
+        if not start_parked or await coordinator.get_status(agent_id) == "running":
+            await coordinator.pause_for_budget(agent_id, interrupted=not start_parked)
         if not start_parked:
             deferred_input = first_cycle_input
     elif not (start_parked and interactive):
@@ -601,7 +602,7 @@ async def _run_until_lifecycle(
             raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
 
         if interactive and coordinator.budget_paused:
-            await coordinator.pause_for_budget(agent_id)
+            await coordinator.pause_for_budget(agent_id, interrupted=True)
             raise BudgetPausedError("Scan is paused until the operator explicitly resumes")
 
         if interactive:
@@ -794,6 +795,8 @@ async def _run_cycle(
         pre_run_items: list[Any] = []
         try:
             await coordinator.mark_running(agent_id)
+            if await coordinator.get_status(agent_id) == "stopped":
+                return None
             _check_operator_pause(coordinator, interactive=interactive)
             if session is not None:
                 max_images = context.get("max_context_images")
@@ -861,7 +864,7 @@ async def _run_cycle(
                 await coordinator.track_conversation_id(agent_id)
         except BudgetPausedError as exc:
             logger.info("agent %s paused at the scan budget limit: %s", agent_id, exc)
-            await coordinator.pause_for_budget(agent_id)
+            await coordinator.pause_for_budget(agent_id, interrupted=True)
             raise
         except SubagentBudgetReservedError as exc:
             logger.info("sub-agent %s stopped at the budget reserve: %s", agent_id, exc)
@@ -1208,7 +1211,7 @@ async def _start_child_runner(
         except asyncio.CancelledError:
             logger.info("child %s cancelled during shutdown", child_id)
             with contextlib.suppress(Exception):
-                await coordinator.request_stop(child_id)
+                await coordinator.request_stop(child_id, preserve_terminal=True)
 
     task_handle = asyncio.create_task(_child_loop(), name=f"agent-{name}-{child_id}")
     await coordinator.attach_runtime(child_id, task=task_handle)
