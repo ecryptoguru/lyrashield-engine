@@ -547,6 +547,8 @@ def _non_interactive_exit_code(
         if findings_fail_build(report_state.vulnerability_reports, fail_on):
             return 2
         if fail_on is not None:
+            if report_state.run_record.get("terminal_reason") == "no_change":
+                return 0
             # The opt-in CI gate may ignore low-severity findings, but must
             # never turn known unfinished coverage into a passing result.
             quality = report_state.run_record.get("scan_quality")
@@ -556,8 +558,18 @@ def _non_interactive_exit_code(
                     finish_result = json.loads(finish_result)
                 except (ValueError, RecursionError):
                     finish_result = None
-            if isinstance(finish_result, dict):
-                assessments.append(finish_result)
+            # A completed receipt alone cannot prove complete coverage. The
+            # ordinary tool-output bound may have replaced the finish JSON
+            # with a display preview, and a resumed run may retain old quality.
+            if (
+                not isinstance(finish_result, dict)
+                or finish_result.get("success") is not True
+                or finish_result.get("scan_completed") is not True
+                or finish_result.get("coverage_complete") is not True
+                or not isinstance(finish_result.get("assessment_reasons"), list)
+            ):
+                return 5
+            assessments.append(finish_result)
             for assessment in assessments:
                 reasons = assessment.get("assessment_reasons", [])
                 if assessment.get("coverage_complete") is False or (

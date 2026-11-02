@@ -58,7 +58,16 @@ def test_opt_in_threshold_only_changes_completed_finding_exit(
     state = SimpleNamespace(
         run_record={"status": "completed"}, vulnerability_reports=[{"severity": severity}]
     )
-    assert main_module._non_interactive_exit_code(state, fail_on="high") == expected
+    qualified = {
+        "success": True,
+        "scan_completed": True,
+        "coverage_complete": True,
+        "assessment_reasons": [],
+    }
+    assert (
+        main_module._non_interactive_exit_code(state, fail_on="high", finish_result=qualified)
+        == expected
+    )
     assert main_module._non_interactive_exit_code(state) == 2
 
 
@@ -112,7 +121,15 @@ def test_no_findings_alone_does_not_fabricate_incompleteness() -> None:
         },
         vulnerability_reports=[],
     )
-    assert main_module._non_interactive_exit_code(state, fail_on="high") == 0
+    qualified = {
+        "success": True,
+        "scan_completed": True,
+        "coverage_complete": True,
+        "assessment_reasons": ["no_findings_recorded"],
+    }
+    assert (
+        main_module._non_interactive_exit_code(state, fail_on="high", finish_result=qualified) == 0
+    )
 
 
 def test_picker_selection_uses_normal_resume_loader(

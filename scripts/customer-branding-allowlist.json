@@ -419,7 +419,8 @@
       "\"\"\"Strix application settings \u2014 pydantic-settings powered.\"\"\"",
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "# and the CLI share one definition without ``strix`` importing the adapter.",
-      "# to the bare upstream ``strix`` dev CLI check for it. Lives here so the adapter"
+      "# to the bare upstream ``strix`` dev CLI check for it. Lives here so the adapter",
+      "        from strix.skills import get_available_skills  # noqa: PLC0415"
     ],
     "lyrashield/runtime/backends.py": [
       "        StrixDockerSandboxClient,",
@@ -847,6 +848,13 @@
       "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_mcp_available_flag_set_when_a_connection_attaches\",",
       "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_mcp_available_flag_absent_without_a_connection\",",
       "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_unknown_tool_calls_are_returned_to_the_model\","
+    ],
+    "lyrashield/interface/resume_picker.py": [
+      "from strix.core.paths import runs_base_dir, runtime_state_dir"
+    ],
+    "lyrashield/policy/diagnostics.py": [
+      "from strix.core.paths import runtime_state_dir",
+      "from strix.utils.secret_files import write_secret_text"
     ]
   }
 }
