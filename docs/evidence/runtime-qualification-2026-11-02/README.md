@@ -81,6 +81,21 @@ manifest SHA256 matches GitHub's published release-asset digest
 Both Linux architecture binaries execute `--version` successfully on the pinned
 Kali base. The checked upstream checksum file is retained here.
 
+## Authenticated runtime archive transport
+
+Kali's [official site registry](https://www.kali.org/docs/community/list-of-official-kali-sites/)
+identifies `kali.download` as its Cloudflare-backed package mirror. The archive
+and CDN served byte-identical signed `kali-last-snapshot` InRelease metadata
+(SHA256 `62375e475a01fed422730632651d784cc42c4145223313178c8519f9822eefc6`).
+The measured 87.2 MB Chromium asset transferred from the CDN at 13.48 MB/s,
+removing the observed archive download bottleneck. The runtime build first
+installs CA certificates through the signed archive and then uses HTTPS for
+bulk packages, retaining the pinned keyring, explicit `signed-by`, suite, and
+all three fail-closed apt settings. No insecure TLS or repository flags were
+added. The exact transport and trust receipt is retained in
+`kali-cdn-transport-receipt.json`. Both rebuilt images carry the exact input
+revision in `org.opencontainers.image.revision`.
+
 ## Remaining acceptance gate
 
 Complete sandbox image builds for both architectures are still running against
