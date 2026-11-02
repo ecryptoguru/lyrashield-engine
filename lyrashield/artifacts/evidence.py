@@ -947,6 +947,21 @@ def valid_http_omission_ids(raw: Any) -> bool:
     )
 
 
+def _valid_http_omissions(document: dict[str, Any]) -> bool:
+    if any(
+        not valid_http_omission_ids(document.get(field, []))
+        for field in (
+            "missing_request_ids",
+            "capacity_omitted_request_ids",
+        )
+    ):
+        return False
+    truncated = document.get("truncated")
+    return not isinstance(truncated, dict) or valid_http_omission_ids(
+        truncated.get("omitted_request_ids", [])
+    )
+
+
 def encode_http_exchange_document(document: dict[str, Any]) -> bytes | None:
     """Fit the complete serialized export, or decline to write any evidence.
 
@@ -954,13 +969,7 @@ def encode_http_exchange_document(document: dict[str, Any]) -> bytes | None:
     silently removed to make an oversized artifact appear valid.
     """
 
-    for field in ("missing_request_ids", "capacity_omitted_request_ids"):
-        if not valid_http_omission_ids(document.get(field, [])):
-            return None
-    truncated_metadata = document.get("truncated")
-    if isinstance(truncated_metadata, dict) and not valid_http_omission_ids(
-        truncated_metadata.get("omitted_request_ids", [])
-    ):
+    if not _valid_http_omissions(document):
         return None
 
     def encode() -> bytes:
@@ -991,8 +1000,14 @@ def encode_http_exchange_document(document: dict[str, Any]) -> bytes | None:
         missing = document.setdefault("missing_request_ids", [])
         if request_id not in missing:
             missing.append(request_id)
+        if not _valid_http_omissions(document):
+            return None
         payload = encode()
-    return payload if len(payload) <= MAX_EXPORT_TOTAL_BYTES else None
+    return (
+        payload
+        if len(payload) <= MAX_EXPORT_TOTAL_BYTES and _valid_http_omissions(document)
+        else None
+    )
 
 
 # ---------------------------------------------------------------------------

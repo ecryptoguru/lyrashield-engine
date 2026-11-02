@@ -492,6 +492,24 @@ omitted captures remain explicit. An export that cannot fit is unavailable.
 Export work has a 20-second total allowance; sandbox cleanup has a separate
 20-second allowance and still runs when export is cancelled or times out.
 
+For development and consumer-contract qualification, run the synthetic fixture
+generator from the repository root using the project's Python environment:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/generate-http-evidence-fixtures.py \
+  --output-dir "$HTTP_EVIDENCE_FIXTURES"
+```
+
+Set `HTTP_EVIDENCE_FIXTURES` to a chosen output directory outside the source
+checkout. The generator uses the engine's installed dependencies and standard
+library; it does not require test-only Python packages or live provider/proxy
+access. It is a development harness, not an installed runtime command. It
+replaces fixture files in that directory and writes `summary.json` with exact
+hashes, byte lengths and expected claim arrays. Generated cases exercise
+partial capture, durable reuse, capacity, explicit unavailable evidence,
+serialized-size limits and late results after cancellation. Reader validation
+must use the raw bytes without reformatting them.
+
 Disabling either flag does not remove support for persisted schema-1.2 runs.
 Resumed schema-1.0 and schema-1.1 runs keep their existing version and do not
 start emitting pending fields. Pending evidence and unresolved coverage

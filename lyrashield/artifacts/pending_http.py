@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import hashlib
 import json
+import logging
 import re
 import tempfile
 from datetime import UTC, datetime
@@ -20,6 +22,10 @@ from lyrashield.artifacts.writer import (
     restore_revision_artifacts,
     snapshot_revision_artifacts,
 )
+
+
+logger = logging.getLogger(__name__)
+_LATE_EXPORTS: set[asyncio.Task[Any]] = set()
 
 
 if TYPE_CHECKING:
@@ -300,6 +306,82 @@ def _outcome(
     return result
 
 
+def _discard_late_export(task: asyncio.Task[Any], owner: tempfile.TemporaryDirectory[str]) -> None:
+    """Consume the ignored result, then delete its privately owned stage."""
+    _LATE_EXPORTS.discard(task)
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        task.result()
+    try:
+        owner.cleanup()
+    except OSError:
+        logger.warning("Late HTTP evidence stage cleanup failed", exc_info=True)
+
+
+async def _stage_fresh_export(
+    run_dir: Path,
+    exporter: Callable[..., Any],
+    client: Any,
+    record: dict[str, Any],
+    findings: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], str | None, bool]:
+    """Race a deadline without waiting for a dependency to accept cancellation.
+
+    An interrupted task owns its quarantined directory until it actually
+    settles. Its callback then removes the stage. This prevents late writes
+    racing deletion or ever replacing committed run artifacts.
+    """
+    owner = tempfile.TemporaryDirectory(prefix=".http-export-", dir=run_dir)
+    stage = Path(owner.name)
+    quarantined = False
+    cancelled = False
+    reason = None
+    outcome: dict[str, Any] = {"status": "failed", "exchanges": 0}
+    try:
+        task = asyncio.create_task(
+            exporter(
+                client,
+                stage,
+                run_record=copy.deepcopy(record),
+                findings=copy.deepcopy(findings),
+            )
+        )
+        done: set[asyncio.Task[Any]] = set()
+        try:
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=evidence.HTTP_EVIDENCE_EXPORT_TIMEOUT_SECONDS,
+            )
+        except asyncio.CancelledError:
+            cancelled, reason = True, "export_cancelled"
+        if task not in done:
+            reason = reason or "export_timeout"
+            quarantined = True
+            _LATE_EXPORTS.add(task)
+            task.add_done_callback(lambda settled: _discard_late_export(settled, owner))
+            task.cancel()
+        else:
+            try:
+                outcome = task.result()
+            except asyncio.CancelledError:
+                cancelled, reason = True, "export_cancelled"
+            except Exception:  # noqa: BLE001 — record unavailability without raw proxy errors
+                reason = "export_failed"
+        fresh = _document_for(record, findings)
+        if reason is None and (stage / evidence.HTTP_EXCHANGES_FILENAME).is_file():
+            fresh = _read_document(stage, outcome)
+            eligible = _bound_export_ids(fresh, record, findings, outcome)
+            eligible_ids = {value for values in eligible.values() for value in values}
+            # A fetched entry explicitly marked missing/omitted is unavailable.
+            # Only a separately qualified prior capture can restore that ID.
+            fresh["exchanges"] = [
+                entry for entry in fresh["exchanges"] if entry["proxy_request_id"] in eligible_ids
+            ]
+        return fresh, outcome, reason, cancelled
+    finally:
+        if not quarantined:
+            owner.cleanup()
+
+
 async def reconcile_http_exchange_evidence(
     state: ReportState,
     client: Any,
@@ -328,65 +410,45 @@ async def reconcile_http_exchange_evidence(
             raise RuntimeError("HTTP export source run identity does not match this run")
         prior = _prior_durable_export(run_dir, record, findings)
     record["report_artifacts_revision"] = revision + 1
-    cancelled = False
-    reason = None
-    with tempfile.TemporaryDirectory(prefix=".http-export-", dir=run_dir) as stage_name:
-        stage = Path(stage_name)
-        try:
-            fresh_outcome = await asyncio.wait_for(
-                exporter(client, stage, run_record=record, findings=findings),
-                timeout=evidence.HTTP_EVIDENCE_EXPORT_TIMEOUT_SECONDS,
-            )
-        except asyncio.CancelledError:
-            cancelled, reason = True, "export_cancelled"
-            fresh_outcome = {"status": "failed", "exchanges": 0}
-        except TimeoutError:
-            reason = "export_timeout"
-            fresh_outcome = {"status": "failed", "exchanges": 0}
-        except Exception:  # noqa: BLE001 — export failure is a durable unavailable outcome
-            reason = "export_failed"
-            fresh_outcome = {"status": "failed", "exchanges": 0}
-        fresh = _document_for(record, findings)
-        if (
-            reason not in {"export_cancelled", "export_timeout", "export_failed"}
-            and (stage / evidence.HTTP_EXCHANGES_FILENAME).is_file()
-        ):
-            fresh = _read_document(stage, fresh_outcome)
-            _bound_export_ids(fresh, record, findings, fresh_outcome)
-        reason = reason or fresh_outcome.get("reason")
-        document = _combine_exports(record, findings, fresh, prior)
-        payload = evidence.encode_http_exchange_document(document)
-        provisional = _outcome(document, payload, reason=reason, pending=True)
-        verified = (
-            _bound_export_ids(document, record, findings, provisional)
-            if payload is not None
-            else {}
+    fresh, fresh_outcome, reason, cancelled = await _stage_fresh_export(
+        run_dir,
+        exporter,
+        client,
+        record,
+        findings,
+    )
+    reason = reason or fresh_outcome.get("reason")
+    document = _combine_exports(record, findings, fresh, prior)
+    payload = evidence.encode_http_exchange_document(document)
+    provisional = _outcome(document, payload, reason=reason, pending=True)
+    verified = (
+        _bound_export_ids(document, record, findings, provisional) if payload is not None else {}
+    )
+    candidate = _candidate_findings(findings, verified)
+    if candidate is None:
+        # The two independently bounded arrays cannot always be demoted
+        # into one pending array. Preserve every claim and artifact; record
+        # failure through the same revision guard, never a lossy projection.
+        candidate, payload = findings, None
+        outcome = {"status": "failed", "exchanges": 0, "reason": "pending_capacity_exceeded"}
+        preserve_artifacts = True
+    else:
+        preserve_artifacts = False
+        if payload is None:
+            reason = "export_size_exceeded"
+        outcome = _outcome(
+            document,
+            payload,
+            reason=reason,
+            pending=any(finding.get("pending_http_exchange_ids") for finding in candidate),
         )
-        candidate = _candidate_findings(findings, verified)
-        if candidate is None:
-            # The two independently bounded arrays cannot always be demoted
-            # into one pending array. Preserve every claim and artifact; record
-            # failure through the same revision guard, never a lossy projection.
-            candidate, payload = findings, None
-            outcome = {"status": "failed", "exchanges": 0, "reason": "pending_capacity_exceeded"}
-            preserve_artifacts = True
-        else:
-            preserve_artifacts = False
-            if payload is None:
-                reason = "export_size_exceeded"
-            outcome = _outcome(
-                document,
-                payload,
-                reason=reason,
-                pending=any(finding.get("pending_http_exchange_ids") for finding in candidate),
-            )
-        try:
-            _commit_revision(
-                state, revision, candidate, payload, outcome, preserve_artifacts=preserve_artifacts
-            )
-        finally:
-            if cancelled:
-                raise asyncio.CancelledError
+    try:
+        _commit_revision(
+            state, revision, candidate, payload, outcome, preserve_artifacts=preserve_artifacts
+        )
+    finally:
+        if cancelled:
+            raise asyncio.CancelledError
     return outcome
 
 
