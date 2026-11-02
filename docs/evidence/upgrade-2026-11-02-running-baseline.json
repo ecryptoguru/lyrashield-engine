@@ -12,5 +12,13 @@
     "image_labels_match_runtime_revision_environment": true,
     "runtime_digest_matches_image_digest": true
   },
-  "scope": "Existing release rollback baseline. This does not qualify the new candidate, a model-provider route, or a client scan."
+  "scope": "Existing release rollback baseline. This does not qualify the new candidate, a model-provider route, or a client scan.",
+  "docker_server": {
+    "version": "29.6.2",
+    "architecture": "amd64",
+    "operating_system": "linux",
+    "containerd": "2.2.6",
+    "runc": "1.3.6",
+    "method": "Read-only Docker version through Azure VM RunShellScript; no host changes."
+  }
 }
