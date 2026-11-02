@@ -99,8 +99,62 @@ def test_contract_rejects_hydration_and_credential_drift(drift: str) -> None:
     elif drift == "job-token":
         workflow["jobs"]["docker-smoke"]["env"] = {"GH_TOKEN": TOKEN}
     elif drift == "build-token":
-        build["run"] += " --build-arg GH_TOKEN=$GH_TOKEN"
+        build.setdefault("with", {})["build-args"] = "GH_TOKEN=${{ github.token }}"
     elif drift == "soft-failure":
         hydrate["continue-on-error"] = True
     with pytest.raises(AssertionError):
         assert_hydration_contract(workflow, "docker-smoke", "Build sandbox image")
+
+
+def assert_ci_cache_contract(workflow: dict[str, Any]) -> None:
+    assert_hydration_contract(workflow, "docker-smoke", "Build sandbox image")
+    steps = workflow["jobs"]["docker-smoke"]["steps"]
+    build = next(step for step in steps if step.get("name") == "Build sandbox image")
+    assert build.get("uses") == (
+        "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc"
+    )
+    assert "run" not in build
+    assert build["if"] == "steps.changed_paths.outputs.docs_only != 'true'"
+    inputs = build["with"]
+    assert inputs["context"] == "."
+    assert inputs["file"] == "containers/Dockerfile"
+    assert inputs["tags"] == "lyrashield-sandbox:ci"
+    assert inputs["load"] is True
+    assert inputs["push"] is False
+    assert inputs["cache-from"] == "type=gha,version=2,scope=engine-sandbox-v1"
+    assert inputs["cache-to"] == "type=gha,version=2,mode=max,scope=engine-sandbox-v1"
+    assert not {"build-args", "build-contexts", "github-token"} & inputs.keys()
+    assert not any(step.get("uses", "").startswith("docker/login-action@") for step in steps)
+    assert workflow["permissions"] == {"contents": "read"}
+    assert build["env"] == {"DOCKER_BUILD_RECORD_UPLOAD": "false"}
+
+
+def test_ci_uses_authenticated_cache_action_and_loads_only_local_image() -> None:
+    assert_ci_cache_contract(load_workflow("ci.yml"))
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    (
+        ("context", "{{defaultContext}}"),
+        ("load", False),
+        ("push", True),
+        ("cache-from", "type=gha,version=2,scope=another-image"),
+        ("cache-to", "type=gha,version=2,mode=min,scope=engine-sandbox-v1"),
+        ("cache-to", "type=gha,version=2,mode=max,scope=engine-sandbox-v1,ignore-error=true"),
+        ("build-args", "GH_TOKEN=${{ github.token }}"),
+        ("secrets", "GIT_AUTH_TOKEN=${{ github.token }}"),
+    ),
+)
+def test_ci_cache_contract_rejects_remote_context_push_and_cache_drift(
+    key: str, value: str | bool
+) -> None:
+    workflow = deepcopy(load_workflow("ci.yml"))
+    build = next(
+        step
+        for step in workflow["jobs"]["docker-smoke"]["steps"]
+        if step.get("name") == "Build sandbox image"
+    )
+    build["with"][key] = value
+    with pytest.raises(AssertionError):
+        assert_ci_cache_contract(workflow)

@@ -237,15 +237,17 @@ jobs:
 
       - name: Build sandbox image
         if: steps.changed_paths.outputs.docs_only != 'true'
-        run: |
-          docker buildx build \
-            -f containers/Dockerfile \
-            -t lyrashield-sandbox:ci \
-            --cache-from type=gha,scope=engine-sandbox-v1 \
-            --cache-to type=gha,mode=max,scope=engine-sandbox-v1 \
-            --load \
-            --progress=plain \
-            .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: containers/Dockerfile
+          tags: lyrashield-sandbox:ci
+          load: true
+          push: false
+          cache-from: type=gha,version=2,scope=engine-sandbox-v1
+          cache-to: type=gha,version=2,mode=max,scope=engine-sandbox-v1
 
       - name: Smoke sandbox image
         if: steps.changed_paths.outputs.docs_only != 'true'
