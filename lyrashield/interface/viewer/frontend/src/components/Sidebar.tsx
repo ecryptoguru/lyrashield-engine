@@ -5,6 +5,7 @@ import {
   History,
   Mail,
   LogOut,
+  PanelLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { View } from "@/App";
@@ -153,21 +154,22 @@ export default function Sidebar({
     <>
       {/* Left-edge pull zone: click to bring the rail back when collapsed. */}
       {collapsed && (
-        <div
-          className="fixed left-0 top-0 z-40 hidden h-full w-4 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.08)] lg:block"
-          onClick={expandSidebar}
-          title="Expand sidebar"
-        />
+        <button type="button" aria-label="Expand sidebar" onClick={expandSidebar}
+          className="fixed left-2 top-2 z-40 hidden h-11 w-11 items-center justify-center rounded border border-white/20 bg-black text-white focus-visible:outline focus-visible:outline-2 lg:flex">
+          <PanelLeft className="h-5 w-5" aria-hidden="true" />
+        </button>
       )}
 
       <aside
+        inert={collapsed}
+        aria-hidden={collapsed || undefined}
         className={cn(
           "sticky top-0 z-20 hidden h-screen flex-shrink-0 flex-col overflow-hidden border-r border-[rgba(255,255,255,0.08)] bg-black lg:flex",
           !isResizing && "transition-[width] duration-200 ease-out"
         )}
         style={{ width: collapsed ? 0 : width }}
       >
-        <header className="px-5 py-4 text-sm font-medium text-white">LyraShield <span className="text-[#888]">Local</span></header>
+        <header className="px-5 py-4 text-sm font-medium text-white flex items-center gap-2">LyraShield <span className="text-[#888]">Local</span><button type="button" aria-label="Collapse sidebar" onClick={() => persistCollapsed(true)} className="ml-auto p-2 focus-visible:outline focus-visible:outline-2"><PanelLeft className="h-4 w-4" aria-hidden="true" /></button></header>
 
         {/* Navigation */}
         <nav className="relative min-w-[160px] flex-1 overflow-y-auto overflow-x-clip scrollbar-thin pb-10 pt-2">

@@ -44,6 +44,7 @@ from lyrashield.interface.tui.messages import (
     Delivery,
     deliver_operator_control,
     deliver_user_message,
+    read_submission_receipt,
     send_operator_control,
     send_user_message_to_agent,
 )
@@ -1991,6 +1992,9 @@ class StrixTUIApp(App[None]):
                 steer_handler=_viewer_steer,
                 control_handler=_viewer_control,
                 control_state_handler=self.coordinator.budget_control_state,
+                submission_receipt_handler=lambda submission_id, fingerprint: (
+                    read_submission_receipt(self.coordinator, submission_id, fingerprint)
+                ),
             )
         except Exception:
             logger.debug("failed to start local viewer", exc_info=True)

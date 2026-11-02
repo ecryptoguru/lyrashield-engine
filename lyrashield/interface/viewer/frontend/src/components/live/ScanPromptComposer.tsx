@@ -12,6 +12,13 @@ import { track } from "@/lib/cta";
 import { attemptSteering } from "@/lib/steering";
 import { cn } from "@/lib/utils";
 
+function formatBudget(value: number) {
+  const exact = value.toString();
+  if (exact.includes("e")) return exact;
+  const [whole, fraction = ""] = exact.split(".");
+  return `${whole}.${fraction.padEnd(2, "0")}`;
+}
+
 const ROOT_TARGET_VALUE = "__root__";
 
 interface ScanPromptComposerProps {
@@ -43,7 +50,7 @@ export function ScanPromptComposer({
   fixedAgentId,
   className,
 }: ScanPromptComposerProps) {
-  const submissionRef = useRef<{ key: string; id: string } | null>(null);
+  const submissionRef = useRef<{ key: string; id: string; targetName: string; targetId: string; runName: string; message: string } | null>(null);
   const controlRef = useRef<{ action: string; id: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [expanded, setExpanded] = useState(false);
@@ -53,16 +60,20 @@ export function ScanPromptComposer({
   const [budget, setBudget] = useState<BudgetControlState | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  const refreshBudget = useCallback(async () => {
+  const refreshBudget = useCallback(async (signal?: AbortSignal) => {
     try {
-      const caps = await fetchCapabilities();
-      if (caps.launched_run === runName) setBudget(caps.budget);
+      const caps = await fetchCapabilities(signal);
+      if (!signal?.aborted && caps.launched_run === runName) setBudget(caps.budget);
     } catch {
       // Existing controls remain retryable; budget metadata is best effort.
     }
   }, [runName]);
   useEffect(() => {
-    if (expanded && canControl) void refreshBudget();
+    if (!expanded || !canControl) return;
+    const controller = new AbortController();
+    void refreshBudget(controller.signal);
+    const timer = setInterval(() => void refreshBudget(controller.signal), 2000);
+    return () => { clearInterval(timer); controller.abort(); };
   }, [expanded, canControl, refreshBudget]);
 
   const isModal = fixedAgentId != null;
@@ -81,17 +92,17 @@ export function ScanPromptComposer({
 
   // Selected target for the multi-agent variant. ROOT sentinel by default.
   const [selectedTarget, setSelectedTarget] = useState<string>(ROOT_TARGET_VALUE);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [unknown, setUnknown] = useState(false);
 
   // If the selected child target disappears (finished), fall back to Root.
   useEffect(() => {
     if (
-      selectedTarget !== ROOT_TARGET_VALUE &&
+      !sending && !unknown && selectedTarget !== ROOT_TARGET_VALUE &&
       !targetOptions.some((a) => a.id === selectedTarget)
     ) {
       setSelectedTarget(ROOT_TARGET_VALUE);
     }
-  }, [selectedTarget, targetOptions]);
+  }, [selectedTarget, targetOptions, sending, unknown]);
 
   // Resolve the concrete agent id + display name for the current target.
   const { targetId, targetName } = useMemo(() => {
@@ -110,8 +121,8 @@ export function ScanPromptComposer({
     }
     const agent = agents.find((a) => a.id === selectedTarget) ?? null;
     return {
-      targetId: agent?.id ?? rootAgent?.id ?? null,
-      targetName: agent?.name ?? "Root agent",
+      targetId: selectedTarget,
+      targetName: agent?.name ?? submissionRef.current?.targetName ?? selectedTarget,
     };
   }, [agents, fixedAgentId, isModal, rootAgent, selectedTarget]);
 
@@ -133,27 +144,30 @@ export function ScanPromptComposer({
   const handleCollapse = useCallback(() => {
     setExpanded(false);
     setFocused(false);
-    setMenuOpen(false);
   }, []);
 
   const handleSend = useCallback(async () => {
     if (sending) return;
-    const message = value.trim();
-    if (!message || !targetId) return;
+    const frozen = unknown ? submissionRef.current : null;
+    const message = frozen?.message ?? value.trim();
+    const agentId = frozen?.targetId ?? targetId;
+    const submissionRun = frozen?.runName ?? runName;
+    if (!message || !agentId) return;
 
     setSending(true);
     setFeedback(null);
-    const name = targetName;
-    const key = JSON.stringify([runName, targetId, message]);
+    const name = frozen?.targetName ?? targetName;
+    const key = JSON.stringify([submissionRun, agentId, message]);
     if (submissionRef.current?.key !== key) {
-      submissionRef.current = { key, id: crypto.randomUUID() };
+      submissionRef.current = { key, id: crypto.randomUUID(), targetName: name, targetId: agentId, runName: submissionRun, message };
     }
     const id = submissionRef.current.id;
     const outcome = await attemptSteering(async () => {
-      const result = await steerAgent(runName, targetId, message, id);
+      const result = await steerAgent(submissionRun, agentId, message, id);
       if (!result.ok && result.error !== "delivery_unknown") submissionRef.current = null;
       return result;
     }, name);
+    setUnknown(!outcome.sent && submissionRef.current !== null);
     if (outcome.sent) {
       submissionRef.current = null;
       setValue("");
@@ -163,7 +177,7 @@ export function ScanPromptComposer({
       setFeedback(outcome.feedback);
     }
     setSending(false);
-  }, [sending, value, targetId, targetName, runName]);
+  }, [sending, value, targetId, targetName, runName, unknown]);
 
   const handleControl = async (action: "resume" | "increase_budget") => {
     if (sending) return;
@@ -217,7 +231,7 @@ export function ScanPromptComposer({
         className
       )}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-[#666]" />
@@ -233,45 +247,17 @@ export function ScanPromptComposer({
           ) : (
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-[#aaa]">Target:</span>
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setMenuOpen((o) => !o)}
-                  onBlur={() => requestAnimationFrame(() => setMenuOpen(false))}
-                  className="inline-flex h-7 items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 text-xs text-white transition-colors hover:border-white/[0.16] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
-                  aria-haspopup="listbox"
-                  aria-expanded={menuOpen}
-                >
-                  <span className="max-w-[140px] truncate">{targetName}</span>
-                  <ChevronDown className="h-3.5 w-3.5 text-[#999]" />
-                </button>
-                {menuOpen && (
-                  <div
-                    className="absolute right-0 z-10 mt-1 min-w-[160px] overflow-hidden rounded-lg border border-[#333] bg-[#0a0a0a] py-1 shadow-xl"
-                    role="listbox"
-                  >
-                    <TargetMenuItem
-                      label="Root agent"
-                      active={selectedTarget === ROOT_TARGET_VALUE}
-                      onSelect={() => {
-                        setSelectedTarget(ROOT_TARGET_VALUE);
-                        setMenuOpen(false);
-                      }}
-                    />
-                    {targetOptions.map((option) => (
-                      <TargetMenuItem
-                        key={option.id}
-                        label={option.name}
-                        active={selectedTarget === option.id}
-                        onSelect={() => {
-                          setSelectedTarget(option.id);
-                          setMenuOpen(false);
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
+              <select
+                aria-label="Steering target"
+                value={selectedTarget}
+                disabled={sending || unknown}
+                onChange={event => setSelectedTarget(event.target.value)}
+                className="h-8 max-w-[140px] rounded-full border border-white/10 bg-[#0a0a0a] px-2 text-xs text-white focus-visible:outline focus-visible:outline-2"
+              >
+                <option value={ROOT_TARGET_VALUE}>Root agent</option>
+                {targetOptions.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
+                {selectedTarget !== ROOT_TARGET_VALUE && !targetOptions.some(a => a.id === selectedTarget) && <option value={selectedTarget}>Original target ({selectedTarget})</option>}
+              </select>
             </div>
           )}
           <button
@@ -289,7 +275,7 @@ export function ScanPromptComposer({
         <div className="border-b border-white/10 px-5 py-3 text-xs text-[#bbb]">
           <p>Budget paused. Messages queue until you explicitly resume.</p>
           <p className="mt-1">{budget?.increment_usd != null && budget.limit_usd != null
-            ? `Current limit $${budget.limit_usd.toFixed(2)}. Increase adds $${budget.increment_usd.toFixed(2)} and keeps the scan paused.`
+            ? `Current limit $${formatBudget(budget.limit_usd)}. Increase adds $${formatBudget(budget.increment_usd)} and keeps the scan paused.`
             : "Loading configured budget amount…"}</p>
           {budget?.resume_requires_increase && <p className="mt-1">Budget exhausted. Increase the budget before resuming.</p>}
           <div className="mt-2 flex flex-wrap gap-3">
@@ -307,7 +293,7 @@ export function ScanPromptComposer({
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
               e.preventDefault();
               void handleSend();
             }
@@ -315,11 +301,15 @@ export function ScanPromptComposer({
           placeholder="Send a live prompt to the running pentest…"
           aria-label="Steering message"
           maxLength={4000}
-          disabled={sending}
+          disabled={sending || unknown}
           className="block w-full resize-none border-0 bg-transparent p-0 text-[15px] leading-6 text-white placeholder:text-[#444] focus:outline-none disabled:opacity-60 max-h-[160px] overflow-y-auto"
         />
       </div>
 
+      {unknown && <div className="px-5 pb-3 text-xs text-amber-200">
+        <p>The original target and message are held until delivery is known. Retry uses the same submission.</p>
+        <button type="button" className="mt-2 underline" onClick={() => { submissionRef.current = null; setUnknown(false); setFeedback("Uncertain submission discarded. It may still have been delivered."); }}>Discard uncertain submission</button>
+      </div>}
       <div className="flex items-center justify-between gap-3 px-4 pb-4">
         <div role="status" aria-live="polite" className="text-xs text-[#999]">{sending ? "Pending mailbox acceptance…" : feedback ?? "Press Enter to send."}</div>
         <button
@@ -345,35 +335,6 @@ export function ScanPromptComposer({
         </button>
       </div>
     </div>
-  );
-}
-
-function TargetMenuItem({
-  label,
-  active,
-  onSelect,
-}: {
-  label: string;
-  active: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="option"
-      aria-selected={active}
-      // onMouseDown so the click lands before the trigger's onBlur closes the menu.
-      onMouseDown={(e) => {
-        e.preventDefault();
-        onSelect();
-      }}
-      className={cn(
-        "block w-full truncate px-3 py-1.5 text-left text-xs transition-colors hover:bg-white/[0.06]",
-        active ? "text-white" : "text-[#aaa]"
-      )}
-    >
-      {label}
-    </button>
   );
 }
 

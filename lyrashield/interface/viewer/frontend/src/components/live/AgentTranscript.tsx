@@ -3,7 +3,7 @@ import { Brain, Bot } from "lucide-react";
 import { getToolRenderer, getToolIcon } from "./tool-renderers";
 import ChatBubble from "./tool-renderers/ChatBubble";
 import type { ToolRendererProps, AgentNode as GraphAgentNode } from "@/types/events";
-import type { TranscriptAgent, TranscriptEvent } from "@/data/serverSource";
+import type { Transcript, TranscriptAgent, TranscriptEvent } from "@/data/serverSource";
 
 /* ---------- Error boundary so one bad event never blanks the transcript ---------- */
 class RendererErrorBoundary extends Component<
@@ -144,7 +144,8 @@ function graphStatus(status: string): GraphAgentNode["status"] {
  */
 export function buildGraphAgents(
   agents: TranscriptAgent[],
-  events: TranscriptEvent[]
+  events: TranscriptEvent[],
+  summaries?: Transcript["agent_summaries"]
 ): Map<string, GraphAgentNode> {
   const childrenOf = new Map<string, string[]>();
   for (const a of agents) {
@@ -180,13 +181,13 @@ export function buildGraphAgents(
     map.set(a.id, {
       id: a.id,
       name: a.name,
-      task: taskByName.get(a.name) ?? "",
+      task: summaries?.[a.id]?.task ?? taskByName.get(a.name) ?? "",
       status: graphStatus(a.status),
       parentId: a.parent_id,
       children: childrenOf.get(a.id) ?? [],
       createdAt: a.created_at,
-      toolCount: toolCount.get(a.id) ?? 0,
-      messageCount: messageCount.get(a.id) ?? 0,
+      toolCount: summaries?.[a.id]?.tool_count ?? toolCount.get(a.id) ?? 0,
+      messageCount: summaries?.[a.id]?.message_count ?? messageCount.get(a.id) ?? 0,
     });
   }
   return map;
@@ -197,18 +198,20 @@ export function AgentTranscript({
   agent,
   events,
   showHeader = true,
+  windowed = false,
 }: {
   agent: TranscriptAgent;
   events: TranscriptEvent[];
   showHeader?: boolean;
+  windowed?: boolean;
 }) {
   const mine = useMemo(() => {
     const ordered = events
       .filter((e) => e.agent_id === agent.id)
-      .sort((a, b) => eventSeq(a.id) - eventSeq(b.id));
-    const hidden = hiddenUserEventIds(ordered);
-    return ordered.filter((e) => !hidden.has(e.id));
-  }, [events, agent.id]);
+      .sort((a, b) => windowed ? Number(a.id.split("_")[1]) - Number(b.id.split("_")[1]) : eventSeq(a.id) - eventSeq(b.id));
+    const hidden = windowed ? new Set<string>() : hiddenUserEventIds(ordered);
+    return ordered.filter((e) => !hidden.has(e.id) && e.data.viewer_initial_input !== true && !isInterAgentDelivery(e));
+  }, [events, agent.id, windowed]);
 
   const toolCount = mine.filter((e) => e.type === "tool").length;
   const msgCount = mine.length - toolCount;
@@ -276,6 +279,7 @@ export function AgentTranscript({
                   {!isLast && <div className="w-px flex-1 bg-[#1a1a1a] mt-1" />}
                 </div>
                 <div className="flex-1 min-w-0 pt-[5px] pb-6">
+                  {event.data.viewer_truncated === true && <p className="mb-2 text-xs text-amber-200">Large event preview truncated. Full content remains in the local run artifacts.</p>}
                   {isTool ? (
                     <SafeToolRenderer
                       toolName={toolName}

@@ -17,6 +17,32 @@ states, not the current patch inventory.
 
 ## History
 
+## Viewer resource recovery and measured transcript windows (2026-11-02)
+
+The owned viewer tracks summary, transcript, findings, report and history requests
+independently. GET requests have finite timeouts and are aborted on run changes
+or unmount. Failed resources keep data from the same selected run and offer
+independent retries after completion. Historical runs remain read-only, the
+launched run label remains stable, and an uncertain steering retry preserves its
+original run, target, message and submission ID until resolved or discarded.
+After completion, authenticated identical submissions can reconcile a known
+receipt without a live scan loop. Timed-out submissions use a read-only receipt
+callback; pending or cancelled work stays unknown and new writes remain forbidden.
+Native target selection, sidebar collapse/restore, IME-safe submission and an
+inline mobile privacy notice preserve keyboard and pointer access. Budget amounts
+retain sub-cent precision and open controls refresh metadata from other clients.
+
+Measured synthetic histories justified optional `/api/transcript?limit=100`
+transport: `summary=1` returns graph metadata without messages; `agent=<id>`
+returns a recent per-agent window; `before=<source-event-id>` loads older activity.
+Stable event IDs use persisted SQLite row IDs. The viewer renders at most one
+100-event page per agent modal, preserves graph totals across windows, and labels
+large event previews truncated above the 24,000-byte event limit. Full artifacts
+and the unparameterized legacy endpoint remain unchanged. The reader reuses the
+owned TUI event projector and caches at most two unchanged projections keyed by
+metadata/database/WAL inode, size and nanosecond modification time. Changed
+histories still require linear projection; this is not an indexed database reader.
+
 ## Explicit operator budget controls and acknowledged steering (2026-11-02)
 
 Owned lifecycle, TUI and viewer paths now distinguish mailbox acceptance from

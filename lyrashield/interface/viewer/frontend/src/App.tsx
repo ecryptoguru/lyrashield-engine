@@ -18,18 +18,15 @@ import AgentDetailModal from "@/components/live/AgentDetailModal";
 import { ScanPromptComposer } from "@/components/live/ScanPromptComposer";
 import { severityCounts, type ParsedRunSummary } from "@/lib/local-run-parser";
 import {
-  fetchAll,
   fetchAuthStatus,
   fetchCapabilities,
-  fetchRunSummary,
   fetchRuns,
-  fetchTranscript,
-  fetchVulnerabilities,
   forgetAuth,
   type AuthStatus,
   type LoadedRun,
   type RunsPayload,
 } from "@/data/serverSource";
+import { useResource, useRunResources } from "@/data/useRunResources";
 import { runTitle } from "@/lib/target-utils";
 import { getRunStatusDisplay } from "@/lib/run-status";
 import Sidebar from "@/components/Sidebar";
@@ -45,142 +42,44 @@ const TRUST_BANNER =
   "This viewer displays local scan results. Exported reports can contain sensitive target details; share them carefully.";
 
 const SEVERITY_ORDER: VulnerabilitySeverity[] = ["critical", "high", "medium", "low"];
-const POLL_MS = 500;
 const AgentGraph = lazy(() => import("@/components/live/AgentGraph"));
 
 export default function App() {
   const [activeRun, setActiveRun] = useState<string | null>(null);
-  const [run, setRun] = useState<LoadedRun | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
+  const resources = useRunResources(activeRun);
+  const { run } = resources;
+  const error = resources.summary.error ? "Run summary could not be loaded." : null;
   const [forgetError, setForgetError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<View>("overview");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
-  const [runs, setRuns] = useState<RunsPayload | null>(null);
-  // Whether this viewer can steer a live scan (true only inside the in-TUI
-  // launcher that shares the running scan's coordinator + event loop).
-  const [canSteer, setCanSteer] = useState(false);
-  const [canControl, setCanControl] = useState(false);
-  const [launchedRun, setLaunchedRun] = useState<string | null>(null);
+  const history = useResource("history", signal => fetchRuns(signal));
+  const runs = history.data;
+  const refreshRuns = history.retry;
+  const [launchedName, setLaunchedName] = useState("Current run");
+  const capabilities = useResource("capabilities", signal => fetchCapabilities(signal), () => false);
+  const canSteer = capabilities.data?.can_steer === true;
+  const canControl = capabilities.data?.can_control === true;
+  const launchedRun = capabilities.data?.launched_run ?? null;
 
-  const refreshAuth = useCallback(async () => {
+  const refreshAuth = useCallback(async (signal?: AbortSignal) => {
     try {
-      setAuth(await fetchAuthStatus());
+      const next = await fetchAuthStatus(signal);
+      if (!signal?.aborted) setAuth(next);
     } catch {
       /* auth status is best-effort; the launched run stays viewable */
     }
   }, []);
 
-  const refreshRuns = useCallback(async () => {
-    try {
-      setRuns(await fetchRuns());
-    } catch {
-      /* history list is best-effort */
-    }
-  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    void refreshAuth(controller.signal);
+    return () => controller.abort();
+  }, [refreshAuth]);
 
   useEffect(() => {
-    void refreshAuth();
-    void refreshRuns();
-    // Capabilities never change over a session, so fetch once on mount.
-    fetchCapabilities()
-      .then((caps) => {
-        setCanSteer(caps.can_steer);
-        setCanControl(caps.can_control);
-        setLaunchedRun(caps.launched_run);
-      })
-      .catch(() => {
-        /* absence of steering is the safe default */
-      });
-  }, [refreshAuth, refreshRuns]);
-
-  // Live polling, scoped to the active run. Re-runs when the active run changes
-  // so switching to a past run (?run=<name>) reloads its data; a finished run
-  // does a single full fetch and stops.
-  const finishedRef = useRef(false);
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let loading = false;
-    finishedRef.current = false;
-
-    const schedule = (delay = POLL_MS) => {
-      timer = setTimeout(tick, document.visibilityState === "hidden" ? 5000 : delay);
-    };
-
-    const tick = async () => {
-      if (cancelled || loading) return;
-      loading = true;
-      try {
-        const { summary, raw, finished } = await fetchRunSummary(activeRun);
-        if (cancelled) return;
-        if (finished && !finishedRef.current) {
-          const full = await fetchAll(activeRun);
-          if (!cancelled) {
-            setRun(full);
-            setError(null);
-            finishedRef.current = true;
-          }
-          return; // stop polling
-        }
-        const [transcript, vulnerabilities] = await Promise.all([
-          fetchTranscript(activeRun).catch(() => ({ agents: [], events: [] })),
-          fetchVulnerabilities(summary.runId, activeRun),
-        ]);
-        if (cancelled) return;
-        setRun((prev) => ({
-          summary,
-          raw,
-          finished,
-          transcript,
-          vulnerabilities,
-          reportMarkdown: prev?.reportMarkdown ?? null,
-          reportError: prev?.reportError ?? null,
-        }));
-        setError(null);
-        schedule();
-      } catch (e) {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : "Could not load run data.");
-        schedule(5000);
-      } finally {
-        loading = false;
-      }
-    };
-
-    const onVisible = () => {
-      if (document.visibilityState === "visible" && !finishedRef.current && !loading) {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(tick, 0);
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-
-    (async () => {
-      try {
-        const full = await fetchAll(activeRun);
-        if (cancelled) return;
-        setRun(full);
-        setError(null);
-        if (full.finished) {
-          finishedRef.current = true;
-        } else {
-          schedule();
-        }
-      } catch (e) {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : "Could not load run data.");
-        schedule(5000);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [activeRun, retryCount]);
+    if (activeRun === null && run) setLaunchedName(runTitle(run.summary.targets[0] ?? null, run.summary.runName ?? run.summary.runId ?? "Current run"));
+  }, [activeRun, run?.summary.runName, run?.summary.runId]);
 
   const counts = useMemo(
     () => (run ? severityCounts(run.vulnerabilities) : null),
@@ -227,8 +126,6 @@ export default function App() {
     if (directoryName === activeRun) return;
     setActiveRun(directoryName);
     setSelectedId(null);
-    setRun(null);
-    setError(null);
     // Reset the guard so the per-run default applies to the newly selected run.
     initialViewAppliedRef.current = false;
   }, [activeRun, userSetView]);
@@ -278,6 +175,7 @@ export default function App() {
       />
 
       <div className="flex-1 min-w-0">
+        <TrustToast message={TRUST_BANNER} />
         {/* Top bar */}
         <div className="border-b border-[#222]">
           <div className="max-w-[88rem] mx-auto px-3 sm:px-6 py-4 flex flex-wrap items-center gap-x-1.5 gap-y-2">
@@ -288,7 +186,7 @@ export default function App() {
                 <RunSwitcher
                   runs={runs}
                   activeRun={activeRun}
-                  launchedName={runTitle(run?.summary.targets[0] ?? null, run?.summary.runName ?? run?.summary.runId ?? "Current run")}
+                  launchedName={launchedName}
                   onSelect={selectRun}
                 />
               )}
@@ -307,9 +205,16 @@ export default function App() {
             <div role="alert" className="rounded-lg px-4 py-3 flex gap-3 items-start border border-red-500/30 bg-red-500/5">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-400" aria-hidden="true" />
               <p className="text-sm text-red-300">{error}</p>
-              <button type="button" className="text-sm underline text-red-200" onClick={() => setRetryCount((n) => n + 1)}>Retry</button>
+              <button type="button" className="text-sm underline text-red-200" onClick={resources.summary.retry}>Retry</button>
             </div>
           )}
+
+          <ResourceFeedback name="Live controls" resource={capabilities} />
+          {view === "history" ? <ResourceFeedback name="History" resource={history} /> : <>
+            <ResourceFeedback name="Transcript" resource={resources.transcript} />
+            <ResourceFeedback name="Findings" resource={resources.findings} />
+            {resources.report.loading && !resources.report.error && <p role="status" className="text-sm text-[#aaa]">Loading report…</p>}
+          </>}
 
           {/* Keyed wrapper: re-mounts on every view / finding / run change so the
               page-in transition replays. */}
@@ -321,7 +226,7 @@ export default function App() {
             <EmailReportView
               markdown={run?.reportMarkdown ?? null}
               error={run?.reportError ?? null}
-              onRetry={() => setRetryCount((n) => n + 1)}
+              onRetry={resources.report.retry}
               onExit={() => setView("overview")}
             />
           ) : view === "history" ? (
@@ -337,11 +242,11 @@ export default function App() {
                 <History className="w-5 h-5 text-[#888]" aria-hidden="true" />
                 <h1 className="text-2xl font-semibold text-white">Past runs</h1>
               </div>
-              <PastRunsView
+              {runs && <PastRunsView
                 runs={runs}
                 activeRun={activeRun}
                 onSelectRun={selectRun}
-              />
+              />}
             </div>
           ) : !run && !error ? (
             <div className="rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-10 text-center">
@@ -382,10 +287,10 @@ export default function App() {
                   raw={run.raw}
                   finished={run.finished}
                   onOpenEmail={openEmailFromOverview}
-                  onRetryReport={() => setRetryCount((n) => n + 1)}
+                  onRetryReport={resources.report.retry}
                 />
               ) : view === "agents" && agentCount > 0 ? (
-                <AgentsTab run={run} canSteer={canSteer && launchedRun !== null && (activeRun === null || activeRun === launchedRun)} runName={launchedRun ?? ""} canControl={canControl} />
+                <AgentsTab selectedRun={activeRun} run={run} canSteer={canSteer && launchedRun !== null && (activeRun === null || activeRun === launchedRun)} runName={launchedRun ?? ""} canControl={canControl} />
               ) : selected ? (
                 <div className="space-y-4">
                   <button
@@ -400,7 +305,7 @@ export default function App() {
                 <FindingsList
                   vulnerabilities={run.vulnerabilities}
                   finished={run.finished}
-                  unavailable={error !== null}
+                  unavailable={resources.findings.error || resources.findings.loading}
                   onSelect={(id) => setSelectedId(id)}
                 />
               )}
@@ -409,9 +314,17 @@ export default function App() {
           </div>
         </div>
       </div>
-      <TrustToast message={TRUST_BANNER} />
+
     </div>
   );
+}
+
+function ResourceFeedback({ name, resource }: { name: string; resource: { error: boolean; loading: boolean; retry: () => void } }) {
+  if (resource.error) return <div role="alert" className="rounded-lg border border-red-500/30 p-4 text-sm text-red-300 flex flex-wrap gap-3">
+    <span>{name} could not be loaded. Previously loaded data is retained for this run.</span>
+    <button type="button" aria-label={`Retry ${name.toLowerCase()}`} onClick={resource.retry} className="underline">Retry {name.toLowerCase()}</button>
+  </div>;
+  return resource.loading ? <p role="status" className="text-sm text-[#aaa]">Loading {name.toLowerCase()}…</p> : null;
 }
 
 function RunSwitcher({
@@ -706,9 +619,9 @@ function TabButton({
   );
 }
 
-function AgentsTab({ run, canSteer, runName, canControl }: { run: LoadedRun; canSteer: boolean; runName: string; canControl: boolean }) {
+function AgentsTab({ run, canSteer, runName, canControl, selectedRun }: { selectedRun: string | null; run: LoadedRun; canSteer: boolean; runName: string; canControl: boolean }) {
   const { agents, events } = run.transcript;
-  const graphAgents = useMemo(() => buildGraphAgents(agents, events), [agents, events]);
+  const graphAgents = useMemo(() => buildGraphAgents(agents, events, run.transcript.agent_summaries), [agents, events, run.transcript.agent_summaries]);
   // Clicking a graph node opens the agent's transcript in a modal; no node selected means no modal.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedAgent = selectedId ? (agents.find((a) => a.id === selectedId) ?? null) : null;
@@ -751,6 +664,9 @@ function AgentsTab({ run, canSteer, runName, canControl }: { run: LoadedRun; can
         open={selectedAgent !== null}
         agent={selectedAgent}
         events={events}
+        transcript={run.transcript}
+        selectedRun={selectedRun}
+        finished={run.finished}
         steerable={steerable}
         runName={runName}
         canControl={canControl}

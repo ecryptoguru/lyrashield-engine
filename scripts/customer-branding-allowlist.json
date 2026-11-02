@@ -814,6 +814,16 @@
     "lyrashield/interface/repo_clone.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "    base = Path(tempfile.gettempdir()) / \"strix_repos\""
+    ],
+    "lyrashield/interface/viewer/transcript_window.py": [
+      "from strix.core.paths import runtime_state_dir",
+      "from strix.interface.tui.history import _sqlite_timestamp_to_iso"
+    ],
+    "lyrashield/interface/viewer/frontend/tests/benchmark-transcript.js": [
+      "      await page.addInitScript(() => localStorage.setItem(\"strix_viewer_trust_dismissed\", \"1\"));"
+    ],
+    "lyrashield/interface/viewer/frontend/tests/recovery-browser.test.mjs": [
+      "  await page.addInitScript(() => localStorage.setItem(\"strix_viewer_sidebar_collapsed\", \"1\"));"
     ]
   }
 }

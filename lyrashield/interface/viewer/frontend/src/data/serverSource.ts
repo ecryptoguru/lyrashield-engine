@@ -37,6 +37,9 @@ export interface TranscriptEvent {
 export interface Transcript {
   agents: TranscriptAgent[];
   events: TranscriptEvent[];
+  windowed?: boolean;
+  older_cursors?: Record<string, string | null>;
+  agent_summaries?: Record<string, { tool_count: number; message_count: number; task: string }>;
 }
 
 export interface LoadedRun {
@@ -50,10 +53,20 @@ export interface LoadedRun {
   transcript: Transcript;
 }
 
-async function getJson(path: string): Promise<unknown> {
-  const res = await fetch(path, { cache: "no-store" });
-  if (!res.ok) throw new Error(`${path} responded ${res.status}`);
-  return res.json();
+export async function getJson(path: string, signal?: AbortSignal): Promise<unknown> {
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  const timer = setTimeout(() => controller.abort(new Error("Request timed out")), 8000);
+  try {
+    const res = await fetch(path, { cache: "no-store", signal: controller.signal });
+    if (!res.ok) throw new Error(`${path} responded ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
 }
 
 /** Build a ``?run=<name>`` suffix for run-scoped data endpoints. */
@@ -61,12 +74,12 @@ function runQuery(runName?: string | null): string {
   return runName ? `?run=${encodeURIComponent(runName)}` : "";
 }
 
-export async function fetchRunSummary(runName?: string | null): Promise<{
+export async function fetchRunSummary(runName?: string | null, signal?: AbortSignal): Promise<{
   summary: ParsedRunSummary;
   raw: Record<string, unknown>;
   finished: boolean;
 }> {
-  const raw = (await getJson("/api/run" + runQuery(runName))) as Record<string, unknown>;
+  const raw = (await getJson("/api/run" + runQuery(runName), signal)) as Record<string, unknown>;
   // parseRunJson tolerates extra keys and takes raw TEXT.
   const summary = parseRunJson(JSON.stringify(raw));
   const finished = raw.finished === true;
@@ -75,22 +88,30 @@ export async function fetchRunSummary(runName?: string | null): Promise<{
 
 export async function fetchVulnerabilities(
   runId: string | null,
-  runName?: string | null
+  runName?: string | null,
+  signal?: AbortSignal
 ): Promise<Vulnerability[]> {
-  const arr = await getJson("/api/vulnerabilities" + runQuery(runName));
+  const arr = await getJson("/api/vulnerabilities" + runQuery(runName), signal);
   return parseVulnerabilitiesJson(JSON.stringify(arr), runId);
 }
 
-export async function fetchReportMarkdown(runName?: string | null): Promise<string | null> {
-  const obj = (await getJson("/api/report" + runQuery(runName))) as { markdown?: string };
+export async function fetchReportMarkdown(runName?: string | null, signal?: AbortSignal): Promise<string | null> {
+  const obj = (await getJson("/api/report" + runQuery(runName), signal)) as { markdown?: string };
   return obj?.markdown ?? null;
 }
 
-export async function fetchTranscript(runName?: string | null): Promise<Transcript> {
-  const obj = (await getJson("/api/transcript" + runQuery(runName))) as Partial<Transcript>;
+export async function fetchTranscript(runName?: string | null, signal?: AbortSignal, page?: { agent: string; before?: string }): Promise<Transcript> {
+  const query = new URLSearchParams({ limit: "100" });
+  if (runName) query.set("run", runName);
+  if (page) { query.set("agent", page.agent); if (page.before) query.set("before", page.before); }
+  else query.set("summary", "1");
+  const obj = (await getJson("/api/transcript?" + query, signal)) as Partial<Transcript>;
   return {
     agents: Array.isArray(obj?.agents) ? obj.agents : [],
     events: Array.isArray(obj?.events) ? obj.events : [],
+    windowed: obj?.windowed === true,
+    older_cursors: obj?.older_cursors,
+    agent_summaries: obj?.agent_summaries,
   };
 }
 
@@ -181,8 +202,8 @@ async function postJson(
   return { ok: res.ok, status: res.status, data };
 }
 
-export async function fetchRuns(): Promise<RunsPayload> {
-  const obj = (await getJson("/api/runs")) as Partial<RunsPayload>;
+export async function fetchRuns(signal?: AbortSignal): Promise<RunsPayload> {
+  const obj = (await getJson("/api/runs", signal)) as Partial<RunsPayload>;
   return {
     locked: obj?.locked ?? true,
     count: typeof obj?.count === "number" ? obj.count : 0,
@@ -208,8 +229,8 @@ export interface Capabilities {
 export type SteerResult = { ok: true } | { ok: false; error: string };
 
 /** GET /api/capabilities. can_steer is true only inside a live in-TUI scan. */
-export async function fetchCapabilities(): Promise<Capabilities> {
-  const obj = (await getJson("/api/capabilities")) as Partial<Capabilities>;
+export async function fetchCapabilities(signal?: AbortSignal): Promise<Capabilities> {
+  const obj = (await getJson("/api/capabilities", signal)) as Partial<Capabilities>;
   return {
     can_steer: obj?.can_steer === true,
     can_control: obj?.can_control === true,
@@ -268,8 +289,8 @@ export async function submitFeedback(
   return { ok: false, error: String(data.error ?? "unavailable") };
 }
 
-export async function fetchAuthStatus(): Promise<AuthStatus> {
-  const obj = (await getJson("/api/auth/status")) as Partial<AuthStatus>;
+export async function fetchAuthStatus(signal?: AbortSignal): Promise<AuthStatus> {
+  const obj = (await getJson("/api/auth/status", signal)) as Partial<AuthStatus>;
   return { verified: obj?.verified === true, email: obj?.email ?? null };
 }
 
