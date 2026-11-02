@@ -252,3 +252,94 @@ def test_unwritable_destination_rejected_before_any_mutation(site: Path, relativ
         assert _snapshot(site) == before
     finally:
         target.chmod(mode)
+
+
+@pytest.fixture
+def launcher_site(site: Path) -> Path:
+    environment = site / "environment"
+    nested = environment / "lib/python3.13/site-packages"
+    nested.mkdir(parents=True)
+    for child in list(site.iterdir()):
+        if child != environment:
+            child.rename(nested / child.name)
+    binary = environment / "bin"
+    binary.mkdir()
+    dist = nested / "pip-26.2.2.dist-info"
+    entrypoints = dist / "entry_points.txt"
+    entrypoints.write_text(
+        "[console_scripts]\npip = pip._internal.cli.main:main\npip3 = pip._internal.cli.main:main\n"
+    )
+    relative = entrypoints.relative_to(nested).as_posix()
+    identity = [HELPER.record_hash(entrypoints.read_bytes()), str(entrypoints.stat().st_size)]
+    inventory = next(w for w in HELPER.WHEEL_INVENTORIES if w["name"] == "pip")
+    inventory["files"][relative] = identity
+    record = dist / "RECORD"
+    rows = list(csv.reader(record.open()))
+    rows.append([relative, *identity])
+    for name in ("pip", "pip3", "pip3.13"):
+        path = binary / name
+        path.write_text(
+            f"#!{binary}/python3.13\n"
+            "import sys\nfrom pip._internal.cli.main import main\n"
+            "if __name__ == '__main__':\n"
+            "    sys.argv[0] = sys.argv[0].removesuffix('.exe')\n"
+            "    sys.exit(main())\n"
+        )
+        path.chmod(0o755)
+        rows.append(
+            [
+                f"../../../bin/{name}",
+                HELPER.record_hash(path.read_bytes()),
+                str(path.stat().st_size),
+            ]
+        )
+    output = io.StringIO()
+    csv.writer(output).writerows(rows)
+    record.write_text(output.getvalue())
+    return nested
+
+
+def test_versioned_launchers_remain_executable_after_repair(launcher_site: Path) -> None:
+    binary = launcher_site.parents[2] / "bin"
+    before = {p.name: (p.read_bytes(), p.stat().st_mode) for p in binary.iterdir()}
+    HELPER.repair(launcher_site)
+    assert {p.name: (p.read_bytes(), p.stat().st_mode) for p in binary.iterdir()} == before
+
+
+@pytest.mark.parametrize("case", ["missing_record_row", "nonexecutable"])
+def test_versioned_launcher_is_validated_independently(launcher_site: Path, case: str) -> None:
+    environment = launcher_site.parents[2]
+    versioned = environment / "bin/pip3.13"
+    if case == "missing_record_row":
+        _remove_record_row(launcher_site, "pip", "26.2.2", "../../../bin/pip3.13")
+        versioned.write_bytes(b"#!/bin/sh\nexit 97\n")
+    else:
+        versioned.chmod(0o644)
+    before = _snapshot(environment)
+    mode_before = versioned.stat().st_mode
+    with pytest.raises(ValueError):
+        HELPER.repair(launcher_site)
+    assert _snapshot(environment) == before
+    assert versioned.stat().st_mode == mode_before
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["pip/_vendor/vendor.txt", "pip/_vendor/bom.cdx.json", "pip-26.2.2.dist-info/RECORD"],
+)
+def test_hardlinked_outputs_reject_before_mutation(
+    site: Path, tmp_path_factory: pytest.TempPathFactory, relative: str
+) -> None:
+    target = site / relative
+    external = tmp_path_factory.mktemp("external-cache") / "original"
+    external.hardlink_to(target)
+    before = _snapshot(site)
+    external_before = (external.read_bytes(), external.stat().st_mode, external.stat().st_ino)
+    with pytest.raises(ValueError, match="linked"):
+        HELPER.repair(site)
+    assert _snapshot(site) == before
+    assert (
+        external.read_bytes(),
+        external.stat().st_mode,
+        external.stat().st_ino,
+    ) == external_before

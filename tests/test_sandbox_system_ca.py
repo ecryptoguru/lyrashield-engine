@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import ssl
 import subprocess
 from pathlib import Path
 
@@ -190,3 +191,21 @@ def test_smoke_rejects_unreadable_effective_bundle(
             checker.verify_effective_bundle()
     finally:
         bundle.chmod(0o600)
+
+
+def test_smoke_rejects_noncanonical_revoked_der(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = (ROOT / "tests/fixtures/emsign-g3.crt").read_text()
+    der = ssl.PEM_cert_to_DER_cert(source)
+    bundle = tmp_path / "trailing-g3.pem"
+    bundle.write_text(ssl.DER_cert_to_PEM_cert(der + b"\0"))
+    spec = importlib.util.spec_from_file_location(
+        "canonical_bundle", ROOT / "containers/verify_ca_bundle.py"
+    )
+    assert spec and spec.loader
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+    with pytest.raises(ValueError):
+        checker.verify_effective_bundle()

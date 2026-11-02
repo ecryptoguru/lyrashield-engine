@@ -9,6 +9,9 @@ import re
 import ssl
 from pathlib import Path
 
+from cryptography import x509
+from cryptography.hazmat.primitives.serialization import Encoding
+
 
 G3 = "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b"
 CERTIFICATE = re.compile(
@@ -28,8 +31,15 @@ def verify_effective_bundle() -> None:
         raise ValueError("missing or malformed effective CA bundle")
     for block in blocks:
         der = ssl.PEM_cert_to_DER_cert(block)
-        if hashlib.sha256(der).hexdigest() == G3:
+        certificate = x509.load_der_x509_certificate(der)
+        canonical = certificate.public_bytes(Encoding.DER)
+        if canonical != der:
+            raise ValueError("noncanonical or trailing DER in effective CA bundle")
+        if hashlib.sha256(canonical).hexdigest() == G3:
             raise ValueError("compromised emSign G3 in effective CA bundle")
     context = ssl.create_default_context(cafile=str(bundle))
-    if not context.get_ca_certs(binary_form=True):
+    loaded = context.get_ca_certs(binary_form=True)
+    if G3 in {hashlib.sha256(der).hexdigest() for der in loaded}:
+        raise ValueError("compromised emSign G3 loaded by TLS context")
+    if not loaded:
         raise ValueError("effective CA bundle has no usable CA certificates")

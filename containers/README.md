@@ -84,3 +84,10 @@ required; truncated, malformed, unreadable or missing trust inputs fail closed.
 Only the fingerprint-identified packaged G3 source is disabled. Other anchors,
 including the sandbox testing CA, remain trusted. The pip smoke independently
 requires a readable, parseable effective CA bundle before writing a passing receipt.
+
+CA source DER is parsed and roundtripped with the existing pinned X.509 parser;
+the actual TLS context's canonical loaded fingerprints are checked independently.
+Raw PEM payload hashes alone cannot attest root absence. The installer also
+requires the current versioned pip launcher and its canonical hashed RECORD row,
+admitted source and mode0755. Existing multiply linked mutation targets are
+rejected before any writes, preserving files outside the environment.

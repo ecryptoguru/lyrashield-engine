@@ -222,5 +222,7 @@
     "tests/test_reviewed_sandbox_npm.cjs": "a61828097c7eeeeafe70e536ae4cb8f4fa9d139774fce69b6b92ecfa03e55d68",
     "tests/fixtures/emsign-g3.crt": "36e68e205b53c67c7a013894e0d5c8583063468118d1ce78ecbc2200d1dd185c"
   },
-  "remaining_gate": "Parent integration, fresh dual-architecture final images, smoke, installed inventory and full security dispositions. Independent system Python and Go lanes were not modified."
+  "remaining_gate": "Parent integration, fresh dual-architecture final images, smoke, installed inventory and full security dispositions. Independent system Python and Go lanes were not modified.",
+  "historical_source_revision": "3ed248e4da98768040b5e0a6e731b2a67a16daf5",
+  "component_review_followup": "component-review-round2.json"
 }

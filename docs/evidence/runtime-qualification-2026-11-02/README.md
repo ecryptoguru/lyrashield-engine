@@ -142,3 +142,11 @@ removed packages. Actual amd64/arm64 overlays pass real-wheel tamper/no-mutation
 nonroot pip/cache/install/TLS, exhaustive CA fixtures, and the Retire loader's ten
 TLS cases. Historical component receipts retain their original source snapshots.
 The combined final image rebuild and security gate remain open.
+
+[The round2 receipt](component-review-round2.json) records the three residual
+corrections: strict DER plus actual TLS-context fingerprint checks, independent
+versioned-launcher inventory/mode validation, and rejection of hard-linked outputs
+before mutation. Fifty-five focused Python tests pass. Real Python3.13 and both
+Linux Python3.14 architecture fixtures reject the exact cases, preserve normal
+pip/cache/install/TLS behavior and keep the sandbox testing CA trusted. The
+combined final-image gate remains separate.
