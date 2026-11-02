@@ -94,7 +94,7 @@ def test_binary_bundles_product_runtime_resources() -> None:
 
 def test_python_archives_exclude_build_only_artifacts() -> None:
     config = (ROOT / "pyproject.toml").read_text()
-    assert 'exclude = ["/.coverage"]' in config
+    assert 'exclude = ["/.coverage", "/.venv*/**"]' in config
     assert '"lyrashield/interface/viewer/frontend/**"' in config
 
 
