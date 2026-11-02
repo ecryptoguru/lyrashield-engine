@@ -19,6 +19,8 @@ ARG KALI_APT_SUITE=kali-last-snapshot
 # exactly the file apt trusts to authenticate the index; without it apt would
 # fall back to whatever trusted key is present in the image.
 ARG KALI_APT_KEYRING_SHA256=42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f
+# Bootstrap CA trust from the signed archive, then acquire builder tools through
+# the same official HTTPS CDN and signed-by policy used by the runtime stage.
 RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
     printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
@@ -28,7 +30,10 @@ RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://
     apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
-    apt-get install -y --no-install-recommends curl tar git patch ca-certificates gcc libc6-dev libpcap0.8-dev=1.10.6-2 xz-utils
+    apt-get install -y --no-install-recommends ca-certificates && \
+    printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] https://kali.download/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends curl tar git patch gcc libc6-dev libpcap0.8-dev=1.10.6-2 xz-utils
 
 # Official compiler archives are pinned independently of the rolling apt suite.
 # GOTOOLCHAIN=local prevents a dependency from downloading a different compiler.

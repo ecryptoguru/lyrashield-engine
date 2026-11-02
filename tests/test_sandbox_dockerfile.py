@@ -86,8 +86,8 @@ def assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(content: str) -> 
     a file that nothing forces apt to consult.
     """
     deb_lines = [line for line in content.splitlines() if "printf 'deb " in line]
-    assert len(deb_lines) == 3, (
-        f"expected two bootstrap and one CDN deb line, found {len(deb_lines)}"
+    assert len(deb_lines) == 4, (
+        f"expected two bootstrap and two CDN deb lines, found {len(deb_lines)}"
     )
     for line in deb_lines:
         match = KALI_DEB_RE.match(line)
@@ -126,6 +126,18 @@ def test_every_kali_deb_line_is_signed_by_the_pinned_keyring() -> None:
     )
     with pytest.raises(AssertionError):
         assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(wrong_key)
+
+
+def test_go_builder_bootstraps_ca_before_installing_tools_from_signed_https_cdn() -> None:
+    builder = DOCKERFILE.read_text(encoding="utf-8").split("# Runtime stage", 1)[0]
+    ca_install = "apt-get install -y --no-install-recommends ca-certificates"
+    signed_cdn = f"deb [signed-by={KALI_KEYRING_PATH}] https://kali.download/kali"
+    tools_install = "apt-get install -y --no-install-recommends curl tar git patch"
+    assert builder.index("sha256sum -c -") < builder.index(ca_install)
+    assert builder.index(ca_install) < builder.index(signed_cdn) < builder.index(tools_install)
+    assert '"$KALI_APT_SUITE" > /etc/apt/sources.list' in builder
+    assert "apt-get update" in builder[builder.index(signed_cdn) : builder.index(tools_install)]
+    assert "Verify-Peer" not in builder
 
 
 def test_caido_download_retries_transient_server_errors() -> None:
