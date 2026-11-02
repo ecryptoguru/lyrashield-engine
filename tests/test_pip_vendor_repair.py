@@ -124,3 +124,16 @@ def test_repair_is_not_silently_reapplied(site: Path) -> None:
     HELPER.repair(site)
     with pytest.raises(ValueError, match="manifest"):
         HELPER.repair(site)
+
+
+def test_app_lock_replaces_same_version_distro_seed_before_vendor_validation() -> None:
+    dockerfile = (ROOT / "containers/Dockerfile").read_text()
+    installation = next(
+        line
+        for line in dockerfile.splitlines()
+        if "/app/.venv/bin/pip install" in line and "python-requirements.txt" in line
+    )
+    # A repaired Debian 26.2.2 seed is not the official wheel whose RECORD and
+    # exact vendor manifests the application repair deliberately validates.
+    assert "--force-reinstall" in installation
+    assert "--require-hashes" in installation and "--no-deps" in installation

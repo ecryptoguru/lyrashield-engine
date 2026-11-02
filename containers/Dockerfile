@@ -307,7 +307,7 @@ USER pentester
 # Install the complete audited hash lock without re-resolving Semgrep's narrow
 # JWT/MCP/telemetry metadata restrictions; reviewed patches and pip check enforce the graph.
 RUN python3 -m venv /app/.venv && \
-    /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/python-requirements.txt && \
+    /app/.venv/bin/pip install --force-reinstall --no-cache-dir --no-deps --require-hashes -r /tmp/python-requirements.txt && \
     /app/.venv/bin/python /tmp/repair_pip_vendors.py && \
     /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/dirsearch-requirements.txt && \
     /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py && \
