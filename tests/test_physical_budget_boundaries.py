@@ -137,9 +137,10 @@ async def _run(
     hooks: ReportUsageHooks,
     maximum: int = 128,
     extra_body: dict[str, Any] | None = None,
+    bounded: bool = True,
 ) -> Any:
     settings = make_model_settings(
-        None, model_name="openai/gpt-6-luna", bounded_budget=True, max_output_tokens=maximum
+        None, model_name="openai/gpt-6-luna", bounded_budget=bounded, max_output_tokens=maximum
     )
     if extra_body:
         settings.extra_body = extra_body

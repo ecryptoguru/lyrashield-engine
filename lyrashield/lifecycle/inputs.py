@@ -20,6 +20,7 @@ from lyrashield.policy.models import (
     model_supports_reasoning,
     request_timeout_extra_args,
 )
+from lyrashield.policy.physical_requests import FiniteBudgetModelSettings
 
 
 if TYPE_CHECKING:
@@ -341,7 +342,8 @@ def make_model_settings(
     extra_args: dict[str, Any] = request_timeout_extra_args(request_timeout) or {}
     if prompt_cache_key:
         extra_args["prompt_cache_key"] = prompt_cache_key
-    model_settings = ModelSettings(
+    settings_type = FiniteBudgetModelSettings if bounded_budget else ModelSettings
+    model_settings = settings_type(
         parallel_tool_calls=(False if _supports_parallel_tool_calls_setting(model_name) else None),
         # One reservation covers one physical request. SDK policy/native/
         # compatibility replays cannot reuse it when spend is capped.

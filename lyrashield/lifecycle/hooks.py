@@ -28,6 +28,7 @@ from lyrashield.artifacts.usage import (
     _METERED_USD_PER_MILLION,
 )
 from lyrashield.lifecycle.deadline import RunDeadlineExceededError
+from lyrashield.policy.physical_requests import finite_physical_attempt
 from lyrashield.tools.output_store import _take_prefix, _take_suffix
 
 
@@ -713,6 +714,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         """
         bounded = self._max_budget_usd is not None
         with (
+            finite_physical_attempt(bounded),
             provider_managed_retries_disabled(bounded or should_disable_provider_managed_retries()),
             websocket_pre_event_retries_disabled(
                 bounded or should_disable_websocket_pre_event_retries()
