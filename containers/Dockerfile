@@ -74,7 +74,13 @@ RUN useradd -m -s /bin/bash pentester && \
 RUN mkdir -p /home/pentester/tools /app/certs && \
     chown -R pentester:pentester /app/certs /home/pentester/tools
 
+# Bootstrap HTTPS trust through the signed archive, then use Kali's official
+# CDN for the large runtime tool set. The suite, pinned keyring, signed-by and
+# fail-closed apt signature policy remain identical to the archive bootstrap.
 RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] https://kali.download/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     wget curl git vim nano unzip tar \
     apt-transport-https ca-certificates gnupg lsb-release \

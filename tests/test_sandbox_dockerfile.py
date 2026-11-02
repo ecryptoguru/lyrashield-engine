@@ -85,15 +85,14 @@ def assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(content: str) -> 
     trusted key the image happens to carry, so the hash check would be pinning
     a file that nothing forces apt to consult.
     """
-    deb_lines = [
-        line
-        for line in content.splitlines()
-        if "printf 'deb " in line and "archive.kali.org/kali" in line
-    ]
-    assert len(deb_lines) == 2, f"expected one Kali deb line per stage, found {len(deb_lines)}"
+    deb_lines = [line for line in content.splitlines() if "printf 'deb " in line]
+    assert len(deb_lines) == 3, (
+        f"expected two bootstrap and one CDN deb line, found {len(deb_lines)}"
+    )
     for line in deb_lines:
         match = KALI_DEB_RE.match(line)
         assert match is not None, f"unparsable Kali deb line: {line}"
+        assert "http://archive.kali.org/kali" in line or "https://kali.download/kali" in line
         opts = match.group("opts") or ""
         assert f"signed-by={KALI_KEYRING_PATH}" in opts, (
             f"Kali deb line is not signed by the pinned keyring: {line}"
@@ -112,6 +111,14 @@ def test_every_kali_deb_line_is_signed_by_the_pinned_keyring() -> None:
     assert unsigned != content, "negative control did not modify the content"
     with pytest.raises(AssertionError):
         assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(unsigned)
+
+    unsigned_cdn = content.replace(
+        f"deb [signed-by={KALI_KEYRING_PATH}] https://kali.download/kali",
+        "deb https://kali.download/kali",
+    )
+    assert unsigned_cdn != content
+    with pytest.raises(AssertionError):
+        assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(unsigned_cdn)
 
     wrong_key = content.replace(
         f"deb [signed-by={KALI_KEYRING_PATH}] http://",
