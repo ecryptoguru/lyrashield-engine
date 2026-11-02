@@ -258,7 +258,8 @@ USER pentester
 USER root
 
 # Kali's signed kali-last-snapshot index still serves vulnerable 1.2.0-4+b1.
-# Install only Debian's fixed decoder package, checksum-pinned for each CPU.
+# Install both Debian decoder packages, checksum-pinned for each CPU. Python's
+# extension statically bundles its decoder. Keep this after the final APT install.
 COPY containers/install_brotli.sh /opt/lyrashield/install_brotli.sh
 RUN sh /opt/lyrashield/install_brotli.sh
 
