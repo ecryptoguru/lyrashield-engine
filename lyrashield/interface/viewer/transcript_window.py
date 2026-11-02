@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
@@ -40,7 +41,7 @@ def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
             "status": str(data.get("status", "completed"))[:40],
             "args": {"__raw": preview},
         }
-    return {
+    result = {
         **event,
         "timestamp": str(event.get("timestamp", ""))[:128],
         "data": {
@@ -49,6 +50,25 @@ def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
             "viewer_initial_input": data.get("viewer_initial_input", False),
         },
     }
+
+    # Budget against the exact wire serializer, including JSON escaping and
+    # the completed envelope. Binary search preserves the largest valid prefix.
+    lower, upper = 0, len(preview)
+    while lower < upper:
+        middle = (lower + upper + 1) // 2
+        if event["type"] == "chat":
+            result["data"]["content"] = preview[:middle]
+        else:
+            result["data"]["args"]["__raw"] = preview[:middle]
+        if len(json.dumps(result).encode("utf-8")) <= MAX_EVENT_BYTES:
+            lower = middle
+        else:
+            upper = middle - 1
+    if event["type"] == "chat":
+        result["data"]["content"] = preview[:lower]
+    else:
+        result["data"]["args"]["__raw"] = preview[:lower]
+    return result
 
 
 def build_transcript_window(
@@ -127,7 +147,7 @@ def _project_history(
         )
     database = state_dir / "agents.db"
     if database.exists() and view.agents:
-        with sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True) as conn:
+        with closing(sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)) as conn:
             rows = conn.execute(
                 "select id, session_id, message_data, created_at from agent_messages order by id"
             )

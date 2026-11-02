@@ -7,7 +7,8 @@ import {
   useState,
 } from "react";
 import { ArrowUp, ChevronDown, ChevronUp, Loader2, Sparkles } from "lucide-react";
-import { controlScan, fetchCapabilities, steerAgent, type BudgetControlState, type TranscriptAgent } from "@/data/serverSource";
+import { fetchCapabilities, type BudgetControlState, type TranscriptAgent } from "@/data/serverSource";
+import { useOperatorReceipts } from "@/data/operatorReceipts";
 import { track } from "@/lib/cta";
 import { attemptSteering } from "@/lib/steering";
 import { cn } from "@/lib/utils";
@@ -50,6 +51,7 @@ export function ScanPromptComposer({
   fixedAgentId,
   className,
 }: ScanPromptComposerProps) {
+  const receipts = useOperatorReceipts();
   const submissionRef = useRef<{ key: string; id: string; targetName: string; targetId: string; runName: string; message: string } | null>(null);
   const controlRef = useRef<{ action: string; id: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -126,6 +128,18 @@ export function ScanPromptComposer({
     };
   }, [agents, fixedAgentId, isModal, rootAgent, selectedTarget]);
 
+  useEffect(() => {
+    const message = receipts.receipts.find(receipt => receipt.id === submissionRef.current?.id);
+    if (message && !["pending", "unknown"].includes(message.phase)) {
+      submissionRef.current = null;
+      setUnknown(false);
+      if (message.phase === "queued") { setValue(""); setFeedback("Receipt confirmed: message queued."); }
+      else setFeedback(message.phase === "dismissed" ? "Uncertain submission discarded. It may still have been delivered." : "Message was not accepted. The draft is retained.");
+    }
+    const control = receipts.receipts.find(receipt => receipt.id === controlRef.current?.id);
+    if (control && !["pending", "unknown"].includes(control.phase)) controlRef.current = null;
+  }, [receipts.receipts]);
+
   const empty = value.trim().length === 0;
 
   // Grow the textarea with its content, capped by max-h via CSS.
@@ -163,7 +177,7 @@ export function ScanPromptComposer({
     }
     const id = submissionRef.current.id;
     const outcome = await attemptSteering(async () => {
-      const result = await steerAgent(submissionRun, agentId, message, id);
+      const result = await receipts.submit({ id, runName: submissionRun, kind: "message", agentId, targetName: name, message });
       if (!result.ok && result.error !== "delivery_unknown") submissionRef.current = null;
       return result;
     }, name);
@@ -177,7 +191,7 @@ export function ScanPromptComposer({
       setFeedback(outcome.feedback);
     }
     setSending(false);
-  }, [sending, value, targetId, targetName, runName, unknown]);
+  }, [sending, value, targetId, targetName, runName, unknown, receipts.submit]);
 
   const handleControl = async (action: "resume" | "increase_budget") => {
     if (sending) return;
@@ -186,7 +200,7 @@ export function ScanPromptComposer({
     }
     setSending(true);
     setFeedback("Pending control acceptance…");
-    const result = await controlScan(runName, action, controlRef.current.id);
+    const result = await receipts.submit({ id: controlRef.current.id, runName, kind: "control", action });
     if (result.ok) {
       controlRef.current = null;
       await refreshBudget();
@@ -308,7 +322,7 @@ export function ScanPromptComposer({
 
       {unknown && <div className="px-5 pb-3 text-xs text-amber-200">
         <p>The original target and message are held until delivery is known. Retry uses the same submission.</p>
-        <button type="button" className="mt-2 underline" onClick={() => { submissionRef.current = null; setUnknown(false); setFeedback("Uncertain submission discarded. It may still have been delivered."); }}>Discard uncertain submission</button>
+        <button type="button" className="mt-2 underline" onClick={() => { if (submissionRef.current) receipts.dismiss(submissionRef.current.id); submissionRef.current = null; setUnknown(false); setFeedback("Uncertain submission discarded. It may still have been delivered."); }}>Discard uncertain submission</button>
       </div>}
       <div className="flex items-center justify-between gap-3 px-4 pb-4">
         <div role="status" aria-live="polite" className="text-xs text-[#999]">{sending ? "Pending mailbox acceptance…" : feedback ?? "Press Enter to send."}</div>

@@ -250,6 +250,8 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                     self._handle_steer()
                 elif path == "/api/scan/control":
                     self._handle_control()
+                elif path == "/api/receipts/check":
+                    self._handle_receipt_check()
                 else:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
             except BrokenPipeError:
@@ -591,6 +593,69 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 lambda: handler(action, submission_id),
             )
 
+        def _handle_receipt_check(self) -> None:
+            """Read existing process receipts without calling a mutation handler."""
+            if not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
+            body = self._read_body()
+            if not self._validate_live_submission(body):
+                return
+            fingerprint: tuple[str, ...]
+            if "action" in body and "agent_id" not in body and "message" not in body:
+                action = body["action"]
+                if not isinstance(action, str) or action not in {"resume", "increase_budget"}:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_action"})
+                    return
+                fingerprint = ("control", action)
+            else:
+                agent_id, message = body.get("agent_id"), body.get("message")
+                if (
+                    "action" in body
+                    or not isinstance(agent_id, str)
+                    or not agent_id.strip()
+                    or len(agent_id) > 128
+                    or not isinstance(message, str)
+                    or not message.strip()
+                    or len(message) > self._STEER_MESSAGE_MAX
+                ):
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_receipt_payload"})
+                    return
+                fingerprint = ("steer", agent_id, message)
+            submission_id = body["submission_id"]
+            with state.submission_lock:
+                previous = state.submissions.get(submission_id)
+                if previous is None:
+                    result = {"ok": False, "error": "delivery_unknown"}
+                elif previous[0] != fingerprint:
+                    self._send_json(HTTPStatus.CONFLICT, {"error": "submission_conflict"})
+                    return
+                else:
+                    result = self._read_receipt_result(submission_id, fingerprint, previous[1])
+                self._send_json(HTTPStatus.OK, result)
+
+        def _read_receipt_result(
+            self, submission_id: str, fingerprint: tuple[str, ...], cached: dict[str, Any] | None
+        ) -> dict[str, Any]:
+            if cached is None:
+                return {"ok": False, "error": "delivery_unknown"}
+            if not cached.get("_retry"):
+                return cached
+            receipt = (
+                state.submission_receipt_handler(submission_id, fingerprint)
+                if state.submission_receipt_handler
+                else None
+            )
+            if receipt not in {"queued", "rejected"}:
+                return {"ok": False, "error": "delivery_unknown"}
+            result: dict[str, Any] = (
+                {"ok": True, "status": "queued"}
+                if receipt == "queued"
+                else {"ok": False, "error": "not_delivered"}
+            )
+            state.submissions[submission_id] = (fingerprint, result)
+            return result
+
         def _apply_submission(
             self, submission_id: str, fingerprint: tuple[str, ...], apply: Callable[[], bool]
         ) -> None:
@@ -618,21 +683,10 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                         return
                     # A timed-out known operation may only read its receipt.
                     # Never invoke a mutation handler once the run is finished.
-                    receipt = (
-                        state.submission_receipt_handler(submission_id, fingerprint)
-                        if state.submission_receipt_handler
-                        else None
+                    self._send_json(
+                        HTTPStatus.OK,
+                        self._read_receipt_result(submission_id, fingerprint, previous[1]),
                     )
-                    if receipt in {"queued", "rejected"}:
-                        cached_result: dict[str, Any] = (
-                            {"ok": True, "status": "queued"}
-                            if receipt == "queued"
-                            else {"ok": False, "error": "not_delivered"}
-                        )
-                        state.submissions[submission_id] = (fingerprint, cached_result)
-                        self._send_json(HTTPStatus.OK, cached_result)
-                    else:
-                        self._send_json(HTTPStatus.OK, {"ok": False, "error": "delivery_unknown"})
                     return
                 if previous is None and len(state.submissions) >= 4096:
                     self._send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "submission_limit"})

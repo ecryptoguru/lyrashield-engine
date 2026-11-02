@@ -11,9 +11,14 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from lyrashield.interface.viewer import transcript_window
 from lyrashield.interface.viewer.server import serve
 from lyrashield.interface.viewer.transcript import build_run_state
-from lyrashield.interface.viewer.transcript_window import MAX_EVENT_BYTES, build_transcript_window
+from lyrashield.interface.viewer.transcript_window import (
+    MAX_EVENT_BYTES,
+    _bounded_event,
+    build_transcript_window,
+)
 
 
 if TYPE_CHECKING:
@@ -199,3 +204,55 @@ def test_window_http_preserves_session_and_legacy_endpoint_contract(tmp_path: Pa
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.mark.parametrize(
+    "content", ["\0" * 30_000, '\x01\n\t\r\\"' * 10_000], ids=["nul", "mixed-control"]
+)
+def test_control_character_preview_respects_actual_wire_budget(content: str) -> None:
+    event = {
+        "id": "row_1_0",
+        "type": "chat",
+        "agent_id": "root",
+        "timestamp": "now",
+        "version": 1,
+        "data": {"role": "assistant", "content": content},
+    }
+    bounded = _bounded_event(event)
+    assert bounded["data"]["viewer_truncated"]
+    assert len(json.dumps(bounded).encode("utf-8")) <= MAX_EVENT_BYTES
+    assert content.startswith(bounded["data"]["content"])
+
+
+@pytest.mark.parametrize("fail_read", [False, True])
+def test_uncached_projection_closes_sqlite_on_success_and_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_read: bool
+) -> None:
+    run = _history(tmp_path, 1)
+    original_connect = sqlite3.connect
+    opened: list[int] = []
+    closed: list[int] = []
+
+    class TrackedConnection(sqlite3.Connection):
+        def execute(self, sql: str, parameters: tuple[object, ...] = ()) -> sqlite3.Cursor:
+            if fail_read:
+                raise sqlite3.OperationalError("synthetic read failure")
+            return super().execute(sql, parameters)
+
+        def close(self) -> None:
+            closed.append(id(self))
+            super().close()
+
+    def connect(database: str, *, uri: bool) -> sqlite3.Connection:
+        connection = original_connect(database, uri=uri, factory=TrackedConnection)
+        opened.append(id(connection))
+        return connection
+
+    monkeypatch.setattr(transcript_window.sqlite3, "connect", connect)
+    if fail_read:
+        with pytest.raises(sqlite3.OperationalError, match="synthetic"):
+            build_transcript_window(run)
+    else:
+        build_transcript_window(run)
+    assert len(opened) == 1
+    assert closed == opened

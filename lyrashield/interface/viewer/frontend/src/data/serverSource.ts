@@ -274,6 +274,11 @@ export async function controlScan(
   });
 }
 
+/** Receipt lookup never invokes steering or budget mutation, even while live. */
+export async function checkOperatorReceipt(body: Record<string, unknown>): Promise<SteerResult> {
+  return submitOperatorAction("/api/receipts/check", body);
+}
+
 export type SubmitFeedbackResult = { ok: true } | { ok: false; error: string };
 
 /**

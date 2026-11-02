@@ -155,3 +155,74 @@ test("transient capability failure can recover steering without reloading", { ti
   await page.getByRole("button", { name: /^Agents/ }).click();
   await page.getByRole("button", { name: "Expand live prompt composer" }).waitFor();
 }));
+test("first mobile history failure has reachable recovery without a successful history response", { timeout: 20000 }, async () => fixture(async (page, url) => {
+  let failed = true;
+  await page.route("**/api/runs", route => failed ? route.fulfill({ status: 500, json: {} }) : route.continue());
+  await page.goto(url);
+  await page.getByRole("button", { name: "Retry history", exact: true }).waitFor();
+  assert.equal(await page.getByRole("combobox", { name: "Switch pentest" }).count(), 0);
+  failed = false;
+  await page.getByRole("button", { name: "Retry history", exact: true }).click();
+  await page.getByRole("button", { name: /^Past runs/ }).last().click();
+  await page.getByRole("button").filter({ hasText: "past-directory" }).waitFor();
+}, { width: 375, height: 812 }));
+for (const kind of ["message", "increase budget"]) for (const inFlight of [false, true]) {
+  test(`${kind} receipt survives completion${inFlight ? " during acknowledgement" : " after unknown acknowledgement"}`, { timeout: 20000 }, async () => fixture(async (page, url) => {
+    let finished = false;
+    await page.route("**/api/run?*", async route => { const response = await route.fetch({ maxRetries: 2 }); await route.fulfill({ json: { ...await response.json(), finished, ...(finished ? { status: "completed" } : {}) } }); });
+    await page.route("**/api/run", async route => { const response = await route.fetch({ maxRetries: 2 }); await route.fulfill({ json: { ...await response.json(), finished, ...(finished ? { status: "completed" } : {}) } }); });
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    const requests = [];
+    await page.route("**/api/receipts/check", async route => { requests.push(route.request().postDataJSON()); await route.continue(); });
+    await page.route(kind === "message" ? "**/api/agents/steer" : "**/api/scan/control", async route => {
+      requests.push(route.request().postDataJSON());
+      if (requests.length === 1) {
+        const accepted = await route.fetch({ maxRetries: 2 });
+        assert.equal((await accepted.json()).ok, true);
+        if (inFlight) await held;
+        await route.fulfill({ json: { ok: false, error: "delivery_unknown" } });
+      } else await route.fulfill({ json: { ok: true, status: "queued" } });
+    });
+    await page.goto(url); await page.getByRole("button", { name: /^Agents/ }).click();
+    await page.getByRole("button", { name: "Expand live prompt composer" }).click();
+    if (kind === "message") { await page.getByRole("textbox", { name: "Steering message" }).fill("keep exact instruction"); await page.getByRole("button", { name: "Send prompt", exact: true }).click(); }
+    else await page.getByRole("button", { name: "Increase budget", exact: true }).click();
+    if (!inFlight) await page.getByRole("status").filter({ hasText: "Delivery unknown" }).waitFor();
+    finished = true;
+    await page.getByRole("button", { name: "Collapse live prompt composer" }).waitFor({ state: "hidden" });
+    if (inFlight) release();
+    const receipts = page.getByRole("region", { name: "Operator delivery receipts", exact: true });
+    await receipts.getByText("Delivery unknown", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Send prompt", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Increase budget", exact: true }).count(), 0);
+    await receipts.getByRole("button", { name: `Check ${kind} receipt`, exact: true }).click();
+    await receipts.getByText("Acceptance confirmed", { exact: false }).waitFor();
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[0], requests[1]);
+    assert.equal(requests[1].run, "current-directory");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  }, { width: 375, height: 812 }));
+}
+
+test("modal message receipt survives completion and dialog teardown", { timeout: 20000 }, async () => fixture(async (page, url) => {
+  let finished = false;
+  await page.route("**/api/run", async route => { const response = await route.fetch({ maxRetries: 2 }); await route.fulfill({ json: { ...await response.json(), finished, ...(finished ? { status: "completed" } : {}) } }); });
+  const submissions = [];
+  await page.route("**/api/agents/steer", async route => { submissions.push(route.request().postDataJSON()); await route.fetch({ maxRetries: 2 }); await route.fulfill({ json: { ok: false, error: "delivery_unknown" } }); });
+  await page.route("**/api/receipts/check", async route => { submissions.push(route.request().postDataJSON()); await route.continue(); });
+  await page.goto(url); await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.locator(".react-flow__node").first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Expand live prompt composer" }).click();
+  await dialog.getByRole("textbox", { name: "Steering message" }).fill("original modal message");
+  await dialog.getByRole("button", { name: "Send prompt", exact: true }).click();
+  await dialog.getByRole("status").filter({ hasText: "Delivery unknown" }).waitFor();
+  finished = true;
+  await dialog.getByRole("button", { name: "Send prompt", exact: true }).waitFor({ state: "hidden" });
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  const receipts = page.getByRole("region", { name: "Operator delivery receipts", exact: true });
+  await receipts.getByRole("button", { name: "Check message receipt", exact: true }).click();
+  await receipts.getByText("Acceptance confirmed", { exact: false }).waitFor();
+  assert.equal(submissions.length, 2); assert.deepEqual(submissions[0], submissions[1]);
+}));

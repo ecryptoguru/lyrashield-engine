@@ -26,6 +26,8 @@ import {
   type LoadedRun,
   type RunsPayload,
 } from "@/data/serverSource";
+import { OperatorReceiptProvider } from "@/data/operatorReceipts";
+import { OperatorReceipts } from "@/components/live/OperatorReceipts";
 import { useResource, useRunResources } from "@/data/useRunResources";
 import { runTitle } from "@/lib/target-utils";
 import { getRunStatusDisplay } from "@/lib/run-status";
@@ -45,6 +47,10 @@ const SEVERITY_ORDER: VulnerabilitySeverity[] = ["critical", "high", "medium", "
 const AgentGraph = lazy(() => import("@/components/live/AgentGraph"));
 
 export default function App() {
+  return <OperatorReceiptProvider><ViewerApp /></OperatorReceiptProvider>;
+}
+
+function ViewerApp() {
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const resources = useRunResources(activeRun);
   const { run } = resources;
@@ -210,7 +216,9 @@ export default function App() {
           )}
 
           <ResourceFeedback name="Live controls" resource={capabilities} />
-          {view === "history" ? <ResourceFeedback name="History" resource={history} /> : <>
+          <ResourceFeedback name="History" resource={history} />
+          <OperatorReceipts />
+          {view !== "history" && <>
             <ResourceFeedback name="Transcript" resource={resources.transcript} />
             <ResourceFeedback name="Findings" resource={resources.findings} />
             {resources.report.loading && !resources.report.error && <p role="status" className="text-sm text-[#aaa]">Loading report…</p>}
@@ -270,7 +278,7 @@ export default function App() {
                     Agents ({agentCount})
                   </TabButton>
                 )}
-                {canViewRuns && (
+                {(canViewRuns || history.error) && (
                   <TabButton active={false} onClick={openHistory}>
                     Past runs
                   </TabButton>

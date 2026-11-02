@@ -215,3 +215,70 @@ def test_lost_ack_reconciles_only_receipt_after_finished_loop_close(  # noqa: PL
             loop.call_soon_threadsafe(loop.stop)
             thread.join(timeout=3)
             loop.close()
+
+
+@pytest.mark.parametrize("kind", ["steer", "control"])
+def test_read_only_receipt_endpoint_never_enqueues_unknown_or_pending_ids(
+    tmp_path: Path, kind: str
+) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "run.json").write_text(json.dumps({"status": "running"}))
+    calls = Mock(side_effect=TimeoutError("acknowledgement unknown"))
+    receipt = Mock(return_value="unknown")
+    server, url, token = serve(
+        run,
+        open_browser=False,
+        steer_handler=calls,
+        control_handler=calls,
+        submission_receipt_handler=receipt,
+    )
+    headers = {
+        "Cookie": f"strix_viewer_session_{urlsplit(url).port}={token}",
+        "Content-Type": "application/json",
+    }
+    body = {"run": "run", "submission_id": "known"}
+    body.update(
+        {"agent_id": "root", "message": "review"}
+        if kind == "steer"
+        else {"action": "increase_budget"}
+    )
+
+    def post(
+        payload: dict[str, str], path: str = "/api/receipts/check", authenticated: bool = True
+    ) -> dict[str, object]:
+        request = urllib.request.Request(  # noqa: S310 - local fixture URL
+            url + path,
+            data=json.dumps(payload).encode(),
+            headers=headers if authenticated else {"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request) as response:  # noqa: S310
+            return json.load(response)
+
+    try:
+        assert post(body) == {"ok": False, "error": "delivery_unknown"}
+        calls.assert_not_called()
+        receipt.assert_not_called()
+        assert post(body, "/api/agents/steer" if kind == "steer" else "/api/scan/control") == {
+            "ok": False,
+            "error": "delivery_unknown",
+        }
+        assert post(body) == {"ok": False, "error": "delivery_unknown"}
+        assert calls.call_count == 1
+        receipt.return_value = "queued"
+        assert post(body) == {"ok": True, "status": "queued"}
+        assert post(body) == {"ok": True, "status": "queued"}
+        assert calls.call_count == 1
+        for changed in [
+            {**body, "run": "historical"},
+            {**body, "message": "altered"} if kind == "steer" else {**body, "action": "resume"},
+        ]:
+            with pytest.raises(urllib.error.HTTPError) as error:
+                post(changed)
+            assert error.value.code == 409
+        with pytest.raises(urllib.error.HTTPError) as error:
+            post(body, authenticated=False)
+        assert error.value.code == 403
+    finally:
+        server.shutdown()
+        server.server_close()
