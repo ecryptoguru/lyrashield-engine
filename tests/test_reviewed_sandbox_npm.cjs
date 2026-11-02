@@ -159,3 +159,62 @@ test("ESLint and js-beautify retain CLI glob and parser contracts", () => {
     assert.match(fs.readFileSync(source, "utf8"), /\n  missingName\(\);\n/);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
+
+test("Retire CONNECT verifies DNS and IP identities before repository HTTP", async () => {
+  const fs = require("node:fs"), os = require("node:os");
+  const https = require("node:https"), http = require("node:http"), net = require("node:net");
+  const {loadrepository} = require(path.join(modules, "retire/lib/repo.js"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "retire-tls-"));
+  function certificate(name, san) {
+    const key = path.join(dir, name + ".key"), cert = path.join(dir, name + ".pem");
+    const result = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+      "-subj", "/CN=" + name, "-addext", "subjectAltName=" + san, "-keyout", key, "-out", cert],
+      {encoding: "utf8", timeout: 10000});
+    assert.equal(result.status, 0, result.stderr);
+    return {key: fs.readFileSync(key), cert: fs.readFileSync(cert)};
+  }
+  const dns = certificate("localhost", "DNS:localhost");
+  const ip = certificate("ip", "IP:127.0.0.2");
+  async function scenario(proxyProtocol, targetHost, credentials, insecure, accepted) {
+    let authorizedHttp = 0;
+    const origin = https.createServer(credentials, (req, res) => { authorizedHttp++;
+      assert.equal(req.headers.authorization, "Basic " + Buffer.from("origin:secret").toString("base64"));
+      res.end("{}"); });
+    await new Promise(resolve => origin.listen(0, "127.0.0.1", resolve));
+    const proxy = proxyProtocol === "https" ? https.createServer(dns) : http.createServer();
+    const sockets = new Set();
+    proxy.on("connect", (request, socket, head) => {
+      assert.equal(request.headers["proxy-authorization"], "Basic " + Buffer.from("fixture:password").toString("base64"));
+      const upstream = net.connect(origin.address().port, "127.0.0.1", () => {
+        socket.write("HTTP/1.1 200 Connection established\r\n\r\n");
+        if (head.length) upstream.write(head);
+        socket.pipe(upstream); upstream.pipe(socket);
+      });
+      for (const peer of [socket, upstream]) {
+        sockets.add(peer); peer.on("error", () => {}); peer.on("close", () => sockets.delete(peer));
+      }
+    });
+    await new Promise(resolve => proxy.listen(0, "127.0.0.1", resolve));
+    try {
+      const operation = loadrepository(`https://origin:secret@${targetHost}/repo`, {nocache: true, insecure,
+        proxy: `${proxyProtocol}://fixture:password@localhost:${proxy.address().port}`,
+        cacertbuf: Buffer.concat([dns.cert, ip.cert]), log: {info(){},debug(){},warn(){},error(){}}});
+      if (accepted) assert.deepEqual(await operation, {});
+      else await assert.rejects(operation, /ERR_TLS_CERT_ALTNAME_INVALID|does not match|not in the cert/);
+      assert.equal(authorizedHttp, accepted ? 1 : 0, "origin HTTP must wait for identity verification");
+    } finally {
+      for (const peer of sockets) peer.destroy();
+      origin.closeAllConnections(); proxy.closeAllConnections();
+      await Promise.all([new Promise(resolve => origin.close(resolve)),new Promise(resolve => proxy.close(resolve))]);
+    }
+  }
+  try {
+    for (const protocol of ["http", "https"]) {
+      await scenario(protocol, "localhost", dns, false, true);
+      await scenario(protocol, "wrong.invalid", dns, false, false);
+      await scenario(protocol, "127.0.0.2", ip, false, true);
+      await scenario(protocol, "127.0.0.2", dns, false, false);
+      await scenario(protocol, "127.0.0.2", dns, true, true);
+    }
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});

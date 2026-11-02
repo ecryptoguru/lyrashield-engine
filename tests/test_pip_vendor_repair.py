@@ -7,6 +7,8 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -23,7 +25,11 @@ SPEC.loader.exec_module(HELPER)
 
 def _dist(site: Path, name: str, version: str, files: dict[str, bytes]) -> None:
     dist = site / f"{name}-{version}.dist-info"
-    files = {**files, f"{dist.name}/METADATA": f"Name: {name}\nVersion: {version}\n".encode()}
+    files = {
+        **files,
+        f"{dist.name}/WHEEL": b"fixture wheel",
+        f"{dist.name}/METADATA": f"Name: {name}\nVersion: {version}\n".encode(),
+    }
     rows = []
     for relative, data in files.items():
         target = site / relative
@@ -75,15 +81,29 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             {
                 f"{name}/__init__.py": f"__version__ = '{new}'".encode(),
                 f"{name}/_extension.so": b"never vendor ABI bytes",
+                **(
+                    {"urllib3/contrib/emscripten/emscripten_fetch_worker.js": b"// verified worker"}
+                    if name == "urllib3"
+                    else {}
+                ),
                 f"{name}-{new}.dist-info/licenses/LICENSE": b"upstream license",
             },
         )
+    inventories = []
+    for name, version in [("pip", "26.2.2"), ("msgpack", "1.2.3"), ("urllib3", "2.8.0")]:
+        record = tmp_path / f"{name}-{version}.dist-info/RECORD"
+        expected = {row[0]: row[1:] for row in csv.reader(record.open()) if row[1]}
+        inventories.append(
+            {"name": name, "version": version, "files": expected, "sha256": "fixture"}
+        )
+    monkeypatch.setattr(HELPER, "WHEEL_INVENTORIES", inventories)
     return tmp_path
 
 
 def test_repair_copies_verified_python_and_updates_inventory_and_record(site: Path) -> None:
     HELPER.repair(site)
-    HELPER.checked_distribution(site, "pip", "26.2.2")
+    record = site / "pip-26.2.2.dist-info/RECORD"
+    HELPER.verified_record_files(site, {row[0]: row for row in csv.reader(record.open())})
     vendor = site / "pip/_vendor"
     assert "msgpack==1.2.3" in (vendor / "vendor.txt").read_text()
     assert not list(vendor.rglob("*.so"))
@@ -116,13 +136,13 @@ def test_tampered_original_or_replacement_fails_before_any_write(site: Path, rel
 
 def test_repair_rejects_unreviewed_manifest_even_with_valid_record(site: Path) -> None:
     _dist(site, "pip", "26.2.2", {"pip/_vendor/vendor.txt": b"msgpack==9.0\n"})
-    with pytest.raises(ValueError, match="manifest"):
+    with pytest.raises(ValueError, match=r"manifest|inventory|RECORD"):
         HELPER.repair(site)
 
 
 def test_repair_is_not_silently_reapplied(site: Path) -> None:
     HELPER.repair(site)
-    with pytest.raises(ValueError, match="manifest"):
+    with pytest.raises(ValueError, match=r"manifest|inventory|RECORD"):
         HELPER.repair(site)
 
 
@@ -137,3 +157,98 @@ def test_app_lock_replaces_same_version_distro_seed_before_vendor_validation() -
     # exact vendor manifests the application repair deliberately validates.
     assert "--force-reinstall" in installation
     assert "--require-hashes" in installation and "--no-deps" in installation
+
+
+def _snapshot(site: Path) -> dict[str, bytes | str]:
+    return {
+        str(p.relative_to(site)): str(p.readlink()) if p.is_symlink() else p.read_bytes()
+        for p in site.rglob("*")
+        if p.is_file() or p.is_symlink()
+    }
+
+
+def _remove_record_row(site: Path, package: str, version: str, relative: str) -> None:
+    record = site / f"{package}-{version}.dist-info/RECORD"
+    rows = list(csv.reader(record.open()))
+    stream = io.StringIO()
+    csv.writer(stream).writerows(row for row in rows if row[0] != relative)
+    record.write_text(stream.getvalue())
+
+
+@pytest.mark.parametrize(
+    "package,version,relative",
+    [
+        ("pip", "26.2.2", "pip/_vendor/__init__.py"),
+        ("msgpack", "1.2.3", "msgpack-1.2.3.dist-info/licenses/LICENSE"),
+    ],
+)
+def test_removed_record_row_cannot_authorize_tampered_payload(
+    site: Path, package: str, version: str, relative: str
+) -> None:
+    _remove_record_row(site, package, version, relative)
+    (site / relative).write_bytes(b"DEBUNDLED = False\n# tampered")
+    before = _snapshot(site)
+    with pytest.raises(ValueError):
+        HELPER.repair(site)
+    assert _snapshot(site) == before
+
+
+def test_missing_second_destination_is_rejected_before_first_deletion(site: Path) -> None:
+
+    shutil.rmtree(site / "pip/_vendor/msgpack")
+    _remove_record_row(site, "pip", "26.2.2", "pip/_vendor/msgpack/old.py")
+    before = _snapshot(site)
+    with pytest.raises(ValueError):
+        HELPER.repair(site)
+    assert _snapshot(site) == before
+
+
+def test_symlink_destination_is_rejected_before_mutation(site: Path, tmp_path: Path) -> None:
+
+    other = tmp_path / "other"
+    (site / "pip/_vendor/msgpack").rename(other)
+    (site / "pip/_vendor/msgpack").symlink_to(other, target_is_directory=True)
+    before = _snapshot(site)
+    with pytest.raises(ValueError):
+        HELPER.repair(site)
+    assert _snapshot(site) == before
+
+
+def test_repair_retains_verified_emscripten_worker_resource(site: Path) -> None:
+    HELPER.repair(site)
+    expected = site / "urllib3/contrib/emscripten/emscripten_fetch_worker.js"
+    actual = site / "pip/_vendor/urllib3/contrib/emscripten/emscripten_fetch_worker.js"
+    assert actual.read_bytes() == expected.read_bytes()
+
+
+def test_rehashed_tampered_code_does_not_replace_trusted_wheel_identity(site: Path) -> None:
+    path = site / "urllib3/__init__.py"
+    path.write_bytes(b"raise RuntimeError('tampered')")
+    record = site / "urllib3-2.8.0.dist-info/RECORD"
+    rows = list(csv.reader(record.open()))
+    for row in rows:
+        if row[0] == "urllib3/__init__.py":
+            row[1:] = [HELPER.record_hash(path.read_bytes()), str(path.stat().st_size)]
+    stream = io.StringIO()
+    csv.writer(stream).writerows(rows)
+    record.write_text(stream.getvalue())
+    before = _snapshot(site)
+    with pytest.raises(ValueError, match="inventory/RECORD"):
+        HELPER.repair(site)
+    assert _snapshot(site) == before
+
+
+@pytest.mark.parametrize("relative", ["pip/_vendor/msgpack", "pip-26.2.2.dist-info/RECORD"])
+def test_unwritable_destination_rejected_before_any_mutation(site: Path, relative: str) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root can write regardless of permission bits")
+    target = site / relative
+    mode = target.stat().st_mode
+    target.chmod(0o500 if target.is_dir() else 0o400)
+    try:
+        before = _snapshot(site)
+        with pytest.raises(ValueError, match="writable"):
+            HELPER.repair(site)
+        assert _snapshot(site) == before
+    finally:
+        target.chmod(mode)

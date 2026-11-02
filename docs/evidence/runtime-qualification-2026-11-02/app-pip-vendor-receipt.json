@@ -78,5 +78,7 @@
     "hashes_required": true,
     "note": "Installed Linux inventory and system Python are separate; universal lock has108 stanzas and includes platform markers."
   },
-  "residual_inventory": "Pip continues to declare upstream setuptools70.3.0 because it bundles the unchanged pkg_resources subset; no vulnerable setuptools package_index/sdist/wheel source is present. A separate source-scope disposition records this; no advisory ignore was added."
+  "residual_inventory": "Pip continues to declare upstream setuptools70.3.0 because it bundles the unchanged pkg_resources subset; no vulnerable setuptools package_index/sdist/wheel source is present. A separate source-scope disposition records this; no advisory ignore was added.",
+  "historical_source_revision": "a28efcad",
+  "component_review_followup": "component-review-round1.json"
 }

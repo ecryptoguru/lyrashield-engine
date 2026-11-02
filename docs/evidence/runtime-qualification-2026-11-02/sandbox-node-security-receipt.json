@@ -47,5 +47,7 @@
     "pass": 7,
     "skip": 4,
     "fail": 0
-  }
+  },
+  "historical_source_revision": "63b3d06c",
+  "component_review_followup": "component-review-round1.json"
 }

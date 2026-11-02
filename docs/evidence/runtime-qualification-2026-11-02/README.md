@@ -130,3 +130,15 @@ The baseline image digests are not the final repaired image digests. After the G
 system Python and these changes are integrated, both architectures require a new
 build, smoke, installed inventory and security disposition. No deployment or
 release was made.
+
+## Component review follow-up
+
+[The round1 receipt](component-review-round1.json) records fixes for all six
+component findings: requested IP identity on proxied TLS; complete independently
+pinned wheel inventories; preflight before mutation; retained Emscripten worker;
+exhaustive active trust-store parsing; and failure on missing/unreadable CA bundles.
+Forty-eight focused Python tests and eight Node checks pass, with four skips for
+removed packages. Actual amd64/arm64 overlays pass real-wheel tamper/no-mutation,
+nonroot pip/cache/install/TLS, exhaustive CA fixtures, and the Retire loader's ten
+TLS cases. Historical component receipts retain their original source snapshots.
+The combined final image rebuild and security gate remain open.

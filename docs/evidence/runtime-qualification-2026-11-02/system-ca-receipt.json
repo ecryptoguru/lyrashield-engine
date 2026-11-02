@@ -41,5 +41,7 @@
     }
   },
   "scope": "Actual transient containers on baseline images; rebuilt final images remain a separate gate",
-  "script_sha256": "55646d528e5b58f0b7992b46aa50bce1a8c1efa853657463dc94427c67c8d061"
+  "script_sha256": "55646d528e5b58f0b7992b46aa50bce1a8c1efa853657463dc94427c67c8d061",
+  "historical_source_revision": "4d6b35d1",
+  "component_review_followup": "component-review-round1.json"
 }

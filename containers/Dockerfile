@@ -140,7 +140,9 @@ RUN mkdir -p /home/pentester/.local && \
     git -C /home/pentester/.local/nuclei-templates checkout --detach "${NUCLEI_TEMPLATES_COMMIT}"
 
 COPY --chown=pentester:pentester containers/npm-tools/package.json containers/npm-tools/package-lock.json /home/pentester/.npm-tools/
+COPY --chown=pentester:pentester containers/patch_retire_tls.cjs /tmp/patch_retire_tls.cjs
 RUN npm ci --omit=dev --prefix /home/pentester/.npm-tools && \
+    node /tmp/patch_retire_tls.cjs /home/pentester/.npm-tools/node_modules && \
     npm cache clean --force && \
     # ast-grep ships two identical binaries (`ast-grep` and `sg`); dedupe (~52MB)
     ln -sf ast-grep /home/pentester/.npm-tools/node_modules/@ast-grep/cli/sg
@@ -309,6 +311,7 @@ COPY --chown=pentester:pentester containers/python-requirements.txt /tmp/python-
 COPY --chown=pentester:pentester containers/dirsearch-requirements.txt /tmp/dirsearch-requirements.txt
 COPY --chown=pentester:pentester containers/patch_dirsearch_metadata.py /tmp/patch_dirsearch_metadata.py
 COPY --chown=pentester:pentester containers/repair_pip_vendors.py /tmp/repair_pip_vendors.py
+COPY --chown=pentester:pentester containers/pip_vendor_wheels.json /tmp/pip_vendor_wheels.json
 
 USER pentester
 # Install the complete audited hash lock without re-resolving Semgrep's narrow
@@ -334,6 +337,7 @@ COPY --chown=root:root lyrashield/runtime/target_relay_proxy.py /opt/lyrashield/
 COPY --chown=root:root containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify_semgrep_pyjwt.py
 COPY --chown=root:root containers/verify_brotli.py /opt/lyrashield/verify_brotli.py
 COPY --chown=root:root containers/verify_pip_vendors.py /opt/lyrashield/verify_pip_vendors.py
+COPY --chown=root:root containers/verify_ca_bundle.py /opt/lyrashield/verify_ca_bundle.py
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import csv
 import datetime
-import hashlib
 import http.server
 import io
 import json
@@ -26,9 +25,7 @@ from pip._vendor import msgpack, requests, urllib3
 from pip._vendor.cachecontrol.serialize import Serializer
 from pip._vendor.requests import exceptions as request_errors
 from pip._vendor.urllib3.response import HTTPResponse
-
-
-G3 = "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b"
+from verify_ca_bundle import verify_effective_bundle
 
 
 def wheel_bytes() -> bytes:
@@ -134,6 +131,7 @@ def serve_certificate(directory: Path) -> tuple[Path, Path, Path]:
 
 def verify() -> None:  # noqa: PLR0915 - one bounded offline acceptance scenario
     """Prove namespace identity, cache roundtrip, TLS rejection and offline pip use."""
+    verify_effective_bundle()
     assert urllib3.__version__ == "2.8.0"
     assert msgpack.__version__ == "1.2.3"
     assert msgpack.Packer.__module__ == "pip._vendor.msgpack.fallback"
@@ -150,12 +148,6 @@ def verify() -> None:  # noqa: PLR0915 - one bounded offline acceptance scenario
     serialized = Serializer().dumps(prepared, response, body=b"cached")
     restored = Serializer().loads(prepared, serialized)
     assert restored is not None and restored.read() == b"cached"
-    bundle = Path(os.environ.get("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt"))
-    if bundle.exists():
-        context = ssl.create_default_context(cafile=str(bundle))
-        assert G3 not in {
-            hashlib.sha256(der).hexdigest() for der in context.get_ca_certs(binary_form=True)
-        }
     artifact = wheel_bytes()
     requests_seen = []
 

@@ -1,7 +1,7 @@
 """Replace two vulnerable pip 26.2.2 vendors with verified locked package sources.
 
-Pip remains self contained (DEBUNDLED=False). Only pure Python sources and license
-files are copied, using pip's import namespace; no platform extension is vendored.
+Pip remains self contained (DEBUNDLED=False). Verified portable source, runtime
+resources and licenses retain pip's namespace; no platform extension is vendored.
 All inputs are checked before mutation. The vendor manifest, CycloneDX inventory,
 and pip RECORD describe the actual replacement bytes. See the public qualification
 receipt for the narrow downstream exception and official wheel provenance.
@@ -15,6 +15,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import shutil
 import sysconfig
 from email.parser import BytesParser
@@ -30,27 +31,161 @@ def record_hash(data: bytes) -> str:
     return "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
 
 
+INVENTORY_SHA256 = "60edea68ce59ce0c7c46639ace730028ea061c82cb9abccb0b93107fed1e210a"
+_inventory_bytes = Path(__file__).with_name("pip_vendor_wheels.json").read_bytes()
+if hashlib.sha256(_inventory_bytes).hexdigest() != INVENTORY_SHA256:
+    raise ValueError("unreviewed trusted wheel inventory")
+WHEEL_INVENTORIES = json.loads(_inventory_bytes)
+
+
+def safe_tree(root: Path) -> list[Path]:
+    """Reject symlinked directories/files before using or removing a package."""
+    if not root.is_dir() or root.is_symlink():
+        raise ValueError(f"expected a real package directory: {root.name}")
+    paths = list(root.rglob("*"))
+    if any(p.is_symlink() for p in [root, *root.parents, *paths]):
+        raise ValueError("package paths must not contain symlinks")
+    if any(not p.is_dir() and not p.is_file() for p in paths):
+        raise ValueError("package contains a non-regular filesystem object")
+    return [p for p in paths if p.is_file()]
+
+
+def is_bytecode(path: Path) -> bool:
+    return path.suffix == ".pyc" and path.parent.name == "__pycache__"
+
+
+def verified_record_files(site: Path, records: dict[str, list[str]]) -> None:
+    for relative, row in records.items():
+        if len(row) != 3:
+            raise ValueError("malformed distribution RECORD")
+        if not row[1]:
+            continue
+        path = site / relative
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"missing or symlinked RECORD file: {relative}")
+        data = path.read_bytes()
+        if [record_hash(data), str(len(data))] != row[1:]:
+            raise ValueError(f"distribution RECORD mismatch: {relative}")
+
+
 def checked_distribution(site: Path, name: str, version: str) -> tuple[Path, dict[str, list[str]]]:
-    """Reject unexpected versions, ambiguous paths and edited distribution bytes."""
+    """Bind complete installed payloads to a separately pinned official wheel."""
+    site = site.resolve()
     dist = site / f"{name}-{version}.dist-info"
+    paths = safe_tree(site / name) + safe_tree(dist)
     metadata = BytesParser().parsebytes((dist / "METADATA").read_bytes())
     if metadata.get_all("Name") != [name] or metadata.get_all("Version") != [version]:
         raise ValueError(f"expected the pinned {name} {version}")
+    wheel_data = (dist / "WHEEL").read_bytes()
+    wheel_identity = [record_hash(wheel_data), str(len(wheel_data))]
+    candidates = [
+        w
+        for w in WHEEL_INVENTORIES
+        if w["name"] == name
+        and w["version"] == version
+        and w["files"][f"{dist.name}/WHEEL"] == wheel_identity
+    ]
+    if len(candidates) != 1:
+        raise ValueError("unreviewed wheel platform inventory")
+    trusted = candidates[0]
+    expected = trusted["files"]
     rows = list(csv.reader(io.StringIO((dist / "RECORD").read_text())))
+    if any(len(row) != 3 for row in rows):
+        raise ValueError("malformed distribution RECORD")
     records = {row[0]: row for row in rows}
     if len(records) != len(rows):
         raise ValueError("duplicate distribution RECORD entry")
-    for name_in_record, row in records.items():
-        if len(row) != 3:
-            raise ValueError("malformed distribution RECORD")
-        # Entry-point scripts may live outside site-packages. They are not inputs.
-        if name_in_record.startswith("../") or not row[1]:
-            continue
-        path = site / name_in_record
+    for relative, identity in expected.items():
+        path = site / relative
+        if records.get(relative, [])[1:] != identity or not path.is_file():
+            raise ValueError(f"trusted wheel inventory/RECORD mismatch: {relative}")
         data = path.read_bytes()
-        if [record_hash(data), str(len(data))] != row[1:]:
-            raise ValueError(f"distribution RECORD mismatch: {name_in_record}")
+        if [record_hash(data), str(len(data))] != identity:
+            raise ValueError(f"trusted wheel RECORD mismatch: {relative}")
+    self_record = f"{dist.name}/RECORD"
+    if records.get(self_record) != [self_record, "", ""]:
+        raise ValueError("expected the single un-hashed RECORD self entry")
+    check_installer_outputs(site, name, dist, trusted, records, paths)
+    # Entry points are generated by the installer rather than shipped as bytes.
+    if f"{dist.name}/entry_points.txt" in expected:
+        for command in ("pip", "pip3"):
+            relative = f"../../../bin/{command}"
+            if relative not in records:
+                raise ValueError("missing generated pip entrypoint inventory")
+            check_entrypoint(site, site / relative)
+    verified_record_files(site, records)
     return dist, records
+
+
+def check_installer_outputs(
+    site: Path,
+    name: str,
+    dist: Path,
+    trusted: dict,
+    records: dict[str, list[str]],
+    paths: list[Path],
+) -> None:
+    """Admit only explicit installer variations beyond authenticated payloads."""
+    expected = trusted["files"]
+    self_record = f"{dist.name}/RECORD"
+    extras = (set(records) | {p.relative_to(site).as_posix() for p in paths}) - expected.keys()
+    for relative in extras - {self_record}:
+        path = site / relative
+        if (
+            is_bytecode(path)
+            and relative.startswith(name + "/")
+            and ".." not in Path(relative).parts
+        ):
+            # Installer-produced bytecode is never a trusted source; it is purged
+            # after all preflight checks, and regenerated from admitted sources.
+            if relative in records and records[relative][1:] != ["", ""]:
+                raise ValueError("unexpected hashed installer bytecode")
+            continue
+        if (
+            relative == f"{dist.name}/INSTALLER" and path.read_bytes() in (b"pip\n", b"uv\n", b"uv")
+        ) or (relative == f"{dist.name}/REQUESTED" and path.read_bytes() == b""):
+            pass
+        elif relative == f"{dist.name}/direct_url.json":
+            direct = json.loads(path.read_bytes())
+            if set(direct) != {"url", "archive_info"} or not isinstance(direct["url"], str):
+                raise ValueError("unreviewed installer direct URL layout")
+            archive = direct["archive_info"]
+            if archive and archive.get("hashes", {}).get("sha256") != trusted["sha256"]:
+                raise ValueError("unreviewed installer direct URL provenance")
+        elif relative.startswith("../../../bin/") and name == "pip":
+            check_entrypoint(site, path)
+        else:
+            raise ValueError(f"unreviewed installed file: {relative}")
+        if relative not in records or not records[relative][1]:
+            raise ValueError("installer output missing from RECORD")
+
+
+def check_entrypoint(site: Path, path: Path) -> None:
+    """Allow the two qualified installer templates and a local venv shebang."""
+    environment = site.parents[2]
+    if path.resolve().parent != (environment / "bin").resolve() or path.is_symlink():
+        raise ValueError("unreviewed installer script destination")
+    if path.name not in {"pip", "pip3", "pip" + site.parent.name.removeprefix("python")}:
+        raise ValueError("unreviewed installer script name")
+    shebang, body = path.read_text().split("\n", 1)
+    interpreter = Path(shebang.removeprefix("#!"))
+    if (
+        not shebang.startswith("#!/")
+        or interpreter.parent.resolve() != (environment / "bin").resolve()
+        or interpreter.name not in {"python", "python3", site.parent.name}
+    ):
+        raise ValueError("unreviewed installer shebang")
+    body = body.replace('"', "'").removeprefix("# -*- coding: utf-8 -*-\n")
+    prefix = "import sys\nfrom pip._internal.cli.main import main\nif __name__ == '__main__':\n"
+    endings = [
+        "    sys.argv[0] = sys.argv[0].removesuffix('.exe')\n    sys.exit(main())\n",
+        "    if sys.argv[0].endswith('-script.pyw'):\n"
+        "        sys.argv[0] = sys.argv[0][:-11]\n"
+        "    elif sys.argv[0].endswith('.exe'):\n"
+        "        sys.argv[0] = sys.argv[0][:-4]\n    sys.exit(main())\n",
+    ]
+    if body not in {prefix + ending for ending in endings}:
+        raise ValueError("unreviewed pip entrypoint source")
 
 
 def replacement_sources(
@@ -63,7 +198,13 @@ def replacement_sources(
     for name, (old, new) in REPLACEMENTS.items():
         source_dist, source_records = checked_distribution(site, name, new)
         source = site / name
-        files = [p for p in source.rglob("*") if p.is_file() and p.suffix in {".py", ".pyi"}]
+        files = [
+            source_path
+            for relative in source_records
+            if relative.startswith(name + "/")
+            and not is_bytecode(source_path := site / relative)
+            and source_path.suffix not in {".so", ".pyd", ".dll", ".dylib"}
+        ]
         if not files or not (source / "__init__.py").is_file():
             raise ValueError("missing vendor replacement source")
         for path in files:
@@ -91,8 +232,6 @@ def replacement_sources(
         if len(license_files) != 1:
             raise ValueError("expected one upstream package license")
         writes[vendor / name / "LICENSE.txt"] = license_files[0].read_bytes()
-        if (source / "py.typed").is_file():
-            writes[vendor / name / "py.typed"] = (source / "py.typed").read_bytes()
         replacements[f"pkg:pypi/{name}@{old}"] = f"pkg:pypi/{name}@{new}"
         provenance.append(
             {
@@ -108,8 +247,41 @@ def replacement_sources(
     return writes, replacements, provenance
 
 
+def require_writable_directory(path: Path) -> None:
+    if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
+        raise ValueError("vendor directory is not writable/searchable")
+
+
+def preflight_targets(site: Path, vendor: Path, writes: dict[Path, bytes]) -> list[Path]:
+    """Validate all removal/write destinations before the first file changes."""
+    # Validate every removal target, parent and write destination before mutation.
+    bytecode = []
+    for name in ("pip", *REPLACEMENTS):
+        bytecode.extend(p for p in safe_tree(site / name) if is_bytecode(p))
+    for name in REPLACEMENTS:
+        target = vendor / name
+        safe_tree(target)
+        for directory in [target.parent, target, *(p for p in target.rglob("*") if p.is_dir())]:
+            require_writable_directory(directory)
+    for path in bytecode:
+        require_writable_directory(path.parent)
+    for path in writes:
+        if not path.resolve().is_relative_to(site.resolve()) or any(
+            ancestor.is_symlink() for ancestor in [path, *path.parents]
+        ):
+            raise ValueError("unsafe vendor destination")
+        parent = path.parent
+        while not parent.exists():
+            parent = parent.parent
+        require_writable_directory(parent)
+        if path.exists() and (not path.is_file() or not os.access(path, os.W_OK)):
+            raise ValueError("vendor destination is not a writable regular file")
+    return bytecode
+
+
 def repair(site: Path) -> None:
     """Validate all inputs, then apply the exact reviewed two-package repair."""
+    site = site.resolve()
     dist, records = checked_distribution(site, "pip", "26.2.2")
     vendor = site / "pip/_vendor"
     manifest = vendor / "vendor.txt"
@@ -153,22 +325,34 @@ def repair(site: Path) -> None:
     writes[manifest] = vendor_text.encode()
     writes[bom_path] = (json.dumps(replace_refs(bom), indent=2) + "\n").encode()
     writes[vendor / "lyrashield-vendor-repair.json"] = (
-        json.dumps({"pip": "26.2.2", "replacements": provenance}, indent=2) + "\n"
+        json.dumps(
+            {
+                "pip": "26.2.2",
+                "trusted_inventory_sha256": INVENTORY_SHA256,
+                "replacements": provenance,
+            },
+            indent=2,
+        )
+        + "\n"
     ).encode()
-    # No writes have occurred before every original and replacement is validated.
     prefixes = tuple(f"pip/_vendor/{name}/" for name in REPLACEMENTS)
     records = {k: v for k, v in records.items() if not k.startswith(prefixes)}
+    for path, data in writes.items():
+        relative = path.relative_to(site).as_posix()
+        records[relative] = [relative, record_hash(data), str(len(data))]
+    output = io.StringIO(newline="")
+    csv.writer(output).writerows(records[k] for k in sorted(records))
+    writes[dist / "RECORD"] = output.getvalue().encode()
+    bytecode = preflight_targets(site, vendor, writes)
+    # No writes have occurred before every input, removal and output is checked.
+    for path in bytecode:
+        path.unlink()
     for name in REPLACEMENTS:
         shutil.rmtree(vendor / name)
     for path, data in writes.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-        relative = path.relative_to(site).as_posix()
-        records[relative] = [relative, record_hash(data), str(len(data))]
-    output = io.StringIO(newline="")
-    csv.writer(output).writerows(records[k] for k in sorted(records))
-    (dist / "RECORD").write_text(output.getvalue())
-    checked_distribution(site, "pip", "26.2.2")
+    verified_record_files(site, records)
 
 
 if __name__ == "__main__":
