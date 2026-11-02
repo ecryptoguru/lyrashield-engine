@@ -223,6 +223,28 @@ def _usage_value(entry: Any, field: str) -> Any:
     return getattr(entry, field, None)
 
 
+def _reported_usage(usage: Any) -> bool:
+    """SDK empty Usage() is absence, unlike an evidenced zero-use request."""
+    if usage is None:
+        return False
+    counters = [_usage_value(usage, field) for field in ("input_tokens", "output_tokens")]
+    if not all(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+        for value in counters
+    ):
+        return False
+    requests = _usage_value(usage, "requests")
+    return (
+        isinstance(requests, (int, float))
+        and not isinstance(requests, bool)
+        and math.isfinite(requests)
+        and requests > 0
+    ) or any(value > 0 for value in counters)
+
+
 def _cached_tokens_from_entry(entry: Any) -> int:
     details = _usage_value(entry, "input_tokens_details")
     if not details:
@@ -763,20 +785,21 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 )
             self._reservations[key] = reservation
 
-    async def release_out_of_band_request(self, *, key: str, model: str, usage: Any = None) -> None:
+    async def release_out_of_band_request(self, *, key: str, model: str, usage: Any = None) -> bool:
         """Drop an out-of-band reservation and commit its observed cost."""
         async with self._reservation_lock:
             reservation = self._reservations.pop(key, None)
-            if usage is not None:
+            if _reported_usage(usage):
                 self._committed_cost_floor += _usage_cost_upper_bound(model, usage)
                 # Actual usage for this key reconciles any abandoned-attempt
                 # floor: the estimate is replaced, never added twice.
                 self._abandoned_floors.pop(key, None)
-            elif reservation is not None:
+            elif reservation is not None and reservation > 0:
                 # No usage was reported, but the provider may still bill the
                 # partial work. Keep the bounded reservation as a conservative
                 # estimated-spend floor instead of assuming a zero charge.
                 self._abandoned_floors[key] = self._abandoned_floors.get(key, 0.0) + reservation
+            return _reported_usage(usage) or reservation == 0
 
     async def reserve_web_search_call(
         self,
@@ -812,21 +835,24 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 )
             self._reservations[key] = estimated_cost
 
-    async def release_web_search_call(self, *, key: str, actual_cost: float) -> None:
+    async def release_web_search_call(self, *, key: str, actual_cost: float | None) -> None:
         """Drop a web search reservation and commit the observed per-call cost.
 
         Idempotent: if the reservation key is absent (already released/committed),
         this is a no-op and does NOT add ``actual_cost`` again — duplicate
         finalization must not inflate committed cost.
         """
-        if not math.isfinite(actual_cost) or actual_cost < 0:
-            actual_cost = 0.0
+        if actual_cost is not None and (not math.isfinite(actual_cost) or actual_cost < 0):
+            actual_cost = None
         async with self._reservation_lock:
             if key not in self._reservations:
                 # Already released/committed — exactly-once finalization.
                 return
-            self._reservations.pop(key, None)
-            self._committed_cost_floor += actual_cost
+            quote = self._reservations.pop(key)
+            if actual_cost is None:
+                self._abandoned_floors[key] = quote
+            else:
+                self._committed_cost_floor += actual_cost
 
     @property
     def compaction_trigger_tokens(self) -> int:
@@ -1105,7 +1131,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         agent_id = self._agent_id(context, agent)
         model = self._agent_model(agent)
 
-        if report_state is not None:
+        reported = _reported_usage(response.usage)
+        if report_state is not None and reported:
             try:
                 report_state.record_sdk_usage(
                     agent_id=agent_id,
@@ -1145,23 +1172,27 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             else:
                 attempt_key = None
             if attempt_key is not None:
-                self._agent_reservations.pop(attempt_key, None)
-                self._agent_abandoned_floors.pop(attempt_key, None)
-                if active is not None and active[0] is context and active[1] == attempt_key:
-                    self._active_attempts.pop(scope, None)
-                for input_id, input_entry in tuple(self._input_attempts.items()):
-                    if input_entry[1] is context and input_entry[3] == attempt_key:
-                        self._input_attempts.pop(input_id, None)
-                for response_key, bindings in tuple(self._response_attempts.items()):
-                    remaining = [
-                        binding
-                        for binding in bindings
-                        if binding[0] is not context or binding[1] != attempt_key
-                    ]
-                    if remaining:
-                        self._response_attempts[response_key] = remaining
-                    else:
-                        self._response_attempts.pop(response_key, None)
+                reservation = self._agent_reservations.pop(attempt_key, None)
+                if reported:
+                    self._agent_abandoned_floors.pop(attempt_key, None)
+                elif reservation is not None and reservation > 0:
+                    self._agent_abandoned_floors[attempt_key] = reservation
+                if reported or reservation == 0:
+                    if active is not None and active[0] is context and active[1] == attempt_key:
+                        self._active_attempts.pop(scope, None)
+                    for input_id, input_entry in tuple(self._input_attempts.items()):
+                        if input_entry[1] is context and input_entry[3] == attempt_key:
+                            self._input_attempts.pop(input_id, None)
+                    for response_key, bindings in tuple(self._response_attempts.items()):
+                        remaining = [
+                            binding
+                            for binding in bindings
+                            if binding[0] is not context or binding[1] != attempt_key
+                        ]
+                        if remaining:
+                            self._response_attempts[response_key] = remaining
+                        else:
+                            self._response_attempts.pop(response_key, None)
             self._committed_cost_floor += _usage_cost_upper_bound(model, response.usage)
 
         if self._max_budget_usd is not None:

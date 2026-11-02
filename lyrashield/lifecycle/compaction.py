@@ -28,6 +28,7 @@ from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.lifecycle.sessions import replace_session_items, session_write_lock
 from lyrashield.policy.models import StrixProvider
+from lyrashield.policy.physical_requests import guard_physical_model
 from lyrashield.utils.redaction import redact_text
 from strix.config import load_settings
 from strix.llm.context_budget import context_window, count_tokens, output_limit
@@ -381,7 +382,7 @@ async def _summarize(
     response: ModelResponse | None = None
     try:
         with hooks.single_provider_attempt() if hooks is not None else contextlib.nullcontext():
-            response = await model_provider.get_model(model).get_response(
+            response = await guard_physical_model(model_provider.get_model(model)).get_response(
                 system_instructions=None,
                 input=prompt,
                 model_settings=model_settings,

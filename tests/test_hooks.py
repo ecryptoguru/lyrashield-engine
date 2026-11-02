@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import litellm
 import pytest
 from agents.exceptions import MaxTurnsExceeded
+from agents.usage import Usage
 
 import lyrashield.lifecycle.hooks as hooks_mod
 from lyrashield.lifecycle.agents import AgentCoordinator
@@ -257,12 +258,13 @@ async def test_budget_enforcement_decision_table(
 ) -> None:
     hooks = _make_hooks(10.0)
     state = _make_report_state(cost)
+    response = SimpleNamespace(usage=Usage(requests=1), response_id=None)
     with patch("lyrashield.lifecycle.hooks.get_global_report_state", return_value=state):
         if expected is None:
-            await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), MagicMock())
+            await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), response)
         else:
             with pytest.raises(expected):
-                await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), MagicMock())
+                await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), response)
     state.record_sdk_usage.assert_called_once()
 
 

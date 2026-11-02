@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from agents.agent_output import AgentOutputSchema
+from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
 from pydantic import (
@@ -36,11 +37,11 @@ from lyrashield.policy.models import (
     is_gpt6_model,
     parse_model_route,
 )
+from lyrashield.policy.physical_requests import guard_physical_model
 
 
 if TYPE_CHECKING:
     from agents.items import ModelResponse
-    from agents.model_settings import ModelSettings
     from agents.models.interface import Model
 
     from lyrashield.policy.settings import DedupeSettings, Settings
@@ -376,6 +377,20 @@ async def _request_dedupe_judgement(
     )
 
     hooks = get_active_hooks()
+    if (
+        hooks is not None
+        and hooks.budget_control_state().get("limit_usd") is not None
+        and isinstance(model_settings, ModelSettings)
+    ):
+        # The direct-call quote and its physical output ceiling must agree.
+        maximum = model_settings.max_tokens
+        model_settings = model_settings.resolve(
+            ModelSettings(
+                max_tokens=min(maximum, _DEDUPE_MAX_OUTPUT_TOKENS)
+                if isinstance(maximum, int) and maximum > 0
+                else _DEDUPE_MAX_OUTPUT_TOKENS
+            )
+        )
     reservation_key = f"dedupe:{uuid4().hex}"
     if hooks is not None:
         await hooks.reserve_out_of_band_request(
@@ -390,7 +405,7 @@ async def _request_dedupe_judgement(
     usage_persisted = False
     try:
         with hooks.single_provider_attempt() if hooks is not None else contextlib.nullcontext():
-            response = await model.get_response(
+            response = await guard_physical_model(model).get_response(
                 system_instructions=DEDUPE_SYSTEM_PROMPT,
                 input=user_msg,
                 model_settings=model_settings,

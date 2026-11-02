@@ -31,6 +31,7 @@ from lyrashield.lifecycle import hooks as hooks_module
 from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy.models import _completed_stream_event
+from lyrashield.policy.physical_requests import guard_physical_model
 from lyrashield.triage import service
 
 
@@ -245,13 +246,17 @@ async def test_direct_litellm_boundary_sets_no_hidden_replay_knobs_only_for_cap(
         raise APIConnectionError(request=httpx.Request("POST", "https://offline.invalid"))
 
     monkeypatch.setattr("litellm.acompletion", lost_ack)
-    with pytest.raises(APIConnectionError):
-        await dedupe._request_dedupe_judgement(
-            model=LitellmModel("openai/gpt-6-luna", api_key="offline-test"),
-            model_name="openai/gpt-6-luna",
-            model_settings=make_model_settings(None, model_name="openai/gpt-6-luna"),
-            user_msg="offline finding",
-        )
+    async with AsyncOpenAI(api_key="offline-test") as client:
+        with pytest.raises(APIConnectionError):
+            await dedupe._request_dedupe_judgement(
+                model=guard_physical_model(
+                    LitellmModel("openai/gpt-6-luna", api_key="offline-test"),
+                    resolved_client=client,
+                ),
+                model_name="openai/gpt-6-luna",
+                model_settings=make_model_settings(None, model_name="openai/gpt-6-luna"),
+                user_msg="offline finding",
+            )
     assert observed == ([(0, 0)] if bounded else [(None, None)])
     assert not should_disable_provider_managed_retries()
 

@@ -218,6 +218,12 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
 def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
     """Retain successful paid probes even when a later preflight probe fails."""
     usages = args.warm_up_usages
+    previous = get_global_report_state()
+    selected = None
+    if getattr(args, "resume", None):
+        selected = ReportState(args.run_name)
+        selected.hydrate_from_run_dir()
+        set_global_report_state(selected)
     try:
         asyncio.run(
             warm_up_llm(
@@ -228,8 +234,9 @@ def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
             )
         )
     except (SystemExit, RunDeadlineExceededError, asyncio.CancelledError) as exc:
-        state = ReportState(args.run_name)
-        state.hydrate_from_run_dir()
+        state = selected or ReportState(args.run_name)
+        if selected is None:
+            state.hydrate_from_run_dir()
         for model, usage in usages:
             state.record_sdk_usage(agent_id="warmup", agent_name="warmup", model=model, usage=usage)
         exhausted = isinstance(exc, RunDeadlineExceededError)
@@ -240,6 +247,10 @@ def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
             ) from exc
         usages.clear()
         raise
+
+    finally:
+        if selected is not None:
+            set_global_report_state(previous)
 
 
 def main(

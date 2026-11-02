@@ -150,3 +150,7 @@ before mutation. Fifty-five focused Python tests pass. Real Python3.13 and both
 Linux Python3.14 architecture fixtures reject the exact cases, preserve normal
 pip/cache/install/TLS behavior and keep the sandbox testing CA trusted. The
 combined final-image gate remains separate.
+
+Finite physical-attempt qualification and its explicit adapter limitations are
+recorded in [physical-budget-adapters.md](physical-budget-adapters.md). Durable
+unknown-charge recovery remains a promotion gate before paid acceptance.

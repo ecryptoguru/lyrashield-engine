@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from agents.agent_output import AgentOutputSchema
+from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -30,13 +31,12 @@ from lyrashield.lifecycle.hooks import (
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy.loader import load_settings
 from lyrashield.policy.models import StrixProvider, configure_sdk_model_defaults
+from lyrashield.policy.physical_requests import guard_physical_model
 from lyrashield.utils.redaction import redact_text
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from agents.model_settings import ModelSettings
 
 
 TRIAGE_INPUT_SCHEMA_VERSION = "ai-security-triage-input/1.0"
@@ -200,6 +200,20 @@ async def _request_judgement(
     reservation_key = f"ai-triage:{uuid4().hex}"
     system_instructions = "You are a bounded security triage assistant. Return only the schema."
     hooks = get_active_hooks()
+    if (
+        hooks is not None
+        and hooks.budget_control_state().get("limit_usd") is not None
+        and isinstance(model_settings, ModelSettings)
+    ):
+        # The direct-call quote and its physical output ceiling must agree.
+        maximum = model_settings.max_tokens
+        model_settings = model_settings.resolve(
+            ModelSettings(
+                max_tokens=min(maximum, limits.max_output_tokens)
+                if isinstance(maximum, int) and maximum > 0
+                else limits.max_output_tokens
+            )
+        )
     if hooks is not None:
         await hooks.reserve_out_of_band_request(
             key=reservation_key,
@@ -212,7 +226,7 @@ async def _request_judgement(
     response: Any = None
     try:
         with hooks.single_provider_attempt() if hooks is not None else contextlib.nullcontext():
-            response = await model.get_response(
+            response = await guard_physical_model(model).get_response(
                 system_instructions=system_instructions,
                 input=prompt,
                 model_settings=model_settings,

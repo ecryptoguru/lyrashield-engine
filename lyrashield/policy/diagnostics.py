@@ -199,6 +199,8 @@ def _response_fields(response: Any) -> dict[str, Any]:
 class DiagnosticModel(Model):
     """Observe attempts without altering SDK serialization, retry policy, or input."""
 
+    _physical_passthrough = True
+
     def __init__(
         self,
         inner: Model,

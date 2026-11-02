@@ -15,7 +15,11 @@ from rich.panel import Panel
 from rich.text import Text
 
 from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
-from lyrashield.lifecycle.hooks import ReportUsageHooks, _estimate_out_of_band_input_tokens
+from lyrashield.lifecycle.hooks import (
+    BudgetExceededError,
+    ReportUsageHooks,
+    _estimate_out_of_band_input_tokens,
+)
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
@@ -26,6 +30,7 @@ from lyrashield.policy.models import (
     is_known_openai_bare_model,
     is_recommended_or_frontier_model,
 )
+from lyrashield.policy.physical_requests import guard_physical_model
 
 
 logger = logging.getLogger(__name__)
@@ -114,7 +119,7 @@ async def warm_up_llm(
                 budget.single_provider_attempt() if budget is not None else contextlib.nullcontext()
             ):
                 response = await asyncio.wait_for(
-                    model.get_response(
+                    guard_physical_model(model).get_response(
                         system_instructions=system,
                         input=prompt,
                         model_settings=model_settings,
@@ -130,9 +135,14 @@ async def warm_up_llm(
                 )
         finally:
             if budget is not None:
-                await budget.release_out_of_band_request(
+                settled = await budget.release_out_of_band_request(
                     key=key, model=route, usage=getattr(response, "usage", None)
                 )
+                if response is not None and not settled:
+                    raise BudgetExceededError(
+                        "Preflight returned without reported provider usage; "
+                        "its conservative quote is retained and scanning cannot continue."
+                    )
         return response
 
     def remaining_timeout() -> float:

@@ -290,7 +290,7 @@ def _summarize_results(results: list[dict[str, Any]], max_results: int) -> str:
 
 
 @function_tool(timeout=15)
-async def web_search(
+async def web_search(  # noqa: PLR0915 - shared and dedicated charge settlement stay together
     ctx: RunContextWrapper,
     query: str,
     topic: Literal[
@@ -356,6 +356,7 @@ async def web_search(
                 default=str,
             )
     slot_reserved = report_state is not None
+    dispatched = False
     try:
         if hooks is not None:
             await hooks.reserve_web_search_call(
@@ -375,6 +376,7 @@ async def web_search(
         import httpx
 
         async with httpx.AsyncClient(timeout=15) as client:
+            dispatched = True
             response = await client.post(
                 f"{api_base}/search",
                 headers={
@@ -433,12 +435,13 @@ async def web_search(
             default=str,
         )
     finally:
-        # Release the global-budget reservation and the per-scan slot unless
-        # the success path already committed both.
+        # After dispatch, a lost response can still be billable. Keep both
+        # the shared quote and dedicated search allowance uncertain; only
+        # pre-dispatch failures may return the allowance to the caller.
         if hooks is not None:
             await hooks.release_web_search_call(
                 key=reservation_key,
-                actual_cost=0.0,
+                actual_cost=None if dispatched else 0.0,
             )
-        if slot_reserved and report_state is not None:
+        if slot_reserved and report_state is not None and not dispatched:
             report_state.release_web_search_reservation(estimated_cost)

@@ -38,6 +38,7 @@ from openai.types.shared import Reasoning
 
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
+from lyrashield.policy.physical_requests import guard_physical_model
 from strix.config.models import _TurnGuardModel
 
 
@@ -250,6 +251,8 @@ def _retry_statusless_provider_errors(context: RetryPolicyContext) -> bool:
 class _CodexResponsesModel(OpenAIResponsesModel):
     """Responses model for the ChatGPT subscription backend (always streamed, stateless)."""
 
+    _budget_zero_cost = True
+
     def __init__(
         self,
         model: str,
@@ -382,6 +385,8 @@ class _NonStreamingModel(Model):
     response exactly as it would for a real stream, so nothing else changes.
     """
 
+    _physical_passthrough = True
+
     def __init__(self, inner: Model) -> None:
         self._inner = inner
 
@@ -503,6 +508,31 @@ async def _bind_usage_response(input_items: Any, response_id: object) -> None:
 class _RequestBoundTurnGuardModel(_TurnGuardModel):
     """Use the per-request model timeout to bound long silent stream gaps."""
 
+    _lyrashield_physical_guarded = True
+
+    def __init__(
+        self,
+        inner: Model,
+        *,
+        max_tool_calls_per_turn: int = 0,
+        stream_idle_timeout: float | None = None,
+        resolved_client: AsyncOpenAI | None = None,
+    ) -> None:
+        super().__init__(
+            inner,
+            max_tool_calls_per_turn=max_tool_calls_per_turn,
+            stream_idle_timeout=stream_idle_timeout,
+        )
+        self._physical_model = guard_physical_model(inner, resolved_client=resolved_client)
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        guard = _TurnGuardModel(
+            self._physical_model,
+            max_tool_calls_per_turn=self._max_tool_calls_per_turn,
+            stream_idle_timeout=None,
+        )
+        return await guard.get_response(*args, **kwargs)
+
     async def stream_response(
         self,
         system_instructions: str | None,
@@ -529,7 +559,7 @@ class _RequestBoundTurnGuardModel(_TurnGuardModel):
             # the event gap by the tighter per-request scan timeout too.
             idle_timeout = min(idle_timeout, float(request_timeout))
         guard = _TurnGuardModel(
-            self._inner,
+            self._physical_model,
             max_tool_calls_per_turn=self._max_tool_calls_per_turn,
             # Disable the upstream timer with None: zero is an immediate
             # deadline on the imported substrate. The owned timer below keeps
