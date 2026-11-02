@@ -21,6 +21,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+from safe_io import preflight, publish, read_regular
+
 
 HERE = Path(__file__).resolve().parent
 
@@ -31,13 +33,14 @@ def digest(data: bytes) -> str:
 
 def obtain(url: str, expected: str, cache: Path, filename: str) -> Path:
     path = cache / filename
+    preflight(cache, filename)
     if not path.exists():
         with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310
             data = response.read()
         if digest(data) != expected:
             raise ValueError(f"download digest mismatch: {filename}")
-        path.write_bytes(data)
-    if digest(path.read_bytes()) != expected:
+        publish(cache, {filename: data})
+    if digest(read_regular(cache, filename)) != expected:
         raise ValueError(f"cached digest mismatch: {filename}")
     return path
 
@@ -125,6 +128,7 @@ def prepare(manifest: dict, arch: str, cache: Path) -> list[Path]:
 
 def install(manifest: dict, arch: str, paths: list[Path]) -> None:
     packages = manifest["packages"][arch]
+    preflight(Path("/"), "usr/share/lyrashield/security/system-python-leaves.json")
     for package in packages:
         # An absent leaf is an unexpected base, not permission to add it.
         subprocess.run(
@@ -154,18 +158,24 @@ def install(manifest: dict, arch: str, paths: list[Path]) -> None:
         )
         if actual != package["Version"]:
             raise ValueError("installed leaf version mismatch")
-    receipt = Path("/usr/share/lyrashield/security/system-python-leaves.json")
-    receipt.parent.mkdir(parents=True, exist_ok=True)
-    receipt.write_text(
-        json.dumps(
-            {
-                "architecture": arch,
-                "packages": packages,
-                "release_sha256": {n: r["release_sha256"] for n, r in manifest["releases"].items()},
-            },
-            indent=2,
-        )
-        + "\n"
+    receipt = "usr/share/lyrashield/security/system-python-leaves.json"
+    publish(
+        Path("/"),
+        {
+            receipt: (
+                json.dumps(
+                    {
+                        "architecture": arch,
+                        "packages": packages,
+                        "release_sha256": {
+                            n: r["release_sha256"] for n, r in manifest["releases"].items()
+                        },
+                    },
+                    indent=2,
+                )
+                + "\n"
+            ).encode()
+        },
     )
 
 

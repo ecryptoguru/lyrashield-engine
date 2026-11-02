@@ -10,6 +10,24 @@ archived `InRelease` with the image's official keyring through `sqv`, verifies t
 compressed Packages index against that signed Release, matches the binary/source
 identity and hash in that index, verifies each deb, and rejects an APT plan other
 than eight upgrades, zero additions and zero removals. No repository is added.
+The tracked `cache/.gitignore` creates an empty, deliberately unpopulated build
+input. To retain the qualified cache, copy these exact files into `cache/` before
+`docker build`; they enter the same COPY context, remain ignored by Git, and are
+verified exactly as online inputs. The parent Docker wiring must pass
+`--cache /opt/lyrashield/system-python-security/cache` for its persistent COPY path
+(or the temporary path in the example below). Remove cached archives from the
+image after installation if needed; retain manifests, signed Releases and receipts.
+
+For each build architecture, retain `sid-${arch}-Packages.xz`,
+`kali-${arch}-Packages.gz`, and each deb basename listed in `leaves.json` for
+that architecture. A shared cache for both architectures may contain all four
+indexes and both deb variants. The signed Releases already ship under `provenance/`.
+The main installer first uses an exact cached file; it fetches only an absent
+file. A present altered file is an error and is never silently replaced. Thus the
+normal Docker build can run with a retained authenticated cache even after an
+archive index rotates. Supplying no cache bytes retains the checked online path.
+Do not commit the archives or update any digest to match an unqualified response.
+
 The archive URLs are mutable: if a pinned index has rotated out, the build fails
 closed. Supply those exact artifacts through `--cache` for offline builds; update
 the entire qualification explicitly rather than accepting new unsigned bytes.
@@ -47,7 +65,7 @@ smokes. These standalone files deliberately do not edit the common Dockerfile:
 
 ```dockerfile
 COPY containers/system-python-security /opt/lyrashield/system-python-security
-RUN /usr/bin/python3 /opt/lyrashield/system-python-security/install_leaves.py \
+RUN /usr/bin/python3 /opt/lyrashield/system-python-security/install_leaves.py --cache /opt/lyrashield/system-python-security/cache \
     && /usr/bin/python3 /opt/lyrashield/system-python-security/amend_sources.py \
     && /usr/bin/python3 /opt/lyrashield/system-python-security/verify_runtime.py
 ```
@@ -100,3 +118,20 @@ upgraded. No blanket CVE ignore or invented version is used.
 five pip-vendored urllib3 advisories, Mako's missed finding, and all nine unmatched
 distributions. It distinguishes existing Debian backports and Linux platform
 boundaries from applied fixes and outstanding runtime/final-image gates.
+
+Standalone source publication checks every source and output path, rejects symbolic
+and hard links, stages every output/backup before replacement, and rolls back
+caught publication errors. An existing non-directory receipt ancestor fails before
+source mutation. This is exception recovery, not a claim of multi-file atomicity
+against abrupt power loss or SIGKILL. Retained verification derives its exact
+required file/package coverage and hashes from root-owned manifests; an empty,
+truncated or jointly falsified receipt cannot reduce the checks.
+
+Review round one is recorded in `provenance/review-round1-receipt.json` and
+`provenance/arm64-review-round1-smoke.log`. It supersedes the initial receipt
+coverage and publication checks: 30 host tests, five actual precondition/rollback
+tests, 16 runtime tests as root and as `pentester`, and two fresh-seed tests for
+each user passed. Explicitly approved empty device scopes remain empty; requested
+scopes cannot fill missing stored authorization. Malformed Unicode PKCE returns
+an OAuth protocol error. The retained helper directory stays root-owned and
+available for the normal non-root final smoke.

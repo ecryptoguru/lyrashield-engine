@@ -180,7 +180,7 @@
       "severity": "medium",
       "component": "Timing Attack Vulnerability in PKCE code_verifier Comparison (CWE-208)",
       "qualification": "unfixed in Debian and Kali; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-49265)",
-      "disposition": "downstream hmac.compare_digest PKCE backport from 74664d3; valid/invalid API checks exercise actual comparison"
+      "disposition": "downstream hmac.compare_digest PKCE backport from 74664d3; valid/invalid API checks exercise actual comparison; non-ASCII PKCE is rejected as invalid_grant through the real grant token API, rather than raising TypeError"
     },
     {
       "distribution": "oauthlib",
@@ -194,7 +194,7 @@
       "severity": "high",
       "component": "Bearer token can be retrieved as long as client knows a valid client ID for device workflow",
       "qualification": "no Debian tracker entry; actual upstream fix 4.0.1",
-      "disposition": "author advisory requires 4.0.1 (aggregator incorrectly says 4.0.0); downstream port of device-code required parameter, bound-client validator hook, fail-closed status mapping and approved scopes from 77a5f1c8; actual token issuance rejected for unknown/pending and succeeds for authorized. Existing 3.x client/authentication API retained; no major-version metadata claim"
+      "disposition": "author advisory requires 4.0.1 (aggregator incorrectly says 4.0.0); downstream port of device-code required parameter, bound-client validator hook, fail-closed status mapping and approved scopes from 77a5f1c8; actual token issuance rejected for unknown/pending and succeeds for authorized. Existing 3.x client/authentication API retained; no major-version metadata claim; round1 correction requires authoritative stored scopes, preserves an approved empty list and ignores token-supplied scope; actual empty/read/missing authorization cases tested"
     },
     {
       "distribution": "pip",

@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "reviewed_commit": "307597669f29ea2d0ecc214c9008fccc24129b20",
+  "independent_review_sha256": "aff425682d7c090b4f0d09091a48e24d34fc93d0ffcc8302a55421a7b248260c",
+  "qualification_sha256": "4499b68a97dc24edd3830c2baaef243b7e559473db91e10a2bcd8d3a8b54b9d4",
+  "amendments_manifest_sha256": "77e5fed3e0159fdffc40435a6c0240fff6daa2f7e8c305a80cd547279f2048d4",
+  "red_first_results": {
+    "scope_expansion": "reproduced actual token API: empty authorization issued default read / requested admin before fix",
+    "unicode_pkce": "reproduced uncaught TypeError before fix; new API regression failed before fix",
+    "receipt_omission": "independent probe accepted empty inventories before fix; retained verifier now requires trusted coverage",
+    "source_topology": "independent exact-source probe wrote external sentinel through symlink before fix",
+    "late_publication": "independent probe changed sources before late receipt error, immediate retry failed before fix",
+    "cache_ancestor": "new focused regression observed an external cache publication through linked ancestor before fix",
+    "cleanup_parent_swap": "new regression observed cleanup removing an external empty directory through a switched ancestor; fixed by descriptor-relative no-follow cleanup"
+  },
+  "green_results": {
+    "host_pytest": 30,
+    "production_precondition_unittest": 5,
+    "root_runtime_unittest": 16,
+    "pentester_runtime_unittest": 16,
+    "fresh_seed_unittest_each_user": 2,
+    "arm64_apt": "8 upgraded, zero new, zero removed",
+    "arm64_and_amd64_cache": "signed Release/index/source/binary identities and hashes passed with urlopen blocked; no pin refresh",
+    "real_tools": "Wapiti HTML report, ndiff XML comparison, mitmproxy/H2 API and pip/mitmdump/Wapiti/ndiff CLI smokes passed",
+    "rollback_cases": "middle source replacement, receipt publication, deletion after receipt publication, invalid late receipt parent; original bytes restored and retry passed"
+  },
+  "execution": {
+    "network": "none",
+    "memory_bytes": 536870912,
+    "cpu": 0.5,
+    "baseline_config_digest": "52e38fb8105145c7b049291c4ecc1e12d619633acd47cf97f3ab704ac2d118c0",
+    "root_runtime": "/usr/bin/python3 /repair/verify_runtime.py",
+    "non_root_runtime": "/usr/sbin/runuser -u pentester -- /usr/bin/python3 /repair/verify_runtime.py",
+    "images_built_or_pulled": false
+  },
+  "remaining_boundaries": [
+    "No amd64 execution or rebuilt final image acceptance claimed here",
+    "Root/runtime owner must wire --cache /opt/lyrashield/system-python-security/cache; Dockerfile deliberately untouched",
+    "Exception rollback tested; abrupt power loss/SIGKILL is not a multi-file crash-atomic transaction"
+  ],
+  "receipt_sha256": {
+    "arm64-review-round1-leaves.json": "3da7dc2e621fe17e8dfcf489e589257d22040d22b001717b2d9c042e2c85cea9",
+    "arm64-review-round1-amendments.json": "fc05dc8d1f3aa4ac61f677f2f5b0a993bda3e6076f3cd4d1988975eeab6fdaba",
+    "arm64-review-round1-smoke.log": "4945781534cd8416cd13eba0c5e10b8e1c3f063aa1592c95c75a2aa55c24990c"
+  },
+  "qualified_helper_sha256": {
+    "safe_io.py": "d6e297a6692ae01b9d7c0e5778336d4e64e1d3b5119b421cfcd60ff7e789901d",
+    "verify_receipts.py": "f4fd8fedca81455e9cc8fd15eaa18914b0bb7167fc9da455791db1286f110572",
+    "amend_sources.py": "f17d577be59cf1e77ae89e9e14c638403e6fb8fcd0561491be5d626bd67af4bd",
+    "install_leaves.py": "4eec76f2822ad932556d45d608bbde06001e37ad3b4d4757c2f7a80d2964a825",
+    "verify_runtime.py": "0eae8c66b93f33e6d088b938831b67db132b825851e93b71f5c91c409e299057",
+    "check_preconditions.py": "61ffc0eecfa31cc32b731fd0ceaf6bc263cc917ef32cadb723c5cfd58b824133"
+  }
+}

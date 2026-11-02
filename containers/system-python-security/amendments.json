@@ -76,7 +76,7 @@
       "version": "3.3.1-2",
       "before_sha256": "0d6931601c4e88a078fb3ccf5f052c035ad6a4bb2171efb9c218e088a7272dc6",
       "before_md5": "f93e1b2e246419f40d9a661e89798508",
-      "after_sha256": "53f308e800db1005c58fe17e7310ad695a62947363f725de8259f387fa841114",
+      "after_sha256": "a9697b0f1f662aca216a15c1f486cab1672e149a4052542ba237366ec5815169",
       "upstream_commits": [
         "74664d3fe037a354e180e305135c6bab1747a6b0"
       ],
@@ -87,11 +87,11 @@
         ],
         [
           "    return base64.urlsafe_b64encode(\n        hashlib.sha256(verifier.encode()).digest()\n    ).decode().rstrip('=') == challenge\n",
-          "    expected = base64.urlsafe_b64encode(\n        hashlib.sha256(verifier.encode()).digest()\n    ).decode().rstrip('=')\n    return hmac.compare_digest(expected, challenge)\n"
+          "    if (not isinstance(verifier, str) or not isinstance(challenge, str)\n            or not verifier.isascii() or not challenge.isascii()):\n        return False\n    expected = base64.urlsafe_b64encode(\n        hashlib.sha256(verifier.encode()).digest()\n    ).decode().rstrip('=')\n    return hmac.compare_digest(expected, challenge)\n"
         ],
         [
           "    return verifier == challenge\n",
-          "    return hmac.compare_digest(verifier, challenge)\n"
+          "    if (not isinstance(verifier, str) or not isinstance(challenge, str)\n            or not verifier.isascii() or not challenge.isascii()):\n        return False\n    return hmac.compare_digest(verifier, challenge)\n"
         ]
       ]
     },
@@ -156,7 +156,7 @@
       "version": "3.3.1-2",
       "before_sha256": "0e3e9c095d42aeb72dd45a2139e418f0e8fcb7d664437de57ab38e76d17102d1",
       "before_md5": "6125c58a7ee1f42ca11a124f9981a93f",
-      "after_sha256": "11cf4d3710af67dbbfbb259eb2fc82b40bebb876642ad714ca4c5f3bae0776d7",
+      "after_sha256": "4d3188154d011e276d2237170a0fffdae4311d373730a4487a489d21ced6d9f7",
       "upstream_commits": [
         "77a5f1c8ce00da2b0b8c5f6e9cc129920085f114"
       ],
@@ -175,11 +175,11 @@
         ],
         [
           "        request.client_id = request.client_id or request.client.client_id\n        self.validate_scopes(request)",
-          "        request.client_id = request.client_id or request.client.client_id\n        self.validate_device_code(request)\n        self.validate_scopes(request)"
+          "        request.client_id = request.client_id or request.client.client_id\n        self.validate_device_code(request)\n        # Preserve the stored scopes, including an explicitly empty list.\n        if not self.request_validator.validate_scopes(\n                request.client_id, request.scopes, request.client, request):\n            raise rfc6749_errors.InvalidScopeError(request=request)"
         ],
         [
           "    def create_token_response(\n",
-          "    def validate_device_code(self, request: common.Request) -> None:\n        \"\"\"Validate the ``device_code`` and its authorization status.\n\n        Delegates to :meth:`RequestValidator.validate_device_code`, which\n        returns one of the ``DEVICE_CODE_*`` statuses, and maps it to the\n        appropriate RFC 8628 Section 3.5 error.\n\n        :param request: OAuthlib request.\n        :type request: oauthlib.common.Request\n        \"\"\"\n        if not request.device_code:\n            raise rfc6749_errors.InvalidRequestError(\n                \"Missing device_code parameter.\", request=request\n            )\n\n        status = self.request_validator.validate_device_code(\n            request.client_id, request.device_code, request\n        )\n        if status == self.DEVICE_CODE_AUTHORIZED:\n            # The validator is expected to populate these from the stored\n            # authorization; if it did not, validate_scopes will silently fall\n            # back to the client's default scopes.\n            if getattr(request, \"user\", None) is None:\n                log.debug(\"request.user was not set on device_code validation.\")\n            if getattr(request, \"scopes\", None) is None and request.scope is None:\n                raise rfc6749_errors.ServerError(\n                    description=\"validate_device_code must set request.scopes for an authorized device_code.\",\n                    request=request,\n                )\n            if getattr(request, \"scopes\", None) is None:\n                log.debug(\"request.scopes was not set on device_code validation.\")\n            return\n\n        # A recognized non-authorized status maps to its RFC 8628 polling\n        # error; anything else means the device_code is unknown or invalid.\n        error_class = self._device_code_errors.get(status)\n        if error_class is not None:\n            raise error_class(request=request)\n\n        # None is the documented \"unknown/invalid device_code\" return. Any\n        # other unrecognized value most likely signals a validator that did\n        # not return a DEVICE_CODE_* status, so surface it for debugging.\n        if status is not None:\n            log.warning(\n                \"validate_device_code returned unrecognized status %r; treating \"\n                \"the device_code as invalid. Return one of the \"\n                \"DeviceCodeGrant.DEVICE_CODE_* constants.\", status\n            )\n        raise rfc6749_errors.InvalidGrantError(request=request)\n\n    def create_token_response(\n"
+          "    def validate_device_code(self, request: common.Request) -> None:\n        \"\"\"Validate the ``device_code`` and its authorization status.\n\n        Delegates to :meth:`RequestValidator.validate_device_code`, which\n        returns one of the ``DEVICE_CODE_*`` statuses, and maps it to the\n        appropriate RFC 8628 Section 3.5 error.\n\n        :param request: OAuthlib request.\n        :type request: oauthlib.common.Request\n        \"\"\"\n        if not request.device_code:\n            raise rfc6749_errors.InvalidRequestError(\n                \"Missing device_code parameter.\", request=request\n            )\n\n        # Token input is not an authorization record. The validator must\n        # restore the code's approved scopes independently of supplied scope.\n        request.scopes = None\n        request.scope = None\n        status = self.request_validator.validate_device_code(\n            request.client_id, request.device_code, request\n        )\n        if status == self.DEVICE_CODE_AUTHORIZED:\n            # The validator is expected to populate these from the stored\n            # authorization; if it did not, validate_scopes will silently fall\n            # back to the client's default scopes.\n            if getattr(request, \"user\", None) is None:\n                log.debug(\"request.user was not set on device_code validation.\")\n            if request.scopes is None:\n                raise rfc6749_errors.ServerError(\n                    description=\"validate_device_code must set request.scopes for an authorized device_code.\",\n                    request=request,\n                )\n            return\n\n        # A recognized non-authorized status maps to its RFC 8628 polling\n        # error; anything else means the device_code is unknown or invalid.\n        error_class = self._device_code_errors.get(status)\n        if error_class is not None:\n            raise error_class(request=request)\n\n        # None is the documented \"unknown/invalid device_code\" return. Any\n        # other unrecognized value most likely signals a validator that did\n        # not return a DEVICE_CODE_* status, so surface it for debugging.\n        if status is not None:\n            log.warning(\n                \"validate_device_code returned unrecognized status %r; treating \"\n                \"the device_code as invalid. Return one of the \"\n                \"DeviceCodeGrant.DEVICE_CODE_* constants.\", status\n            )\n        raise rfc6749_errors.InvalidGrantError(request=request)\n\n    def create_token_response(\n"
         ]
       ]
     },
@@ -660,5 +660,60 @@
     "version": "2.8.0",
     "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl",
     "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3"
-  }
+  },
+  "expected_outputs": {
+    "usr/lib/python3/dist-packages/h2/utilities.py": "a203c0b2215db8950caaedf5daf888efa59c3578a22a0cbe3b8a9f028a7ed153",
+    "usr/lib/python3/dist-packages/hpack/hpack.py": "6575b9c8f5cae0ad6098feac1ec61e6fd667840ca8c5c64c4df766bfd5915d3e",
+    "usr/lib/python3/dist-packages/mako/template.py": "a980357fdf4ca9929ee2c6a376e7411375440d62d6a850b2677e14e8a1e96452",
+    "usr/lib/python3/dist-packages/oauthlib/common.py": "6e8b8b579dbbbfc8b99c2e1b063bc32ab22c87be27a49f63a49e8303780804b8",
+    "usr/lib/python3/dist-packages/oauthlib/oauth2/rfc6749/grant_types/authorization_code.py": "a9697b0f1f662aca216a15c1f486cab1672e149a4052542ba237366ec5815169",
+    "usr/lib/python3/dist-packages/oauthlib/oauth2/rfc8628/grant_types/device_code.py": "4d3188154d011e276d2237170a0fffdae4311d373730a4487a489d21ced6d9f7",
+    "usr/lib/python3/dist-packages/oauthlib/oauth2/rfc8628/request_validator.py": "118e6f658a8aca76ac42fd0cbfed2b86fde79fb81523e98c57c9fdcabaeb2aac",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/LICENSE.txt": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/__init__.py": "24ca35b60d67215d40789daf10d0bf4f17e5d1ee61e86ce5f43195935ad645ba",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/_base_connection.py": "1f37121077b1803ad152beb48cd9e20762908ddc3ded279d0f996e45f1ed0978",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/_collections.py": "1fac8ba8659d64d919d0b9bf7e72c4caaba59ce716eaab570a1daacf183bdf15",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/_request_methods.py": "802785f3948efd45385a83f0607228cffb70f9e33f1153a42c5a7c385b02ec30",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/_version.py": "7b84320186a7a1805134fd8aeaa0d508e80116851aecbd23f7561042c5073bd4",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/connection.py": "8a59dab3d7b6a0e1b38a5fd6e565ef6a49381bb995729d015e4f6440ab8523e0",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/connectionpool.py": "6a147869216b94449a053e869d4311cba23294551c83ee20fe5d2f1eaff50a3e",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/emscripten/__init__.py": "64398badcf82717c23cf5fd46ce0be666284e9173da96e9ae692cd127d9485bb",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/emscripten/connection.py": "822125b01a14b0a55445b6736fc182ac99aa5b6dd79ef8f668dc90545e36b258",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/emscripten/emscripten_fetch_worker.js": "cf5937cd9e3f84329ddfeb4def0cf3f0b1e31c2da9c4dfeebbc07793d0fd0377",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/emscripten/fetch.py": "e7171dfbebe217165dda7072d1a2bbdddb49f53b21d7261953f4945f09f089b9",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/emscripten/request.py": "98bdbcb33cb52af137349856a2be633666aba7c830a650d4fbb8301996398344",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/emscripten/response.py": "083a58d0616896e47723110290cda01f9b837d80ccd042f5156afb07beb0b603",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/pyopenssl.py": "5acf2f0ae6527e023a4031da552246600f6e753581f4a2f4c19ff4d7c88a8230",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/contrib/socks.py": "81141f708d6928e021e62238fd30c090a6803f737f1f620de49e660652990691",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/exceptions.py": "8503c7a2aa38cb0e3a7ac3525647225505d5520031580825b21e8c6f242d6be4",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/fields.py": "6862c5015669554f856c996596f7b8021834fa91fd659050d88cfb95fa648e43",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/filepost.py": "53c78d67e9a928a1e1ae56c7104893c7180ad7a21e8e111aeeecf8db2a80fdd2",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/http2/__init__.py": "c73ac0487ed1e4035190f24ea2de651a70133aadca2aec97cc8e36adc9f09aab",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/http2/connection.py": "9e3960af8c0b862009bed52ac44127e12f79be27db95346b9ab6911e809cbfad",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/http2/probe.py": "9e7024a9b8406a43a217be6bcfb5b4b9d677f047a1fee0fc7e357be0def71442",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/poolmanager.py": "46654506338ff9a0e79baeef8a409af7d37aad001633150384a1eb4a5d1ff4cb",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/py.typed": "51a0ae3c56b71fc5006a46edfb91bc48f69c95d4ce1af26fd7ca4f8d42798036",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/response.py": "0e4559c737914d4f8f941dca9ecfaf6caec6792258302bffec7b8b41dae3c71a",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/__init__.py": "faa792d1071e8af6b3bc110a0cd142008fba00271d0ce1384ccbe8ed22cd9404",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/connection.py": "2633bbdb69731e5ccb5cf4e4afd65605d86c7979cc5633126f50c92d5ad74a74",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/proxy.py": "b1e3fcf90e41e9b07474cb703e3f98719650df4bc7b8ba91bbeb48d096767f3b",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/request.py": "d9af3b7ae5309e3ca50777f27994b3fd5b3aeb32c6aaa44a252ddba5366c89b0",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/response.py": "bd013adfdba81218f5be98c4771bb994d22124249466477ba6a965508d0164e0",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/retry.py": "0fdc26b67d1ecc42b0cab3972f20bb07284d783f4dc318394fe8b99098c42925",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/ssl_.py": "72c779c13f6e2afa22149d75f98a5fab0cdc886193515d9dae62e12354fd61c4",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/ssl_match_hostname.py": "16de38289cd3cc632629f7ff6573fdd658b65785a19af132d7a3ca05cbf8bd99",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/ssltransport.py": "133e0ef2947fbd3f1d6a7fc5bea0584ba7600df05710c7d57ebcdc754a167e2e",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/timeout.py": "e1e4f5155799654ee1ee6603d49ab639735ee1fc5e91d36f868594919bac4690",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/url.py": "6a2814d91987dd9728278d413a154ee5277b15cb262d9945425377f2a693311f",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/util.py": "8f795b64ad633f28b00f7e13f08809cdd5846554fee04fb4bd82098bd52378d0",
+    "usr/lib/python3/dist-packages/pip/_vendor/urllib3/util/wait.py": "fe987c22b511deca8faa2d0ea29420254947e30ce419e3390a2c80ed7186b662",
+    "usr/lib/python3/dist-packages/pip/_vendor/vendor.txt": "1e8d959bd1b137c476b4f7f6e04ca14f2dd0cc7dd2440bb48f9966c67ca72a1d",
+    "usr/lib/python3/dist-packages/setuptools/_vendor/jaraco/context.py": "fb3cd2e56074a2494912935c5089f91cf6ef09ee0c57d9dc3b23c83c0a1d9331",
+    "usr/lib/python3/dist-packages/soupsieve/css_parser.py": "a1073e92a8dec5e6d0ecfd50ae055113735c73313ecf873e4ac9553c82e76305",
+    "usr/share/python-wheels/pip-26.2.2-py3-none-any.whl": "47e9640f24ca80dfc46963c5d559d4bb225da82e0725786da142344440cde8a2",
+    "usr/share/python-wheels/setuptools-78.1.1-py3-none-any.whl": "fa1ce4d5584ea6226756463b192ab016ab37625bdbb981278861f732d4e62e46"
+  },
+  "expected_removed": [],
+  "amendment": "lyrashield-system-python-2"
 }

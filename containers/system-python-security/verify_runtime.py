@@ -151,6 +151,105 @@ class RuntimeSecurityTests(unittest.TestCase):
             self.assertFalse(code.code_challenge_method_plain(verifier, "wrong"))
             self.assertEqual(compare.call_count, 4)
 
+    def test_oauth_pkce_malformed_input_is_protocol_error(self):
+        from urllib.parse import urlencode
+
+        from oauthlib.common import Request
+        from oauthlib.oauth2.rfc6749.grant_types.authorization_code import AuthorizationCodeGrant
+
+        validator = Mock()
+
+        def authenticate(request):
+            request.client = SimpleNamespace(client_id="fixture")
+            return True
+
+        validator.authenticate_client.side_effect = authenticate
+        validator.validate_code.return_value = True
+        grant = AuthorizationCodeGrant(validator)
+        for method, challenge, verifier in [
+            ("plain", "valid", "invalid-é"),
+            ("S256", "invalid-é", "valid"),
+            ("plain", "valid", "wrong"),
+            ("S256", "wrong", "valid"),
+        ]:
+            validator.get_code_challenge.return_value = challenge
+            validator.get_code_challenge_method.return_value = method
+            request = Request(
+                "https://fixture.invalid/token",
+                http_method="POST",
+                body=urlencode(
+                    {
+                        "grant_type": "authorization_code",
+                        "client_id": "fixture",
+                        "code": "inert",
+                        "code_verifier": verifier,
+                    }
+                ),
+            )
+            handler = Mock()
+            _, body, status = grant.create_token_response(request, handler)
+            self.assertEqual(status, 400)
+            self.assertEqual(json.loads(body)["error"], "invalid_grant")
+            handler.create_token.assert_not_called()
+
+    def test_oauth_device_scope_is_authoritative_even_when_empty(self):
+        from oauthlib.common import Request
+        from oauthlib.oauth2.rfc8628.grant_types.device_code import DeviceCodeGrant
+        from oauthlib.oauth2.rfc8628.request_validator import RequestValidator
+
+        class Validator(RequestValidator):
+            stored = None
+
+            def authenticate_client(self, request):
+                request.client = SimpleNamespace(client_id="fixture")
+                return True
+
+            def validate_grant_type(self, *_args):
+                return True
+
+            def validate_scopes(self, _client_id, scopes, *_args):
+                return set(scopes) <= {"read", "admin"}
+
+            def get_default_scopes(self, *_args):
+                return ["read"]
+
+            def validate_device_code(self, _client_id, _code, request):
+                request.user = "fixture-user"
+                if self.stored is not None:
+                    request.scopes = self.stored.copy()
+                return "authorized"
+
+            def client_authentication_required(self, _request):
+                return True
+
+            def save_bearer_token(self, *_args):
+                pass
+
+        validator = Validator()
+        grant = DeviceCodeGrant(validator)
+        for stored in ([], ["read"], None):
+            validator.stored = stored
+            for supplied in ("", "&scope=admin"):
+                request = Request(
+                    "https://fixture.invalid/token",
+                    http_method="POST",
+                    body="grant_type=urn:ietf:params:oauth:grant-type:device_code"
+                    "&client_id=fixture&device_code=approved" + supplied,
+                )
+                handler = Mock()
+                handler.create_token.side_effect = lambda req, *_args: {
+                    "access_token": "inert",
+                    "scope": " ".join(req.scopes),
+                }
+                _, body, status = grant.create_token_response(request, handler)
+                if stored is None:
+                    self.assertEqual(status, 400)
+                    self.assertEqual(json.loads(body)["error"], "server_error")
+                    handler.create_token.assert_not_called()
+                else:
+                    self.assertEqual(status, 200)
+                    self.assertEqual(json.loads(body)["scope"], " ".join(stored))
+
     def test_oauth_device_grant_status_and_client_api(self):
         from oauthlib.common import Request
         from oauthlib.oauth2.rfc6749.errors import (
@@ -337,27 +436,9 @@ class RuntimeSecurityTests(unittest.TestCase):
             self.assertIn("443/tcp", result.stdout)
 
     def test_downstream_receipts_match_installed_bytes(self):
-        from amend_sources import sha, wheel_files
+        from verify_receipts import verify
 
-        receipt = json.loads(
-            Path("/usr/share/lyrashield/security/system-python-amendments.json").read_text()
-        )
-        for name, values in receipt["files"].items():
-            data = (Path("/") / name).read_bytes()
-            self.assertEqual(sha(data), values["after_sha256"], name)
-            if name.endswith(".whl"):
-                wheel_files(data)
-        for name in receipt["removed"]:
-            self.assertFalse((Path("/") / name).exists())
-        leaves = json.loads(
-            Path("/usr/share/lyrashield/security/system-python-leaves.json").read_text()
-        )
-        for package in leaves["packages"]:
-            actual = subprocess.check_output(
-                ["/usr/bin/dpkg-query", "-W", "-f=${Version}", package["Package"]],
-                text=True,
-            )
-            self.assertEqual(actual, package["Version"])
+        verify()
 
     def test_actual_system_module_origins(self):
         import importlib

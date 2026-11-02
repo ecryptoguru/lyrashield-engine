@@ -16,11 +16,12 @@ import csv
 import hashlib
 import io
 import json
-import shutil
 import subprocess
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
+
+from safe_io import publish, read_regular
 
 
 HERE = Path(__file__).resolve().parent
@@ -97,7 +98,7 @@ def owner(root: Path, relative: str, package: str, version: str, data: bytes) ->
     )
     if installed != version:
         raise ValueError("unexpected original package version: " + package)
-    lines = (root / "var/lib/dpkg/info" / (package + ".md5sums")).read_text().splitlines()
+    lines = read_regular(root, "var/lib/dpkg/info/" + package + ".md5sums").decode().splitlines()
     md5s = {line.split(None, 1)[1]: line.split(None, 1)[0] for line in lines}
     if md5s.get(relative) != hashlib.md5(data, usedforsecurity=False).hexdigest():
         raise ValueError("original dpkg ownership/MD5 mismatch: " + relative)
@@ -108,6 +109,8 @@ def urllib3_files(wheel: bytes, expected: str) -> dict[str, bytes]:
         raise ValueError("unreviewed urllib3 wheel")
     files = wheel_files(wheel)
     result = {n: data for n, data in files.items() if n.startswith("urllib3/")}
+    if any(Path(n).suffix in {".so", ".pyd", ".dylib", ".dll"} for n in result):
+        raise ValueError("unexpected ABI extension in pure-Python urllib3 input")
     license_name = "urllib3-2.8.0.dist-info/licenses/LICENSE.txt"
     result["urllib3/LICENSE.txt"] = files[license_name]
     path = "urllib3/contrib/emscripten/__init__.py"
@@ -127,8 +130,7 @@ def amend(root: Path, replacement: bytes, *, check_owners: bool = True) -> dict:
     originals = {}
     patches = manifest["patches"]
     for patch in patches:
-        path = root / patch["path"]
-        data = path.read_bytes()
+        data = read_regular(root, patch["path"])
         if check_owners:
             owner(root, patch["path"], patch["package"], patch["version"], data)
         originals[patch["path"]] = data
@@ -143,7 +145,7 @@ def amend(root: Path, replacement: bytes, *, check_owners: bool = True) -> dict:
     if actual != set(pip["files"]):
         raise ValueError("unexpected system pip file inventory")
     for relative, expected in pip["files"].items():
-        data = (site / relative).read_bytes()
+        data = read_regular(root, "usr/lib/python3/dist-packages/" + relative)
         if sha(data) != expected:
             raise ValueError("original pip source mismatch: " + relative)
         if check_owners:
@@ -171,7 +173,7 @@ def amend(root: Path, replacement: bytes, *, check_owners: bool = True) -> dict:
         ),
     ]:
         relative = pip[name]
-        data = (root / relative).read_bytes()
+        data = read_regular(root, relative)
         if sha(data) != expected:
             raise ValueError("unreviewed original seed: " + relative)
         if check_owners:
@@ -205,7 +207,7 @@ def amend(root: Path, replacement: bytes, *, check_owners: bool = True) -> dict:
     for n, data in replacement_files.items():
         relative = "usr/lib/python3/dist-packages/" + n
         if (root / relative).exists():
-            originals[relative] = (root / relative).read_bytes()
+            originals[relative] = read_regular(root, relative)
         writes[relative] = data
     writes.update(seed_outputs)
     cleanup_roots = {
@@ -213,14 +215,14 @@ def amend(root: Path, replacement: bytes, *, check_owners: bool = True) -> dict:
         *((root / p["path"]).parent for p in patches),
     }
     compiled = {
-        str(path.relative_to(root)): sha(path.read_bytes())
+        str(path.relative_to(root)): sha(read_regular(root, str(path.relative_to(root))))
         for directory in cleanup_roots
         for path in directory.rglob("*.pyc")
     }
     receipt = {
         "schema": 1,
         "qualification_sha256": manifest["qualification_sha256"],
-        "amendment": "lyrashield-system-python-1",
+        "amendment": manifest["amendment"],
         "manifest_sha256": sha((HERE / "amendments.json").read_bytes()),
         "original_versions": {p["package"]: p["version"] for p in patches},
         "urllib3": manifest["urllib3"],
@@ -235,23 +237,14 @@ def amend(root: Path, replacement: bytes, *, check_owners: bool = True) -> dict:
         "removed": removed,
         "removed_compiled_sha256": dict(sorted(compiled.items())),
     }
-    # All source, ownership, seed RECORD and replacement checks precede mutation.
-    for relative, data in writes.items():
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-    for relative in removed:
-        (root / relative).unlink()
-    # Remove every old bytecode form, including legacy flat .pyc modules.
-    for relative in compiled:
-        (root / relative).unlink()
-    for directory in cleanup_roots:
-        for cache in directory.rglob("__pycache__"):
-            if cache.exists():
-                shutil.rmtree(cache)
-    receipt_path = root / "usr/share/lyrashield/security/system-python-amendments.json"
-    receipt_path.parent.mkdir(parents=True, exist_ok=True)
-    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    if {name: sha(data) for name, data in writes.items()} != manifest["expected_outputs"]:
+        raise ValueError("computed amendment differs from trusted output contract")
+    if removed != manifest["expected_removed"]:
+        raise ValueError("computed removal differs from trusted output contract")
+    receipt_path = "usr/share/lyrashield/security/system-python-amendments.json"
+    writes[receipt_path] = (json.dumps(receipt, indent=2) + "\n").encode()
+    # Publication prepares all paths, bytes and backups before replacing originals.
+    publish(root, writes, [*removed, *compiled])
     return receipt
 
 
@@ -261,7 +254,7 @@ def main() -> None:
     args = parser.parse_args()
     manifest = json.loads((HERE / "amendments.json").read_text())
     if args.urllib3_wheel:
-        replacement = args.urllib3_wheel.read_bytes()
+        replacement = read_regular(args.urllib3_wheel.absolute().parent, args.urllib3_wheel.name)
     else:
         with urllib.request.urlopen(manifest["urllib3"]["url"], timeout=60) as response:  # noqa: S310
             replacement = response.read()
