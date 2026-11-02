@@ -141,6 +141,13 @@ async def deliver_user_message(
         accepted = await asyncio.wait_for(asyncio.shield(pending), timeout)
     except TimeoutError:
         return "unknown"
+    except asyncio.CancelledError:
+        # A cancelled mailbox task is an uncertain receipt, not a request to
+        # cancel its UI caller. Genuine caller cancellation must propagate.
+        caller = asyncio.current_task()
+        if caller is not None and caller.cancelling():
+            raise
+        return "unknown"
     except Exception:
         logger.exception("Operator message delivery failed")
         return "unknown"
@@ -204,6 +211,13 @@ async def deliver_operator_control(
     try:
         accepted = await asyncio.wait_for(asyncio.shield(pending), DELIVERY_TIMEOUT_SECONDS)
     except TimeoutError:
+        return "unknown"
+    except asyncio.CancelledError:
+        # A cancelled mailbox task is an uncertain receipt, not a request to
+        # cancel its UI caller. Genuine caller cancellation must propagate.
+        caller = asyncio.current_task()
+        if caller is not None and caller.cancelling():
+            raise
         return "unknown"
     except Exception:
         logger.exception("Operator control delivery failed")

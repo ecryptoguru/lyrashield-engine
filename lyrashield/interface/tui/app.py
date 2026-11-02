@@ -1840,10 +1840,13 @@ class StrixTUIApp(App[None]):
             if message == "/increase-budget":
                 budget = self.coordinator.budget_control_state()
                 limit = budget.get("limit_usd")
-                self.notify(
-                    f"Budget increased; limit ${_format_budget(limit)}. Scan remains paused."
+                acceptance = (
+                    f"Budget increase accepted; current limit ${_format_budget(limit)}."
                     if isinstance(limit, (int, float))
-                    else "Budget increased. Scan remains paused."
+                    else "Budget increase accepted."
+                )
+                self.notify(
+                    acceptance + (" Scan remains paused." if budget.get("paused") is True else "")
                 )
             else:
                 self.notify("Resume accepted" if message in controls else "Queued")

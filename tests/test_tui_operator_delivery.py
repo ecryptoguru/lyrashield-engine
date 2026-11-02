@@ -182,7 +182,10 @@ async def test_tui_subcent_budget_notices_describe_actual_increment_and_limit() 
         app._notify_budget_pause({"root": "budget_paused"})
         assert "Current limit $0.004; /increase-budget adds $0.004." in app.notices[-1]
         assert await app._send_user_message("/increase-budget", "budget-once", "root") == "queued"
-        assert app.notices[-1] == "Budget increased; limit $0.008. Scan remains paused."
+        assert (
+            app.notices[-1]
+            == "Budget increase accepted; current limit $0.008. Scan remains paused."
+        )
         assert budget["limit_usd"] == 0.008
         assert coordinator.budget_paused
         assert coordinator.statuses["root"] == "budget_paused"
@@ -203,3 +206,180 @@ async def test_unknown_draft_requires_explicit_discard_before_different_submissi
         area.text = "review auth"
         await pilot.press("enter")
         assert app.submissions[-1] != first
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["steer", "control"])
+@pytest.mark.parametrize("cancel_during_retry", [False, True])
+async def test_cancelled_inner_delivery_stays_unknown_with_live_loop(
+    monkeypatch: pytest.MonkeyPatch, kind: str, cancel_during_retry: bool
+) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "Root", parent_id=None)
+    await coordinator.pause_for_budget("root")
+    increase = Mock()
+    coordinator.set_budget_extender(increase)
+    release = asyncio.Event()
+    inner: asyncio.Task[object] | None = None
+    original = coordinator.send if kind == "steer" else coordinator.operator_control
+    calls = 0
+
+    async def delayed(*args: object, **kwargs: object) -> bool:
+        nonlocal inner, calls
+        calls += 1
+        inner = asyncio.current_task()
+        accepted = await original(*args, **kwargs)
+        await release.wait()
+        return accepted
+
+    monkeypatch.setattr(coordinator, "send" if kind == "steer" else "operator_control", delayed)
+    monkeypatch.setattr(messages, "DELIVERY_TIMEOUT_SECONDS", 0.01)
+    view = Mock()
+
+    async def deliver() -> messages.Delivery:
+        if kind == "steer":
+            return await messages.deliver_user_message(
+                coordinator=coordinator,
+                loop=asyncio.get_running_loop(),
+                live_view=view,
+                target_agent_id="root",
+                message="original instruction",
+                submission_id="cancelled",
+                timeout=0.01,
+            )
+        return await messages.deliver_operator_control(
+            coordinator=coordinator,
+            loop=asyncio.get_running_loop(),
+            action="increase_budget",
+            submission_id="cancelled",
+        )
+
+    assert await deliver() == "unknown"
+    assert inner is not None
+    if cancel_during_retry:
+        retry = asyncio.create_task(deliver())
+        await asyncio.sleep(0)
+    inner.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await inner
+    fingerprint = (
+        ("steer", "root", "original instruction")
+        if kind == "steer"
+        else ("control", "increase_budget")
+    )
+    assert messages.read_submission_receipt(coordinator, "cancelled", fingerprint) == "unknown"
+    if cancel_during_retry:
+        assert await retry == "unknown"
+    assert await deliver() == "unknown"
+    assert calls == 1
+    assert coordinator.pending_counts.get("root", 0) == (1 if kind == "steer" else 0)
+    assert increase.call_count == (1 if kind == "control" else 0)
+    assert coordinator.budget_paused
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["steer", "control"])
+async def test_operator_caller_cancellation_propagates_without_cancelling_delivery(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "Root", parent_id=None)
+    await coordinator.pause_for_budget("root")
+    increase = Mock()
+    coordinator.set_budget_extender(increase)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original = coordinator.send if kind == "steer" else coordinator.operator_control
+    calls = 0
+
+    async def delayed(*args: object, **kwargs: object) -> bool:
+        nonlocal calls
+        calls += 1
+        accepted = await original(*args, **kwargs)
+        started.set()
+        await release.wait()
+        return accepted
+
+    monkeypatch.setattr(coordinator, "send" if kind == "steer" else "operator_control", delayed)
+    view = Mock()
+
+    async def deliver() -> messages.Delivery:
+        if kind == "steer":
+            return await messages.deliver_user_message(
+                coordinator=coordinator,
+                loop=asyncio.get_running_loop(),
+                live_view=view,
+                target_agent_id="root",
+                message="original instruction",
+                submission_id="outer-cancel",
+            )
+        return await messages.deliver_operator_control(
+            coordinator=coordinator,
+            loop=asyncio.get_running_loop(),
+            action="increase_budget",
+            submission_id="outer-cancel",
+        )
+
+    caller = asyncio.create_task(deliver())
+    await started.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert caller.cancelled()
+    release.set()
+    assert await deliver() == "queued"
+    assert calls == 1
+    assert coordinator.pending_counts.get("root", 0) == (1 if kind == "steer" else 0)
+    assert increase.call_count == (1 if kind == "control" else 0)
+    assert coordinator.budget_paused
+    if kind == "steer":
+        view.record_user_message.assert_called_once_with("root", "original instruction")
+
+
+@pytest.mark.asyncio
+async def test_recovered_budget_acceptance_reports_current_state_after_other_operator_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "Root", parent_id=None)
+    budget = {"limit_usd": 0.004, "increment_usd": 0.004}
+    increases = 0
+
+    def increase() -> None:
+        nonlocal increases
+        increases += 1
+        budget["limit_usd"] += budget["increment_usd"]
+
+    coordinator.set_budget_extender(increase, budget_state=lambda: dict(budget))
+    await coordinator.pause_for_budget("root")
+    original = coordinator.operator_control
+    release = asyncio.Event()
+    accepted = asyncio.Event()
+    delivery_task: asyncio.Task[bool] | None = None
+
+    async def delayed(action: str, submission_id: str) -> bool:
+        nonlocal delivery_task
+        delivery_task = asyncio.current_task()
+        result = await original(action, submission_id)
+        accepted.set()
+        await release.wait()
+        return result
+
+    monkeypatch.setattr(coordinator, "operator_control", delayed)
+    monkeypatch.setattr(messages, "DELIVERY_TIMEOUT_SECONDS", 0.01)
+    app = _BridgeApp(coordinator, asyncio.get_running_loop())
+    async with app.run_test():
+        assert await app._send_user_message("/increase-budget", "lost-budget", "root") == "unknown"
+        await accepted.wait()
+        assert await original("resume", "other-operator")
+        assert not coordinator.budget_paused
+        release.set()
+        # Finish only the original delivery, then reconcile without an active bridge loop.
+        assert delivery_task is not None
+        assert await delivery_task
+        app._scan_loop = None
+        assert await app._send_user_message("/increase-budget", "lost-budget", "root") == "queued"
+        assert app.notices[-1] == "Budget increase accepted; current limit $0.008."
+        assert budget["limit_usd"] == 0.008
+        assert increases == 1
+        assert not coordinator.budget_paused
