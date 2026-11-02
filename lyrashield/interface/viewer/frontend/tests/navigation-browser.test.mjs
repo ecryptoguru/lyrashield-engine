@@ -1,27 +1,18 @@
 import test from "node:test";
-import { once } from "node:events";
-import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
-
-const root = fileURLToPath(new URL("../../../../../", import.meta.url));
-const python = resolve(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+import { startPythonServer } from "./python-server-fixture.js";
 
 test("mobile history opens empty live runs and preserves already-selected run data", { timeout: 30_000 }, async () => {
-  const server = spawn(python, [resolve(root, "tests/viewer_navigation_server.py")], {
-    cwd: root, stdio: ["ignore", "pipe", "pipe"],
-  });
-  const ready = once(server.stdout, "data");
+  const server = await startPythonServer("tests/viewer_navigation_server.py");
   let browser;
   try {
-    const [data] = await ready;
-    const { url } = JSON.parse(data.toString());
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 375, height: 812 } });
-    await page.goto(url);
-    await page.waitForLoadState("networkidle");
+    page.setDefaultTimeout(8000);
+    // Live resources poll every 500ms; wait for rendered run identity instead
+    // of requiring a 500ms network-idle gap between those requests.
+    await page.goto(server.url, { waitUntil: "domcontentloaded" });
     const current = page.getByRole("heading", { name: "Current friendly name", exact: true });
     const history = page.getByRole("button", { name: "Past runs", exact: true }).last();
     await current.waitFor();
@@ -44,9 +35,6 @@ test("mobile history opens empty live runs and preserves already-selected run da
     assert.equal(await past.isVisible(), true);
   } finally {
     await browser?.close();
-    if (server.exitCode === null) {
-      server.kill("SIGTERM");
-      await once(server, "exit");
-    }
+    await server.stop();
   }
 });

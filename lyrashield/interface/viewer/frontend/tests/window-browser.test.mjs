@@ -1,19 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { once } from "node:events";
-import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-const root = fileURLToPath(new URL("../../../../../", import.meta.url));
+import { startPythonServer } from "./python-server-fixture.js";
 for (const width of [1440, 375]) test(`bounded transcript older paging and retry at ${width}px`, { timeout: 30000 }, async () => {
-  const server = spawn(resolve(root, ".venv-candidate/bin/python"), [resolve(root, "tests/viewer_performance_server.py"), "--messages", "350"], { cwd: root, env: { ...process.env, PYTHONPATH: root }, stdio: ["ignore", "pipe", "pipe"] });
+  const server = await startPythonServer("tests/viewer_performance_server.py", ["--messages", "350"]);
   let browser;
   try {
-    const [ready] = await once(server.stdout, "data"); const { url } = JSON.parse(ready.toString());
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width, height: 1000 } }); page.setDefaultTimeout(5000);
-    await page.goto(url); await page.locator(".react-flow__node").first().click();
+    await page.goto(server.url); await page.locator(".react-flow__node").first().click();
     await page.getByText(/^Message 349:/).waitFor();
     assert.equal(await page.locator("dialog .py-1 > div.flex").count(), 100);
     assert.equal(await page.getByText(/^Message 0:/).count(), 0);
@@ -41,5 +36,5 @@ for (const width of [1440, 375]) test(`bounded transcript older paging and retry
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "hidden" });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  } finally { await browser?.close(); server.kill("SIGTERM"); await once(server, "exit"); }
+  } finally { await browser?.close(); await server.stop(); }
 });

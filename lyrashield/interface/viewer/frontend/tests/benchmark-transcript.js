@@ -1,17 +1,13 @@
 // Standalone benchmark: node tests/benchmark-transcript.js [baseline-static-dir]
-import { once } from "node:events";
-import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-const root = fileURLToPath(new URL("../../../../../", import.meta.url));
+import { startPythonServer } from "./python-server-fixture.js";
 for (const messages of [10000, 50000]) {
-  const args = [resolve(root, "tests/viewer_performance_server.py"), "--messages", String(messages)];
+  const args = ["--messages", String(messages)];
   if (process.argv[2]) args.push("--static", process.argv[2]);
-  const server = spawn(resolve(root, ".venv-candidate/bin/python"), args, { cwd: root, env: { ...process.env, PYTHONPATH: root }, stdio: ["ignore", "pipe", "pipe"] });
+  const server = await startPythonServer("tests/viewer_performance_server.py", args, { startupTimeout: 30_000 });
   let browser;
   try {
-    const [ready] = await once(server.stdout, "data"); const { url, metrics } = JSON.parse(ready.toString());
+    const { url, metrics } = server;
     browser = await chromium.launch({ headless: true });
     for (const width of [1440, 375]) {
       const page = await browser.newPage({ viewport: { width, height: 1000 } });
@@ -30,5 +26,5 @@ for (const messages of [10000, 50000]) {
       console.log(JSON.stringify({ variant: process.argv[2] ? "baseline" : "window", messages, width, ...metrics, ...outcome }));
       await page.close();
     }
-  } finally { await browser?.close(); server.kill("SIGTERM"); await once(server, "exit"); }
+  } finally { await browser?.close(); await server.stop(); }
 }
