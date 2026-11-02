@@ -57,6 +57,12 @@ jobs:
           for platform in linux/amd64 linux/arm64; do
             bash scripts/smoke-sandbox.sh "$image" "$platform"
           done
+      - name: Audit byte-bound Go application coordinates
+        run: |
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
+          for platform in linux/amd64 linux/arm64; do
+            bash scripts/audit-sandbox-go-applications.sh "$image" "$platform"
+          done
       - name: Promote the smoke-qualified digest
         env:
           RELEASE_TAG: ${{ github.ref_name }}

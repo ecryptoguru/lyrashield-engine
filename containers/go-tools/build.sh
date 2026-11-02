@@ -37,6 +37,10 @@ while IFS='|' read -r name repository commit checksum package tags experiment ve
         fi
         go mod download
         go mod verify
+        if [ "$name" = trivy ]; then
+            GOEXPERIMENT="$experiment" go test -count=1 -p 1 -mod=readonly \
+                ./pkg/x/json ./pkg/iac/scanners/cloudformation/parser
+        fi
         # Never silently resolve a newer graph while compiling a release.
         flags='-s -w -extldflags=-static'
         if [ -n "$version" ]; then flags="$flags -X $version"; fi

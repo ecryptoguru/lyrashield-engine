@@ -3,16 +3,16 @@
 # ruff: noqa: INP001
 from __future__ import annotations
 
-import base64
 import functools
 import http.server
 import json
-import lzma
 import subprocess
 import tarfile
 import tempfile
 import threading
 from pathlib import Path
+
+from go_compression_fixtures import verified_fixtures
 
 
 def run(*args: str, expected: int = 0, include_stderr: bool = False) -> str:
@@ -80,15 +80,8 @@ def main() -> None:
         archives.mkdir()
         with tarfile.open(archives / "fixture.tar.gz", "w:gz") as archive:
             archive.add(secrets / "fixture.txt", arcname="fixture.txt")
-        # Independently encoded valid Zstandard bytes containing the same fake token.
-        (archives / "fixture.txt.zst").write_bytes(
-            base64.b64decode(
-                "KLUv/SA4wQEAZ2l0aHViX3Rva2VuPSJnaHBfQTFiMkMzZDRFNWY2RzdoOEk5ajBLMWwyTTNuNE81cDZRN3I4Igo="
-            )
-        )
-        (archives / "fixture.txt.xz").write_bytes(
-            lzma.compress((secrets / "fixture.txt").read_bytes())
-        )
+        for extension, encoded in verified_fixtures().items():
+            (archives / ("fixture.txt" + extension)).write_bytes(encoded)
         archive_report = root / "gitleaks-archive.json"
         run(
             "gitleaks",

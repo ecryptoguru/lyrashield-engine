@@ -140,9 +140,17 @@ WORKDIR /tmp
 
 COPY containers/verify_go_tools.py /opt/lyrashield/verify_go_tools.py
 COPY containers/go-tools/distro/verify.py /opt/lyrashield/verify_distro_go_tools.py
+COPY containers/go_compression_fixtures.py /opt/lyrashield/go_compression_fixtures.py
 
 # Go tools are built in the gobuilder stage; copy the static binaries only.
-COPY --from=gobuilder --chown=pentester:pentester /out/bin/ /home/pentester/go/bin/
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/httpx /home/pentester/go/bin/httpx
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/katana /home/pentester/go/bin/katana
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/gospider /home/pentester/go/bin/gospider
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/interactsh-client /home/pentester/go/bin/interactsh-client
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/vulnx /home/pentester/go/bin/vulnx
+COPY --from=gobuilder --chown=root:root /out/bin/gitleaks /usr/local/bin/gitleaks
+COPY --from=gobuilder --chown=root:root /out/bin/trivy /usr/local/bin/trivy
+COPY --from=gobuilder --chown=root:root /out/bin/trufflehog /usr/local/bin/trufflehog
 COPY --from=gobuilder /out/share/go-tools/ /usr/local/share/lyrashield/go-tools/
 COPY containers/go-tools/distro/applications.cdx.json /usr/local/share/lyrashield/go-tools/distro/applications.cdx.json
 
@@ -217,14 +225,6 @@ RUN git clone --depth 1 https://github.com/aravind0x7/JS-Snooper.git && \
     chmod +x jwt_tool/jwt_tool.py
 
 USER root
-
-# Gitleaks, Trivy and TruffleHog are rebuilt from the same pinned release
-# sources in gobuilder, with the reviewed security graph. Unpacked executables
-# retain Go build metadata so the release image audit can inspect every tool.
-RUN install -m 0755 /home/pentester/go/bin/gitleaks /usr/local/bin/gitleaks && \
-    install -m 0755 /home/pentester/go/bin/trivy /usr/local/bin/trivy && \
-    install -m 0755 /home/pentester/go/bin/trufflehog /usr/local/bin/trufflehog && \
-    rm /home/pentester/go/bin/gitleaks /home/pentester/go/bin/trivy /home/pentester/go/bin/trufflehog
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends wapiti
@@ -321,6 +321,9 @@ COPY --chown=root:root containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify
 COPY --chown=root:root containers/verify_brotli.py /opt/lyrashield/verify_brotli.py
 COPY --chown=root:root containers/verify_pip_vendors.py /opt/lyrashield/verify_pip_vendors.py
 COPY --chown=root:root containers/verify_ca_bundle.py /opt/lyrashield/verify_ca_bundle.py
+COPY --chown=root:root containers/verify_go_tool_provenance.py /opt/lyrashield/verify_go_tool_provenance.py
+COPY --chown=root:root containers/go-tools/applications.json /usr/local/share/lyrashield/go-tools/applications.json
+RUN /app/.venv/bin/python /opt/lyrashield/verify_go_tool_provenance.py --write-sbom /usr/local/share/lyrashield/go-tools/applications.cdx.json
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 

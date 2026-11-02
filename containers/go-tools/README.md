@@ -53,3 +53,25 @@ where already imported. `verify_goldmark.go` checks escaped links, autolinks,
 images and a benign HTTPS link against each actual selected graph during the
 build. The old 1.7.13 renderer fails the same regression. See
 https://pkg.go.dev/vuln/GO-2026-5320 and the upstream fixed renderer.
+
+Local `go build` correctly records its main module as `(devel)`. The separate
+`applications.json` records the real upstream module versions at the pinned
+source revisions (including their canonical pseudo-versions). Gitleaks 8.30.1
+is the verified upstream tag at its pinned revision; its declared Go module
+retains the historical zricethezav namespace. The installed CycloneDX inventory
+binds each upstream coordinate to the builder's final executable SHA256 and
+marks the local security overlay with independent lock/patch hashes. It does
+not claim that these are unchanged vendor release binaries.
+
+The build and smoke gate verify all eight final files against builder receipts.
+The publication gate independently mounts the reviewed verifier and expected
+coordinates, rejects missing/changed inventory, then scans both this eight-tool
+supplement and the four signed distro-source applications before promotion.
+A deliberately vulnerable historical Interactsh application inventory must
+match CVE-2024-5262 and fail the same HIGH/CRITICAL scanner policy as a negative
+control. The binary dependency audits and all raw retained rows remain separate.
+
+Every build runs both affected Trivy source test packages with the locked graph,
+jsonv2 experiment and fixed compiler. Runtime compression regressions use larger
+independently C-encoded Zstandard and XZ fixtures. They reject literal-token
+storage and independently decode the exact payload before exercising Go codecs.
