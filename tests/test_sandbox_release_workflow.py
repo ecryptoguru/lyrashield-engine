@@ -55,7 +55,12 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
     )
     assert "docker_args=(--rm)" in smoke
     assert 'docker_args+=(--platform "$platform")' in smoke
-    assert 'docker run "${docker_args[@]}" "$image"' in smoke
+    assert 'docker run "${docker_args[@]}" --network none "$image"' in smoke
+    invocations = [
+        line for line in smoke.replace("\\\n", "").splitlines() if line.startswith("docker run ")
+    ]
+    assert len(invocations) == 2
+    assert all('"${docker_args[@]}"' in line and "--network none" in line for line in invocations)
     assert "docker buildx imagetools create" in content
     assert "RELEASE_TAG: ${{ github.ref_name }}" in content
     assert 'for tag in "$RELEASE_TAG" "${{ github.sha }}"' in content
