@@ -12,13 +12,15 @@ from typing import Any
 
 import httpx
 import pytest
-from agents import ModelSettings
+from agents import ModelSettings, RunContextWrapper
 from agents.exceptions import ModelBehaviorError
 from openai import RateLimitError
 
 import lyrashield.tools.todo.tools as todo_tools
 import strix.tools.notes.tools as notes_tools
 from lyrashield.agents.prompt import render_system_prompt
+from lyrashield.artifacts import state as state_module
+from lyrashield.lifecycle import hooks as budget_hooks
 from lyrashield.lifecycle import runner
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.deadline import RunDeadline
@@ -754,3 +756,68 @@ async def test_runner_clears_scan_hooks_and_cleans_sandbox_after_rate_limit(
     assert callable(spill_writers[0])
     assert spill_writers[-1] is None
     assert teardown_calls == [None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cap,expected_attempts", [(0.006, 1), (0.012, 2), (None, 2)])
+async def test_finite_budget_policy_covers_root_delegate_and_fresh_fallback_reservation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, cap: float | None, expected_attempts: int
+) -> None:
+    _patch_engine_scaffold(monkeypatch, tmp_path, {})
+    monkeypatch.setattr(runner, "load_settings", lambda: _gpt6_llm_settings(prompt_cache=False))
+    monkeypatch.setattr(state_module, "_global_report_state", None)
+    monkeypatch.setattr(budget_hooks, "_estimate_input_tokens", lambda *_args: 0)
+    monkeypatch.setattr(budget_hooks, "_model_rate_card", lambda _model: (1, 0, 0, 1))
+    monkeypatch.setattr(budget_hooks, "_reservation_input_rate", lambda _model: 1)
+    policies = []
+
+    def model_settings(*args: Any, **kwargs: Any) -> ModelSettings:
+        result = make_model_settings(*args, **kwargs)
+        policies.append(result.retry.max_retries)
+        return result
+
+    monkeypatch.setattr(runner, "make_model_settings", model_settings)
+    monkeypatch.setattr(
+        runner,
+        "build_strix_agent",
+        lambda **kwargs: types.SimpleNamespace(
+            name="Root",
+            model=kwargs["model"],
+            model_settings=kwargs["model_settings"],
+        ),
+    )
+    physical_attempts = []
+    observed_hooks = []
+
+    async def run_loop(**kwargs: Any) -> Any:
+        hooks = kwargs["hooks"]
+        observed_hooks.append(hooks)
+        context = RunContextWrapper(kwargs["context"])
+        await hooks.on_llm_start(context, kwargs["agent"], None, [])
+        physical_attempts.append(kwargs["agent"].model)
+        # An accepted operation with lost acknowledgement retains its full
+        # quote; only a fresh hook admission can authorize the fallback.
+        if len(physical_attempts) == 1:
+            raise ModelBehaviorError("synthetic lost acknowledgement")
+        return types.SimpleNamespace(final_output='{"scan_completed": true}')
+
+    monkeypatch.setattr(runner, "run_agent_loop", run_loop)
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "quick"},
+        scan_id="physical-fallback",
+        image="img",
+        coordinator=AgentCoordinator(),
+        max_budget_usd=cap,
+    )
+    assert len(physical_attempts) == expected_attempts
+    assert len(policies) == 3  # coordinator, delegate, fallback
+    assert policies == ([0, 0, 0] if cap is not None else [5, 5, 5])
+    assert observed_hooks[0] is observed_hooks[1]
+    if cap is not None:
+        hooks = observed_hooks[0]
+        # SDK hooks from different contexts keep separate reserved attempts;
+        # neither the abandoned main request nor the fallback is refunded.
+        assert sum(hooks._agent_reservations.values()) == pytest.approx(
+            0.004096 * expected_attempts
+        )
+        assert sum(hooks._agent_reservations.values()) <= cap

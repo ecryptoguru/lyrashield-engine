@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from importlib import import_module
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import httpx
 import pytest
 from agents import Runner
 from agents.model_settings import ModelSettings
+from agents.models._retry_runtime import should_disable_provider_managed_retries
 from agents.models.interface import ModelTracing
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel
@@ -21,8 +23,10 @@ from lyrashield.artifacts import dedupe
 from lyrashield.artifacts.state import ReportState
 from lyrashield.interface import warmup
 from lyrashield.lifecycle import execution
+from lyrashield.lifecycle import hooks as budget_hooks
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
+from lyrashield.lifecycle.hooks import ReportUsageHooks
 from lyrashield.policy.models import (
     StrixProvider,
     configure_sdk_model_defaults,
@@ -330,3 +334,158 @@ def test_successful_preflight_leaves_usage_for_single_ui_recording(monkeypatch):
     main._run_llm_preflight(args, deadline=None)
     assert args.warm_up_usages == [("openai/gpt-6-sol", usage)]
     factory.assert_not_called()
+
+
+def test_preflight_admits_against_arg_cap_before_any_provider_call(tmp_path, monkeypatch):
+    main = import_module("lyrashield.interface.main")
+    state = ReportState("preflight-cap")
+    state._run_dir = tmp_path
+    args = SimpleNamespace(run_name="preflight-cap", warm_up_usages=[], max_budget_usd=0.000001)
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-luna", api_key="fixture"),
+        dedupe=DedupeSettings(_env_file=None, model="openai/gpt-6-luna"),
+    )
+    model = SimpleNamespace(
+        get_response=AsyncMock(
+            return_value=SimpleNamespace(
+                usage=Usage(requests=1, input_tokens=1, output_tokens=1, total_tokens=2)
+            )
+        )
+    )
+    monkeypatch.setattr(warmup, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        warmup, "StrixProvider", lambda **_kwargs: SimpleNamespace(get_model=lambda _name: model)
+    )
+    monkeypatch.setattr(dedupe, "resolve_dedupe_model", lambda *_args, **_kwargs: model)
+    monkeypatch.setattr(main, "ReportState", lambda _name: state)
+    with pytest.raises(SystemExit):
+        main._run_llm_preflight(args, deadline=None)
+    model.get_response.assert_not_called()
+    assert args.warm_up_usages == []
+    receipt = json.loads((tmp_path / "run.json").read_text())
+    assert receipt["terminal_reason"] == "llm_preflight_failed"
+
+
+def test_preflight_main_and_dedupe_share_cap_and_success_usage_survives_denial(
+    tmp_path, monkeypatch
+):
+    main = import_module("lyrashield.interface.main")
+    monkeypatch.setattr(budget_hooks, "_model_rate_card", lambda _model: (1, 0, 0, 1))
+    monkeypatch.setattr(budget_hooks, "_reservation_input_rate", lambda _model: 1)
+    monkeypatch.setattr(budget_hooks, "_estimate_out_of_band_input_tokens", lambda *_args: 4096)
+    monkeypatch.setattr(warmup, "_estimate_out_of_band_input_tokens", lambda *_args: 4096)
+    state = ReportState("preflight-shared")
+    state._run_dir = tmp_path
+    args = SimpleNamespace(run_name="preflight-shared", warm_up_usages=[], max_budget_usd=0.0045)
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-luna", api_key="fixture"),
+        dedupe=DedupeSettings(_env_file=None, model="openai/gpt-6-luna"),
+    )
+    usage = Usage(requests=1, input_tokens=4000, output_tokens=0, total_tokens=4000)
+    root = SimpleNamespace(get_response=AsyncMock(return_value=SimpleNamespace(usage=usage)))
+    judge = SimpleNamespace(get_response=AsyncMock())
+    monkeypatch.setattr(warmup, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        warmup, "StrixProvider", lambda **_kwargs: SimpleNamespace(get_model=lambda _name: root)
+    )
+    monkeypatch.setattr(dedupe, "resolve_dedupe_model", lambda *_args, **_kwargs: judge)
+    monkeypatch.setattr(main, "ReportState", lambda _name: state)
+    with pytest.raises(SystemExit):
+        main._run_llm_preflight(args, deadline=None)
+    root.get_response.assert_awaited_once()
+    judge.get_response.assert_not_called()
+    assert root.get_response.call_args.kwargs["model_settings"].retry.max_retries == 0
+    receipt = json.loads((tmp_path / "run.json").read_text())
+    assert receipt["llm_usage"]["total_tokens"] == 4000
+    assert args.warm_up_usages == []
+
+
+def test_cancelled_dedupe_preflight_is_terminal_and_preserves_main_usage(tmp_path, monkeypatch):
+    main = import_module("lyrashield.interface.main")
+    state = ReportState("preflight-cancel")
+    state._run_dir = tmp_path
+    args = SimpleNamespace(run_name="preflight-cancel", warm_up_usages=[], max_budget_usd=1)
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-luna", api_key="fixture"),
+        dedupe=DedupeSettings(_env_file=None, model="openai/gpt-6-luna"),
+    )
+    usage = Usage(requests=1, input_tokens=7, output_tokens=2, total_tokens=9)
+    root = SimpleNamespace(get_response=AsyncMock(return_value=SimpleNamespace(usage=usage)))
+    captured = []
+
+    def capture_hooks(**kwargs):
+        hooks = ReportUsageHooks(**kwargs)
+        captured.append(hooks)
+        return hooks
+
+    async def cancelled(**_kwargs):
+        assert should_disable_provider_managed_retries()
+        raise asyncio.CancelledError
+
+    judge = SimpleNamespace(get_response=AsyncMock(side_effect=cancelled))
+    monkeypatch.setattr(warmup, "ReportUsageHooks", capture_hooks)
+    monkeypatch.setattr(warmup, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        warmup, "StrixProvider", lambda **_kwargs: SimpleNamespace(get_model=lambda _name: root)
+    )
+    monkeypatch.setattr(dedupe, "resolve_dedupe_model", lambda *_args, **_kwargs: judge)
+    monkeypatch.setattr(main, "ReportState", lambda _name: state)
+    with pytest.raises(asyncio.CancelledError):
+        main._run_llm_preflight(args, deadline=None)
+    assert len(captured) == 1
+    assert sum(captured[0]._abandoned_floors.values()) > 0
+    receipt = json.loads((tmp_path / "run.json").read_text())
+    assert receipt["status"] == "failed"
+    assert receipt["terminal_reason"] == "llm_preflight_failed"
+    assert receipt["llm_usage"]["total_tokens"] == 9
+    assert args.warm_up_usages == []
+    assert not should_disable_provider_managed_retries()
+
+
+def test_capped_successful_preflight_keeps_usage_for_one_later_ui_recording(monkeypatch):
+    main = import_module("lyrashield.interface.main")
+    args = SimpleNamespace(run_name="preflight-success-cap", warm_up_usages=[], max_budget_usd=1)
+    settings = Settings(
+        _env_file=None,
+        llm=LlmSettings(_env_file=None, model="openai/gpt-6-luna", api_key="fixture"),
+        dedupe=DedupeSettings(_env_file=None, model="openai/gpt-6-sol"),
+    )
+    usage = Usage(requests=1, input_tokens=7, output_tokens=2, total_tokens=9)
+
+    async def respond(**kwargs):
+        assert should_disable_provider_managed_retries()
+        assert kwargs["model_settings"].retry.max_retries == 0
+        return SimpleNamespace(usage=usage)
+
+    root = SimpleNamespace(get_response=AsyncMock(side_effect=respond))
+    judge = SimpleNamespace(get_response=AsyncMock(side_effect=respond))
+    factory = Mock(
+        side_effect=AssertionError("Successful preflight must defer ledger writes to UI")
+    )
+    monkeypatch.setattr(warmup, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        warmup, "StrixProvider", lambda **_kwargs: SimpleNamespace(get_model=lambda _name: root)
+    )
+    monkeypatch.setattr(dedupe, "resolve_dedupe_model", lambda *_args, **_kwargs: judge)
+    monkeypatch.setattr(main, "ReportState", factory)
+    main._run_llm_preflight(args, deadline=None)
+    assert args.warm_up_usages == [(settings.llm.model, usage), (settings.dedupe.model, usage)]
+    root.get_response.assert_awaited_once()
+    judge.get_response.assert_awaited_once()
+    factory.assert_not_called()
+    assert not should_disable_provider_managed_retries()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cap", [0, -1, float("nan")])
+async def test_invalid_preflight_cap_cannot_turn_into_unlimited_provider_work(monkeypatch, cap):
+    provider = Mock(
+        side_effect=AssertionError("Invalid cap must fail before provider construction")
+    )
+    monkeypatch.setattr(warmup, "StrixProvider", provider)
+    with pytest.raises(ValueError, match="finite number greater than 0"):
+        await warmup.warm_up_llm(show_model_warning=False, max_budget_usd=cap)
+    provider.assert_not_called()

@@ -332,6 +332,7 @@ def make_model_settings(
     force_required_tool_choice: bool = False,
     request_timeout: float | None = None,
     bounded_runtime: bool = False,
+    bounded_budget: bool = False,
     max_output_tokens: int | None = None,
     prompt_cache_key: str | None = None,
     prompt_cache_options: PromptCacheOptions | None = None,
@@ -342,7 +343,11 @@ def make_model_settings(
         extra_args["prompt_cache_key"] = prompt_cache_key
     model_settings = ModelSettings(
         parallel_tool_calls=(False if _supports_parallel_tool_calls_setting(model_name) else None),
-        retry=replace(DEFAULT_MODEL_RETRY, max_retries=1)
+        # One reservation covers one physical request. SDK policy/native/
+        # compatibility replays cannot reuse it when spend is capped.
+        retry=replace(DEFAULT_MODEL_RETRY, max_retries=0)
+        if bounded_budget
+        else replace(DEFAULT_MODEL_RETRY, max_retries=1)
         if bounded_runtime
         else DEFAULT_MODEL_RETRY,
         include_usage=True,

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -365,8 +366,8 @@ async def _request_dedupe_judgement(
     reserves explicitly. Without a reservation, dedupe traffic is only counted
     after the fact and a scan can overshoot ``max_budget_usd``.
 
-    Direct Azure/OpenAI calls use the native HTTP client's bounded retries;
-    ModelSettings.retry belongs to Runner and does not wrap this call.
+    ModelSettings.retry belongs to Runner and does not wrap this direct call.
+    Finite scan budgets therefore disable hidden native retries explicitly.
     """
     # Lazy import avoids the lifecycle-hooks/artifact-state import cycle.
     from lyrashield.lifecycle.hooks import (
@@ -388,18 +389,19 @@ async def _request_dedupe_judgement(
     response: ModelResponse | None = None
     usage_persisted = False
     try:
-        response = await model.get_response(
-            system_instructions=DEDUPE_SYSTEM_PROMPT,
-            input=user_msg,
-            model_settings=model_settings,
-            tools=[],
-            output_schema=_DEDUPE_OUTPUT_SCHEMA,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=None,
-            prompt=None,
-        )
+        with hooks.single_provider_attempt() if hooks is not None else contextlib.nullcontext():
+            response = await model.get_response(
+                system_instructions=DEDUPE_SYSTEM_PROMPT,
+                input=user_msg,
+                model_settings=model_settings,
+                tools=[],
+                output_schema=_DEDUPE_OUTPUT_SCHEMA,
+                handoffs=[],
+                tracing=ModelTracing.DISABLED,
+                previous_response_id=None,
+                conversation_id=None,
+                prompt=None,
+            )
         report_state = get_global_report_state()
         if report_state is not None:
             try:
@@ -415,8 +417,8 @@ async def _request_dedupe_judgement(
             except Exception:
                 logger.exception("failed to record SDK usage for dedupe")
     finally:
-        # Always release: a failed request must not strand its reservation and
-        # shrink the remaining budget for the rest of the scan.
+        # Settle observed usage, or retain the conservative quote when a
+        # failed/cancelled request has no proof that the provider did not bill.
         if hooks is not None:
             await hooks.release_out_of_band_request(
                 key=reservation_key,

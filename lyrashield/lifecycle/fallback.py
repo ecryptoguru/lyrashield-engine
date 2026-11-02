@@ -172,6 +172,7 @@ async def run_root_agent(
             force_required_tool_choice=llm_settings.force_required_tool_choice,
             request_timeout=runtime.model_request_timeout,
             bounded_runtime=runtime.bounded_runtime,
+            bounded_budget=runtime.bounded_budget,
             max_output_tokens=min(
                 runtime.max_output_tokens,
                 services.delegate_output_token_ceiling,

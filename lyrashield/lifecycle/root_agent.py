@@ -77,6 +77,7 @@ class RootRuntime:
     model_request_timeout: float
     bounded_runtime: bool
     root_status: str | None
+    bounded_budget: bool = False
 
 
 async def build_root_runtime(
@@ -141,6 +142,7 @@ async def build_root_runtime(
         scan_mode,
         getattr(llm_settings, "max_output_tokens", None),
     )
+    bounded_budget = max_budget_usd is not None
     bounded_runtime = not interactive and coordinator.run_deadline is not None
     if bounded_runtime:
         bounded_timeout = 90 if scan_mode == "deep" else 60
@@ -157,6 +159,7 @@ async def build_root_runtime(
         force_required_tool_choice=llm_settings.force_required_tool_choice,
         request_timeout=model_request_timeout,
         bounded_runtime=bounded_runtime,
+        bounded_budget=bounded_budget,
         max_output_tokens=max_output_tokens,
         prompt_cache_key=(
             services.stable_prompt_cache_key(
@@ -195,6 +198,7 @@ async def build_root_runtime(
         force_required_tool_choice=llm_settings.force_required_tool_choice,
         request_timeout=model_request_timeout,
         bounded_runtime=bounded_runtime,
+        bounded_budget=bounded_budget,
         max_output_tokens=delegate_max_output_tokens,
         prompt_cache_key=(
             services.stable_prompt_cache_key("delegates", delegate_cache_material, scan_id)
@@ -396,5 +400,6 @@ async def build_root_runtime(
         max_output_tokens=max_output_tokens,
         model_request_timeout=model_request_timeout,
         bounded_runtime=bounded_runtime,
+        bounded_budget=bounded_budget,
         root_status=root_status,
     )

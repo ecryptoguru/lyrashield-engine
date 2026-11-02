@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import math
@@ -194,8 +195,8 @@ async def _request_judgement(
     limits: TriageLimits,
     on_response: Callable[[Any], None] | None = None,
 ) -> tuple[TriageJudgement, Any]:
-    # This direct call bypasses Runner. On Azure/OpenAI the native HTTP client
-    # owns bounded retries (two by default); do not add a second retry loop.
+    # This direct call bypasses Runner. A finite reservation must cover one
+    # physical submission, so hidden native retries are disabled below.
     reservation_key = f"ai-triage:{uuid4().hex}"
     system_instructions = "You are a bounded security triage assistant. Return only the schema."
     hooks = get_active_hooks()
@@ -210,18 +211,19 @@ async def _request_judgement(
         )
     response: Any = None
     try:
-        response = await model.get_response(
-            system_instructions=system_instructions,
-            input=prompt,
-            model_settings=model_settings,
-            tools=[],
-            output_schema=_TRIAGE_OUTPUT_SCHEMA,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=None,
-            prompt=None,
-        )
+        with hooks.single_provider_attempt() if hooks is not None else contextlib.nullcontext():
+            response = await model.get_response(
+                system_instructions=system_instructions,
+                input=prompt,
+                model_settings=model_settings,
+                tools=[],
+                output_schema=_TRIAGE_OUTPUT_SCHEMA,
+                handoffs=[],
+                tracing=ModelTracing.DISABLED,
+                previous_response_id=None,
+                conversation_id=None,
+                prompt=None,
+            )
         # Save returned usage before reservation release or judgement parsing:
         # either can fail or be cancelled after provider work completed.
         if on_response is not None:

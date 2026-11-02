@@ -57,6 +57,7 @@ def _runtime(delegate_model: str | None = "delegate/model") -> SimpleNamespace:
         hooks=None,
         model_request_timeout=60.0,
         bounded_runtime=None,
+        bounded_budget=False,
         max_output_tokens=4096,
         root_instructions="instructions",
         delegate_routing=False,

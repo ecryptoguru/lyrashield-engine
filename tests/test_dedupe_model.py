@@ -729,7 +729,7 @@ async def test_dedupe_call_reserves_and_releases_against_the_scan_budget() -> No
 
     reserved: list[object] = []
 
-    class _Hooks:
+    class _Hooks(hooks_module.ReportUsageHooks):
         async def reserve_out_of_band_request(self, **kwargs: object) -> None:
             events.append(f"reserve:{kwargs['key']}")
             reserved.append(kwargs["max_output_tokens"])
@@ -741,7 +741,7 @@ async def test_dedupe_call_reserves_and_releases_against_the_scan_budget() -> No
         events.append("request")
         return SimpleNamespace(usage=None)
 
-    hooks_module.set_active_hooks(cast("Any", _Hooks()))
+    hooks_module.set_active_hooks(_Hooks(model="gpt-6-luna", max_budget_usd=1.0))
     try:
         response = await dedupe_module._request_dedupe_judgement(
             model=SimpleNamespace(get_response=_fake_get_response),
@@ -837,10 +837,10 @@ async def test_semantic_duplicate_must_name_a_transmitted_report(
 
 @pytest.mark.asyncio
 async def test_dedupe_releases_its_reservation_when_the_request_fails() -> None:
-    """A provider error must not strand the reservation for the rest of the scan."""
+    """A provider error still settles through the reservation owner."""
     events: list[str] = []
 
-    class _Hooks:
+    class _Hooks(hooks_module.ReportUsageHooks):
         async def reserve_out_of_band_request(self, **_kwargs: object) -> None:
             events.append("reserve")
 
@@ -850,7 +850,7 @@ async def test_dedupe_releases_its_reservation_when_the_request_fails() -> None:
     async def _boom(**_kwargs: object) -> None:
         raise RuntimeError("provider exploded")
 
-    hooks_module.set_active_hooks(cast("Any", _Hooks()))
+    hooks_module.set_active_hooks(_Hooks(model="gpt-6-luna", max_budget_usd=1.0))
     try:
         with pytest.raises(RuntimeError, match="provider exploded"):
             await dedupe_module._request_dedupe_judgement(

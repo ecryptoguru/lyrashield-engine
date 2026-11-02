@@ -9,11 +9,18 @@ import hashlib
 import json
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from itertools import count
 from typing import TYPE_CHECKING, Any, cast
 
 from agents.lifecycle import RunHooks
+from agents.models._retry_runtime import (
+    provider_managed_retries_disabled,
+    should_disable_provider_managed_retries,
+    should_disable_websocket_pre_event_retries,
+    websocket_pre_event_retries_disabled,
+)
 
 from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.artifacts.usage import (
@@ -673,6 +680,23 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 self._max_budget_usd is not None and committed + reserved >= self._max_budget_usd
             ),
         }
+
+    @contextmanager
+    def single_provider_attempt(self) -> Iterator[None]:
+        """Prevent hidden replays inside one finite out-of-band reservation.
+
+        These frozen-SDK contexts also cover direct OpenAI and LiteLLM calls,
+        which do not run the SDK retry driver. Preserve any enclosing no-retry
+        context and reset task-local state when this request exits.
+        """
+        bounded = self._max_budget_usd is not None
+        with (
+            provider_managed_retries_disabled(bounded or should_disable_provider_managed_retries()),
+            websocket_pre_event_retries_disabled(
+                bounded or should_disable_websocket_pre_event_retries()
+            ),
+        ):
+            yield
 
     def extend_budget(self) -> None:
         if not self._interactive:

@@ -219,8 +219,15 @@ def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
     """Retain successful paid probes even when a later preflight probe fails."""
     usages = args.warm_up_usages
     try:
-        asyncio.run(warm_up_llm(show_model_warning=False, usages=usages, deadline=deadline))
-    except (SystemExit, RunDeadlineExceededError) as exc:
+        asyncio.run(
+            warm_up_llm(
+                show_model_warning=False,
+                usages=usages,
+                deadline=deadline,
+                max_budget_usd=getattr(args, "max_budget_usd", None),
+            )
+        )
+    except (SystemExit, RunDeadlineExceededError, asyncio.CancelledError) as exc:
         state = ReportState(args.run_name)
         state.hydrate_from_run_dir()
         for model, usage in usages:

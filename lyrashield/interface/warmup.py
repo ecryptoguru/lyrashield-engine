@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
 from typing import Any
+from uuid import uuid4
 
 from agents.models.interface import ModelTracing
 from rich.console import Console
@@ -13,6 +15,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
+from lyrashield.lifecycle.hooks import ReportUsageHooks, _estimate_out_of_band_input_tokens
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
@@ -73,6 +76,7 @@ async def warm_up_llm(
     *,
     usages: list[tuple[str, Any]] | None = None,
     deadline: RunDeadline | None = None,
+    max_budget_usd: float | None = None,
 ) -> None:
     """Warm up the configured LLM and optional dedupe model.
 
@@ -83,7 +87,53 @@ async def warm_up_llm(
     console = Console()
     logger.info("Warming up LLM connection")
 
+    # Interactive probes share one finite allowance. Successful usage is handed
+    # to the existing UI ledger; an unknown/cancelled probe stops preflight and
+    # cannot lend its quote to a second probe or onward scan.
+    budget = (
+        ReportUsageHooks(model="preflight", max_budget_usd=max_budget_usd)
+        if max_budget_usd is not None
+        else None
+    )
     preflight = RunDeadline.start(30)
+
+    async def probe(model: Any, route: str, model_settings: Any, timeout: float) -> Any:
+        key = f"preflight:{uuid4().hex}"
+        system = "You are a helpful assistant."
+        prompt = "Reply with just 'OK'."
+        if budget is not None:
+            await budget.reserve_out_of_band_request(
+                key=key,
+                model=route,
+                input_tokens=_estimate_out_of_band_input_tokens(route, system, prompt),
+                max_output_tokens=model_settings.max_tokens,
+            )
+        response: Any = None
+        try:
+            with (
+                budget.single_provider_attempt() if budget is not None else contextlib.nullcontext()
+            ):
+                response = await asyncio.wait_for(
+                    model.get_response(
+                        system_instructions=system,
+                        input=prompt,
+                        model_settings=model_settings,
+                        tools=[],
+                        output_schema=None,
+                        handoffs=[],
+                        tracing=ModelTracing.DISABLED,
+                        previous_response_id=None,
+                        conversation_id=None,
+                        prompt=None,
+                    ),
+                    timeout=timeout,
+                )
+        finally:
+            if budget is not None:
+                await budget.release_out_of_band_request(
+                    key=key, model=route, usage=getattr(response, "usage", None)
+                )
+        return response
 
     def remaining_timeout() -> float:
         if deadline is not None and deadline.remaining_seconds() <= 0:
@@ -163,26 +213,18 @@ async def warm_up_llm(
 
         timeout = remaining_timeout()
         model = StrixProvider(settings=settings).get_model(raw_model)
-        response = await asyncio.wait_for(
-            model.get_response(
-                system_instructions="You are a helpful assistant.",
-                input="Reply with just 'OK'.",
-                model_settings=make_model_settings(
-                    None,
-                    model_name=raw_model,
-                    request_timeout=timeout,
-                    max_output_tokens=min(64, llm.max_output_tokens or 64),
-                    extra_headers=llm.extra_headers,
-                ),
-                tools=[],
-                output_schema=None,
-                handoffs=[],
-                tracing=ModelTracing.DISABLED,
-                previous_response_id=None,
-                conversation_id=None,
-                prompt=None,
+        response = await probe(
+            model,
+            raw_model,
+            make_model_settings(
+                None,
+                model_name=raw_model,
+                request_timeout=timeout,
+                bounded_budget=max_budget_usd is not None,
+                max_output_tokens=min(64, llm.max_output_tokens or 64),
+                extra_headers=llm.extra_headers,
             ),
-            timeout=timeout,
+            timeout,
         )
         if usages is not None and getattr(response, "usage", None) is not None:
             usages.append((raw_model, response.usage))
@@ -205,24 +247,11 @@ async def warm_up_llm(
                 None,
                 model_name=dedupe_model,
                 request_timeout=timeout,
+                bounded_budget=max_budget_usd is not None,
                 max_output_tokens=min(64, llm.max_output_tokens or 64),
                 extra_headers=settings.dedupe.extra_headers,
             )
-            response = await asyncio.wait_for(
-                deduper.get_response(
-                    system_instructions="You are a helpful assistant.",
-                    input="Reply with just 'OK'.",
-                    model_settings=deduper_settings,
-                    tools=[],
-                    output_schema=None,
-                    handoffs=[],
-                    tracing=ModelTracing.DISABLED,
-                    previous_response_id=None,
-                    conversation_id=None,
-                    prompt=None,
-                ),
-                timeout=timeout,
-            )
+            response = await probe(deduper, dedupe_model, deduper_settings, timeout)
             if usages is not None and getattr(response, "usage", None) is not None:
                 usages.append((dedupe_model, response.usage))
             logger.info("LLM warm-up succeeded for dedupe model %s", dedupe_model)
