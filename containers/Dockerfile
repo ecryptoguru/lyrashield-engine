@@ -300,12 +300,14 @@ RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 COPY --chown=pentester:pentester containers/python-requirements.txt /tmp/python-requirements.txt
 COPY --chown=pentester:pentester containers/dirsearch-requirements.txt /tmp/dirsearch-requirements.txt
 COPY --chown=pentester:pentester containers/patch_dirsearch_metadata.py /tmp/patch_dirsearch_metadata.py
+COPY --chown=pentester:pentester containers/repair_pip_vendors.py /tmp/repair_pip_vendors.py
 
 USER pentester
 # Install the complete audited hash lock without re-resolving Semgrep's narrow
 # JWT/MCP/telemetry metadata restrictions; reviewed patches and pip check enforce the graph.
 RUN python3 -m venv /app/.venv && \
     /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/python-requirements.txt && \
+    /app/.venv/bin/python /tmp/repair_pip_vendors.py && \
     /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/dirsearch-requirements.txt && \
     /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py && \
     /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py --package semgrep --runtime-dependencies && \
@@ -323,6 +325,7 @@ RUN python3 -m venv /app/.venv && \
 COPY --chown=root:root lyrashield/runtime/target_relay_proxy.py /opt/lyrashield/target_relay_proxy.py
 COPY --chown=root:root containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify_semgrep_pyjwt.py
 COPY --chown=root:root containers/verify_brotli.py /opt/lyrashield/verify_brotli.py
+COPY --chown=root:root containers/verify_pip_vendors.py /opt/lyrashield/verify_pip_vendors.py
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 
