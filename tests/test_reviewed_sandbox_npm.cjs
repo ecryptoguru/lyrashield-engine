@@ -82,6 +82,7 @@ test("glob stops filesystem work after cancellation", async () => {
     const atReject = reads;
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(reads, atReject, "cancelled glob must not continue recursive reads");
+    assert.equal(reads, 1, "aborting the first read must stop further directory work");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -135,4 +136,26 @@ test("Retire preserves authenticated HTTP proxy routing", async () => {
     assert.deepEqual(seen, {url: "http://example.invalid/repository", host: "example.invalid",
       auth: "Basic " + Buffer.from("fixture:password").toString("base64")});
   } finally { await new Promise(resolve => proxy.close(resolve)); }
+});
+
+test("ESLint and js-beautify retain CLI glob and parser contracts", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sandbox-node-callers-"));
+  try {
+    fs.mkdirSync(path.join(dir, "src"));
+    const source = path.join(dir, "src/main.js");
+    fs.writeFileSync(source, "function demo(){missingName();}\n");
+    const lint = spawnSync(process.execPath, [path.join(modules, "eslint/bin/eslint.js"),
+      "--no-config-lookup", "--rule", "no-undef:error", "--format", "json", "src/**/*.js"],
+      {cwd: dir, encoding: "utf8", timeout: 10000});
+    assert.equal(lint.error, undefined);
+    assert.equal(lint.status, 1, lint.stderr);
+    assert.equal(JSON.parse(lint.stdout)[0].messages[0].ruleId, "no-undef");
+    const format = spawnSync(process.execPath, [path.join(modules, "js-beautify/js/bin/js-beautify.js"),
+      "--replace", "--indent-size", "2", "src/*.js"], {cwd: dir, encoding: "utf8", timeout: 10000});
+    assert.equal(format.error, undefined);
+    assert.equal(format.status, 0, format.stderr);
+    assert.match(fs.readFileSync(source, "utf8"), /\n  missingName\(\);\n/);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });

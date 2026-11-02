@@ -34,11 +34,18 @@
   "checks": [
     "red:old FTP/IPv6 parsers exceed2s child-process budget; old Zod visits10000 constrained-array elements; old minimatch exceeds2s",
     "green:brace regression, constrained-array short circuit, glob cancellation, bounded minimatch, real local Retire JSON finding, authenticated local HTTP proxy routing",
-    "four inherited address/FTP tests skip because the corresponding packages are absent from the repaired upstream dependency graph"
+    "four inherited address/FTP tests skip because the corresponding packages are absent from the repaired upstream dependency graph",
+    "actual ESLint CLI finds no-undef and emits JSON through glob inputs; actual js-beautify CLI formats matching globbed source files",
+    "isolated old glob cancellation regression fails with41 reads vs21 at rejection; fixed glob performs exactly1 read after first-read abort"
   ],
   "inputs": {
     "containers/npm-tools/package.json": "2f2b3b536c64ca207debb5eb1a2f73f3eebc560410412183604cca178572a21f",
     "containers/npm-tools/package-lock.json": "6a6a2a761877c4b3fc2b26cfa8d506371070e1c346a80288faca5ebf79647178",
-    "tests/test_reviewed_sandbox_npm.cjs": "8614d4b77fb7ea2f90456128eddc1037eab8a18926482d17a234b1180791bbb9"
+    "tests/test_reviewed_sandbox_npm.cjs": "0207b6e59b24ac88d61687141da91311f016f1dc0221ad886954fd14e1719b30"
+  },
+  "node_test_results": {
+    "pass": 7,
+    "skip": 4,
+    "fail": 0
   }
 }
