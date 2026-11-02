@@ -500,13 +500,16 @@ PYTHONPATH=. .venv/bin/python scripts/generate-http-evidence-fixtures.py \
   --output-dir "$HTTP_EVIDENCE_FIXTURES"
 ```
 
-Set `HTTP_EVIDENCE_FIXTURES` to a chosen output directory outside the source
-checkout. The generator uses the engine's installed dependencies and standard
-library; it does not require test-only Python packages or live provider/proxy
+Set `HTTP_EVIDENCE_FIXTURES` to a new, nonexistent output directory under an
+existing parent outside the source checkout. The generator uses the engine's
+installed dependencies and standard library; it does not require test-only Python packages or live provider/proxy
 access. It is a development harness, not an installed runtime command. It
-replaces fixture files in that directory and writes `summary.json` with exact
-hashes, byte lengths and expected claim arrays. Generated cases exercise
-partial capture, durable reuse, capacity, explicit unavailable evidence,
+exclusively creates a private directory and refuses existing output paths,
+including symlinks. Files are published without following or replacing links;
+`summary.json` records exact hashes, byte lengths and expected claim arrays. If generation fails, inspect
+the private partial output and choose a fresh directory for another run.
+Generated cases exercise partial capture, durable reuse, capacity, explicit
+unavailable evidence,
 serialized-size limits and late results after cancellation. Reader validation
 must use the raw bytes without reformatting them.
 

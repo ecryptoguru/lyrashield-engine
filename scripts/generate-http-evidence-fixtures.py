@@ -2,8 +2,8 @@
 """Generate synthetic HTTP evidence bundles for independent consumer qualification.
 
 Run from the repository root with PYTHONPATH=. and the engine environment.
-No provider, proxy, target or deployment calls are made. Existing fixture files
-in the selected output directory are replaced; timestamps and hashes are fresh.
+No provider, proxy, target or deployment calls are made. The output must be a
+new directory under an existing parent; existing paths are never replaced.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import functools
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -186,49 +185,77 @@ async def _run_case(state: ReportState, case: str) -> dict[str, Any]:
     )
 
 
+def _write_exclusive(directory_fd: int, name: str, payload: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(payload)
+
+
+def _publish_case(output_fd: int, case: str, source_directory: Path) -> dict[str, Any]:
+    os.mkdir(case, 0o700, dir_fd=output_fd)
+    case_fd = os.open(case, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=output_fd)
+    files = {}
+    try:
+        for name in ("run.json", "vulnerabilities.json", evidence.HTTP_EXCHANGES_FILENAME):
+            source = source_directory / name
+            if source.exists():
+                payload = source.read_bytes()
+                _write_exclusive(case_fd, name, payload)
+                files[name] = {"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
+            else:
+                try:
+                    os.stat(name, dir_fd=case_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                raise FileExistsError(f"Unexpected fixture destination already exists: {name}")
+    finally:
+        os.close(case_fd)
+    return files
+
+
 async def generate(output: Path) -> dict[str, Any]:
+    """Publish into an exclusively created private root; refuse existing paths.
+
+    Directory descriptors keep publication attached to the directories we
+    created. Exclusive, no-follow file creation also protects the summary.
+    """
+    output = output.absolute()
+    output.mkdir(mode=0o700)
+    output_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     summary = {}
     previous_directory = Path.cwd()
-    for case in STANDARD_CASES + NEGATIVE_CASES:
-        with tempfile.TemporaryDirectory() as working:
-            try:
-                os.chdir(working)
-                prefix = "task5-fix1" if case in STANDARD_CASES else "task5-fix2"
-                state = ReportState(run_name=f"{prefix}-{case}")
-                outcome = await _run_case(state, case)
-                target = output / case
-                target.mkdir(parents=True, exist_ok=True)
-                files = {}
-                for name in ("run.json", "vulnerabilities.json", evidence.HTTP_EXCHANGES_FILENAME):
-                    source = state.get_run_dir() / name
-                    destination = target / name
-                    if source.exists():
-                        shutil.copy2(source, destination)
-                        payload = source.read_bytes()
-                        files[name] = {
-                            "sha256": hashlib.sha256(payload).hexdigest(),
-                            "bytes": len(payload),
-                        }
-                    else:
-                        destination.unlink(missing_ok=True)
-                summary[case] = {
-                    "run_name": state.run_name,
-                    "status": outcome["status"],
-                    "reason": outcome.get("reason"),
-                    "exchanges": outcome["exchanges"],
-                    "files": files,
-                    "ordinary": {
-                        finding["id"]: finding.get("http_exchange_ids", [])
-                        for finding in state.vulnerability_reports
-                    },
-                    "pending": {
-                        finding["id"]: finding.get("pending_http_exchange_ids", [])
-                        for finding in state.vulnerability_reports
-                    },
-                }
-            finally:
-                os.chdir(previous_directory)
-    return summary
+    try:
+        for case in STANDARD_CASES + NEGATIVE_CASES:
+            with tempfile.TemporaryDirectory() as working:
+                try:
+                    os.chdir(working)
+                    prefix = "task5-fix1" if case in STANDARD_CASES else "task5-fix2"
+                    state = ReportState(run_name=f"{prefix}-{case}")
+                    outcome = await _run_case(state, case)
+                    files = _publish_case(output_fd, case, state.get_run_dir())
+                    summary[case] = {
+                        "run_name": state.run_name,
+                        "status": outcome["status"],
+                        "reason": outcome.get("reason"),
+                        "exchanges": outcome["exchanges"],
+                        "files": files,
+                        "ordinary": {
+                            finding["id"]: finding.get("http_exchange_ids", [])
+                            for finding in state.vulnerability_reports
+                        },
+                        "pending": {
+                            finding["id"]: finding.get("pending_http_exchange_ids", [])
+                            for finding in state.vulnerability_reports
+                        },
+                    }
+                finally:
+                    os.chdir(previous_directory)
+        payload = json.dumps(summary, indent=2).encode("utf-8")
+        _write_exclusive(output_fd, "summary.json", payload)
+        return summary
+    finally:
+        os.close(output_fd)
 
 
 def main() -> None:
@@ -240,10 +267,7 @@ def main() -> None:
         LYRASHIELD_RUN_RECORD_V1_1="1",
         LYRASHIELD_PENDING_HTTP_EVIDENCE="1",
     )
-    output = args.output_dir.resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    summary = asyncio.run(generate(output))
-    (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    summary = asyncio.run(generate(args.output_dir))
     print(  # noqa: T201 - CLI fixture summary
         json.dumps(
             {
