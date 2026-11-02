@@ -140,6 +140,7 @@ def resolve_dedupe_model(
         api_key=api_key or None,
         base_url=api_base or None,
         extra_headers=extra_headers,
+        api_mode=dedupe.api_mode,
     ).get_model(model_name)
 
 

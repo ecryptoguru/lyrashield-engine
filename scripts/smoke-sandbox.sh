@@ -26,6 +26,7 @@ docker run "${docker_args[@]}" "$image" sh -lc '
   nmap -sn 127.0.0.1 >/dev/null &&
   /app/.venv/bin/python -c "import caido_api" &&
   /app/.venv/bin/python /opt/lyrashield/verify_semgrep_pyjwt.py &&
+  /app/.venv/bin/python /opt/lyrashield/verify_brotli.py &&
   status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
   case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
 '

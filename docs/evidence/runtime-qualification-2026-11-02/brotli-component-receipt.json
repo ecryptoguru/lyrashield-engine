@@ -1,0 +1,17 @@
+{
+  "component": "Debian Brotli decoder verification; not full sandbox qualification",
+  "manifest_digest": "sha256:502127a58c1209e2fb1878c219aa9c7f53d7cf6ad2741f9eedbe5921a23744ca",
+  "base_manifest_digest": "sha256:281d39ff02e3b389401586134ff9e6572954687822a58055ec07a60ded4e0b7f",
+  "package": "libbrotli1",
+  "version": "1.2.0-4.1",
+  "architectures": {
+    "amd64": {
+      "package_sha256": "2d58db32250aa535e27c62e98451debd43b539aa026066806432e842d5b56c00",
+      "real_decode": "passed"
+    },
+    "arm64": {
+      "package_sha256": "ff90055f0c42dc39fdf8f12d7f68c7da32da2ec90d0a49eb39e80b764988ee02",
+      "real_decode": "passed"
+    }
+  }
+}

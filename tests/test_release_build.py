@@ -149,8 +149,8 @@ def test_wheel_excludes_go_sources_and_installs_from_base_dependencies(tmp_path:
         assert "strix/interface/tui/history.py" in names
         metadata_path = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = package.read(metadata_path).decode()
-        assert "Requires-Dist: mcp<2,>=1.28.1" in metadata
-        assert "Requires-Dist: pypdf>=6.19.0; extra == 'viewer'" in metadata
+        assert "Requires-Dist: mcp<2,>=1.30.0" in metadata
+        assert "Requires-Dist: pypdf>=6.21.4; extra == 'viewer'" in metadata
 
     environment = tmp_path / "base-install"
     subprocess.run(  # noqa: S603 - fixed local venv creation

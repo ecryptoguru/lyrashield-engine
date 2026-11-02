@@ -1,3 +1,11 @@
 # Semgrep 1.178.0 metadata is patched after the closed hash-lock install.
 # Keep this resolver exception restricted to the tested security-fixed line.
 pyjwt[crypto]==2.15.1
+
+# Semgrep 1.178.0: exact reviewed runtime security overrides.
+mcp==1.30.0
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-otlp-proto-http==1.45.1
+opentelemetry-instrumentation-requests==0.66b1
+opentelemetry-instrumentation-threading==0.66b1

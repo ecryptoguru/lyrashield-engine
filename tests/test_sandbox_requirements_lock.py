@@ -32,6 +32,7 @@ def _packages(text: str) -> set[tuple[str, str]]:
 def _compile_args(output: Path, *platform_args: str) -> list[str]:
     args = [
         "uv",
+        "--no-config",
         "pip",
         "compile",
         str(INPUT.relative_to(ROOT)),

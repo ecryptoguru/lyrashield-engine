@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
-import docker
 from docker.errors import DockerException, ImageNotFound
 from rich.console import Console
 from rich.panel import Panel
@@ -544,13 +543,15 @@ def validate_run_name(value: str) -> str:
 
 def check_docker_connection() -> Any:
     try:
-        return docker.from_env()
-    except DockerException:
+        from lyrashield.runtime.docker_connection import connect_docker
+
+        return connect_docker()
+    except (DockerException, RuntimeError) as exc:
         console = Console()
         error_text = Text()
         error_text.append("DOCKER NOT AVAILABLE", style="bold red")
         error_text.append("\n\n", style="white")
-        error_text.append("Cannot connect to Docker daemon.\n", style="white")
+        error_text.append(f"{exc}\n", style="white")
         error_text.append(
             "Please ensure Docker Desktop is installed and running, and try running "
             "lyrashield again.\n",

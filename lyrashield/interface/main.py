@@ -214,6 +214,26 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     # releases, so the upstream version check would suggest the wrong package.
 
 
+def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
+    """Retain successful paid probes even when a later preflight probe fails."""
+    usages = args.warm_up_usages
+    try:
+        asyncio.run(warm_up_llm(show_model_warning=False, usages=usages, deadline=deadline))
+    except (SystemExit, RunDeadlineExceededError) as exc:
+        state = ReportState(args.run_name)
+        state.hydrate_from_run_dir()
+        for model, usage in usages:
+            state.record_sdk_usage(agent_id="warmup", agent_name="warmup", model=model, usage=usage)
+        exhausted = isinstance(exc, RunDeadlineExceededError)
+        state.set_terminal_reason("runtime_deadline" if exhausted else "llm_preflight_failed")
+        if not state.save_run_data(status="stopped" if exhausted else "failed"):
+            raise RuntimeError(
+                "Could not persist LLM preflight usage and terminal receipt"
+            ) from exc
+        usages.clear()
+        raise
+
+
 def main(
     *,
     entry_monotonic: float | None = None,
@@ -437,7 +457,7 @@ def main(
         set_global_report_state(exhausted_state)
 
     if not args.non_interactive:
-        asyncio.run(warm_up_llm(show_model_warning=False, usages=warm_up_usages))
+        _run_llm_preflight(args, deadline=deadline)
 
     _telemetry_model = load_settings().llm.model
     _telemetry_scan_mode = args.scan_mode

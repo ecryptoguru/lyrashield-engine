@@ -12,6 +12,7 @@ import pytest
 from agents.extensions.models.litellm_model import LitellmModel
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
+from agents.models.openai_provider import OpenAIProvider
 from agents.models.openai_responses import OpenAIResponsesModel
 
 from lyrashield.policy.models import (
@@ -625,12 +626,13 @@ def test_admission_checks_exactly_the_provider_routing_selects() -> None:
 def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPatch) -> None:
     """E2: for every accepted GPT-6 fixture, StrixProvider.get_model must
     route through the same provider admission selected. This spies on the
-    actual SDK seam (super().get_model) and asserts the routed name equals
+    actual SDK provider seam and asserts the routed name equals
     the canonical ``{provider}/{model_path}`` form admission parsed — no
     fixture may pass vacuously without observed routing."""
     from lyrashield.policy import codex  # noqa: PLC0415
     from lyrashield.policy.models import StrixProvider  # noqa: PLC0415
 
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture")
     # Prevent subscription model shortcut from bypassing routing.
     monkeypatch.setattr(codex, "subscription_model", lambda _name: None)
 
@@ -665,7 +667,10 @@ def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPa
             return _spy
 
         # Bind the spy on the parent class so super().get_model() hits it.
-        parent_cls = type(provider).__mro__[1]
+        if route.provider in {None, "openai"}:
+            parent_cls = OpenAIProvider
+        else:
+            parent_cls = type(provider).__mro__[1]
         monkeypatch.setattr(parent_cls, "get_model", _make_spy(seen))
 
         raised: Exception | None = None
@@ -673,11 +678,13 @@ def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPa
             provider.get_model(model_name)
         except RuntimeError as exc:
             raised = exc
-        # Every fixture MUST reach super().get_model — no vacuous pass.
+        # Every fixture MUST reach the SDK provider — no vacuous pass.
         assert raised is not None, f"{model_name}: did not reach super().get_model()"
         assert len(seen) == 1, f"{model_name}: expected 1 routing call, got {len(seen)}"
         routed = seen[0]
-        if route.wrapper is not None and route.provider is not None:
+        if route.provider in {None, "openai"}:
+            assert routed == route.model_path
+        elif route.wrapper is not None and route.provider is not None:
             expected_routed = f"{route.provider}/{route.model_path}"
             assert routed == expected_routed, (
                 f"{model_name}: routed {routed!r} != canonical {expected_routed!r}"

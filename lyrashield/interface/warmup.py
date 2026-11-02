@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
@@ -71,6 +72,7 @@ async def warm_up_llm(
     show_model_warning: bool = True,
     *,
     usages: list[tuple[str, Any]] | None = None,
+    deadline: RunDeadline | None = None,
 ) -> None:
     """Warm up the configured LLM and optional dedupe model.
 
@@ -81,6 +83,19 @@ async def warm_up_llm(
     console = Console()
     logger.info("Warming up LLM connection")
 
+    preflight = RunDeadline.start(30)
+
+    def remaining_timeout() -> float:
+        if deadline is not None and deadline.remaining_seconds() <= 0:
+            raise RunDeadlineExceededError("runtime allowance exhausted during LLM preflight")
+        remaining = min(30.0, float(load_settings().llm.timeout), preflight.remaining_seconds())
+        if deadline is not None:
+            remaining = min(remaining, deadline.remaining_seconds())
+        if remaining <= 0:
+            raise TimeoutError("LLM preflight exceeded its 30-second allowance")
+        return remaining
+
+    remaining_timeout()
     raw_model = ""
     try:
         settings = load_settings()
@@ -146,6 +161,7 @@ async def warm_up_llm(
                 ),
             )
 
+        timeout = remaining_timeout()
         model = StrixProvider(settings=settings).get_model(raw_model)
         response = await asyncio.wait_for(
             model.get_response(
@@ -154,7 +170,8 @@ async def warm_up_llm(
                 model_settings=make_model_settings(
                     None,
                     model_name=raw_model,
-                    request_timeout=llm.timeout,
+                    request_timeout=timeout,
+                    max_output_tokens=min(64, llm.max_output_tokens or 64),
                     extra_headers=llm.extra_headers,
                 ),
                 tools=[],
@@ -165,7 +182,7 @@ async def warm_up_llm(
                 conversation_id=None,
                 prompt=None,
             ),
-            timeout=llm.timeout,
+            timeout=timeout,
         )
         if usages is not None and getattr(response, "usage", None) is not None:
             usages.append((raw_model, response.usage))
@@ -183,10 +200,12 @@ async def warm_up_llm(
             # A dedicated dedupe model may route to another provider, which must
             # never receive the main endpoint's headers; it has its own
             # DEDUPE_LLM_EXTRA_HEADERS.
+            timeout = remaining_timeout()
             deduper_settings = make_model_settings(
                 None,
                 model_name=dedupe_model,
-                request_timeout=llm.timeout,
+                request_timeout=timeout,
+                max_output_tokens=min(64, llm.max_output_tokens or 64),
                 extra_headers=settings.dedupe.extra_headers,
             )
             response = await asyncio.wait_for(
@@ -202,13 +221,19 @@ async def warm_up_llm(
                     conversation_id=None,
                     prompt=None,
                 ),
-                timeout=llm.timeout,
+                timeout=timeout,
             )
             if usages is not None and getattr(response, "usage", None) is not None:
                 usages.append((dedupe_model, response.usage))
             logger.info("LLM warm-up succeeded for dedupe model %s", dedupe_model)
 
+    except RunDeadlineExceededError:
+        raise
     except Exception as e:
+        if deadline is not None and deadline.remaining_seconds() <= 0:
+            raise RunDeadlineExceededError(
+                "runtime allowance exhausted during LLM preflight"
+            ) from e
         logger.debug("LLM warm-up failed", exc_info=True)
         error_text = Text()
         sub_hint = _subscription_error_hint(e)

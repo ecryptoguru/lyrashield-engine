@@ -193,9 +193,9 @@ RUN git clone --depth 1 https://github.com/aravind0x7/JS-Snooper.git && \
 
 USER root
 
-ARG TRUFFLEHOG_VERSION=3.96.0
-ARG TRUFFLEHOG_LINUX_X64_SHA256=7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0
-ARG TRUFFLEHOG_LINUX_ARM64_SHA256=50acd4c7a3b8ebfe5083d8350956057030c44be3515dedd55b45263495c490b2
+ARG TRUFFLEHOG_VERSION=3.99.2
+ARG TRUFFLEHOG_LINUX_X64_SHA256=3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4
+ARG TRUFFLEHOG_LINUX_ARM64_SHA256=929b81efffca752eafd58bf6f17bf725d354f338636a7bbbee65c086d2f9ddf3
 RUN set -eux; \
     ARCH="$(uname -m)"; \
     case "$ARCH" in \
@@ -247,6 +247,11 @@ USER pentester
 
 USER root
 
+# Kali's signed kali-last-snapshot index still serves vulnerable 1.2.0-4+b1.
+# Install only Debian's fixed decoder package, checksum-pinned for each CPU.
+COPY containers/install_brotli.sh /opt/lyrashield/install_brotli.sh
+RUN sh /opt/lyrashield/install_brotli.sh
+
 RUN apt-get autoremove -y && \
     apt-get autoclean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
@@ -288,12 +293,12 @@ COPY --chown=pentester:pentester containers/patch_dirsearch_metadata.py /tmp/pat
 
 USER pentester
 # Install the complete audited hash lock without re-resolving Semgrep's narrow
-# PyJWT metadata restriction; the reviewed patch and pip check enforce the graph.
+# JWT/MCP/telemetry metadata restrictions; reviewed patches and pip check enforce the graph.
 RUN python3 -m venv /app/.venv && \
     /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/python-requirements.txt && \
     /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/dirsearch-requirements.txt && \
     /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py && \
-    /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py --package semgrep && \
+    /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py --package semgrep --runtime-dependencies && \
     /app/.venv/bin/pip check && \
     printf '%s\n' \
         '#!/bin/bash' \
@@ -307,6 +312,7 @@ RUN python3 -m venv /app/.venv && \
 # lyrashield/tools/proxy/caido_api.py; this COPY is its only packaging step.
 COPY --chown=root:root lyrashield/runtime/target_relay_proxy.py /opt/lyrashield/target_relay_proxy.py
 COPY --chown=root:root containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify_semgrep_pyjwt.py
+COPY --chown=root:root containers/verify_brotli.py /opt/lyrashield/verify_brotli.py
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 

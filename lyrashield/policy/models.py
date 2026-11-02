@@ -619,10 +619,15 @@ class StrixProvider(MultiProvider):
         api_key: str | None = None,
         base_url: str | None = None,
         extra_headers: dict[str, str] | None = None,
+        api_mode: str | None = None,
     ) -> None:
         from openai import AsyncOpenAI
 
         self._settings = settings
+        self._api_mode_override = api_mode
+        self._api_mode = api_mode or (
+            getattr(settings.llm, "api_mode", "auto") if settings is not None else "auto"
+        )
         self._override_api_key = api_key
         self._override_base_url = base_url
         self._override_headers = extra_headers
@@ -651,7 +656,7 @@ class StrixProvider(MultiProvider):
             )
             super().__init__(
                 openai_client=client,
-                openai_use_responses=not bool(base_url),
+                openai_use_responses=True,
             )
         elif self._azure_responses_enabled:
             if llm is None or not llm.api_base:
@@ -661,15 +666,13 @@ class StrixProvider(MultiProvider):
             super().__init__(
                 openai_api_key=llm.api_key,
                 openai_base_url=_azure_responses_base_url(llm.api_base),
-                openai_use_responses=True,
+                openai_use_responses=self._api_mode != "chat_completions",
             )
         else:
             super().__init__(
                 openai_api_key=api_key,
                 openai_base_url=base_url,
-                # A custom endpoint is OpenAI-compatible, i.e. chat completions; the
-                # global default is the main model's and may say otherwise.
-                openai_use_responses=False if base_url else None,
+                openai_use_responses=True,
             )
 
     def _create_fallback_provider(self, prefix: str) -> ModelProvider:
@@ -734,7 +737,9 @@ class StrixProvider(MultiProvider):
                     base_url=_azure_responses_base_url(base_url),
                     default_headers=dict(headers or {}),
                 )
-                azure_provider = OpenAIProvider(openai_client=client, use_responses=True)
+                azure_provider = OpenAIProvider(
+                    openai_client=client, use_responses=self._api_mode != "chat_completions"
+                )
             # Names like ``azure/eu/gpt-6-sol`` or ``azure_ai/gpt-6-luna``
             # both resolve to the final deployment/model segment for Azure's
             # v1 Responses API.
@@ -759,6 +764,9 @@ class StrixProvider(MultiProvider):
         if self._settings is None:
             self._settings = load_settings()
         llm = self._settings.llm
+        self._api_mode = self._api_mode_override or getattr(llm, "api_mode", "auto")
+        if model_name is None:
+            model_name = llm.model
         slug = codex.subscription_model(model_name)
         idle_timeout = float(llm.stream_idle_timeout)
         if slug:
@@ -782,7 +790,25 @@ class StrixProvider(MultiProvider):
             routed_name = model_name
             if route is not None and route.provider is not None:
                 routed_name = f"{route.provider}/{route.model_path}"
-            model = super().get_model(routed_name)
+            if (
+                route is not None
+                and route.provider in {None, "openai"}
+                and (is_gpt6_model(model_name) or self._api_mode != "auto")
+            ):
+                from agents.models.openai_provider import OpenAIProvider
+
+                # Capability and explicit policy select the API independently
+                # for root, delegate, fallback and dedicated dedupe routes.
+                use_responses = self._api_mode == "responses" or (
+                    self._api_mode == "auto" and is_gpt6_model(model_name)
+                )
+                provider = OpenAIProvider(
+                    openai_client=self.openai_provider._get_client(),
+                    use_responses=use_responses,
+                )
+                model = provider.get_model(route.model_path)
+            else:
+                model = super().get_model(routed_name)
             if (
                 _is_azure_model(model_name)
                 and is_gpt6_model(model_name)
@@ -907,7 +933,11 @@ def configure_sdk_model_defaults(settings: Settings) -> None:
             _configure_litellm_default("api_base", llm.api_base)
             if not _is_azure_model(llm.model):
                 os.environ["OPENAI_BASE_URL"] = llm.api_base
-                set_default_openai_api("chat_completions")
+                set_default_openai_api(
+                    "chat_completions"
+                    if getattr(llm, "api_mode", "auto") == "chat_completions"
+                    else "responses"
+                )
             else:
                 set_default_openai_api("responses")
         else:
@@ -1112,6 +1142,15 @@ def _configure_litellm_default(name: str, value: str) -> None:
 
 def uses_chat_completions_tool_schema(model_name: str, settings: Settings) -> bool:
     """Return whether the resolved SDK route can only receive JSON function tools."""
+    if getattr(settings.llm, "api_mode", "auto") == "chat_completions":
+        return True
+    route = parse_model_route(model_name)
+    if (
+        route is not None
+        and route.provider in {None, "openai"}
+        and (is_gpt6_model(model_name) or getattr(settings.llm, "api_mode", "auto") == "responses")
+    ):
+        return False
     # ponytail: explicit operator opt-in is the provider capability assertion.
     # Keep Azure on its proven JSON-tool path unless that assertion is present.
     if model_supports_programmatic_tool_calling(model_name):

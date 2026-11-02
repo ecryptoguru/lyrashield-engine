@@ -41,14 +41,14 @@ dependencies = [
   "openai-agents[litellm]>=0.19.0,<0.23",
   # Keep the SDK within the reviewed openai-agents and LiteLLM compatibility range.
   "openai>=2.48.0,<3.2",
-  # Compatible-release pin reviewed in dependency update #77.
-  "litellm~=1.90.7",
+  # Reviewed compatible patch line; see docs/evidence/runtime-qualification-2026-11-02.
+  "litellm~=1.101.3",
   "jinja2>=3.1.6",
   "pyyaml>=6.0.3",
   "httpx>=0.28.1",
   # The engine imports `McpError`, retained through MCP SDK 1.x but renamed in
   # 2.x. Keep fresh wheel installs within the API line verified by the lock.
-  "mcp>=1.28.1,<2",
+  "mcp>=1.30.0,<2",
   "python-dotenv>=1.2.2",
   "pygments>=2.20.0",
   "pydantic>=2.11.3",
@@ -73,7 +73,7 @@ dependencies = [
 # Encrypted PDF export for the local viewer (`strix view`). Imported lazily by
 # strix/viewer/server.py, and the LyraShield worker never runs the viewer, so
 # these stay out of the base install rather than shipping in every scan image.
-viewer = ["reportlab>=4.0", "pypdf>=6.19.0", "markdown-it-py>=3.0.0"]
+viewer = ["reportlab>=4.0", "pypdf>=6.21.4", "markdown-it-py>=3.0.0"]
 
 [project.scripts]
 lyrashield = "lyrashield_adapter.cli:main"
@@ -333,6 +333,7 @@ ignore = [
 # scope: they cost seconds and are unneeded until a model call is made.
 "strix/report/pricing.py" = ["PLC0415"]
 "strix/llm/compaction.py" = ["PLC0415"]
+"strix/llm/request_log.py" = ["PLC0415"]
 "strix/llm/context_budget.py" = ["PLC0415"]
 "strix/interface/tui/runtime.py" = ["PLC0415"]
 "lyrashield/tools/web_search/tool.py" = ["PLC0415"]
@@ -436,3 +437,16 @@ skips = ["B101", "B105", "B601", "B404", "B603", "B607"]  # Skip assert, hardcod
 # enforces it. A medium floor would drop B311, B403 and B405-B409, and the ruff
 # equivalents of B403/B405-B409 (S403, S405-S409) are preview-only and inactive
 # in this repo, so enforcing medium would silently weaken the security gate.
+
+[tool.uv]
+# Security floors for the Caido/LiteLLM transitives; keep SDK lines independently pinned.
+constraint-dependencies = [
+  "aiohttp>=3.14.5,<3.15",
+  "graphql-core>=3.2.13,<3.3",
+  "certifi>=2026.10.18",
+  "filelock>=4.2.1",
+  "msgpack>=1.2.3",
+  "pillow>=13.0.0",
+  "setuptools>=84.1.0",
+  "virtualenv>=21.14.10",
+]

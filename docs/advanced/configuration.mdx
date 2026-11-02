@@ -40,6 +40,14 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
   normalized to their `/openai/v1/` base.
 </ParamField>
 
+<ParamField path="LLM_API_MODE" default="auto" type="string">
+  API selection policy: `auto`, `responses`, or `chat_completions`. Automatic
+  selection uses the admitted GPT-6 model capability and selects Responses,
+  including when `LLM_API_BASE` points to a custom gateway. Set an explicit
+  policy when the approved gateway requires one API. Root, delegate, and
+  fallback routes share this policy. Alias: `LYRASHIELD_LLM_API_MODE`.
+</ParamField>
+
 <ParamField path="LLM_API_VERSION" type="string">
   Azure API version. Also accepted: `AZURE_API_VERSION`,
   `AZURE_OPENAI_API_VERSION`.
@@ -55,6 +63,9 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
 
 <ParamField path="LLM_TIMEOUT" default="300" type="integer">
   Request timeout in seconds for LLM calls. Alias: `LYRASHIELD_LLM_TIMEOUT`.
+  Startup preflight has a separate 30-second total allowance, bounded by this
+  request limit and the remaining trusted scan deadline. Its completed usage
+  is retained in the run ledger.
 </ParamField>
 
 <ParamField path="LYRASHIELD_REASONING_EFFORT" default="medium" type="string">
@@ -162,6 +173,13 @@ Finding deduplication is a cheap, structured classification task. By default it 
 <ParamField path="DEDUPE_LLM_API_BASE" type="string">
   Optional custom API base URL for the deduplication model. Use when the dedupe
   model runs on a different endpoint than the main model.
+</ParamField>
+
+<ParamField path="DEDUPE_LLM_API_MODE" default="auto" type="string">
+  Dedicated dedupe API policy: `auto`, `responses`, or `chat_completions`.
+  Automatic selection uses Responses for admitted GPT-6 models independently
+  of the dedupe endpoint URL. When no dedicated dedupe model is configured,
+  the main model's API policy applies. Alias: `LYRASHIELD_DEDUPE_LLM_API_MODE`.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_EXTRA_HEADERS" type="string">

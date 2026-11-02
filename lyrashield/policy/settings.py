@@ -114,6 +114,9 @@ class LlmSettings(BaseSettings):
             "AZURE_AI_API_BASE",
         ),
     )
+    api_mode: Literal["auto", "responses", "chat_completions"] = Field(
+        default="auto", validation_alias=AliasChoices("LLM_API_MODE", "LYRASHIELD_LLM_API_MODE")
+    )
     api_version: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -201,6 +204,10 @@ class DedupeSettings(BaseSettings):
         default=None,
         alias="STRIX_DEDUPE_REASONING_EFFORT",
         validation_alias=_lyra("STRIX_DEDUPE_REASONING_EFFORT"),
+    )
+    api_mode: Literal["auto", "responses", "chat_completions"] = Field(
+        default="auto",
+        validation_alias=AliasChoices("DEDUPE_LLM_API_MODE", "LYRASHIELD_DEDUPE_LLM_API_MODE"),
     )
     api_key: str | None = Field(
         default=None,

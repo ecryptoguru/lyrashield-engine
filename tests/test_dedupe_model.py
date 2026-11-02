@@ -565,6 +565,7 @@ async def test_custom_openai_dedupe_endpoint_sends_only_dedupe_credentials(
         model="openai/gpt-6-luna",
         api_key="dedupe-openai-key",
         api_base="https://dedupe.openai.example/v1",
+        api_mode="chat_completions",
     )
     model = _unwrap(resolve_dedupe_model(dedupe, dedupe.model or "", settings=settings))
     assert isinstance(model, OpenAIChatCompletionsModel)

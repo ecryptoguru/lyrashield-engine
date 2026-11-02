@@ -26,10 +26,10 @@ async def docker_backend(
     bind_mounts: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, Any]:
     """Start a Docker session through the LyraShield adapter."""
-    import docker  # noqa: PLC0415
     from agents.sandbox.sandboxes.docker import DockerSandboxClientOptions  # noqa: PLC0415
     from agents.sandbox.types import User  # noqa: PLC0415
 
+    from lyrashield.runtime import docker_connection  # noqa: PLC0415
     from lyrashield.runtime.docker_client import (  # noqa: PLC0415
         StrixDockerSandboxClient,
         assert_sdk_docker_compatibility,
@@ -37,7 +37,7 @@ async def docker_backend(
 
     assert_sdk_docker_compatibility()
     loop = asyncio.get_running_loop()
-    discovery = loop.run_in_executor(None, docker.from_env)
+    discovery = loop.run_in_executor(None, docker_connection.connect_docker)
     try:
         transport = await asyncio.shield(discovery)
     except asyncio.CancelledError:
