@@ -59,8 +59,17 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
     invocations = [
         line for line in smoke.replace("\\\n", "").splitlines() if line.startswith("docker run ")
     ]
-    assert len(invocations) == 2
+    assert len(invocations) == 3
     assert all('"${docker_args[@]}"' in line and "--network none" in line for line in invocations)
+    assert all("--privileged" not in line for line in invocations)
+    syn = next(line for line in invocations if "verify_distro_go_tools.py --syn" in line)
+    assert "--cap-drop ALL --cap-add NET_RAW --user 0:0" in syn
+    assert '--entrypoint /usr/bin/python3 "$image"' in syn
+    assert sum(line.count("--cap-add") for line in invocations) == 1
+    node = next(line for line in invocations if "--entrypoint node" in line)
+    assert "--read-only" in node and "--tmpfs /tmp" in node
+    assert 'test_reviewed_sandbox_npm.cjs:ro"' in node
+    assert '"$image" --test /tmp/test_reviewed_sandbox_npm.cjs' in node
     assert "docker buildx imagetools create" in content
     assert "RELEASE_TAG: ${{ github.ref_name }}" in content
     assert 'for tag in "$RELEASE_TAG" "${{ github.sha }}"' in content

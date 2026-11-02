@@ -94,6 +94,12 @@ this fixed download route outside Docker:
 python3 containers/system-python-security/hydrate_runtime_inputs.py --download
 ```
 
+Both sandbox build workflows run this command immediately before their Docker
+build. Engine CI uses the same `docs_only` predicate for hydration and build.
+`GH_TOKEN` is set from `github.token` only for the hydration step; it is not passed
+to Docker, build arguments or image layers. Repository contents access stays
+read-only. The reviewed asset must be accessible to that workflow identity.
+
 This calls `gh release download` with the explicit `github.com` host, fixed
 repository, tag and exact asset pattern. It accepts no URL/repository/tag override
 and does not forward enterprise credentials or caller-selected host settings.

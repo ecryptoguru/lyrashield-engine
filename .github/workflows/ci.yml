@@ -229,6 +229,12 @@ jobs:
         if: steps.changed_paths.outputs.docs_only != 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      - name: Hydrate qualified runtime inputs
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 containers/system-python-security/hydrate_runtime_inputs.py --download
+
       - name: Build sandbox image
         if: steps.changed_paths.outputs.docs_only != 'true'
         run: |
