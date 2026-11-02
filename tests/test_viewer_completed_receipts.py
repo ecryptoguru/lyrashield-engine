@@ -282,3 +282,53 @@ def test_read_only_receipt_endpoint_never_enqueues_unknown_or_pending_ids(
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.mark.parametrize("finished", [False, True])
+@pytest.mark.parametrize(
+    "action,error_code",
+    [("resume", "budget_increase_required"), ("increase_budget", "not_delivered")],
+)
+def test_receipt_marks_cached_control_rejections_without_reapplying(
+    tmp_path: Path, finished: bool, action: str, error_code: str
+) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    record = run / "run.json"
+    record.write_text(json.dumps({"status": "running"}))
+    control = Mock(return_value=False)
+    server, url, token = serve(
+        run,
+        open_browser=False,
+        control_handler=control,
+        control_state_handler=lambda: {"resume_requires_increase": True},
+    )
+    headers = {
+        "Cookie": f"strix_viewer_session_{urlsplit(url).port}={token}",
+        "Content-Type": "application/json",
+    }
+    body = {"run": "run", "submission_id": "rejected", "action": action}
+
+    def post(path: str) -> dict[str, object]:
+        request = urllib.request.Request(  # noqa: S310 - local fixture URL
+            url + path, data=json.dumps(body).encode(), headers=headers
+        )
+        with urllib.request.urlopen(request) as response:  # noqa: S310
+            return json.load(response)
+
+    try:
+        assert post("/api/scan/control") == {"ok": False, "error": error_code}
+        if finished:
+            record.write_text(
+                json.dumps({"status": "completed", "end_time": "2026-11-02T00:00:00Z"})
+            )
+        for _ in range(2):
+            assert post("/api/receipts/check") == {
+                "ok": False,
+                "error": error_code,
+                "status": "rejected",
+            }
+        control.assert_called_once_with(action, "rejected")
+    finally:
+        server.shutdown()
+        server.server_close()

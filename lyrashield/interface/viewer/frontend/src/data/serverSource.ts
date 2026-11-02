@@ -226,7 +226,7 @@ export interface Capabilities {
   budget: BudgetControlState | null;
 }
 
-export type SteerResult = { ok: true } | { ok: false; error: string };
+export type SteerResult = { ok: true } | { ok: false; error: string; status?: "rejected" };
 
 /** GET /api/capabilities. can_steer is true only inside a live in-TUI scan. */
 export async function fetchCapabilities(signal?: AbortSignal): Promise<Capabilities> {
@@ -250,7 +250,8 @@ async function submitOperatorAction(path: string, body: Record<string, unknown>)
     });
     const data = await response.json() as Record<string, unknown>;
     if (response.ok && data.ok === true) return { ok: true };
-    return { ok: false, error: String(data.error ?? "unavailable") };
+    return { ok: false, error: String(data.error ?? "unavailable"),
+      ...(response.ok && data.status === "rejected" ? { status: "rejected" as const } : {}) };
   } catch {
     return { ok: false, error: "delivery_unknown" };
   } finally {

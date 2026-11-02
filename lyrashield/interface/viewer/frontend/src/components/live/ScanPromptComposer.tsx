@@ -137,7 +137,11 @@ export function ScanPromptComposer({
       else setFeedback(message.phase === "dismissed" ? "Uncertain submission discarded. It may still have been delivered." : "Message was not accepted. The draft is retained.");
     }
     const control = receipts.receipts.find(receipt => receipt.id === controlRef.current?.id);
-    if (control && !["pending", "unknown"].includes(control.phase)) controlRef.current = null;
+    if (control && !["pending", "unknown"].includes(control.phase)) {
+      controlRef.current = null;
+      if (control.phase === "rejected") setFeedback(control.error === "budget_increase_required"
+        ? "Budget exhausted. Increase the budget before resuming." : "The control was not accepted.");
+    }
   }, [receipts.receipts]);
 
   const empty = value.trim().length === 0;

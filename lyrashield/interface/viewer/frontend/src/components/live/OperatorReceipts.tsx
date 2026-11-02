@@ -14,7 +14,7 @@ export function OperatorReceipts() {
           : receipt.phase === "unknown" ? "Delivery unknown. Check the original submission's receipt; its target and payload are retained."
             : receipt.phase === "queued" ? receipt.kind === "message" ? "Acceptance confirmed. The original message was queued." : "Acceptance confirmed. The original control was accepted."
               : receipt.phase === "dismissed" ? "Receipt dismissed. The original submission may already have been delivered."
-                : "The original submission was not accepted."}</p>
+                : receipt.error === "budget_increase_required" ? "The original resume was not accepted because the budget was exhausted." : "The original submission was not accepted."}</p>
         <div className="flex flex-wrap gap-3">
           {receipt.phase === "unknown" && <button type="button" onClick={() => void check(receipt.id)} className="min-h-11 rounded border border-white/30 px-3 focus-visible:outline focus-visible:outline-2">Check {action} receipt</button>}
           {receipt.phase !== "pending" && <button type="button" onClick={() => dismiss(receipt.id)} className="min-h-11 px-2 underline">Dismiss receipt</button>}

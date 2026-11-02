@@ -7,6 +7,7 @@ type ReceiptPayload = { id: string; runName: string } & (
 );
 export type OperatorReceipt = ReceiptPayload & {
   phase: "pending" | "unknown" | "queued" | "rejected" | "dismissed";
+  error?: string;
 };
 interface ReceiptContext {
   receipts: OperatorReceipt[];
@@ -29,7 +30,7 @@ export function OperatorReceiptProvider({ children }: { children: ReactNode }) {
   const submit = useCallback(async (payload: ReceiptPayload): Promise<SteerResult> => {
     const previous = receiptRef.current.find(receipt => receipt.id === payload.id);
     if (previous) {
-      const { phase: _phase, ...original } = previous;
+      const { phase: _phase, error: _error, ...original } = previous;
       if (JSON.stringify(original) !== JSON.stringify(payload)) return { ok: false, error: "submission_conflict" };
       if (previous.phase === "pending") return { ok: false, error: "delivery_unknown" };
     } else if (receiptRef.current.filter(unresolved).length >= 4096) {
@@ -46,7 +47,8 @@ export function OperatorReceiptProvider({ children }: { children: ReactNode }) {
     }
     const phase = result.ok ? "queued" : result.error === "delivery_unknown" ? "unknown" : "rejected";
     update(current => current.filter(receipt => receipt.id === payload.id || unresolved(receipt))
-      .map(receipt => receipt.id === payload.id ? { ...receipt, phase } : receipt));
+      .map(receipt => receipt.id === payload.id ? { ...receipt, phase,
+        ...(phase === "rejected" && !result.ok ? { error: result.error } : {}) } : receipt));
     return result;
   }, [update]);
 
@@ -61,9 +63,10 @@ export function OperatorReceiptProvider({ children }: { children: ReactNode }) {
     try { result = await checkOperatorReceipt(body); }
     catch { result = { ok: false, error: "delivery_unknown" }; }
     // Lookup transport/auth errors cannot prove that an earlier action failed.
-    const phase = result.ok ? "queued" : result.error === "not_delivered" ? "rejected" : "unknown";
+    const phase = result.ok ? "queued" : result.status === "rejected" ? "rejected" : "unknown";
     update(current => current.filter(candidate => candidate.id === id || unresolved(candidate))
-      .map(candidate => candidate.id === id ? { ...candidate, phase } : candidate));
+      .map(candidate => candidate.id === id ? { ...candidate, phase,
+        ...(phase === "rejected" && !result.ok ? { error: result.error } : {}) } : candidate));
   }, [update]);
 
   const dismiss = useCallback((id: string) => {

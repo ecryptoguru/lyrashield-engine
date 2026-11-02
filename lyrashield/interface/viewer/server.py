@@ -632,6 +632,10 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                     return
                 else:
                     result = self._read_receipt_result(submission_id, fingerprint, previous[1])
+                    if result.get("ok") is False and result.get("error") != "delivery_unknown":
+                        # This is an existing definitive receipt, not a lookup
+                        # transport/auth error. Preserve its specific reason.
+                        result = {**result, "status": "rejected"}
                 self._send_json(HTTPStatus.OK, result)
 
         def _read_receipt_result(

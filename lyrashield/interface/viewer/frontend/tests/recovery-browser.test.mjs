@@ -226,3 +226,36 @@ test("modal message receipt survives completion and dialog teardown", { timeout:
   await receipts.getByText("Acceptance confirmed", { exact: false }).waitFor();
   assert.equal(submissions.length, 2); assert.deepEqual(submissions[0], submissions[1]);
 }));
+test("lost Resume rejection resolves from a cached receipt after completion without another mutation", { timeout: 20000 }, async () => fixture(async (page, url) => {
+  let finished = false;
+  await page.route("**/api/run", async route => { const response = await route.fetch({ maxRetries: 2 }); await route.fulfill({ json: { ...await response.json(), finished, ...(finished ? { status: "completed" } : {}) } }); });
+  await page.route("**/api/capabilities", async route => { const response = await route.fetch({ maxRetries: 2 }); const json = await response.json(); json.budget.resume_requires_increase = false; await route.fulfill({ json }); });
+  const mutations = [], checks = [];
+  await page.route("**/api/scan/control", async route => {
+    mutations.push(route.request().postDataJSON());
+    const response = await route.fetch({ maxRetries: 2 });
+    assert.deepEqual(await response.json(), { ok: false, error: "budget_increase_required" });
+    await route.fulfill({ json: { ok: false, error: "delivery_unknown" } });
+  });
+  await page.route("**/api/receipts/check", async route => {
+    checks.push(route.request().postDataJSON());
+    if (checks.length === 1) await route.fulfill({ status: 403, json: { ok: false, error: "forbidden", status: "rejected" } });
+    else await route.continue();
+  });
+  await page.goto(url); await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.getByRole("button", { name: "Expand live prompt composer" }).click();
+  await page.getByRole("textbox", { name: "Steering message" }).fill("preserved draft");
+  await page.getByRole("button", { name: "Resume scan", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Delivery unknown" }).waitFor();
+  assert.equal(await page.getByRole("textbox", { name: "Steering message" }).inputValue(), "preserved draft");
+  finished = true;
+  await page.getByRole("button", { name: "Collapse live prompt composer" }).waitFor({ state: "hidden" });
+  const receipts = page.getByRole("region", { name: "Operator delivery receipts", exact: true });
+  await receipts.getByRole("button", { name: "Check resume receipt", exact: true }).click();
+  await receipts.getByRole("button", { name: "Check resume receipt", exact: true }).waitFor();
+  assert.equal(await receipts.getByText("Delivery unknown", { exact: false }).count(), 1);
+  await receipts.getByRole("button", { name: "Check resume receipt", exact: true }).click();
+  await receipts.getByText("not accepted", { exact: false }).waitFor();
+  assert.equal(await receipts.getByText("Delivery unknown", { exact: false }).count(), 0);
+  assert.equal(mutations.length, 1); assert.equal(checks.length, 2); assert.deepEqual(mutations[0], checks[0]); assert.deepEqual(checks[0], checks[1]);
+}));
