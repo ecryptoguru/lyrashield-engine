@@ -46,13 +46,14 @@ The runtime owner must integrate after **the last APT command**, before final
 smokes. These standalone files deliberately do not edit the common Dockerfile:
 
 ```dockerfile
-COPY containers/system-python-security /tmp/system-python-security
-RUN /usr/bin/python3 /tmp/system-python-security/install_leaves.py \
-    && /usr/bin/python3 /tmp/system-python-security/amend_sources.py \
-    && /usr/bin/python3 /tmp/system-python-security/verify_runtime.py \
-    && rm -rf /tmp/system-python-security
+COPY containers/system-python-security /opt/lyrashield/system-python-security
+RUN /usr/bin/python3 /opt/lyrashield/system-python-security/install_leaves.py \
+    && /usr/bin/python3 /opt/lyrashield/system-python-security/amend_sources.py \
+    && /usr/bin/python3 /opt/lyrashield/system-python-security/verify_runtime.py
 ```
 
+The verifier and provenance remain root-owned in the image so the final
+non-root offline smoke can repeat the checks after all subsequent installation.
 `python3-brotli` and `libbrotli1` are owned by the runtime repair lane and must
 also be pinned to compatible fixed signed packages. Effective CA distrust,
 application pip, Node, native tools and final-image gates remain in that lane.

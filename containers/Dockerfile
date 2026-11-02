@@ -272,6 +272,13 @@ RUN apt-get autoremove -y && \
     # Remove package documentation and man pages not needed at runtime (~95MB)
     rm -rf /usr/share/doc/* /usr/share/doc-base/* /usr/share/man/*
 
+# Apply qualified distro leaves/backports after every APT operation. Keep the
+# verifier and provenance available for final non-root, offline image smoke.
+COPY containers/system-python-security /opt/lyrashield/system-python-security
+RUN /usr/bin/python3 /opt/lyrashield/system-python-security/install_leaves.py && \
+    /usr/bin/python3 /opt/lyrashield/system-python-security/amend_sources.py && \
+    /usr/bin/python3 /opt/lyrashield/system-python-security/verify_runtime.py
+
 ENV PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"
 ENV VIRTUAL_ENV="/app/.venv"
 
