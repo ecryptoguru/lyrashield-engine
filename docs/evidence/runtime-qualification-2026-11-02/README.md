@@ -1,5 +1,12 @@
 # Runtime and dependency qualification — 2026-11-02
 
+Both baseline image builds and functional smokes completed. The subsequent full
+image inventory found real vulnerabilities, so **image security acceptance remains
+open**. The exact baseline digests, 386 scan rows per architecture, coverage limits,
+and narrowly evidenced source-only dispositions are in
+[baseline-image-inventory.json](baseline-image-inventory.json). The Go and system
+Python fixes require a combined rebuild and new scan before promotion.
+
 The owned runtime fixes preserve evidence on unrelated bad requests, select
 Responses by admitted GPT-6 capability and explicit API policy, bound LLM
 preflight to 30 seconds, and share Docker context/TLS selection across discovery,
@@ -12,6 +19,9 @@ normalization. Preflight honors the configured hard output cap (up to 64 probe o
 tokens) and persists successful paid usage before a later probe failure exits.
 
 ## Source validation
+
+These complete source results were recorded at `f87a5ca7`; later image-hardening
+commits have focused checks and need the parent integration gate.
 
 - Full Python suite: **3,067 passed, 7 skipped**, with one upstream Pydantic warning.
 - Full lint/format: **441 Python files**. Full mypy: **246 source files**.
@@ -47,7 +57,8 @@ qualified security patch. Virtualenv 21.14.9 retained CVE-2026-113713.
 | Engine all extras/groups, Linux Python 3.13 / aarch64 | 136 | 0 |
 | Engine all extras/groups, Linux Python 3.14 / x86_64 | 136 | 0 |
 | Engine all extras/groups, Linux Python 3.14 / aarch64 | 136 | 0 |
-| Sandbox tool Python graph | 105 | 0 |
+| Initial sandbox tool Python graph | 105 | 0 |
+| Repaired app lock, local platform evaluation | 106 | 0 |
 
 Linux target environments were evaluated against every frozen exported
 requirement marker before marker removal; all retained exact pins and hashes
@@ -70,10 +81,12 @@ or external telemetry service is contacted. See the sandbox dependency
 
 The signed Kali snapshot still serves vulnerable Brotli `1.2.0-4+b1` on both
 architectures. The installer adds no Debian apt source and overlays only official
-Debian `libbrotli1=1.2.0-4.1` after architecture-specific SHA256 verification.
-Tampered bytes never reach installation. Both exact packages pass a real decoder
-invocation in the separate component verification image. The manifest digest and
-package hashes are retained in `brotli-component-receipt.json`.
+Debian `libbrotli1=1.2.0-4.1` and `python3-brotli=1.2.0-4.1` after architecture-specific
+SHA256 verification. Python's native extension statically bundles a separate decoder.
+Both packages are applied after the final APT install. Actual amd64 and arm64
+transient containers passed source/binary version checks, exact runtime ELF hashes
+and real shared-library/system-Python decodes. See [python-brotli-receipt.json](python-brotli-receipt.json).
+The earlier isolated component proof remains in `brotli-component-receipt.json`.
 
 TruffleHog **3.99.2** release archives match the upstream checksum manifest; its
 manifest SHA256 matches GitHub's published release-asset digest
@@ -96,9 +109,24 @@ added. The exact transport and trust receipt is retained in
 `kali-cdn-transport-receipt.json`. Both rebuilt images carry the exact input
 revision in `org.opencontainers.image.revision`.
 
-## Remaining acceptance gate
+## Scoped image repairs and remaining acceptance
 
-Complete sandbox image builds for both architectures are still running against
-the signed Kali archive. Full image digests, installed image advisory scans, and
-full sandbox smoke acceptance remain unproven. The decoder component manifest
-is **not** a qualified sandbox image digest. No deployment or release was made.
+[The Node receipt](sandbox-node-security-receipt.json) records Retire 6.1.0 and
+fixed Zod/glob/minimatch, real local scanner JSON and proxy routing, and zero npm
+audit findings. Retire's upstream HTTP client removes its old vulnerable FTP/SOCKS
+dependency chain. Four inherited parser tests skip because their packages are absent.
+
+[The app pip receipt](app-pip-vendor-receipt.json) records official pip 26.2.2 plus
+exact verified pure-Python urllib3/msgpack vendor repairs, truthful manifests and
+RECORD, and real amd64/arm64 offline installation, HTTP cache and TLS tests. The
+fresh venv always replaces a same-version distro seed with the hash-locked official
+wheel before applying the strict repair. System pip and its seed are separate.
+
+[The system CA receipt](system-ca-receipt.json) records fingerprint-scoped emSign G3
+distrust through both CAfile and CApath. Both architectures rejected that root
+after repair and retained the sandbox testing CA. Unrelated anchors remain active.
+
+The baseline image digests are not the final repaired image digests. After the Go,
+system Python and these changes are integrated, both architectures require a new
+build, smoke, installed inventory and security disposition. No deployment or
+release was made.
