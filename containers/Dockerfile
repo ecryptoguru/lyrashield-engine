@@ -74,11 +74,14 @@ RUN useradd -m -s /bin/bash pentester && \
 RUN mkdir -p /home/pentester/tools /app/certs && \
     chown -R pentester:pentester /app/certs /home/pentester/tools
 
+COPY containers/distrust_emsign_g3.sh /opt/lyrashield/distrust_emsign_g3.sh
+
 # Bootstrap HTTPS trust through the signed archive, then use Kali's official
 # CDN for the large runtime tool set. The suite, pinned keyring, signed-by and
 # fail-closed apt signature policy remain identical to the archive bootstrap.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
+    sh /opt/lyrashield/distrust_emsign_g3.sh && \
     printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] https://kali.download/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -121,7 +124,8 @@ RUN openssl ecparam -name prime256v1 -genkey -noout -out /app/certs/ca.key && \
 
 USER root
 RUN cp /app/certs/ca.crt /usr/local/share/ca-certificates/ca.crt && \
-    update-ca-certificates
+    update-ca-certificates && \
+    sh /opt/lyrashield/distrust_emsign_g3.sh
 
 USER pentester
 WORKDIR /tmp
