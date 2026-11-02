@@ -58,6 +58,70 @@ reconciled with the receipt rather than hidden. No package, capability, license,
 `pkg_resources` API, module, or dependency is removed; obsolete compiled caches
 are discarded so old code cannot shadow the amended source.
 
+## Clean-CI cache hydration
+
+`runtime-inputs.json` pins the dependency-only transport asset in
+`ecryptoguru/lyrashield-engine`, release tag `runtime-inputs-20261102-v1`, asset
+`strix-runtime-inputs-20261102-v1.tar.gz`. The prepared archive is **69,432,518
+bytes**, SHA256
+`649a883f7949f3d789c44b6d2ee66b7dba36ee21e1f1b0b03d117c6b47c692be`.
+Its 14 regular files contain **69,409,899 payload bytes**: four qualified package
+indexes and ten unique qualified debs. No application source, credentials, signing
+keys or local configuration enter the bundle. The manifest also binds
+`leaves.json`, both signed Releases, and every member's exact size and SHA256.
+
+Before the existing Docker build, hydrate the ignored cache from a reviewed local
+bundle:
+
+```sh
+python3 containers/system-python-security/hydrate_runtime_inputs.py \
+  --bundle /tmp/strix-runtime-inputs-20261102-v1.tar.gz
+```
+
+The default destination is `containers/system-python-security/cache/`, already
+present in a fresh checkout. `--cache /existing/canonical/cache` selects another
+existing directory. Existing valid entries are preserved, while altered entries,
+unknown files (except the regular `.gitignore`), symbolic links and hard links
+are errors. All 14 archive members are checked before transactional publication.
+The hydrator accepts only the canonical sorted USTAR regular-file representation;
+there is no `extractall` call. Expanded data is capped at the exact archive size,
+and local/downloaded bundle reads are capped at the pinned transport size.
+
+Once the root lane has created and reviewed the draft release asset, CI may use
+this fixed download route outside Docker:
+
+```sh
+python3 containers/system-python-security/hydrate_runtime_inputs.py --download
+```
+
+This calls `gh release download` with the explicit `github.com` host, fixed
+repository, tag and exact asset pattern. It accepts no URL/repository/tag override
+and does not forward enterprise credentials or caller-selected host settings.
+`gh` handles authentication; its child has a 120-second timeout and a file-size
+limit equal to the pinned bundle. The CI identity must have access to the asset,
+including draft visibility where applicable. A missing or inaccessible asset
+fails; there is no fallback to latest releases or rotated indexes. This helper
+never creates/releases/uploads an asset, and no release asset is published by
+this source change.
+
+For maintainers reproducing the already pinned archive:
+
+```sh
+python3 containers/system-python-security/hydrate_runtime_inputs.py \
+  --cache /existing/canonical/qualified-cache \
+  --create-bundle /tmp/strix-runtime-inputs-20261102-v1.tar.gz
+```
+
+Publication paths reject linked ancestors; on macOS use `/private/tmp/` for the
+creator's output where `/tmp` is a system symlink. The creator verifies the exact
+input set and refuses output that differs from the committed transport pin. It
+cannot update the manifest or qualify new package bytes. Fixed USTAR metadata and
+fixed 65,535-byte stored deflate blocks make the archive independent of zlib
+compression choices; Python 3.9 and 3.14 reproduced the full archive identically.
+The payload stays outside Git. Hydration is only input preparation: the existing
+installer must still verify official signatures, index and package identities and
+hashes through the normal `--cache` path.
+
 ## Docker integration
 
 The runtime owner must integrate after **the last APT command**, before final

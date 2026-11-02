@@ -84,7 +84,7 @@ def preflight(root: Path, relative: str) -> None:
         os.close(descriptor)
 
 
-def read_regular(root: Path, relative: str) -> bytes:
+def read_regular(root: Path, relative: str, *, max_bytes: int | None = None) -> bytes:
     descriptor, name = _parent(root, relative)
     try:
         info = _existing(descriptor, name)
@@ -97,7 +97,12 @@ def read_regular(root: Path, relative: str) -> bytes:
                 raise ValueError("linked or non-regular input")
             if (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
                 raise ValueError("input topology changed during preflight")
-            return stream.read()
+            if max_bytes is not None and actual.st_size > max_bytes:
+                raise ValueError("regular file exceeds read bound")
+            data = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+            if max_bytes is not None and len(data) > max_bytes:
+                raise ValueError("regular file grew beyond read bound")
+            return data
     finally:
         os.close(descriptor)
 
