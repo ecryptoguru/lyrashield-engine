@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "releases": {
+    "sid": {
+      "base": "https://deb.debian.org/debian/",
+      "keyring": "/usr/share/keyrings/debian-archive-keyring.pgp",
+      "release_sha256": "40b459178938cc0f1dbd2d481a205054f18e9b62c3a40547ab97fba7e36634ea",
+      "indexes": {
+        "arm64": {
+          "path": "dists/sid/main/binary-arm64/Packages.xz",
+          "sha256": "2a35d08bd0ab8a6c1482aad837d7ffcad307e29e659394e011824c1f08f52bc1"
+        },
+        "amd64": {
+          "path": "dists/sid/main/binary-amd64/Packages.xz",
+          "sha256": "2ac155a2a44cdc31a8bf344df5e24fe4100adfd62d0e4a6e0a3f565f6253ea53"
+        }
+      }
+    },
+    "kali": {
+      "base": "https://kali.download/kali/",
+      "keyring": "/usr/share/keyrings/kali-archive-keyring.gpg",
+      "release_sha256": "99166523a2f29b8f8ad01ef6ebc7f923a8eff6ac7df885eaba175199d53356d8",
+      "indexes": {
+        "arm64": {
+          "path": "dists/kali-rolling/main/binary-arm64/Packages.gz",
+          "sha256": "c9dd9f2b3bf13f9e1e7705283805691072996f9f18078404335aeb8147329a75"
+        },
+        "amd64": {
+          "path": "dists/kali-rolling/main/binary-amd64/Packages.gz",
+          "sha256": "7f77b3ab2570fcec766527d724d75a14af34adc56f8d322fa1d6946f19fc8a11"
+        }
+      }
+    }
+  },
+  "packages": {
+    "arm64": [
+      {
+        "archive": "kali",
+        "Package": "python3-anyio",
+        "Version": "4.15.1-3",
+        "Architecture": "all",
+        "Filename": "pool/main/p/python-anyio/python3-anyio_4.15.1-3_all.deb",
+        "SHA256": "3aac617ae1e7f5b370639559ae996c37a0a27fbe5e0a25df21b4b2d76114cd42",
+        "Source": "python-anyio"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-dnspython",
+        "Version": "2.8.0-7",
+        "Architecture": "all",
+        "Filename": "pool/main/d/dnspython/python3-dnspython_2.8.0-7_all.deb",
+        "SHA256": "18e94dc71e9dec0332bdfd6d8fc69f36da058ef48d773deb4f1c1dceca211547",
+        "Source": "dnspython"
+      },
+      {
+        "archive": "kali",
+        "Package": "python3-jwt",
+        "Version": "2.15.1-1",
+        "Architecture": "all",
+        "Filename": "pool/main/p/pyjwt/python3-jwt_2.15.1-1_all.deb",
+        "SHA256": "e2bdfe81e1c0c45866e37e1a2f2fd190fcec24f8c5fc083e994733b0f915b1af",
+        "Source": "pyjwt"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-msgpack",
+        "Version": "1.2.1-3",
+        "Architecture": "arm64",
+        "Filename": "pool/main/p/python-msgpack/python3-msgpack_1.2.1-3_arm64.deb",
+        "SHA256": "7b020ffa35c8d9f922cb95e55ccf9aba6286b56062491fcb3791d401b69b3301",
+        "Source": "python-msgpack"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-pip",
+        "Version": "26.2.2+dfsg-1",
+        "Architecture": "all",
+        "Filename": "pool/main/p/python-pip/python3-pip_26.2.2+dfsg-1_all.deb",
+        "SHA256": "993e00276f5fbda31d08d0389f3aecc72e16c13771803df8eff31270bed752ca",
+        "Source": "python-pip"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-pip-whl",
+        "Version": "26.2.2+dfsg-1",
+        "Architecture": "all",
+        "Filename": "pool/main/p/python-pip/python3-pip-whl_26.2.2+dfsg-1_all.deb",
+        "SHA256": "5df0bb84a02838cc65483a4fa6fa876e956efc79ae265c784bb2fc2e98091644",
+        "Source": "python-pip"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-pyasn1",
+        "Version": "0.6.5-1",
+        "Architecture": "all",
+        "Filename": "pool/main/p/pyasn1/python3-pyasn1_0.6.5-1_all.deb",
+        "SHA256": "b3ddc86aaa2b7b3c43394afae5f83315d45da2677db40e613276fdf2e96f52f8",
+        "Source": "pyasn1"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-tornado",
+        "Version": "6.6.0-1",
+        "Architecture": "arm64",
+        "Filename": "pool/main/p/python-tornado/python3-tornado_6.6.0-1_arm64.deb",
+        "SHA256": "aa10db473500b0e4a3deec3a4c895a6a6285f950c48de627bb011162732b9036",
+        "Source": "python-tornado"
+      }
+    ],
+    "amd64": [
+      {
+        "archive": "kali",
+        "Package": "python3-anyio",
+        "Version": "4.15.1-3",
+        "Architecture": "all",
+        "Filename": "pool/main/p/python-anyio/python3-anyio_4.15.1-3_all.deb",
+        "SHA256": "3aac617ae1e7f5b370639559ae996c37a0a27fbe5e0a25df21b4b2d76114cd42",
+        "Source": "python-anyio"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-dnspython",
+        "Version": "2.8.0-7",
+        "Architecture": "all",
+        "Filename": "pool/main/d/dnspython/python3-dnspython_2.8.0-7_all.deb",
+        "SHA256": "18e94dc71e9dec0332bdfd6d8fc69f36da058ef48d773deb4f1c1dceca211547",
+        "Source": "dnspython"
+      },
+      {
+        "archive": "kali",
+        "Package": "python3-jwt",
+        "Version": "2.15.1-1",
+        "Architecture": "all",
+        "Filename": "pool/main/p/pyjwt/python3-jwt_2.15.1-1_all.deb",
+        "SHA256": "e2bdfe81e1c0c45866e37e1a2f2fd190fcec24f8c5fc083e994733b0f915b1af",
+        "Source": "pyjwt"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-msgpack",
+        "Version": "1.2.1-3",
+        "Architecture": "amd64",
+        "Filename": "pool/main/p/python-msgpack/python3-msgpack_1.2.1-3_amd64.deb",
+        "SHA256": "0ed826b52f74816f0364c9227d02667f400760a2e66d9837398a7652e8a58603",
+        "Source": "python-msgpack"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-pip",
+        "Version": "26.2.2+dfsg-1",
+        "Architecture": "all",
+        "Filename": "pool/main/p/python-pip/python3-pip_26.2.2+dfsg-1_all.deb",
+        "SHA256": "993e00276f5fbda31d08d0389f3aecc72e16c13771803df8eff31270bed752ca",
+        "Source": "python-pip"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-pip-whl",
+        "Version": "26.2.2+dfsg-1",
+        "Architecture": "all",
+        "Filename": "pool/main/p/python-pip/python3-pip-whl_26.2.2+dfsg-1_all.deb",
+        "SHA256": "5df0bb84a02838cc65483a4fa6fa876e956efc79ae265c784bb2fc2e98091644",
+        "Source": "python-pip"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-pyasn1",
+        "Version": "0.6.5-1",
+        "Architecture": "all",
+        "Filename": "pool/main/p/pyasn1/python3-pyasn1_0.6.5-1_all.deb",
+        "SHA256": "b3ddc86aaa2b7b3c43394afae5f83315d45da2677db40e613276fdf2e96f52f8",
+        "Source": "pyasn1"
+      },
+      {
+        "archive": "sid",
+        "Package": "python3-tornado",
+        "Version": "6.6.0-1",
+        "Architecture": "amd64",
+        "Filename": "pool/main/p/python-tornado/python3-tornado_6.6.0-1_amd64.deb",
+        "SHA256": "2860cd2a2fce74666889bcc014adc6a992f1bae426d91735a4cc78c7584c2b39",
+        "Source": "python-tornado"
+      }
+    ]
+  }
+}

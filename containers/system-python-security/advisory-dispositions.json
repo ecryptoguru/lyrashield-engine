@@ -1,0 +1,854 @@
+{
+  "schema": 1,
+  "qualification_sha256": "4499b68a97dc24edd3830c2baaef243b7e559473db91e10a2bcd8d3a8b54b9d4",
+  "scope": "source-specific dispositions, not an auditor ignore file or final-image clearance",
+  "advisories": [
+    {
+      "distribution": "anyio",
+      "identifiers": [
+        "CVE-2026-63374",
+        "GHSA-82r6-8w77-94w6"
+      ],
+      "sources": [
+        "https://github.com/agronholm/anyio/security/advisories/GHSA-82r6-8w77-94w6",
+        "https://security-tracker.debian.org/tracker/CVE-2026-63374"
+      ],
+      "severity": "critical",
+      "component": "TLSStream IDNA 2003 host name encoding enables potential TLS certificate spoofing",
+      "qualification": "4.15.1-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-63374)",
+      "disposition": "signed leaf upgrade 4.15.1-3"
+    },
+    {
+      "distribution": "anyio",
+      "identifiers": [
+        "CVE-2026-64847",
+        "GHSA-5p39-cfhj-2xmp"
+      ],
+      "sources": [
+        "https://github.com/agronholm/anyio/security/advisories/GHSA-5p39-cfhj-2xmp",
+        "https://security-tracker.debian.org/tracker/CVE-2026-64847"
+      ],
+      "severity": "medium",
+      "component": "AnyIO process-pool workers can block indefinitely on undrained stderr",
+      "qualification": "4.15.1-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-64847)",
+      "disposition": "signed leaf upgrade 4.15.1-3"
+    },
+    {
+      "distribution": "brotli",
+      "identifiers": [
+        "CVE-2026-111497",
+        "GHSA-9v8h-qqgm-4m35"
+      ],
+      "sources": [
+        "https://github.com/advisories/GHSA-9v8h-qqgm-4m35",
+        "https://security-tracker.debian.org/tracker/CVE-2026-111497"
+      ],
+      "severity": "critical",
+      "component": "Out-of-bounds write in the Brotli decoder (\"Node2Shell\") also affects the PyPI Brotli package",
+      "qualification": "1.2.0-4.1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-111497)",
+      "disposition": "runtime lane owns libbrotli1 AND python3-brotli 1.2.0-4.1; not repaired by this helper"
+    },
+    {
+      "distribution": "certifi",
+      "identifiers": [
+        "GHSA-6q48-6c7w-9gw2",
+        "GHSA-6q48-6c7w-9gw2"
+      ],
+      "sources": [
+        "https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2"
+      ],
+      "severity": "critical",
+      "component": "certifi bundles emSign root CAs with compromised intermediate CA keys",
+      "qualification": "test effective system CA",
+      "disposition": "runtime lane must validate effective system trust/CA distrust; not repaired by this helper"
+    },
+    {
+      "distribution": "cryptography",
+      "identifiers": [
+        "CVE-2026-69247",
+        "GHSA-g6cj-pr64-35w5"
+      ],
+      "sources": [
+        "https://github.com/pyca/cryptography/security/advisories/GHSA-g6cj-pr64-35w5",
+        "https://security-tracker.debian.org/tracker/CVE-2026-69247"
+      ],
+      "severity": "high",
+      "component": "PKCS#7 EnvelopedData decryption exposes a Bleichenbacher oracle through distinguishable errors and timing",
+      "qualification": "49.0.0-2; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-69247)",
+      "disposition": "retain Debian 49.0.0-2 security backport; exact original source-package fix"
+    },
+    {
+      "distribution": "dnspython",
+      "identifiers": [
+        "CVE-2026-114605",
+        "GHSA-45c3-73f7-pv4m"
+      ],
+      "sources": [
+        "https://github.com/rthalley/dnspython/security/advisories/GHSA-45c3-73f7-pv4m",
+        "https://security-tracker.debian.org/tracker/CVE-2026-114605"
+      ],
+      "severity": "high",
+      "component": "dnspython dns.name.from_wire_parser() excessive CPU use",
+      "qualification": "2.8.0-7; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-114605)",
+      "disposition": "signed leaf upgrade 2.8.0-7"
+    },
+    {
+      "distribution": "h2",
+      "identifiers": [
+        "CVE-2026-71554",
+        "GHSA-6hr6-w5qg-qmwg"
+      ],
+      "sources": [
+        "https://github.com/python-hyper/h2/security/advisories/GHSA-6hr6-w5qg-qmwg",
+        "https://security-tracker.debian.org/tracker/CVE-2026-71554"
+      ],
+      "severity": "medium",
+      "component": "Duplicate Host header could facilitate request smuggling",
+      "qualification": "unfixed in Debian and Kali; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-71554)",
+      "disposition": "downstream anchored duplicate-Host rejection; actual H2Connection positive/negative regression passed"
+    },
+    {
+      "distribution": "hpack",
+      "identifiers": [
+        "CVE-2026-59980",
+        "GHSA-8v8h-hg4w-mvq2"
+      ],
+      "sources": [
+        "https://github.com/python-hyper/hpack/security/advisories/GHSA-8v8h-hg4w-mvq2",
+        "https://security-tracker.debian.org/tracker/CVE-2026-59980"
+      ],
+      "severity": "medium",
+      "component": "Unbounded variable integer decoding can cause run-away computation on malformed input",
+      "qualification": "unfixed in Debian and Kali; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-59980)",
+      "disposition": "downstream anchored bounded uint32/continuation decoder; all prefix widths tested"
+    },
+    {
+      "distribution": "jaraco-context",
+      "identifiers": [
+        "CVE-2026-23949",
+        "GHSA-58pv-8j8x-9vj2"
+      ],
+      "sources": [
+        "https://github.com/jaraco/jaraco.context/security/advisories/GHSA-58pv-8j8x-9vj2",
+        "https://security-tracker.debian.org/tracker/CVE-2026-23949"
+      ],
+      "severity": "high",
+      "component": "jaraco.context Has a Path Traversal Vulnerability",
+      "qualification": "6.0.1-2; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-23949)",
+      "disposition": "external Debian 6.0.1-2 already fixed; amend private setuptools jaraco 5.3.0 and seed, preserve setuptools/pkg_resources APIs"
+    },
+    {
+      "distribution": "msgpack",
+      "identifiers": [
+        "CVE-2026-57585",
+        "GHSA-6v7p-g79w-8964"
+      ],
+      "sources": [
+        "https://github.com/msgpack/msgpack-python/security/advisories/GHSA-6v7p-g79w-8964",
+        "https://security-tracker.debian.org/tracker/CVE-2026-57585"
+      ],
+      "severity": "high",
+      "component": "Out-of-bounds read / crash on Unpacker reuse after a caught error",
+      "qualification": "1.1.2-3; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-57585)",
+      "disposition": "signed native extension upgrade 1.2.1-3 includes Debian backports; pip vendor fallback separately assessed, not an executable C-extension finding"
+    },
+    {
+      "distribution": "msgpack",
+      "identifiers": [
+        "CVE-2026-114613",
+        "GHSA-j586-36cw-2gc2"
+      ],
+      "sources": [
+        "https://github.com/msgpack/msgpack-python/security/advisories/GHSA-j586-36cw-2gc2",
+        "https://security-tracker.debian.org/tracker/CVE-2026-114613"
+      ],
+      "severity": "high",
+      "component": "Unbounded memory leak in msgpack C extension on strict_map_key validation failure",
+      "qualification": "1.2.1-2; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-114613)",
+      "disposition": "signed native extension upgrade 1.2.1-3 includes Debian backports; pip vendor fallback separately assessed, not an executable C-extension finding"
+    },
+    {
+      "distribution": "oauthlib",
+      "identifiers": [
+        "CVE-2026-49265",
+        "GHSA-xpv3-w29h-x7cv"
+      ],
+      "sources": [
+        "https://github.com/oauthlib/oauthlib/security/advisories/GHSA-xpv3-w29h-x7cv",
+        "https://security-tracker.debian.org/tracker/CVE-2026-49265"
+      ],
+      "severity": "medium",
+      "component": "Timing Attack Vulnerability in PKCE code_verifier Comparison (CWE-208)",
+      "qualification": "unfixed in Debian and Kali; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-49265)",
+      "disposition": "downstream hmac.compare_digest PKCE backport from 74664d3; valid/invalid API checks exercise actual comparison"
+    },
+    {
+      "distribution": "oauthlib",
+      "identifiers": [
+        "CVE-2026-49272",
+        "GHSA-3jp2-3mrg-2vxc"
+      ],
+      "sources": [
+        "https://github.com/oauthlib/oauthlib/security/advisories/GHSA-3jp2-3mrg-2vxc"
+      ],
+      "severity": "high",
+      "component": "Bearer token can be retrieved as long as client knows a valid client ID for device workflow",
+      "qualification": "no Debian tracker entry; actual upstream fix 4.0.1",
+      "disposition": "author advisory requires 4.0.1 (aggregator incorrectly says 4.0.0); downstream port of device-code required parameter, bound-client validator hook, fail-closed status mapping and approved scopes from 77a5f1c8; actual token issuance rejected for unknown/pending and succeeds for authorized. Existing 3.x client/authentication API retained; no major-version metadata claim"
+    },
+    {
+      "distribution": "pip",
+      "identifiers": [
+        "CVE-2026-13346",
+        "GHSA-qwm4-qh6w-59xr"
+      ],
+      "sources": [
+        "https://github.com/advisories/GHSA-qwm4-qh6w-59xr",
+        "https://security-tracker.debian.org/tracker/CVE-2026-13346"
+      ],
+      "severity": "medium",
+      "component": "pip would incorrectly handle doubly-encoded package URLs from indexes",
+      "qualification": "26.2.2+dfsg-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-13346)",
+      "disposition": "signed pip and pip-whl 26.2.2+dfsg-1"
+    },
+    {
+      "distribution": "pyasn1",
+      "identifiers": [
+        "CVE-2026-119196",
+        "GHSA-2qm8-x737-gmw5"
+      ],
+      "sources": [
+        "https://github.com/pyasn1/pyasn1/security/advisories/GHSA-2qm8-x737-gmw5",
+        "https://security-tracker.debian.org/tracker/CVE-2026-119196"
+      ],
+      "severity": "high",
+      "component": "pyasn1 has quadratic CPU consumption in constructed BIT STRING decoding",
+      "qualification": "0.6.5-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119196)",
+      "disposition": "signed leaf upgrade 0.6.5-1"
+    },
+    {
+      "distribution": "pyasn1",
+      "identifiers": [
+        "CVE-2026-119194",
+        "GHSA-fm9c-5rcf-2q5p"
+      ],
+      "sources": [
+        "https://github.com/pyasn1/pyasn1/security/advisories/GHSA-fm9c-5rcf-2q5p",
+        "https://security-tracker.debian.org/tracker/CVE-2026-119194"
+      ],
+      "severity": "high",
+      "component": "pyasn1 has quadratic CPU use in schemaless BER/CER/DER container decoding",
+      "qualification": "0.6.5-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119194)",
+      "disposition": "signed leaf upgrade 0.6.5-1"
+    },
+    {
+      "distribution": "pyasn1",
+      "identifiers": [
+        "CVE-2026-119197",
+        "GHSA-mm57-4v3p-rchx"
+      ],
+      "sources": [
+        "https://github.com/pyasn1/pyasn1/security/advisories/GHSA-mm57-4v3p-rchx",
+        "https://security-tracker.debian.org/tracker/CVE-2026-119197"
+      ],
+      "severity": "high",
+      "component": "pyasn1 has quadratic-complexity denial of service in binary REAL decoding",
+      "qualification": "0.6.5-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119197)",
+      "disposition": "signed leaf upgrade 0.6.5-1"
+    },
+    {
+      "distribution": "pyasn1",
+      "identifiers": [
+        "CVE-2026-119195",
+        "GHSA-9m75-vc3g-4x39"
+      ],
+      "sources": [
+        "https://github.com/pyasn1/pyasn1/security/advisories/GHSA-9m75-vc3g-4x39",
+        "https://security-tracker.debian.org/tracker/CVE-2026-119195"
+      ],
+      "severity": "high",
+      "component": "pyasn1 has quadratic-time denial of service in constructed string and indefinite-length ANY decoding",
+      "qualification": "0.6.5-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119195)",
+      "disposition": "signed leaf upgrade 0.6.5-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102268",
+        "GHSA-ffc3-869f-jxw9"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-ffc3-869f-jxw9",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102268"
+      ],
+      "severity": "critical",
+      "component": "Asymmetric-PEM detection bypass: whitespace/line-ending-mutated public keys skip the HS/asymmetric confusion guard",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102268)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-103001",
+        "GHSA-gvp8-978c-rx2q"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-gvp8-978c-rx2q",
+        "https://security-tracker.debian.org/tracker/CVE-2026-103001"
+      ],
+      "severity": "medium",
+      "component": "PyJWT.decode() reintroduces options-dict mutation, enabling silent claim-verification bypass on dict reuse",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-103001)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102271",
+        "GHSA-p4g4-x82p-q773"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-p4g4-x82p-q773",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102271"
+      ],
+      "severity": "high",
+      "component": "Public keys in DER form are accepted as HMAC secrets, bypassing the CVE-2022-29217 guard",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102271)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102274",
+        "GHSA-w6j9-cwv2-h6wq"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-w6j9-cwv2-h6wq",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102274"
+      ],
+      "severity": "medium",
+      "component": "Malformed RSA JWK aborts parsing of an entire JWK Set",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102274)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102267",
+        "GHSA-9v7f-9g4p-ffgj"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-9v7f-9g4p-ffgj",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102267"
+      ],
+      "severity": "high",
+      "component": "PyJWKClient follows redirects when fetching JWKS",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102267)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102266",
+        "GHSA-9j54-fg26-wv3r"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-9j54-fg26-wv3r",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102266"
+      ],
+      "severity": "high",
+      "component": "PyJWK accepts empty HMAC keys, bypassing PyJWT's empty-key validation",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102266)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102270",
+        "GHSA-jwrc-g2q2-pq5p"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-jwrc-g2q2-pq5p",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102270"
+      ],
+      "severity": "medium",
+      "component": "ReDoS vulnerability when calling the `is_pem_format` function.",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102270)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-101917",
+        "GHSA-2gx3-rcp4-g85q"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-2gx3-rcp4-g85q",
+        "https://security-tracker.debian.org/tracker/CVE-2026-101917"
+      ],
+      "severity": "medium",
+      "component": "PyJWKClient still amplifies unauthenticated JWKS fetches on unknown kid values (incomplete fix of CVE-2026-48524)",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-101917)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-101918",
+        "GHSA-42vr-xj54-vc7v"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-42vr-xj54-vc7v",
+        "https://security-tracker.debian.org/tracker/CVE-2026-101918"
+      ],
+      "severity": "medium",
+      "component": "Unauthenticated RecursionError DoS in pre-verification payload parse (PyJWKClient.get_signing_key_from_jwt / verify_signature=False)",
+      "qualification": "2.15.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-101918)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102269",
+        "GHSA-hxm8-2xgr-2p9m"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-hxm8-2xgr-2p9m",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102269"
+      ],
+      "severity": "medium",
+      "component": "Non-canonical signature segments enable raw-token revocation bypass",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102269)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102273",
+        "GHSA-w2cx-738m-mc7w"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-w2cx-738m-mc7w",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102273"
+      ],
+      "severity": "high",
+      "component": "PyJWT accepts public JWK containers as HMAC secrets",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102273)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102272",
+        "GHSA-r6x4-923q-g947"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-r6x4-923q-g947",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102272"
+      ],
+      "severity": "high",
+      "component": "PyJWT BOM Bypass",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102272)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102265",
+        "GHSA-8wjv-2p76-3863"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-8wjv-2p76-3863",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102265"
+      ],
+      "severity": "medium",
+      "component": "Uncaught RecursionError in jwt.decode() on deeply nested token header",
+      "qualification": "2.14.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102265)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "CVE-2026-102275",
+        "GHSA-x33g-cr3x-6449"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-x33g-cr3x-6449",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102275"
+      ],
+      "severity": "moderate",
+      "component": "PyJWT accepts inconsistent OKP x/d JWKs, causing public/private key identity confusion",
+      "qualification": "2.15.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102275)",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "pyjwt",
+      "identifiers": [
+        "GHSA-pxh4-856f-4h89",
+        "GHSA-pxh4-856f-4h89"
+      ],
+      "sources": [
+        "https://github.com/jpadilla/pyjwt/security/advisories/GHSA-pxh4-856f-4h89"
+      ],
+      "severity": "high",
+      "component": "HS256/384/512 verify accepts empty HMAC key via oct JWK (PyJWK/PyJWKClient) enabling token forgery",
+      "qualification": "signed 2.15.1-1 >= upstream fix",
+      "disposition": "signed leaf upgrade 2.15.1-1"
+    },
+    {
+      "distribution": "setuptools",
+      "identifiers": [
+        "CVE-2026-59890",
+        "GHSA-h35f-9h28-mq5c"
+      ],
+      "sources": [
+        "https://github.com/pypa/setuptools/security/advisories/GHSA-h35f-9h28-mq5c",
+        "https://security-tracker.debian.org/tracker/CVE-2026-59890"
+      ],
+      "severity": "moderate",
+      "component": "MANIFEST.in exclusion bypass in sdist via Unicode normalization collision (NFC/NFD) on macOS APFS/HFS+",
+      "qualification": "(not affected); [Debian](https://security-tracker.debian.org/tracker/CVE-2026-59890)",
+      "disposition": "platform-specific trigger absent on this Linux runtime; retain setuptools 78.1.1, independent private jaraco repaired"
+    },
+    {
+      "distribution": "setuptools",
+      "identifiers": [
+        "GHSA-xmj3-9gf7-h52w",
+        "GHSA-xmj3-9gf7-h52w"
+      ],
+      "sources": [
+        "https://github.com/pypa/setuptools/security/advisories/GHSA-xmj3-9gf7-h52w"
+      ],
+      "severity": "low",
+      "component": "Windows path escape via namespace_packages.txt during legacy wheel installation  Description",
+      "qualification": "Windows-only",
+      "disposition": "platform-specific trigger absent on this Linux runtime; retain setuptools 78.1.1, independent private jaraco repaired"
+    },
+    {
+      "distribution": "soupsieve",
+      "identifiers": [
+        "CVE-2026-86000",
+        "GHSA-gjv8-xp57-g29c"
+      ],
+      "sources": [
+        "https://github.com/facelessuser/soupsieve/security/advisories/GHSA-gjv8-xp57-g29c",
+        "https://security-tracker.debian.org/tracker/CVE-2026-86000"
+      ],
+      "severity": "moderate",
+      "component": "Polynomial-time ReDoS (O(n\u00b2)) in the `IDENTIFIER` / `VALUE` selector sub-patterns",
+      "qualification": "unfixed in Debian and Kali; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-86000)",
+      "disposition": "downstream anchored parser regex fixes from ce44e49 and cf198fc; bounded and valid selectors tested"
+    },
+    {
+      "distribution": "soupsieve",
+      "identifiers": [
+        "CVE-2026-85999",
+        "GHSA-j934-xhv5-fg8f"
+      ],
+      "sources": [
+        "https://github.com/facelessuser/soupsieve/security/advisories/GHSA-j934-xhv5-fg8f",
+        "https://security-tracker.debian.org/tracker/CVE-2026-85999"
+      ],
+      "severity": "moderate",
+      "component": "Polynomial-time ReDoS (O(n\u00b2)) in the whitespace/comment trimming regex `RE_WS_END` (triggers on VALID selectors)",
+      "qualification": "unfixed in Debian and Kali; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-85999)",
+      "disposition": "downstream anchored parser regex fixes from ce44e49 and cf198fc; bounded and valid selectors tested"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "CVE-2026-49854",
+        "GHSA-cx3h-4qpv-8hc9"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-cx3h-4qpv-8hc9",
+        "https://security-tracker.debian.org/tracker/CVE-2026-49854"
+      ],
+      "severity": "low",
+      "component": "Tornado has out-of-bounds memory access via C extension",
+      "qualification": "6.6.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-49854)",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "CVE-2026-49853",
+        "GHSA-3x9g-8vmp-wqvf"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-3x9g-8vmp-wqvf",
+        "https://security-tracker.debian.org/tracker/CVE-2026-49853"
+      ],
+      "severity": "high",
+      "component": "Authorization header forwarded across cross-origin redirects in SimpleAsyncHTTPClient",
+      "qualification": "6.6.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-49853)",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "CVE-2026-49855",
+        "GHSA-mgf9-4vpg-hj56"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-mgf9-4vpg-hj56",
+        "https://security-tracker.debian.org/tracker/CVE-2026-49855"
+      ],
+      "severity": "high",
+      "component": "tornado AsyncHTTPClient accumulates decompressed chunks without size limit (gzip bomb)",
+      "qualification": "6.6.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-49855)",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "CVE-2026-82397",
+        "GHSA-mpf4-983q-p7j4"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-mpf4-983q-p7j4",
+        "https://security-tracker.debian.org/tracker/CVE-2026-82397"
+      ],
+      "severity": "high",
+      "component": "Urlencoded body parsing omits max_num_fields, so one request can stall the event loop",
+      "qualification": "6.6.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-82397)",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "GHSA-pw6j-qg29-8w7f",
+        "GHSA-pw6j-qg29-8w7f"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-pw6j-qg29-8w7f"
+      ],
+      "severity": "moderate",
+      "component": "CurlAsyncHTTPClient leaks per-request credentials on handle reuse",
+      "qualification": "included in signed 6.6.0-1; pycurl absent",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "GHSA-chx6-46f5-w4vp",
+        "GHSA-chx6-46f5-w4vp"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-chx6-46f5-w4vp"
+      ],
+      "severity": "high",
+      "component": "CurlAsyncHTTPClient enforces no response-size limit \u2014 decompression bomb drives unbounded memory accumulation to OOM",
+      "qualification": "included in signed 6.6.0-1; pycurl absent",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "GHSA-c2m8-h5v5-343r",
+        "GHSA-c2m8-h5v5-343r"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-c2m8-h5v5-343r"
+      ],
+      "severity": "high",
+      "component": "StaticFileHandler follows symlinks outside static root (path traversal)",
+      "qualification": "included in signed 6.6.0-1",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "GHSA-3hv7-mjh2-fv65",
+        "GHSA-3hv7-mjh2-fv65"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-3hv7-mjh2-fv65"
+      ],
+      "severity": "moderate",
+      "component": "Unbounded query-string argument count allows event-loop-stalling DoS",
+      "qualification": "included in signed 6.6.0-1",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "GHSA-wwv5-g3v4-889x",
+        "GHSA-wwv5-g3v4-889x"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-wwv5-g3v4-889x"
+      ],
+      "severity": "low",
+      "component": "Incomplete fix for CVE-2026-35536: cookie attribute injection re-opened via the legacy case-insensitive `**kwargs` path in `set_cookie`",
+      "qualification": "included in signed 6.6.0-1",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "GHSA-8423-8fgw-73vq",
+        "GHSA-8423-8fgw-73vq"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-8423-8fgw-73vq"
+      ],
+      "severity": "moderate",
+      "component": "multipart split() creates huge temp list before max_parts check -> memory amplification DoS (httputil.py:34)",
+      "qualification": "included in signed 6.6.0-1",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "CVE-2026-116577",
+        "GHSA-pcg2-g6cj-q92c"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-pcg2-g6cj-q92c",
+        "https://security-tracker.debian.org/tracker/CVE-2026-116577"
+      ],
+      "severity": "moderate",
+      "component": "Quadratic CPU usage when parsing HTTP headers with line folding",
+      "qualification": "6.6.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-116577)",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "CVE-2026-115927",
+        "GHSA-r4j5-9xpp-3985"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-r4j5-9xpp-3985",
+        "https://security-tracker.debian.org/tracker/CVE-2026-115927"
+      ],
+      "severity": "moderate",
+      "component": "Event loop blocking and excess memory use from chunked bodies with many small chunks",
+      "qualification": "6.6.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-115927)",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "tornado",
+      "identifiers": [
+        "CVE-2026-116578",
+        "GHSA-pw9p-v7r6-gx4p"
+      ],
+      "sources": [
+        "https://github.com/tornadoweb/tornado/security/advisories/GHSA-pw9p-v7r6-gx4p",
+        "https://security-tracker.debian.org/tracker/CVE-2026-116578"
+      ],
+      "severity": "low",
+      "component": "Open redirect in RedirectHandler via protocol-relative URLs",
+      "qualification": "6.6.0-1; [Debian](https://security-tracker.debian.org/tracker/CVE-2026-116578)",
+      "disposition": "signed leaf upgrade 6.6.0-1; Curl-only findings additionally require absent pycurl, not a blanket waiver"
+    },
+    {
+      "distribution": "werkzeug",
+      "identifiers": [
+        "CVE-2026-102598",
+        "GHSA-g6x2-hccm-hh4m"
+      ],
+      "sources": [
+        "https://github.com/pallets/werkzeug/security/advisories/GHSA-g6x2-hccm-hh4m",
+        "https://security-tracker.debian.org/tracker/CVE-2026-102598"
+      ],
+      "severity": "moderate",
+      "component": "Werkzeug safe_join() allows Windows special device names",
+      "qualification": "(not affected); [Debian](https://security-tracker.debian.org/tracker/CVE-2026-102598)",
+      "disposition": "Windows device-name trigger absent on Linux; retain package"
+    },
+    {
+      "distribution": "pip._vendor.urllib3",
+      "identifiers": [
+        "GHSA-qccp-gfcp-xxvc",
+        "CVE-2026-44431"
+      ],
+      "sources": [
+        "https://github.com/urllib3/urllib3/security/advisories/GHSA-qccp-gfcp-xxvc"
+      ],
+      "disposition": "replace system AND seed urllib3 2.7.0 with verified upstream 2.8.0 pure-Python wheel; vendor manifest and wheel RECORD updated; actual requests adapter instantiates patched PoolManager"
+    },
+    {
+      "distribution": "pip._vendor.urllib3",
+      "identifiers": [
+        "GHSA-mf9v-mfxr-j63j",
+        "CVE-2026-44432"
+      ],
+      "sources": [
+        "https://github.com/urllib3/urllib3/security/advisories/GHSA-mf9v-mfxr-j63j"
+      ],
+      "disposition": "replace system AND seed urllib3 2.7.0 with verified upstream 2.8.0 pure-Python wheel; vendor manifest and wheel RECORD updated; actual requests adapter instantiates patched PoolManager"
+    },
+    {
+      "distribution": "pip._vendor.urllib3",
+      "identifiers": [
+        "GHSA-8988-9cw3-xx77",
+        "CVE-2026-97687"
+      ],
+      "sources": [
+        "https://github.com/urllib3/urllib3/security/advisories/GHSA-8988-9cw3-xx77"
+      ],
+      "disposition": "replace system AND seed urllib3 2.7.0 with verified upstream 2.8.0 pure-Python wheel; vendor manifest and wheel RECORD updated; actual requests adapter instantiates patched PoolManager"
+    },
+    {
+      "distribution": "pip._vendor.urllib3",
+      "identifiers": [
+        "GHSA-gh4c-6fx4-qh6g",
+        "CVE-2026-97688"
+      ],
+      "sources": [
+        "https://github.com/urllib3/urllib3/security/advisories/GHSA-gh4c-6fx4-qh6g"
+      ],
+      "disposition": "replace system AND seed urllib3 2.7.0 with verified upstream 2.8.0 pure-Python wheel; vendor manifest and wheel RECORD updated; actual requests adapter instantiates patched PoolManager"
+    },
+    {
+      "distribution": "pip._vendor.urllib3",
+      "identifiers": [
+        "GHSA-vxq7-64xx-v4gw",
+        "CVE-2026-97689"
+      ],
+      "sources": [
+        "https://github.com/urllib3/urllib3/security/advisories/GHSA-vxq7-64xx-v4gw"
+      ],
+      "disposition": "replace system AND seed urllib3 2.7.0 with verified upstream 2.8.0 pure-Python wheel; vendor manifest and wheel RECORD updated; actual requests adapter instantiates patched PoolManager"
+    },
+    {
+      "distribution": "mako",
+      "identifiers": [
+        "CVE-2026-41205"
+      ],
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2026-41205",
+        "https://github.com/sqlalchemy/mako/commit/e05ac61989a7fb9dd7dcde6cfd72dc48328719a3"
+      ],
+      "disposition": "downstream exact lstrip normalization fix; sibling sentinel denied, normal TemplateLookup and report rendering retained"
+    }
+  ],
+  "system_pip_msgpack": {
+    "proof": "pip 26.2.2 Debian vendor has no _cmsgpack file; actual Packer and Unpacker come from pip._vendor.msgpack.fallback",
+    "primary_sources": [
+      "https://github.com/msgpack/msgpack-python/security/advisories/GHSA-j586-36cw-2gc2",
+      "https://github.com/msgpack/msgpack-python/security/advisories/GHSA-6v7p-g79w-8964"
+    ],
+    "decision": "retain pure Python 1.1.2 vendor; C memory corruption/leak advisories do not establish native-code reachability here. The independently installed Debian native extension is upgraded."
+  },
+  "unmatched_distributions": {
+    "argon2-cffi-bindings": "no open source tracker issue in qualification; broader native-library assurance not established",
+    "gyp-next": "no open source tracker issue in qualification; not blanket clearance",
+    "lz4": "no open source tracker issue in qualification; native library scope remains separate",
+    "mako": "source fix above closes reproduced POSIX template path traversal; other Windows-only issues do not trigger on Linux",
+    "ndiff": "actual XML compare smoke; native nmap findings remain the runtime lane responsibility",
+    "playwright": "no open source tracker issue in qualification; browser/runtime resources are separate",
+    "pygobject": "no open source tracker issue in qualification; not blanket clearance",
+    "python-apt": "CVE-2025-6966 fixed in installed 3.1.0 source line",
+    "python-magic": "no open source tracker issue in qualification; libmagic/native tool scope separate"
+  },
+  "remaining_gates": [
+    "Brotli Python extension plus libbrotli1 owned by runtime lane",
+    "Effective CA distrust and good-root trust owned by runtime lane",
+    "Native nmap version/advisories owned by runtime lane",
+    "Integrated final arm64 and amd64 image inventory, receipts, CLI compatibility and re-audit still required",
+    "No arbitrary custom script or third-party extension reachability clearance"
+  ]
+}
