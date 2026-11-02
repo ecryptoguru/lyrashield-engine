@@ -121,7 +121,7 @@ def _exa_content(api_key: str, query: str, search_type: str, num_results: int) -
         api_key,
         "https://api.exa.ai/search",
         {
-            "query": f"{_SYSTEM_PROMPT}\n\n{query}",
+            "query": query,
             "type": search_type,
             "numResults": num_results,
             "contents": {"summary": {"query": _EXA_SUMMARY_PROMPT}},

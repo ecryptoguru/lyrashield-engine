@@ -2,18 +2,21 @@
 
 ## Current state
 
-The upstream base is Strix v1.6.2 at
-`ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2`. Product behavior lives in
+The upstream base is exact Strix commit
+`200a501f15a24a4152f92897a6b72af238ee69ef`. Product behavior lives in
 `lyrashield/**` and `lyrashield_adapter/**`; `strix/config/loader.py` retains the
 product settings seam. The reviewed `strix/**` patch changes four paths: the
-settings seam, one reviewed skill override, and two removed skills. Its
-footprint is +22/-201 with digest
-`3629e8f382fdd8eccf78553b102a25e99c73454c`. Pyright and its twelve unused
-typing/import-cycle compatibility hunks were retired under R9; strict mypy is
-the sole Python type gate. R10 brings the owned Local TUI and viewer under Ruff
-and strict mypy. The exact allowlist and current gate live in
-`scripts/verify-controlled-derivative.sh`. Dated entries below describe earlier
+settings seam, the semantic-confusion skill override, and removal of the unshipped
+Hurl and Hypothesis skills. Its footprint remains +22/-201, with digest
+`51682200fe3b9ec8fa2e0f998c80c095e7add114`. The exact allowlist, hard footprint
+ceilings, and patch digest are enforced by `scripts/verify-controlled-derivative.sh`.
+Strict mypy remains the Python type gate. Dated entries below describe earlier
 states, not the current patch inventory.
+
+This import is a candidate until the integrated owned runtime and full gate pass.
+The isolated qualification and all 26 upstream fixture dispositions are recorded
+in [the qualification snapshot](docs/evidence/strix-200a501f-qualification.md). No deployment or live
+provider qualification is implied by importing the substrate.
 
 ## History
 

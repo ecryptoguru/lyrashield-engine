@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import json
 import logging
 import re
@@ -12,6 +13,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from agents import RunContextWrapper, function_tool
+from caido_sdk_client import BaseError
 
 from strix.runtime.caido_handle import CaidoBootstrapHandle
 from strix.tools.nullish import clean_optional
@@ -67,6 +69,48 @@ async def _call[T](client: Client, fn: Callable[[Client], Awaitable[T]]) -> T:
         return await fn(client)
 
 
+_REQUEST_EXISTS_QUERY = "query RequestExists($id: ID!) { request(id: $id) { id } }"
+_REQUEST_EXISTS_ATTEMPTS = 2
+
+
+async def _request_exists(client: Client, request_id: str) -> bool:
+    data = await client.graphql.query(_REQUEST_EXISTS_QUERY, {"id": request_id})
+    return bool(data) and data.get("request") is not None
+
+
+async def existing_request_ids(
+    ctx: RunContextWrapper,
+    request_ids: list[str],
+) -> set[str]:
+    """Return request IDs that exist in the current Caido project."""
+    if not request_ids:
+        return set()
+
+    client = await _ctx_client(ctx)
+    if client is None:
+        raise RuntimeError("Caido client is not available")
+
+    # Request IDs are not an HTTPQL field, so each one is resolved by id. Only
+    # the id is selected: pulling the raw request and response bodies just to
+    # learn whether a row exists is what made this time out on busy projects.
+    existing: set[str] = set()
+    for request_id in request_ids:
+        for attempt in range(1, _REQUEST_EXISTS_ATTEMPTS + 1):
+            try:
+                exists = await _call(
+                    client,
+                    functools.partial(_request_exists, request_id=request_id),
+                )
+            except Exception:
+                if attempt == _REQUEST_EXISTS_ATTEMPTS:
+                    raise
+                continue
+            if exists:
+                existing.add(request_id)
+            break
+    return existing
+
+
 def _to_tool_json(value: Any) -> Any:
     """Recursively convert SDK dataclasses/Pydantic objects to tool JSON values."""
     if value is None or isinstance(value, str | int | float | bool):
@@ -98,7 +142,11 @@ def _no_client() -> str:
 
 
 def _err(name: str, exc: Exception) -> str:
-    logger.exception("%s failed", name)
+    # Caido-side failures (timeouts, bad filters, ...) are returned to the model, not our bugs.
+    if isinstance(exc, BaseError):
+        logger.warning("%s failed", name, exc_info=True)
+    else:
+        logger.exception("%s failed", name)
     return json.dumps(
         {"success": False, "error": f"{name} failed: {exc}"},
         ensure_ascii=False,

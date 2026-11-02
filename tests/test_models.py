@@ -33,6 +33,8 @@ from lyrashield.policy.models import (
 )
 from lyrashield.policy.settings import LlmSettings, Settings
 from strix.config import models as strix_models
+from strix.config.settings import Settings as UpstreamSettings
+from strix.llm.request_log import RequestLoggingModel
 
 
 @pytest.mark.asyncio
@@ -89,6 +91,40 @@ async def test_request_guard_marks_its_own_stream_idle_timeout() -> None:
             prompt=None,
         ):
             pass
+
+
+@pytest.mark.parametrize("idle_timeout", [0.0, None])
+@pytest.mark.asyncio
+async def test_request_guard_disabled_timer_allows_delayed_first_event(
+    idle_timeout: float | None,
+) -> None:
+    event = SimpleNamespace(type="response.created")
+
+    class Inner:
+        async def stream_response(self, *args: Any, **kwargs: Any):  # noqa: ARG002
+            await asyncio.sleep(0.01)
+            yield event
+
+    model = _RequestBoundTurnGuardModel(
+        inner=Inner(), max_tool_calls_per_turn=5, stream_idle_timeout=idle_timeout
+    )
+    async with asyncio.timeout(0.2):
+        seen = [
+            item
+            async for item in model.stream_response(
+                None,
+                [],
+                ModelSettings(),
+                [],
+                None,
+                [],
+                ModelTracing.DISABLED,
+                previous_response_id=None,
+                conversation_id=None,
+                prompt=None,
+            )
+        ]
+    assert seen == [event]
 
 
 @pytest.mark.asyncio
@@ -756,6 +792,9 @@ def test_routes_through_litellm_matches_the_provider(
     drift here breaks every request on that route.
     """
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    # This is a generic upstream routing fixture, not a product model route.
+    # Keep its settings schema independent of the registered product loader.
+    monkeypatch.setattr(strix_models, "load_settings", UpstreamSettings)
     assert strix_models.routes_through_litellm(model_name) is litellm
     try:
         model = strix_models.StrixProvider().get_model(model_name)
@@ -764,6 +803,8 @@ def test_routes_through_litellm_matches_the_provider(
         # proves the route is not LiteLLM's.
         assert not litellm
         return
-    while isinstance(model, strix_models._NonStreamingModel | strix_models._TurnGuardModel):
+    while isinstance(
+        model, strix_models._NonStreamingModel | strix_models._TurnGuardModel | RequestLoggingModel
+    ):
         model = model._inner
     assert isinstance(model, LitellmModel) is litellm

@@ -514,7 +514,7 @@ class _RequestBoundTurnGuardModel(_TurnGuardModel):
         conversation_id: str | None,
         prompt: ResponsePromptParam | None,
     ) -> AsyncIterator[TResponseStreamEvent]:
-        idle_timeout = self._stream_idle_timeout
+        idle_timeout = self._stream_idle_timeout or 0.0
         request_timeout = (model_settings.extra_args or {}).get("timeout")
         if (
             idle_timeout > 0
@@ -528,11 +528,10 @@ class _RequestBoundTurnGuardModel(_TurnGuardModel):
         guard = _TurnGuardModel(
             self._inner,
             max_tool_calls_per_turn=self._max_tool_calls_per_turn,
-            # The upstream guard wraps each ``anext`` in ``wait_for`` and
-            # rewrites every TimeoutError, including errors raised by the
-            # provider adapter. Apply the idle bound here so its own expiry is
-            # distinguishable from an inner timeout.
-            stream_idle_timeout=0.0,
+            # Disable the upstream timer with None: zero is an immediate
+            # deadline on the imported substrate. The owned timer below keeps
+            # its expiry distinguishable from an inner provider timeout.
+            stream_idle_timeout=None,
         )
         stream = guard.stream_response(
             system_instructions,
