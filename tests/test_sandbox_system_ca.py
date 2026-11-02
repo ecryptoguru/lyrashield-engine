@@ -16,11 +16,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_system_ca_repair_precedes_https_and_survives_bulk_install() -> None:
     dockerfile = (ROOT / "containers/Dockerfile").read_text()
-    bootstrap = dockerfile.index("apt-get install -y --no-install-recommends ca-certificates")
-    https = dockerfile.index("https://kali.download/kali")
-    first = dockerfile.index("/opt/lyrashield/distrust_emsign_g3.sh", bootstrap)
-    assert bootstrap < first < https
-    assert dockerfile.count("    sh /opt/lyrashield/distrust_emsign_g3.sh") == 2
+    stages = dockerfile.split("\nFROM ")[1:]
+    assert len(stages) == 2
+    builder, runtime = stages
+    helper = "/opt/lyrashield/distrust_emsign_g3.sh"
+    call = f"    sh {helper}"
+    for stage, expected_calls in ((builder, 1), (runtime, 2)):
+        bootstrap = stage.index("apt-get install -y --no-install-recommends ca-certificates")
+        distrust = stage.index(call)
+        first_https = stage.index("https://")
+        assert stage.index(f"containers/distrust_emsign_g3.sh {helper}") < bootstrap
+        assert bootstrap < distrust < first_https
+        assert stage.count(call) == expected_calls
+    assert f"COPY --chown=root:root containers/distrust_emsign_g3.sh {helper}" in builder
+    # Runtime bulk installation and custom CA registration can regenerate trust;
+    # the second runtime call must follow both before subsequent HTTPS work.
+    bulk_install = runtime.index("    wget curl git vim nano unzip tar")
+    refresh = runtime.index("update-ca-certificates &&")
+    assert bulk_install < refresh < runtime.rindex(call)
+    assert dockerfile.count(call) == 3
 
 
 def test_system_ca_repair_refuses_unreviewed_certificate(tmp_path: Path) -> None:
