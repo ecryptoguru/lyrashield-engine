@@ -384,6 +384,78 @@ Sandbox resource caps are **default-on** (`mem_limit=2g`, `shm_size=512m`, `cpus
 
 The `publish-sandbox` workflow pushes one multi-architecture candidate, runs the non-root capability smoke tests against that exact digest on both supported architectures, and only then promotes the same digest to release tags. It emits an SPDX SBOM plus signed provenance/SBOM attestations for that digest. Promote the digest, never a tag, as one release unit with its worker configuration. The application repository separately verifies and publishes the worker image digest; an operator promotes that worker digest explicitly on the dedicated VM, then reconciles its running reference, OCI labels, health, and scan readiness. Neither image follows a mutable tag in production.
 
+## Evidence artifacts and pending HTTP claims
+
+<ParamField path="LYRASHIELD_RUN_RECORD_V1_1" default="false" type="boolean">
+  Enable the versioned evidence artifact family for new runs: finding evidence
+  metadata, coverage and threat-model artifacts, HTTP export and the result
+  manifest. Existing runs retain the schema version they started with.
+</ParamField>
+
+<ParamField path="LYRASHIELD_PENDING_HTTP_EVIDENCE" default="false" type="boolean">
+  When enabled together with `LYRASHIELD_RUN_RECORD_V1_1`, new runs use
+  `run.json` schema `1.2` and finding `evidence_contract_version: "1.2"`.
+  The companion artifact family remains `evidence_format: "1.1"`.
+  Enable this writer only after compatible readers are deployed and qualified.
+</ParamField>
+
+In schema 1.2, submitted proxy request IDs begin in
+`pending_http_exchange_ids`, including when a live lookup finds the ID.
+Pending claims and `http_exchange_ids` each allow up to 10 distinct numeric
+ASCII IDs of at most 128 characters. Pending IDs are correlation claims;
+they do not create verification receipts, change deduplication identity or
+prove a vulnerability.
+
+Before sandbox teardown, the engine exports captured HTTP evidence and
+reconciles eligible references. Promotion requires matching run identity,
+finding revision and report-artifact revision, the actual captured request,
+and a valid result manifest covering both `vulnerabilities.json` and
+`http_exchanges.json`. The captured request must have a SHA-256 digest and a
+host matching the finding's absolute target or endpoint URL. Exported
+references describe captured evidence; they do not upgrade the finding's
+vulnerability verification state.
+
+Missing, foreign, timed-out and omitted references stay pending and are
+reported as unavailable evidence. A partial export promotes only its valid
+subset. Each finding's export binding selects existing verified references
+first, followed by pending claims, up to 10 IDs; overflow stays pending and
+is recorded as `capacity_omitted_request_ids`. Previously validated durable
+captures may survive a later proxy outage when their manifest and revision
+bindings still validate; `reused_durable_exchanges` records that reuse.
+
+The engine stages an export before committing finding projections and
+writing `run.json` last. Caught write failures restore the prior artifacts
+and memory. An interrupted multi-file replacement is detected by manifest
+verification and fails closed on resume or ingest; the protocol is not a
+filesystem-wide crash-atomic transaction.
+
+Offline reuse requires the original receipt's exact manifest entries for both
+finding and HTTP files. The engine does not reconstruct a missing assertion
+by hashing whichever files happen to be present. Unchanged claim submissions
+do not consume finding revisions; changing authored finding content makes
+its previous capture binding stale and returns those references to pending.
+
+If demotion would exceed the 10 pending-ID limit, reconciliation records
+`evidence_export.status: "failed"` with `reason: "pending_capacity_exceeded"`
+and preserves both original claim arrays and their artifacts. Retained
+ordinary IDs in this failed result are unavailable evidence. Restore proxy
+access to reconcile the retained claims, or explicitly replace the claim set
+with the references that should remain; the engine does not silently discard
+claims or increase the authorized budget. Shared IDs selected by another
+finding are not reported as globally capacity-omitted.
+
+Fresh and reused HTTP exports must fit the complete 1 MiB serialized budget.
+Header counts and names are bounded, body samples may be removed, and any
+omitted captures remain explicit. An export that cannot fit is unavailable.
+Export work has a 20-second total allowance; sandbox cleanup has a separate
+20-second allowance and still runs when export is cancelled or times out.
+
+Disabling either flag does not remove support for persisted schema-1.2 runs.
+Resumed schema-1.0 and schema-1.1 runs keep their existing version and do not
+start emitting pending fields. Pending evidence and unresolved coverage
+remain explicit limitations; follow-up work stays within the authorized
+scan budget.
+
 ## Telemetry
 
 <ParamField path="LYRASHIELD_TELEMETRY" default="false" type="boolean">

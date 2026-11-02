@@ -9,6 +9,7 @@ import pytest
 from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.state import ReportState
 from lyrashield.tools.finish.tool import _do_finish
+from strix.tools.coverage import tools as coverage_tools
 
 
 if TYPE_CHECKING:
@@ -71,3 +72,29 @@ def test_finish_refuses_to_claim_success_when_final_coverage_is_corrupted(
     assert "final_evidence_not_persisted" in result["assessment_reasons"]
     assert finish_state.run_record["status"] == "running"
     assert finish_state.run_record["scan_results"]["scan_completed"] is False
+
+
+def test_unresolved_ledger_row_without_skill_gap_stays_inconclusive(
+    finish_state: ReportState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert finish_state.run_record["status"] == "running"
+    entries = [
+        {
+            "entry_id": "open-row",
+            "agent_name": "root",
+            "agent_id": "root",
+            "surface": "https://example.test/login",
+            "risk_area": "authentication",
+            "outcome": "needs_follow_up",
+            "evidence": "Budget ceiling reached before the control comparison.",
+        }
+    ]
+    monkeypatch.setattr(coverage_tools, "get_coverage_entries", lambda: entries)
+    monkeypatch.setattr(state_module, "_coverage_ledger_entries", lambda: entries)
+    result = _finish(agent_graph={"statuses": {"root": "completed"}, "parent_of": {"root": None}})
+    assert result["success"] is True
+    assert result["coverage_complete"] is False
+    assert result["assessment"] == "inconclusive"
+    assert "coverage_needs_follow_up" in result["assessment_reasons"]
+    assert [gap["kind"] for gap in result["coverage_gaps"]] == ["needs_follow_up"]
+    assert "authorized budget" in " ".join(result["follow_up_guidance"])

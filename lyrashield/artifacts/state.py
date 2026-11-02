@@ -376,6 +376,14 @@ class ReportState:
         """
         self.run_record["evidence_export"] = dict(outcome)
 
+    async def reconcile_http_exchange_evidence(
+        self, client: Any, *, exporter: Callable[..., Any] | None = None
+    ) -> dict[str, Any]:
+        """Resolve pending claims only through the durable export transaction."""
+        from lyrashield.artifacts.pending_http import reconcile_http_exchange_evidence
+
+        return await reconcile_http_exchange_evidence(self, client, exporter=exporter)
+
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
         # E4: return sanitized snapshots so dedupe and other consumers never
         # see raw secrets or host paths from the in-memory reports.

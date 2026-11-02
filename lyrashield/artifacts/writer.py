@@ -530,6 +530,16 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
         )
         lines.append("")
 
+    pending_ids = report.get("pending_http_exchange_ids")
+    if isinstance(pending_ids, list) and pending_ids:
+        lines.append("## Pending HTTP Exchange Claims\n")
+        lines.append(
+            f"{len(pending_ids)} claimed exchange reference(s) remain unavailable as "
+            "verified evidence. A durable export bound to this run and finding "
+            "revision is required; proxy IDs alone do not prove the finding."
+        )
+        lines.append("")
+
     history = report.get("update_history")
     if isinstance(history, list) and history:
         lines.append("## Revision History\n")

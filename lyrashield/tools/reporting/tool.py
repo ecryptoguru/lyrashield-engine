@@ -217,6 +217,30 @@ async def _verify_http_exchange_ids(
     request_ids, errors = _evidence.normalize_http_exchange_ids(raw)
     if request_ids is None or errors or not request_ids:
         return request_ids, errors, None
+    from lyrashield.artifacts.state import get_global_report_state
+
+    state = get_global_report_state()
+    if state is not None and _evidence.record_supports_pending_http_evidence(state.run_record):
+        # Existence checks are advisory. Only a revision-bound durable export
+        # may turn a claim into an HTTP evidence reference.
+        if ctx is not None:
+            try:
+                from lyrashield.tools.proxy.tools import existing_request_ids
+
+                await asyncio.wait_for(
+                    existing_request_ids(ctx, request_ids),
+                    timeout=_evidence.HTTP_EVIDENCE_LOOKUP_TIMEOUT_SECONDS,
+                )
+            except Exception:  # noqa: BLE001 — claims survive proxy failures
+                logger.warning("HTTP claims remain pending after proxy lookup failure")
+        return (
+            request_ids,
+            [],
+            (
+                "HTTP exchange claims stored as pending; only a durable run- and "
+                "finding-revision-bound export can verify these references."
+            ),
+        )
     if ctx is None:
         return None, [], _HTTP_EXCHANGE_DROPPED_WARNING
 
@@ -785,9 +809,9 @@ async def create_vulnerability_report(
             them exactly from ``list_requests``/``view_request`` — the
             exploit exchange plus the baseline/control it differs from. Omit
             only when no HTTP was captured at all; never invent IDs. If the
-            result warns the IDs could not be verified, they were dropped —
-            attach them with ``update_vulnerability_report`` when the proxy
-            responds.
+            result marks IDs pending (schema 1.2), the claims survive until
+            durable export; they are not verified evidence. Older runs drop
+            unreachable IDs and require reattachment when the proxy responds.
     """
     (
         verified_exchange_ids,

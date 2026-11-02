@@ -163,9 +163,12 @@ def sanitize_finding(
     fields are emitted only for a 1.1 record — a 1.0 run keeps its original
     contract even if the writer flag was toggled mid-run.
     """
-    is_v1_1 = schema_version == _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
+    is_v1_1 = _evidence.record_supports_evidence_v1_1({"schema_version": schema_version})
+    is_v1_2 = schema_version == _evidence.RUN_RECORD_SCHEMA_VERSION_1_2
     snapshot: dict[str, Any] = {}
     for key, value in report.items():
+        if key == "pending_http_exchange_ids" and not is_v1_2:
+            continue
         if not is_v1_1 and key in _V1_1_FINDING_FIELDS:
             continue
         if is_sensitive_key(key):
@@ -213,7 +216,7 @@ def sanitize_finding(
             snapshot[key] = _truncate_text(
                 redact_text(value, include_internal_paths=include_internal_paths)
             )
-        elif is_v1_1 and key == "http_exchange_ids" and isinstance(value, list):
+        elif is_v1_1 and key in {"http_exchange_ids", "pending_http_exchange_ids"}:
             # Proxy request ids are correlation references only; they are
             # validated numeric ASCII at intake and bounded again here.
             ids, _errors = _evidence.normalize_http_exchange_ids(value)
@@ -241,7 +244,7 @@ def sanitize_finding(
         # provenance: a filed finding is agent-asserted, and nothing here —
         # including a successful HTTP export — upgrades it to verified. An
         # engine verification path may stamp a stronger value upstream.
-        snapshot["evidence_contract_version"] = _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
+        snapshot["evidence_contract_version"] = schema_version
         snapshot.setdefault("verification_state", "unverified")
 
     # E4: enforce the total serialized finding size bound as a last-line
@@ -462,7 +465,12 @@ def add_vulnerability_report(
         normalized_ids, id_errors = _evidence.normalize_http_exchange_ids(http_exchange_ids)
         if id_errors or normalized_ids is None:
             raise ValueError(f"http_exchange_ids rejected: {'; '.join(id_errors)}")
-        report["http_exchange_ids"] = normalized_ids
+        field = (
+            "pending_http_exchange_ids"
+            if _evidence.record_supports_pending_http_evidence(self.run_record)
+            else "http_exchange_ids"
+        )
+        report[field] = normalized_ids
     if evidence_warnings:
         report["evidence_warnings"] = [
             redact_text(str(w).strip(), include_internal_paths=_redact_paths)[:500]
@@ -593,9 +601,48 @@ def update_vulnerability_report(
                 if id_errors or normalized_ids is None:
                     raise ValueError(f"http_exchange_ids rejected: {'; '.join(id_errors)}")
                 value = normalized_ids
-            if original.get(key) == value:
-                continue
-            changed[key] = value
+            if key == "http_exchange_ids" and _evidence.record_supports_pending_http_evidence(
+                self.run_record
+            ):
+                current_claims = set(original.get("http_exchange_ids") or []) | set(
+                    original.get("pending_http_exchange_ids") or []
+                )
+                if set(value) == current_claims:
+                    continue
+                changed.update(
+                    {
+                        field: proposed
+                        for field, proposed in (
+                            ("pending_http_exchange_ids", value),
+                            ("http_exchange_ids", []),
+                        )
+                        if original.get(field, []) != proposed
+                    }
+                )
+            elif original.get(key) != value:
+                changed[key] = value
+
+        if (
+            changed
+            and _evidence.record_supports_pending_http_evidence(self.run_record)
+            and original.get("http_exchange_ids")
+            and "http_exchange_ids" not in changed
+        ):
+            # Authored revisions invalidate the export's finding revision.
+            # Reclassify the existing captures before publishing that revision.
+            pending = list(
+                dict.fromkeys(
+                    list(original.get("pending_http_exchange_ids") or [])
+                    + list(original.get("http_exchange_ids") or [])
+                )
+            )
+            if len(pending) > _evidence.MAX_HTTP_EXCHANGE_IDS:
+                raise RuntimeError(
+                    "Finding revision would exceed pending HTTP capacity; "
+                    "explicitly replace its claims first"
+                )
+            changed["pending_http_exchange_ids"] = pending
+            changed["http_exchange_ids"] = []
 
         superseded = {
             dependent
