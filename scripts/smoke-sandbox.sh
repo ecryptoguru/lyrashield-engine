@@ -9,7 +9,7 @@ if [[ -n "$platform" ]]; then
   docker_args+=(--platform "$platform")
 fi
 
-docker run "${docker_args[@]}" "$image" sh -lc '
+docker run "${docker_args[@]}" --network none "$image" sh -lc '
   test "$(id -u)" != "0" &&
   test "$(pwd)" = "/workspace" &&
   test -f /app/certs/ca.p12 &&
