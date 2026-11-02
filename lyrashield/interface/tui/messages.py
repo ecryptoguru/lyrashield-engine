@@ -124,8 +124,13 @@ async def deliver_user_message(
     A timeout leaves delivery running. Retrying the same submission recovers its
     acknowledgement; cancelling it would make the delivery outcome ambiguous.
     """
+    receipt = read_submission_receipt(
+        coordinator, submission_id, ("steer", target_agent_id, message)
+    )
+    if receipt is not None and receipt != "unknown":
+        return receipt
     if loop is None or loop.is_closed() or not loop.is_running():
-        return "rejected"
+        return receipt or "rejected"
     coroutine = _deliver_once(coordinator, live_view, target_agent_id, message, submission_id)
     pending: asyncio.Future[bool]
     if asyncio.get_running_loop() is loop:
@@ -185,8 +190,11 @@ async def deliver_operator_control(
     submission_id: str,
 ) -> Delivery:
     """Submit an explicit control from an asynchronous operator interface."""
+    receipt = read_submission_receipt(coordinator, submission_id, ("control", action))
+    if receipt is not None and receipt != "unknown":
+        return receipt
     if loop is None or loop.is_closed() or not loop.is_running():
-        return "rejected"
+        return receipt or "rejected"
     coroutine = _deliver_control_once(coordinator, action, submission_id)
     pending: asyncio.Future[bool]
     if asyncio.get_running_loop() is loop:

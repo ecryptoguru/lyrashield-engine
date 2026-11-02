@@ -259,3 +259,90 @@ test("lost Resume rejection resolves from a cached receipt after completion with
   assert.equal(await receipts.getByText("Delivery unknown", { exact: false }).count(), 0);
   assert.equal(mutations.length, 1); assert.equal(checks.length, 2); assert.deepEqual(mutations[0], checks[0]); assert.deepEqual(checks[0], checks[1]);
 }));
+
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 375, height: 812 }]) {
+  for (const result of ["markdown", "empty", "missing", "failure"]) {
+    test(`first report ${result} preserves truthful loading and recovery at ${viewport.width}px`, { timeout: 20000 }, async () => fixture(async (page, url) => {
+      let release;
+      const held = new Promise(resolve => { release = resolve; });
+      let failed = result === "failure";
+      await page.route("**/api/run", async route => { const response = await route.fetch(); await route.fulfill({ json: { ...await response.json(), finished: true, status: "completed" } }); });
+      await page.route("**/api/report*", async route => {
+        await held;
+        await route.fulfill(failed ? { status: 500, json: {} } : { json: result === "missing" ? {} : { markdown: result === "empty" ? "" : "# Recovered report\nActual summary" } });
+      });
+      await page.goto(url);
+      await page.getByText("Download the report for this run", { exact: true }).waitFor();
+      await page.getByText("Loading report…", { exact: true }).waitFor();
+      assert.equal(await page.getByText("No summary available for this run yet.", { exact: true }).count(), 0);
+      const open = page.getByRole("button", { name: /^Download the report for this run/ });
+      await open.focus(); await page.keyboard.press("Enter");
+      await page.getByRole("heading", { name: "Export report", exact: true }).waitFor();
+      assert.equal(await page.getByText("No report is available for this run.", { exact: true }).count(), 0);
+      assert.equal(await page.getByRole("link", { name: "Download Markdown" }).count(), 0);
+      release();
+      if (result === "failure") {
+        const alert = page.getByRole("alert").filter({ hasText: "The report could not be loaded" });
+        await alert.waitFor();
+        assert.equal(await page.getByText("No report is available for this run.", { exact: true }).count(), 0);
+        await page.getByRole("button", { name: "Back to results", exact: true }).click();
+        assert.equal(await page.getByText("No summary available for this run yet.", { exact: true }).count(), 0);
+        failed = false;
+        await page.getByRole("alert").filter({ hasText: "The report could not be loaded" }).getByRole("button", { name: "Retry", exact: true }).click();
+        await page.getByText("Actual summary", { exact: true }).waitFor();
+        await page.getByRole("button", { name: /^Download the report for this run/ }).click();
+      }
+      if (result === "empty" || result === "missing") {
+        await page.getByText("No report is available for this run.", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "Back to results", exact: true }).click();
+        await page.getByText("No summary available for this run yet.", { exact: true }).waitFor();
+      } else await page.getByRole("link", { name: "Download Markdown" }).waitFor();
+      assert.equal(await page.getByText("Loading report…", { exact: true }).count(), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    }, viewport));
+  }
+}
+
+test("report refresh failure retains same-run Markdown in overview and export, but never another run", { timeout: 20000 }, async () => fixture(async (page, url) => {
+  let finished = false;
+  await page.route(/\/api\/run(?:\?|$)/, async route => {
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...await response.json(), finished, ...(finished ? { status: "completed" } : {}) } });
+  });
+  let failed = false;
+  let holdHistory = false;
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route("**/api/report*", async route => {
+    if (new URL(route.request().url()).searchParams.get("run") === "past-directory") {
+      if (holdHistory) await held;
+      await route.fulfill({ json: { markdown: "# Historical summary" } });
+    } else await route.fulfill(failed ? { status: 500, json: {} } : { json: { markdown: "# Current summary" } });
+  });
+  await page.goto(url);
+  await page.getByRole("button", { name: "Pentest Overview", exact: true }).first().click();
+  await page.getByText("Current summary", { exact: true }).waitFor();
+  failed = true;
+  const alert = page.getByRole("alert").filter({ hasText: "The report could not be loaded" });
+  await alert.waitFor();
+  assert.equal(await page.getByText("Current summary", { exact: true }).isVisible(), true);
+  finished = true;
+  await page.getByRole("button", { name: "Export report", exact: true }).click();
+  await page.getByRole("link", { name: "Download Markdown" }).waitFor();
+  assert.match(await page.getByRole("link", { name: "Download Markdown" }).getAttribute("href"), /Current%20summary/);
+  assert.equal(await alert.isVisible(), true);
+  failed = false;
+  await alert.getByRole("button", { name: "Retry", exact: true }).click();
+  await alert.waitFor({ state: "hidden" });
+  holdHistory = true;
+  const switcher = page.getByRole("combobox", { name: "Switch pentest" });
+  await switcher.selectOption("past-directory");
+  await page.getByText("Loading report…", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Export report", exact: true }).click();
+  assert.equal(await page.getByRole("link", { name: "Download Markdown" }).count(), 0);
+  assert.equal(await page.getByText("Current summary", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("No report is available for this run.", { exact: true }).count(), 0);
+  release();
+  await page.getByRole("link", { name: "Download Markdown" }).waitFor();
+  assert.match(await page.getByRole("link", { name: "Download Markdown" }).getAttribute("href"), /Historical%20summary/);
+}));

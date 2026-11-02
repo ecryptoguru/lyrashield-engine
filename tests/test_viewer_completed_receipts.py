@@ -177,6 +177,27 @@ def test_lost_ack_reconciles_only_receipt_after_finished_loop_close(  # noqa: PL
             if pending
             else {"ok": True, "status": "queued"}
         )
+
+        async def tui_receipt(identifier: str, altered: bool = False) -> messages.Delivery:
+            if kind == "steer":
+                return await messages.deliver_user_message(
+                    coordinator=coordinator,
+                    loop=loop,
+                    live_view=live_view,
+                    target_agent_id="root",
+                    message="altered" if altered else "review",
+                    submission_id=identifier,
+                )
+            return await messages.deliver_operator_control(
+                coordinator=coordinator,
+                loop=loop,
+                action="resume" if altered else "increase_budget",
+                submission_id=identifier,
+            )
+
+        assert asyncio.run(tui_receipt("lost")) == ("unknown" if pending else "queued")
+        assert asyncio.run(tui_receipt("new")) == "rejected"
+        assert asyncio.run(tui_receipt("lost", altered=True)) == "rejected"
         assert calls == 1
         for changed in [
             {**body, "submission_id": "new"},

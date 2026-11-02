@@ -64,6 +64,15 @@ from strix.config import load_settings
 logger = logging.getLogger(__name__)
 
 
+def _format_budget(value: float) -> str:
+    # Match the browser's meaningful precision, with at least two decimal places.
+    exact = str(value)
+    if "e" in exact.lower():
+        return exact
+    whole, _, fraction = exact.partition(".")
+    return f"{whole}.{fraction.ljust(2, '0')}"
+
+
 def get_package_version() -> str:
     return engine_version() or "dev"
 
@@ -72,7 +81,7 @@ class ChatTextArea(TextArea):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._app_reference: StrixTUIApp | None = None
-        self._pending_submission: tuple[str, str] | None = None
+        self._pending_submission: tuple[str, str, str | None] | None = None
         self._sending = False
 
     def set_app_reference(self, app: "StrixTUIApp") -> None:
@@ -82,22 +91,39 @@ class ChatTextArea(TextArea):
         self._update_height()
 
     async def _on_key(self, event: events.Key) -> None:
+        if event.key == "ctrl+n" and self._pending_submission and not self._sending:
+            self._pending_submission = None
+            self.read_only = False
+            self.text = ""
+            event.prevent_default()
+            if self._app_reference:
+                self._app_reference.notify(
+                    "Uncertain submission discarded. It may still have been delivered.",
+                    severity="warning",
+                )
+            return
+
         if event.key == "shift+enter":
-            self.insert("\n")
+            if not self.read_only:
+                self.insert("\n")
             event.prevent_default()
             return
 
         if event.key == "enter" and self._app_reference:
-            message = self.text.strip()
+            message = self._pending_submission[0] if self._pending_submission else self.text.strip()
             event.prevent_default()
             if message and not self._sending:
-                if self._pending_submission is None or self._pending_submission[0] != message:
-                    self._pending_submission = (message, uuid.uuid4().hex)
+                if self._pending_submission is None:
+                    self._pending_submission = (
+                        message,
+                        uuid.uuid4().hex,
+                        self._app_reference.selected_agent_id,
+                    )
                 self._sending = True
                 self.read_only = True
                 try:
                     outcome = await self._app_reference._send_user_message(
-                        message, self._pending_submission[1]
+                        message, self._pending_submission[1], self._pending_submission[2]
                     )
                     if outcome == "queued":
                         self.text = ""
@@ -106,7 +132,7 @@ class ChatTextArea(TextArea):
                         self._pending_submission = None
                 finally:
                     self._sending = False
-                    self.read_only = False
+                    self.read_only = self._pending_submission is not None
             return
 
         await super()._on_key(event)
@@ -256,7 +282,10 @@ class HelpScreen(ModalScreen[None]):
             Label("LyraShield Help", id="help_title"),
             Label(
                 "F1        Help\nCtrl+Q/C  Quit\nESC       Stop Agent\n"
-                "Enter     Send message to agent\nTab       Switch panels\n↑/↓       Navigate tree",
+                "Enter     Send / check receipt\n"
+                "Ctrl+N    Discard uncertain draft\n"
+                "          It may be delivered.\n"
+                "Tab       Switch panels\n↑/↓       Navigate tree",
                 id="help_content",
             ),
             id="dialog",
@@ -1095,7 +1124,8 @@ class StrixTUIApp(App[None]):
             increment = budget.get("increment_usd")
             limit = budget.get("limit_usd")
             detail = (
-                f" Current limit ${limit:.2f}; /increase-budget adds ${increment:.2f}."
+                f" Current limit ${_format_budget(limit)}; "
+                f"/increase-budget adds ${_format_budget(increment)}."
                 if isinstance(increment, (int, float)) and isinstance(limit, (int, float))
                 else ""
             )
@@ -1783,8 +1813,10 @@ class StrixTUIApp(App[None]):
             else:
                 node.expand()
 
-    async def _send_user_message(self, message: str, submission_id: str) -> Delivery:
-        if not self.selected_agent_id:
+    async def _send_user_message(
+        self, message: str, submission_id: str, target_agent_id: str | None
+    ) -> Delivery:
+        if not target_agent_id:
             return "rejected"
         self.notify("Pending mailbox acceptance…")
         controls = {"/resume": "resume", "/increase-budget": "increase_budget"}
@@ -1800,7 +1832,7 @@ class StrixTUIApp(App[None]):
                 coordinator=self.coordinator,
                 loop=self._scan_loop,
                 live_view=self.live_view,
-                target_agent_id=self.selected_agent_id,
+                target_agent_id=target_agent_id,
                 message=message,
                 submission_id=submission_id,
             )
@@ -1809,7 +1841,7 @@ class StrixTUIApp(App[None]):
                 budget = self.coordinator.budget_control_state()
                 limit = budget.get("limit_usd")
                 self.notify(
-                    f"Budget increased; limit ${limit:.2f}. Scan remains paused."
+                    f"Budget increased; limit ${_format_budget(limit)}. Scan remains paused."
                     if isinstance(limit, (int, float))
                     else "Budget increased. Scan remains paused."
                 )
@@ -1819,7 +1851,8 @@ class StrixTUIApp(App[None]):
             self._update_chat_view()
         elif outcome == "unknown":
             self.notify(
-                "Delivery unknown. Retry the unchanged draft to check acceptance.",
+                "Delivery unknown. Enter checks the original submission; "
+                "Ctrl+N discards it to start a new draft.",
                 severity="warning",
             )
         elif message == "/resume" and self.coordinator.budget_control_state().get(

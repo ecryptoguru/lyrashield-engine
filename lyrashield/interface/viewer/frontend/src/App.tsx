@@ -232,8 +232,10 @@ function ViewerApp() {
           >
           {view === "email" ? (
             <EmailReportView
-              markdown={run?.reportMarkdown ?? null}
-              error={run?.reportError ?? null}
+              markdown={resources.report.data}
+              error={resources.report.error ? "The report could not be loaded." : null}
+              loaded={resources.report.loaded}
+              loading={resources.report.loading}
               onRetry={resources.report.retry}
               onExit={() => setView("overview")}
             />
@@ -292,6 +294,8 @@ function ViewerApp() {
                   total={run.vulnerabilities.length}
                   reportMarkdown={run.reportMarkdown}
                   reportError={run.reportError}
+                  reportLoaded={resources.report.loaded}
+                  reportLoading={resources.report.loading}
                   raw={run.raw}
                   finished={run.finished}
                   onOpenEmail={openEmailFromOverview}
@@ -535,6 +539,8 @@ function OverviewTab({
   total,
   reportMarkdown,
   reportError,
+  reportLoaded,
+  reportLoading,
   raw,
   finished,
   onOpenEmail,
@@ -545,6 +551,8 @@ function OverviewTab({
   total: number;
   reportMarkdown: string | null;
   reportError: string | null;
+  reportLoaded: boolean;
+  reportLoading: boolean;
   raw: Record<string, unknown>;
   finished: boolean;
   onOpenEmail: () => void;
@@ -596,7 +604,7 @@ function OverviewTab({
           <ContentSection content={dedupeHeadings(reportMarkdown)} />
         </div>
       ) : (
-        total === 0 && (
+        total === 0 && reportLoaded && !reportLoading && !reportError && (
           <p className="text-sm text-[#888]">No summary available for this run yet.</p>
         )
       )}
