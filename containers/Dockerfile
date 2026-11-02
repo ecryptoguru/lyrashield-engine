@@ -328,7 +328,6 @@ COPY --chown=root:root containers/verify_pip_vendors.py /opt/lyrashield/verify_p
 COPY --chown=root:root containers/verify_ca_bundle.py /opt/lyrashield/verify_ca_bundle.py
 COPY --chown=root:root containers/verify_go_tool_provenance.py /opt/lyrashield/verify_go_tool_provenance.py
 COPY --chown=root:root containers/go-tools/applications.json /usr/local/share/lyrashield/go-tools/applications.json
-RUN /app/.venv/bin/python /opt/lyrashield/verify_go_tool_provenance.py --write-sbom /usr/local/share/lyrashield/go-tools/applications.cdx.json
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 
@@ -341,6 +340,8 @@ RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/p
     echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"' >> /home/pentester/.profile
 
 USER root
+# Validate installed bytes and write root-owned receipts without venv/site startup code.
+RUN /usr/bin/python3 -I -S /opt/lyrashield/verify_go_tool_provenance.py --write-sbom /usr/local/share/lyrashield/go-tools/applications.cdx.json
 RUN install -d -m 0700 -o root -g root /run/lyrashield-relay
 RUN setcap cap_net_raw,cap_net_bind_service+eip /usr/lib/nmap/nmap
 COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

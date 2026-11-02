@@ -5,7 +5,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -123,3 +126,82 @@ def test_compression_fixtures_cannot_match_the_stored_token():
         assert token not in fixtures[name]
         assert len(fixtures[name]) < len(payload) // 20
     assert fixtures["lzma"].decompress(fixtures["XZ"]) == payload
+
+
+def test_sbom_build_runs_as_root_with_isolated_system_python():
+    dockerfile = (ROOT / "containers/Dockerfile").read_text()
+    effective_user = "root"
+    generation_steps = []
+    for line in dockerfile.splitlines():
+        if line.startswith("FROM "):
+            effective_user = "root"
+        elif line.startswith("USER "):
+            effective_user = line.split()[1]
+        elif line.startswith("RUN ") and "--write-sbom" in line:
+            generation_steps.append((effective_user, line))
+    assert len(generation_steps) == 1
+    user, command = generation_steps[0]
+    assert user == "root"
+    assert command.startswith("RUN /usr/bin/python3 -I -S ")
+    assert "--chown=root:root containers/verify_go_tool_provenance.py" in dockerfile
+    assert "--chown=root:root containers/go-tools/applications.json" in dockerfile
+
+
+def test_receipt_gate_and_smoke_use_isolated_system_python():
+    gate = (ROOT / "scripts/audit-sandbox-go-applications.sh").read_text()
+    validator_runs = [
+        line for line in gate.splitlines() if "--entrypoint" in line and "python" in line
+    ]
+    assert len(validator_runs) == 3
+    assert all('--entrypoint /usr/bin/python3 "$image" -I -S' in line for line in validator_runs)
+    assert "/app/.venv/bin/python" not in gate
+    smoke = (ROOT / "scripts/smoke-sandbox.sh").read_text()
+    assert "/usr/bin/python3 -I -S /opt/lyrashield/verify_go_tool_provenance.py" in smoke
+
+
+def test_isolated_verifier_ignores_untrusted_python_startup_and_modules(installed, tmp_path):
+    fs, provenance = installed
+    hostile = tmp_path / "hostile-python"
+    hostile.mkdir()
+    marker = hostile / "startup-executed"
+    (hostile / "sitecustomize.py").write_text(f"open({str(marker)!r}, 'w').write('injected')\n")
+    (hostile / "json.py").write_text("raise RuntimeError('untrusted json imported')\n")
+    manifest = tmp_path / "applications.json"
+    manifest.write_text(json.dumps(MANIFEST))
+    sbom = tmp_path / "applications.cdx.json"
+    command = [
+        sys.executable,
+        "-I",
+        "-S",
+        str(ROOT / "containers/verify_go_tool_provenance.py"),
+        "--manifest",
+        str(manifest),
+        "--filesystem",
+        str(fs),
+        "--provenance",
+        str(provenance),
+    ]
+    env = dict(os.environ, PYTHONPATH=str(hostile), PYTHONSTARTUP=str(hostile / "sitecustomize.py"))
+    generated = subprocess.run(  # noqa: S603 - fixed local verifier with synthetic receipts
+        [*command, "--write-sbom", str(sbom)],
+        cwd=hostile,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert generated.returncode == 0, generated.stderr
+    assert len(json.loads(sbom.read_text())["components"]) == 8
+    assert not marker.exists()
+    (fs / MANIFEST["applications"][0]["binary"].lstrip("/")).write_bytes(b"tampered")
+    rejected = subprocess.run(  # noqa: S603 - fixed local verifier with synthetic tampering
+        [*command, "--sbom", str(sbom)],
+        cwd=hostile,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "installed bytes differ" in rejected.stderr
+    assert not marker.exists()

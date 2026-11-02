@@ -11,16 +11,17 @@ cp "$repo_root/containers/go-tools/distro/verify.py" "$audit_dir/verify_distro_g
 cp "$repo_root/containers/go-tools/applications.json" "$audit_dir/expected-applications.json"
 cp "$repo_root/containers/go-tools/distro/applications.cdx.json" "$audit_dir/expected-distro.cdx.json"
 # Both inventories are mandatory. Validate final installed bytes against builder
-# receipts before exporting any application coordinates to the scanner.
+# receipts before exporting any application coordinates to the scanner. The
+# system interpreter ignores pentester-writable venv, site and Python-path hooks.
 docker run --rm --platform "$platform" --network none \
-  --volume "$audit_dir:/audit:ro" --entrypoint /app/.venv/bin/python "$image" \
+  --volume "$audit_dir:/audit:ro" --entrypoint /usr/bin/python3 "$image" -I -S \
   /audit/verify_go_tool_provenance.py \
   --manifest /audit/expected-applications.json --emit-verified-sbom > "$audit_dir/applications.cdx.json"
 docker run --rm --platform "$platform" --network none \
-  --volume "$audit_dir:/audit:ro" --entrypoint /app/.venv/bin/python "$image" \
+  --volume "$audit_dir:/audit:ro" --entrypoint /usr/bin/python3 "$image" -I -S \
   /audit/verify_distro_go_tools.py --receipts-only
 docker run --rm --platform "$platform" --network none \
-  --volume "$audit_dir:/audit:ro" --entrypoint /app/.venv/bin/python "$image" -c '
+  --volume "$audit_dir:/audit:ro" --entrypoint /usr/bin/python3 "$image" -I -S -c '
 import json
 from pathlib import Path
 expected=json.loads(Path("/audit/expected-distro.cdx.json").read_text())
