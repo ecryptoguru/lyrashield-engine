@@ -525,9 +525,9 @@ async def test_non_user_send_preserves_failed_resume_state() -> None:
 async def test_reset_budget_stops_clears_pause_and_normalizes_statuses() -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.pause_for_budget("root")
     await coordinator.trigger_budget_stop()
     await coordinator.claim_reserve_notification()
-    await coordinator.pause_for_budget("root")
 
     await coordinator.reset_budget_stops(budget_stopped=False, reserve_stopped=False)
 

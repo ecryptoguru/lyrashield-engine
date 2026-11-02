@@ -174,8 +174,21 @@ class AgentCoordinator:
 
     async def pause_for_budget(self, agent_id: str) -> None:
         async with self._lock:
+            if (
+                agent_id not in self.statuses
+                or self.statuses[agent_id] == "stopped"
+                or self._budget_stopped
+                or self.is_shutting_down
+            ):
+                return
             self._budget_paused = True
-        await self.set_status(agent_id, "budget_paused")
+            # A global pause also invalidates timers already running in other
+            # agents. Wake them to recheck the gate without leaving their loops.
+            for aid, status in self.statuses.items():
+                if status in _ACTIVE_STATUSES or aid == agent_id:
+                    self.statuses[aid] = "budget_paused"
+                    self.runtimes.setdefault(aid, AgentRuntime()).wake.set()
+        await self._maybe_snapshot()
 
     async def operator_control(self, action: str, submission_id: str) -> bool:
         """Apply an explicit interactive operator action once per submission.
@@ -325,6 +338,9 @@ class AgentCoordinator:
     async def mark_running(self, agent_id: str) -> None:
         async with self._lock:
             if agent_id in self.statuses and self.statuses[agent_id] in _ACTIVE_STATUSES:
+                if self._budget_paused:
+                    self.statuses[agent_id] = "budget_paused"
+                    return
                 self.statuses[agent_id] = "running"
                 self.errors.pop(agent_id, None)
                 self.wait_kinds.pop(agent_id, None)
@@ -335,9 +351,14 @@ class AgentCoordinator:
     async def park_waiting(self, agent_id: str, *, wait_kind: WaitKind) -> None:
         """Park an agent, recording what it is waiting on so the driver can time it."""
         async with self._lock:
-            if agent_id in self.statuses:
-                self.wait_kinds[agent_id] = wait_kind
-        await self.set_status(agent_id, "waiting")
+            if agent_id not in self.statuses or self.statuses[agent_id] == "stopped":
+                return
+            self.wait_kinds[agent_id] = wait_kind
+            self.statuses[agent_id] = "budget_paused" if self._budget_paused else "waiting"
+            runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
+            runtime.user_wake_required = False
+            runtime.wake.set()
+        await self._maybe_snapshot()
 
     async def record_recovery(self, agent_id: str) -> int:
         """Count a turn that ended without a lifecycle tool call; return the new total.
@@ -418,16 +439,18 @@ class AgentCoordinator:
             return True
 
     def _unreachable_locked(self, agent_id: str) -> bool:
-        """Return True when no loop will ever consume a queued message.
-
-        A terminal agent whose loop is gone cannot be woken — sends to it sit
-        in a mailbox nobody drains while the sender blocks on a reply. Must be
-        called under ``self._lock``.
-        """
-        if self.statuses.get(agent_id) not in {"completed", "stopped", "crashed", "failed"}:
-            return False
+        """Reject stopped targets and runtimes whose attached driver has exited."""
         runtime = self.runtimes.get(agent_id)
-        return runtime is not None and not runtime.resumable
+        if runtime is not None and runtime.task is not None and runtime.task.done():
+            return True
+        status = self.statuses.get(agent_id)
+        if status == "stopped":
+            return True
+        return (
+            status in {"completed", "crashed", "failed"}
+            and runtime is not None
+            and not runtime.resumable
+        )
 
     async def reachability(self, agent_id: str) -> tuple[bool, Status | None]:
         """Return whether a queued message to ``agent_id`` would be consumed."""
@@ -487,9 +510,13 @@ class AgentCoordinator:
             # Follow-up work is valid after a child has reported completion.
             # Without reactivation the sender can wait forever on a mailbox no
             # execution loop will ever consume.
-            if self._budget_paused and self.statuses[target_agent_id] != "stopped":
+            if self._budget_paused and (
+                from_user
+                or self.statuses[target_agent_id] in _ACTIVE_STATUSES
+                or self.statuses[target_agent_id] in {"budget_paused", "completed"}
+            ):
                 self.statuses[target_agent_id] = "budget_paused"
-            elif self.statuses[target_agent_id] in {"completed", "stopped"}:
+            elif self.statuses[target_agent_id] == "completed":
                 self.statuses[target_agent_id] = "running"
                 self.errors.pop(target_agent_id, None)
                 runtime.user_wake_required = False
@@ -497,7 +524,7 @@ class AgentCoordinator:
             self.pending_counts[target_agent_id] = self.pending_counts.get(target_agent_id, 0) + 1
             if submission_id is not None:
                 self._operator_submissions[submission_id] = fingerprint
-            if from_user and not self._budget_paused:
+            if from_user:
                 runtime.user_wake_required = False
                 # A real user message starts a fresh resume attempt: the prior
                 # failure, stall counters, and the "parent already told" flag
@@ -507,8 +534,10 @@ class AgentCoordinator:
                 self.recovery_counts.pop(target_agent_id, None)
                 self.idle_resume_counts.pop(target_agent_id, None)
                 self._parent_notified.discard(target_agent_id)
-                if self.statuses[target_agent_id] not in {"running"}:
-                    self.statuses[target_agent_id] = "waiting"
+                if self.statuses[target_agent_id] != "running":
+                    self.statuses[target_agent_id] = (
+                        "budget_paused" if self._budget_paused else "waiting"
+                    )
             if not self._budget_paused:
                 runtime.wake.set()
             stream = runtime.stream if not self._budget_paused else None
@@ -538,13 +567,18 @@ class AgentCoordinator:
                     return True
                 wake = runtime.wake
                 wake.clear()
-            if timeout is None:
+                wait_timeout = None if self._budget_paused else timeout
+            if wait_timeout is None:
                 await wake.wait()
             else:
                 try:
-                    await asyncio.wait_for(wake.wait(), timeout)
+                    await asyncio.wait_for(wake.wait(), wait_timeout)
                 except TimeoutError:
-                    return False
+                    # A sibling may have paused while this timer was waiting.
+                    # A timer is never authorization to leave a global pause.
+                    async with self._lock:
+                        if not self._budget_paused:
+                            return False
 
     async def consume_pending(
         self,

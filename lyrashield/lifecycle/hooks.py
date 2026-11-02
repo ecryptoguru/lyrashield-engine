@@ -637,7 +637,21 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._budget_increment = max_budget_usd
         self._max_turns = max_turns
         self._interactive = interactive
+        self._operator_pause_check: Callable[[], bool] | None = None
         self._deadline_notified: set[str] = set()
+
+    def set_operator_pause_check(self, check: Callable[[], bool]) -> None:
+        """Bind auxiliary reservations to the same scan-wide execution pause."""
+        self._operator_pause_check = check
+
+    def _check_operator_pause(self, coordinator: Any = None) -> None:
+        paused = (
+            self._operator_pause_check is not None and self._operator_pause_check()
+        ) or getattr(coordinator, "budget_paused", False) is True
+        if paused:
+            if self._interactive:
+                raise BudgetPausedError("Scan is paused until the operator explicitly resumes")
+            raise BudgetExceededError("Scan is paused; headless execution cannot resume")
 
     def budget_control_state(self) -> dict[str, Any]:
         """Expose the concrete increment and whether existing spend prevents resume."""
@@ -688,6 +702,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         Raises `BudgetExceededError` when the request would breach the budget;
         callers must pair this with `release_out_of_band_request`.
         """
+        self._check_operator_pause()
         if self._max_budget_usd is None:
             return
         # Reserve against the worst input bucket: the provider has not yet
@@ -702,6 +717,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             + max_output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
         ) / 1_000_000
         async with self._reservation_lock:
+            self._check_operator_pause()
             self._reservations.pop(key, None)
             report_state = get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
@@ -750,11 +766,13 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         token-rate math and reserves a fixed cost directly against the scan
         budget. Callers must pair this with ``release_web_search_call``.
         """
+        self._check_operator_pause()
         if self._max_budget_usd is None:
             return
         if not math.isfinite(estimated_cost) or estimated_cost < 0:
             estimated_cost = 0.0
         async with self._reservation_lock:
+            self._check_operator_pause()
             self._reservations.pop(key, None)
             report_state = get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
@@ -912,6 +930,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
     ) -> None:
         turns_used: int | None = None
         coordinator = context.context.get("coordinator")
+        self._check_operator_pause(coordinator)
         agent_id = self._agent_id(context, agent)
         deadline = getattr(coordinator, "run_deadline", None)
         if deadline is not None:
@@ -969,6 +988,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             ) / 1_000_000
             agent_id = self._agent_id(context, agent)
             async with self._reservation_lock:
+                self._check_operator_pause(coordinator)
                 scope = (id(context), agent_id)
                 active = self._active_attempts.get(scope)
                 previous_attempt = (
