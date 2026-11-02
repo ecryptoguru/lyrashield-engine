@@ -1,0 +1,91 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "application",
+      "name": "github.com/ffuf/ffuf/v2",
+      "version": "v2.2.1",
+      "purl": "pkg:golang/github.com/ffuf/ffuf/v2@v2.2.1",
+      "bom-ref": "pkg:golang/github.com/ffuf/ffuf/v2@v2.2.1",
+      "properties": [
+        {
+          "name": "lyrashield:kali:source-descriptor-sha256",
+          "value": "59bd325e1d34d8595f1a478e2eb63a3bb2b3871092b21fefa4d4327cfce66830"
+        },
+        {
+          "name": "lyrashield:kali:orig-tar-sha256",
+          "value": "3c47086915216021bec493d59e5f07fc413e39675aeb0bea5b69e1a0c7fd877e"
+        },
+        {
+          "name": "lyrashield:upstream:commit",
+          "value": "1571aa17535d8bfcf42258659a141df0b12efa51"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "github.com/projectdiscovery/naabu/v2",
+      "version": "v2.6.1",
+      "purl": "pkg:golang/github.com/projectdiscovery/naabu/v2@v2.6.1",
+      "bom-ref": "pkg:golang/github.com/projectdiscovery/naabu/v2@v2.6.1",
+      "properties": [
+        {
+          "name": "lyrashield:kali:source-descriptor-sha256",
+          "value": "cc0a9f44099b30959412533799cc5cda1558a66956e5f8a622db343d1507bcac"
+        },
+        {
+          "name": "lyrashield:kali:orig-tar-sha256",
+          "value": "043df5fc474be85f9bea757eb00449d822aa856efb109c69a6b952cdbc04dbe4"
+        },
+        {
+          "name": "lyrashield:upstream:commit",
+          "value": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "github.com/projectdiscovery/nuclei/v3",
+      "version": "v3.11.1",
+      "purl": "pkg:golang/github.com/projectdiscovery/nuclei/v3@v3.11.1",
+      "bom-ref": "pkg:golang/github.com/projectdiscovery/nuclei/v3@v3.11.1",
+      "properties": [
+        {
+          "name": "lyrashield:kali:source-descriptor-sha256",
+          "value": "93f5341ca9be053b4f71f05c9999a817f1bf62c910c9ad0fb97365f326069557"
+        },
+        {
+          "name": "lyrashield:kali:orig-tar-sha256",
+          "value": "e2b2942512c70c23b7d0d198b54da32f75c30c98d3acdd20a67ed619ab32676a"
+        },
+        {
+          "name": "lyrashield:upstream:commit",
+          "value": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "github.com/projectdiscovery/subfinder/v2",
+      "version": "v2.16.0",
+      "purl": "pkg:golang/github.com/projectdiscovery/subfinder/v2@v2.16.0",
+      "bom-ref": "pkg:golang/github.com/projectdiscovery/subfinder/v2@v2.16.0",
+      "properties": [
+        {
+          "name": "lyrashield:kali:source-descriptor-sha256",
+          "value": "b6f47e611ea00b5327cfcd16bef6accdf1657338054dace94a17321c9d88135c"
+        },
+        {
+          "name": "lyrashield:kali:orig-tar-sha256",
+          "value": "088a6e5b8e23a34527f23fb9868c851ec476280e8950e1cdbe36c219658d6570"
+        },
+        {
+          "name": "lyrashield:upstream:commit",
+          "value": "b360529eebcd29345e44b3a9da3b2b0c04a13ff2"
+        }
+      ]
+    }
+  ]
+}

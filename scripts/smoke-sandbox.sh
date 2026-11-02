@@ -30,9 +30,16 @@ docker run "${docker_args[@]}" --network none "$image" sh -lc '
   /app/.venv/bin/python /opt/lyrashield/verify_pip_vendors.py &&
   /usr/bin/python3 /opt/lyrashield/system-python-security/verify_runtime.py &&
   /app/.venv/bin/python /opt/lyrashield/verify_go_tools.py &&
+  /app/.venv/bin/python /opt/lyrashield/verify_distro_go_tools.py &&
   status="$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:48080/graphql/)" &&
   case "$status" in 200|400) exit 0 ;; *) exit 1 ;; esac
 '
+
+# Exercise Naabu's real libpcap/SYN path on loopback without external networking.
+docker run "${docker_args[@]}" \
+  --network none --cap-drop ALL --cap-add NET_RAW --user 0:0 \
+  --entrypoint /usr/bin/python3 "$image" \
+  /opt/lyrashield/verify_distro_go_tools.py --syn
 
 docker run "${docker_args[@]}" \
   --network none \

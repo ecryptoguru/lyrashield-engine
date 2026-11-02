@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Builder stage: compile the Go tools here so the Go toolchain (~225MB) and the
-# module/build caches never reach the runtime image. The resulting binaries are
-# statically linked and copied into the final stage.
+# module/build caches never reach an image layer. The runtime receives static Go
+# tools and architecture-specific packages for the distro tools that require CGO.
 # ---------------------------------------------------------------------------
 # The manifest-list digest is pinned so amd64 and arm64 select the exact base
 # image tested by the release workflow. Refresh it only through the sandbox
@@ -28,7 +28,7 @@ RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://
     apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
-    apt-get install -y --no-install-recommends curl tar git patch ca-certificates
+    apt-get install -y --no-install-recommends curl tar git patch ca-certificates gcc libc6-dev libpcap0.8-dev=1.10.6-2 xz-utils
 
 # Official compiler archives are pinned independently of the rolling apt suite.
 # GOTOOLCHAIN=local prevents a dependency from downloading a different compiler.
@@ -47,7 +47,12 @@ RUN set -eux; \
     rm /tmp/go.tgz
 ENV PATH="/usr/local/go/bin:${PATH}" GOTOOLCHAIN=local GOSUMDB=sum.golang.org
 COPY containers/go-tools/ /opt/lyrashield/go-tools/
-RUN sh /opt/lyrashield/go-tools/build.sh /out/bin
+# Both build scripts use one bounded cache. Delete it in the same RUN that
+# populates it so neither compiler objects nor module downloads enter a layer.
+RUN export GOPATH=/tmp/lyrashield-go-cache/modules GOCACHE=/tmp/lyrashield-go-cache/build && \
+    sh /opt/lyrashield/go-tools/build.sh /out/bin && \
+    sh /opt/lyrashield/go-tools/distro/build.sh /out/distro && \
+    rm -rf /tmp/lyrashield-go-cache
 
 # ---------------------------------------------------------------------------
 # Runtime stage
@@ -82,7 +87,8 @@ COPY containers/distrust_emsign_g3.sh /opt/lyrashield/distrust_emsign_g3.sh
 # Bootstrap HTTPS trust through the signed archive, then use Kali's official
 # CDN for the large runtime tool set. The suite, pinned keyring, signed-by and
 # fail-closed apt signature policy remain identical to the archive bootstrap.
-RUN apt-get update && \
+RUN --mount=type=bind,from=gobuilder,source=/out/distro,target=/tmp/distro-go-debs \
+    apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     sh /opt/lyrashield/distrust_emsign_g3.sh && \
     printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] https://kali.download/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
@@ -99,7 +105,7 @@ RUN apt-get update && \
     less procps htop \
     iproute2 iputils-ping netcat-traditional \
     nmap ncat ndiff \
-    sqlmap nuclei subfinder naabu ffuf \
+    sqlmap libpcap0.8t64=1.10.6-2 /tmp/distro-go-debs/*.deb \
     nodejs npm pipx \
     libcap2-bin \
     gdb \
@@ -134,10 +140,12 @@ USER pentester
 WORKDIR /tmp
 
 COPY containers/verify_go_tools.py /opt/lyrashield/verify_go_tools.py
+COPY containers/go-tools/distro/verify.py /opt/lyrashield/verify_distro_go_tools.py
 
 # Go tools are built in the gobuilder stage; copy the static binaries only.
 COPY --from=gobuilder --chown=pentester:pentester /out/bin/ /home/pentester/go/bin/
 COPY --from=gobuilder /out/share/go-tools/ /usr/local/share/lyrashield/go-tools/
+COPY containers/go-tools/distro/applications.cdx.json /usr/local/share/lyrashield/go-tools/distro/applications.cdx.json
 
 ARG NUCLEI_TEMPLATES_COMMIT=166dcb625c297785f461a567e73885e8c1ae5cf3
 RUN mkdir -p /home/pentester/.local && \
