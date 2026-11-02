@@ -12,11 +12,15 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from agents.model_settings import ModelSettings
+from agents.models.chatcmpl_converter import Converter as ChatConverter
+from agents.models.fake_id import FAKE_RESPONSES_ID
 from agents.models.interface import Model
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel, OpenAIResponsesWSModel
 from agents.usage import Usage
-from openai import AsyncOpenAI
+from agents.util._json import _to_dump_compatible
+from openai import AsyncOpenAI, NotGiven, Omit
+from openai._streaming import SSEDecoder
 from openai.types.responses import ResponseCompletedEvent
 
 
@@ -77,6 +81,9 @@ class _UsageEvidence:
         self._response_id: str | None = None
         self._choices: set[int] = set()
         self._finished: set[int] = set()
+        self._decoder = SSEDecoder()
+        self._done = False
+        self._raw_counts: tuple[int | float, int | float] | None = None
 
     def _invalidate(self) -> None:
         self.overflow = True
@@ -103,8 +110,10 @@ class _UsageEvidence:
         try:
             payload = json.loads(bytes(data))
         except (ValueError, UnicodeError):
+            self._invalidate()
             return
         if not isinstance(payload, dict):
+            self._invalidate()
             return
         chat = payload.get("object") in {"chat.completion", "chat.completion.chunk"}
         if self.sse and not chat:
@@ -143,9 +152,50 @@ class _UsageEvidence:
         self.reported = complete and (
             not self.sse or not chat or bool(self._choices and self._choices <= self._finished)
         )
+        if self.reported:
+            self._raw_counts = (usage[keys[0]], usage[keys[1]])
+
+    def _line(self, data: bytes | bytearray | memoryview) -> bool:
+        try:
+            line = bytes(data).decode("utf-8").removesuffix("\r")
+        except UnicodeError:
+            self._invalidate()
+            return True
+        if "\r" in line:
+            self._invalidate()
+            return True
+        event = self._decoder.decode(line)
+        if event is None:
+            return False
+        if event.data.startswith("[DONE]"):
+            self._done = True
+            return True
+        if event.event is not None and not event.event.startswith("response."):
+            self._invalidate()
+            return True
+        self._inspect(event.data.encode("utf-8"))
+        return self.overflow
+
+    def matches(self, response: Any) -> bool:
+        if not self.reported or self.overflow or self._raw_counts is None:
+            return False
+        usage = getattr(response, "usage", None)
+        if usage is None or self._raw_counts != (
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+        ):
+            return False
+        ids = {getattr(response, "response_id", None), getattr(response, "id", None)}
+        for item in getattr(response, "output", []):
+            provider = getattr(item, "provider_data", None)
+            if isinstance(provider, dict):
+                ids.add(provider.get("response_id"))
+        ids.discard(None)
+        ids.discard(FAKE_RESPONSES_ID)
+        return bool(self._response_id and ids == {self._response_id})
 
     def feed(self, chunk: bytes) -> None:
-        if self.overflow:
+        if self.overflow or self._done:
             return
         # Check before concatenating/copying an untrusted transport span.
         if len(chunk) > self._MAX_FRAME_BYTES - self._bytes:
@@ -172,9 +222,10 @@ class _UsageEvidence:
                 line = self.buffer
             else:
                 line = span[position:newline]
-            if bytes(line[:5]) == b"data:":
-                self._inspect(line[5:])
+            stop = self._line(line)
             self.buffer.clear()
+            if stop:
+                return
             position = newline + 1
 
     def finish(self) -> None:
@@ -207,9 +258,128 @@ class _ObservedUsageResponse(httpx.Response):
                 await self.aclose()
 
 
+# Fields that can replace the priced route, input/context/schema or response
+# modality. They must match the SDK projection of the original call arguments,
+# not extra_body/client defaults applied afterwards.
+_QUOTED_FIELDS = (
+    "model",
+    "input",
+    "messages",
+    "instructions",
+    "tools",
+    "functions",
+    "text",
+    "response_format",
+    "prompt",
+    "previous_response_id",
+    "conversation",
+    "context_management",
+    "web_search_options",
+    "file_ids",
+    "modalities",
+    "audio",
+    "prediction",
+)
+
+
+def _quoted_fields(
+    model: Model,
+    settings: ModelSettings,
+    resolved: AsyncOpenAI,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    names = (
+        "system_instructions",
+        "input",
+        "model_settings",
+        "tools",
+        "output_schema",
+        "handoffs",
+        "tracing",
+    )
+    call = {**dict(zip(names, args, strict=False)), **kwargs}
+    clean = copy.copy(settings)
+    clean.extra_args = None
+    clean.extra_body = None
+    inner = cast("Any", model)
+    if isinstance(model, OpenAIResponsesModel):
+        expected = inner._build_response_create_kwargs(
+            system_instructions=call.get("system_instructions"),
+            input=call["input"],
+            model_settings=clean,
+            tools=call.get("tools", []),
+            output_schema=call.get("output_schema"),
+            handoffs=call.get("handoffs", []),
+            previous_response_id=call.get("previous_response_id"),
+            conversation_id=call.get("conversation_id"),
+            prompt=call.get("prompt"),
+        )
+    else:
+        conversion = {
+            "model": inner.model,
+            "should_replay_reasoning_content": inner.should_replay_reasoning_content,
+        }
+        if isinstance(model, OpenAIChatCompletionsModel):
+            conversion.update(
+                base_url=str(resolved.base_url),
+                strict_feature_validation=inner._strict_feature_validation,
+            )
+        else:
+            # Qualified LiteLLM's exact SDK conversion flags, without executing
+            # LiteLLM or inferring another provider's transport.
+            conversion.update(
+                base_url=inner.base_url,
+                preserve_thinking_blocks=False,
+                preserve_tool_output_all_content=True,
+            )
+        messages = ChatConverter.items_to_messages(call["input"], **conversion)
+        if call.get("system_instructions"):
+            messages.insert(0, {"role": "system", "content": call["system_instructions"]})
+        tools = [ChatConverter.tool_to_openai(tool) for tool in call.get("tools", [])]
+        tools.extend(
+            ChatConverter.convert_handoff_tool(handoff) for handoff in call.get("handoffs", [])
+        )
+        expected = {
+            "model": inner.model.removeprefix("openai/"),
+            "messages": messages,
+            "tools": tools,
+            "response_format": ChatConverter.convert_response_format(call.get("output_schema")),
+        }
+    projected = {key: expected.get(key) for key in _QUOTED_FIELDS}
+    projected = {
+        key: None if isinstance(value, (Omit, NotGiven)) else _to_dump_compatible(value)
+        for key, value in projected.items()
+    }
+    if not isinstance(projected["model"], str) or not projected["model"]:
+        raise PhysicalBudgetAdapterError("Finite generation requires an explicit priced model.")
+    return copy.deepcopy(projected)
+
+
+def _validate_quoted_fields(payload: Any, expected: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise PhysicalBudgetAdapterError("Cannot verify finite generation quote fields.")
+    for key, value in expected.items():
+        actual = payload.get(key)
+        if key in {"tools", "functions"} and not actual and not value:
+            continue
+        if actual != value:
+            raise PhysicalBudgetAdapterError(
+                f"Finite generation changed quoted {key}; "
+                "raw body overrides cannot reprice a request."
+            )
+    for key in ("n", "best_of", "num_generations"):
+        value = payload.get(key, 1)
+        if type(value) is not int or value != 1:
+            raise PhysicalBudgetAdapterError("Finite generation requires exactly one completion.")
+    if payload.get("service_tier") not in (None, "default"):
+        raise PhysicalBudgetAdapterError("Finite generation cannot change its priced service tier.")
+
+
 class _SinglePostTransport(httpx.AsyncBaseTransport):
-    def __init__(self, original: httpx.AsyncClient, maximum: int) -> None:
+    def __init__(self, original: httpx.AsyncClient, maximum: int, quoted: dict[str, Any]) -> None:
         self.original = original
+        self.quoted = quoted
         self.maximum = maximum
         self.sent = False
         self.usage_evidence: _UsageEvidence | None = None
@@ -243,12 +413,15 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
             raise PhysicalBudgetAdapterError(
                 "Finite generation is missing its configured hard output cap."
             )
+        _validate_quoted_fields(payload, self.quoted)
         self.sent = True
         # Auth and redirect flow run above this counter on the scoped client.
         # Reuse the resolved URL's pool/TLS transport below those flows, so
         # every challenge-driven physical dispatch must re-enter this guard.
         transport = self.original._transport_for_url(request.url)
         response = await transport.handle_async_request(request)
+        response.request = request
+        self.original.cookies.extract_cookies(response)
         evidence = _UsageEvidence(
             sse="text/event-stream" in response.headers.get("content-type", "")
         )
@@ -267,7 +440,11 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
 
 @asynccontextmanager
 async def _physical_call(
-    model: Model, settings: ModelSettings, resolved_client: AsyncOpenAI | None = None
+    model: Model,
+    settings: ModelSettings,
+    resolved_client: AsyncOpenAI | None,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> AsyncIterator[tuple[Model, ModelSettings, _SinglePostTransport | None]]:
     finite = _finite_attempt.get() or getattr(settings, "_lyrashield_finite_budget", False) is True
     if not finite or getattr(model, "_budget_zero_cost", False) is True:
@@ -324,7 +501,8 @@ async def _physical_call(
             "The resolved provider client cannot enforce a finite budget."
         )
     original_http = resolved._client
-    transport = _SinglePostTransport(original_http, maximum)
+    quoted = _quoted_fields(model, settings, resolved, args, kwargs)
+    transport = _SinglePostTransport(original_http, maximum, quoted)
     async with httpx.AsyncClient(
         transport=transport,
         timeout=original_http.timeout,
@@ -362,7 +540,7 @@ class _PhysicalAttemptModel(Model):
 
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
         settings = kwargs["model_settings"] if "model_settings" in kwargs else args[2]
-        async with _physical_call(self._inner, settings, self._resolved_client) as (
+        async with _physical_call(self._inner, settings, self._resolved_client, args, kwargs) as (
             model,
             effective,
             transport,
@@ -373,14 +551,14 @@ class _PhysicalAttemptModel(Model):
                 args = (*args[:2], effective, *args[3:])
             response = await model.get_response(*args, **kwargs)
             if transport is not None and not (
-                transport.usage_evidence is not None and transport.usage_evidence.reported
+                transport.usage_evidence is not None and transport.usage_evidence.matches(response)
             ):
                 response.usage = Usage()
             return response
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         settings = kwargs["model_settings"] if "model_settings" in kwargs else args[2]
-        async with _physical_call(self._inner, settings, self._resolved_client) as (
+        async with _physical_call(self._inner, settings, self._resolved_client, args, kwargs) as (
             model,
             effective,
             transport,
@@ -397,7 +575,7 @@ class _PhysicalAttemptModel(Model):
                         and isinstance(event, ResponseCompletedEvent)
                         and not (
                             transport.usage_evidence is not None
-                            and transport.usage_evidence.reported
+                            and transport.usage_evidence.matches(event.response)
                         )
                     ):
                         event.response.usage = None

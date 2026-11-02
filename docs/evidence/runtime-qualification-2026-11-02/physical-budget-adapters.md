@@ -14,6 +14,25 @@ Digest challenge cannot hide a second generation POST. It disables generation
 redirects and refuses a hidden second POST. It does not change a shared client,
 LiteLLM globals or a provider factory, and does not infer credentials.
 
+The final wire model, input/messages, instructions, tools/functions, output
+schema, prompt/state references, context management and audio/modality/prediction
+fields must equal the frozen SDK projection of the original owned call arguments.
+That snapshot precedes extra-body/extra-argument merges and client serialization;
+late overrides cannot increase the quoted input or switch Luna to Sol. The
+resolved SDK model/deployment name is authoritative, preserving native aliases.
+Generation multiplicity (`n`, `best_of`, `num_generations`) must be absent or the
+integer 1; an explicit service tier must be `default`. Output token caps retain
+their existing positive quoted bound. Arbitrary provider request bodies are not
+qualified by this policy; unknown provider-specific financial semantics are not
+priced or inferred. Normal typed tools, screenshot input and structured response
+schemas retain their original SDK shape.
+
+Response Set-Cookie updates are applied to the original resolved HTTPX cookie
+jar using its standard extraction semantics, including domain/path/secure checks,
+rotations and deletions. Independent clients retain independent jars. Concurrent
+responses apply their actual updates rather than replacing the jar with a stale
+per-request snapshot.
+
 | Actual resolved adapter / route class | Finite disposition | Compatibility and fallback impact |
 | --- | --- | --- |
 | Native HTTP OpenAI Responses or Chat Completions, including admitted bare/OpenAI GPT-6 Sol/Luna routes | Qualified; existing client and configured hard output cap retained | Streaming, nonstreaming bridge and diagnostics remain supported. HTTP 307/308 generation redirects fail after one POST. |
@@ -41,9 +60,12 @@ Returned output without complete provider usage is preserved, but cannot release
 the quote as zero spend. A bounded observer reads the normal HTTPX-decoded bytes,
 including gzip, without changing response data or decoding it twice. It prevents
 synthetic zero placeholders and partial/interim Chat streaming counters from
-being mistaken for terminal usage. Chat receipts require completed choices;
-later generation invalidates an earlier receipt until fresh terminal usage
-arrives. Complete reported zero counters can reconcile a quote; a known
+being mistaken for terminal usage. SSE data lines are assembled by the frozen
+SDK's event decoder; authority stops at `[DONE]`. Chat receipts require completed
+choices, and later generation invalidates an earlier receipt until fresh terminal
+usage arrives. The raw terminal response ID and counters must match the SDK's
+actual returned ID/provider metadata and input/output counters. Unsupported or
+ambiguous framing retains the quote. Complete reported zero counters can reconcile a quote; a known
 zero-priced route can still proceed. The observer caps total observed decoded
 bytes at 1 MiB and SSE lines at 4,096. It checks bounds before copying incoming
 spans and scans with an advancing index. Oversized or unrecognized usage remains
