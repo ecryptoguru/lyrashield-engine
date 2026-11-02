@@ -87,8 +87,7 @@ COPY containers/distrust_emsign_g3.sh /opt/lyrashield/distrust_emsign_g3.sh
 # Bootstrap HTTPS trust through the signed archive, then use Kali's official
 # CDN for the large runtime tool set. The suite, pinned keyring, signed-by and
 # fail-closed apt signature policy remain identical to the archive bootstrap.
-RUN --mount=type=bind,from=gobuilder,source=/out/distro,target=/tmp/distro-go-debs \
-    apt-get update && \
+RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     sh /opt/lyrashield/distrust_emsign_g3.sh && \
     printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] https://kali.download/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
@@ -105,7 +104,7 @@ RUN --mount=type=bind,from=gobuilder,source=/out/distro,target=/tmp/distro-go-de
     less procps htop \
     iproute2 iputils-ping netcat-traditional \
     nmap ncat ndiff \
-    sqlmap libpcap0.8t64=1.10.6-2 /tmp/distro-go-debs/*.deb \
+    sqlmap libpcap0.8t64=1.10.6-2 \
     nodejs npm pipx \
     libcap2-bin \
     gdb \
@@ -248,6 +247,14 @@ RUN apt-get autoremove -y && \
         ! -name 'en' ! -name 'en_US' ! -name 'C' -exec rm -rf {} + && \
     # Remove package documentation and man pages not needed at runtime (~95MB)
     rm -rf /usr/share/doc/* /usr/share/doc-base/* /usr/share/man/*
+
+# Install these local packages after image-wide doc/man pruning. Apply the
+# include only to these four archives so their licenses, receipts and man page
+# survive any dpkg path exclusions without changing policy for other packages.
+RUN --mount=type=bind,from=gobuilder,source=/out/distro,target=/tmp/distro-go-debs \
+    dpkg --path-include='*' --install /tmp/distro-go-debs/*.deb && \
+    dpkg --verify ffuf naabu nuclei subfinder > /tmp/distro-go-integrity && \
+    test ! -s /tmp/distro-go-integrity && rm /tmp/distro-go-integrity
 
 # Apply qualified distro leaves/backports after every APT operation. Keep the
 # verifier and provenance available for final non-root, offline image smoke.

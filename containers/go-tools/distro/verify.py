@@ -1,6 +1,7 @@
 """Check installed distro packages and exercise their CLIs against loopback."""
 
 # ruff: noqa: INP001
+import argparse
 import ctypes
 import hashlib
 import http.server
@@ -8,9 +9,10 @@ import json
 import os
 import shutil
 import socket
+import socketserver
 import ssl
+import struct
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -18,7 +20,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 
+def file_digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def verify_installed() -> None:
+    supplement_path = Path("/usr/local/share/lyrashield/go-tools/distro/applications.cdx.json")
+    entries = json.loads(supplement_path.read_text())["components"]
+    components = {entry["name"]: entry for entry in entries}
+    assert len(components) == len(entries) == 4
     for name, version in (
         ("ffuf", "2.2.1-1"),
         ("naabu", "2.6.1-0kali1"),
@@ -31,8 +42,36 @@ def verify_installed() -> None:
             ["/usr/bin/dpkg-query", "-W", "-f=${Version}", name], text=True
         )
         assert actual == version + "+lyra1", (name, actual)
-        record = Path("/usr/share/doc") / name / "lyrashield-build/binary.sha256"
-        assert hashlib.sha256(binary.read_bytes()).hexdigest() == record.read_text().split()[0]
+        integrity = subprocess.check_output(  # noqa: S603 - fixed package verification
+            ["/usr/bin/dpkg", "--verify", name], text=True
+        )
+        assert not integrity, (name, integrity)
+        receipt = Path("/usr/share/doc") / name / "lyrashield-build"
+        assert (receipt / "binary.sha256").read_text().split() == [
+            file_digest(binary),
+            f"usr/bin/{name}",
+        ]
+        module = (receipt / "go.mod").read_text().splitlines()[0].removeprefix("module ")
+        component = components.pop(module)
+        upstream = version.rsplit("-", 1)[0]
+        assert component["version"] == "v" + upstream
+        assert component["purl"] == f"pkg:golang/{module}@v{upstream}"
+        props = {item["name"]: item["value"] for item in component["properties"]}
+        descriptor = receipt / f"{name}_{version}.dsc"
+        assert file_digest(descriptor) == props["lyrashield:kali:source-descriptor-sha256"]
+        expected_orig = props["lyrashield:kali:orig-tar-sha256"]
+        assert any(
+            line.split()[:1] == [expected_orig]
+            and line.split()[-1] == f"{name}_{upstream}.orig.tar.gz"
+            for line in descriptor.read_text().splitlines()
+        )
+        assert (receipt / "graph.sha256").read_text().split() == [
+            file_digest(receipt / "go.mod"),
+            "go.mod",
+            file_digest(receipt / "go.sum"),
+            "go.sum",
+        ]
+    assert not components
 
     # Naabu's Go pcap bindings use dlopen, so neither ldd nor package installation
     # alone establishes that the linked runtime actually provides pcap APIs.
@@ -61,7 +100,7 @@ def verify_loopback() -> None:
             HOME=temp, XDG_CONFIG_HOME=temp, NO_PROXY="127.0.0.1", DISABLE_CLOUD_UPLOAD="true"
         )
 
-        def run(*command: str) -> str:
+        def run(*command: str, expected: int = 0) -> str:
             result = subprocess.run(  # noqa: S603 - fixed tools and loopback inputs
                 command,
                 cwd=root,
@@ -72,7 +111,7 @@ def verify_loopback() -> None:
                 timeout=60,
                 check=False,
             )
-            assert result.returncode == 0, (command, result.returncode, result.stdout)
+            assert result.returncode == expected, (command, result.returncode, result.stdout)
             return result.stdout
 
         def handler(*args, **kwargs):
@@ -122,8 +161,6 @@ def verify_loopback() -> None:
                     "nuclei", "-duc", "-ni", "-silent", "-nc", "-t", "fixture.yaml", "-u", url
                 )
                 assert "lyra-loopback" in found and url in found, found
-                providers = run("subfinder", "-ls", "-duc", "-pc", "providers.yaml")
-                assert "crtsh" in providers.lower(), providers
             finally:
                 server.shutdown()
                 thread.join()
@@ -174,6 +211,103 @@ def verify_loopback() -> None:
                 legacy.shutdown()
                 thread.join()
         verify_sha1_limit(root, run)
+        verify_subfinder(root, run)
+
+
+def verify_subfinder(root: Path, run: Callable[..., str]) -> None:
+    name = "found.fixture.invalid"
+    queries: list[str] = []
+    requests: list[str] = []
+
+    class Proxy(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            requests.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(f"http://{name}/artifact\n".encode())
+
+    class Resolver(socketserver.BaseRequestHandler):
+        def handle(self) -> None:
+            message, udp = self.request
+            end = message.index(b"\0", 12) + 1
+            labels = message[12 : end - 1]
+            parts = []
+            while labels:
+                size = labels[0]
+                parts.append(labels[1 : size + 1].decode())
+                labels = labels[size + 1 :]
+            host = ".".join(parts)
+            queries.append(host)
+            record = b""
+            if host == name and message[end : end + 2] == b"\0\1":
+                record = struct.pack("!HHHIH4s", 0xC00C, 1, 1, 10, 4, socket.inet_aton("192.0.2.7"))
+            header = message[:2] + struct.pack("!HHHHH", 0x8180, 1, bool(record), 0, 0)
+            udp.sendto(header + message[12 : end + 4] + record, self.client_address)
+
+    with (
+        http.server.ThreadingHTTPServer(("127.0.0.1", 0), Proxy) as proxy,
+        socketserver.UDPServer(("127.0.0.1", 0), Resolver) as dns,
+    ):
+        (root / "resolvers.txt").write_text(f"127.0.0.1:{dns.server_address[1]}\n")
+        threads = [threading.Thread(target=s.serve_forever) for s in (proxy, dns)]
+        for thread in threads:
+            thread.start()
+        try:
+            assert "v2.16.0" in run("subfinder", "-version")
+            output = run(
+                "subfinder",
+                "-duc",
+                "-d",
+                "fixture.invalid",
+                "-s",
+                "waybackarchive",
+                "-v",
+                "-active",
+                "-ip",
+                "-oJ",
+                "-pc",
+                "providers.yaml",
+                "-rL",
+                "resolvers.txt",
+                "-r",
+                f"127.0.0.1:{dns.server_address[1]}",
+                "-proxy",
+                f"http://127.0.0.1:{proxy.server_port}",
+                "-timeout",
+                "3",
+            )
+            assert "Loading provider config from providers.yaml" in output, output
+            hits = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+            assert any(hit.get("host") == name and hit.get("ip") == "192.0.2.7" for hit in hits), (
+                output,
+                requests,
+                queries,
+            )
+            assert name in queries and any(
+                "web.archive.org/cdx/search/cdx" in req for req in requests
+            )
+        finally:
+            proxy.shutdown()
+            dns.shutdown()
+            for thread in threads:
+                thread.join()
+
+    (root / "invalid-provider.yaml").write_text("waybackarchive: [\n")
+    rejected = run(
+        "subfinder",
+        "-duc",
+        "-d",
+        "fixture.invalid",
+        "-s",
+        "waybackarchive",
+        "-pc",
+        "invalid-provider.yaml",
+        "-rL",
+        "missing-resolvers.txt",
+        expected=1,
+    )
+    assert "Could not read providers from invalid-provider.yaml" in rejected, rejected
+    assert "missing-resolvers.txt" in rejected, rejected
 
 
 def verify_sha1_limit(root: Path, run: Callable[..., str]) -> None:
@@ -279,9 +413,17 @@ def verify_syn() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--syn"]:
+    if not __debug__:
+        raise RuntimeError("Package evidence requires Python assertions")
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--receipts-only", action="store_true")
+    mode.add_argument("--syn", action="store_true")
+    args = parser.parse_args()
+    if args.syn:
         verify_syn()
     else:
         verify_installed()
-        verify_loopback()
-    print("Distro Go package capability fixtures passed.")  # noqa: T201
+        if not args.receipts_only:
+            verify_loopback()
+    print("Distro Go package verification passed.")  # noqa: T201

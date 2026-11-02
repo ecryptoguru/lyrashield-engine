@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -87,6 +88,20 @@ def test_runtime_installs_rebuilt_packages_and_discards_combined_builder_cache()
     install = next(
         line for line in dockerfile.splitlines() if "from=gobuilder,source=/out/distro" in line
     )
-    assert "libpcap0.8t64=1.10.6-2 /tmp/distro-go-debs/*.deb" in install
+    assert "libpcap0.8t64=1.10.6-2" in dockerfile
+    assert "dpkg --path-include='*' --install /tmp/distro-go-debs/*.deb" in install
+    assert "dpkg --verify ffuf naabu nuclei subfinder" in install
+    assert dockerfile.rindex("rm -rf /usr/share/doc/*") < dockerfile.index(install)
     assert "sqlmap nuclei subfinder naabu ffuf" not in dockerfile
     assert "verify_distro_go_tools.py" in (ROOT / "scripts/smoke-sandbox.sh").read_text()
+
+
+def test_receipt_gate_rejects_optimized_python() -> None:
+    result = subprocess.run(  # noqa: S603 - fixed local verification script
+        [sys.executable, "-O", str(INPUTS / "verify.py"), "--receipts-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Package evidence requires Python assertions" in result.stderr

@@ -64,7 +64,11 @@ while IFS='|' read -r name version dsc orig overlay armdeb amddeb; do
             echo "Nuclei links the deprecated OpenPGP implementation" >&2
             exit 1
         fi
-        go test -p 1 -mod=readonly "$inputs/nuclei/sdk_test.go"
+        go test -count=1 -trimpath -p 1 -mod=readonly "$inputs/nuclei/sdk_test.go"
+        cp "$inputs/nuclei/testdata/template_adapter_test.go" pkg/external/customtemplates/
+        cp "$inputs/nuclei/testdata/tracker_adapter_test.go" pkg/reporting/trackers/github/
+        go test -count=1 -trimpath -p 1 -mod=readonly -run '^TestLyra' \
+            ./pkg/external/customtemplates ./pkg/reporting/trackers/github
     fi
     provenance="../package/usr/share/doc/$name/lyrashield-build"
     mkdir -p "$provenance"

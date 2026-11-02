@@ -17,14 +17,10 @@ import (
 	"github.com/google/go-github/v30/github"
 )
 
-func TestGitHubClientAndSigning(t *testing.T) {
+func TestGitHubCommitSigning(t *testing.T) {
 	signatures := make(chan string, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /repos/test/repo":
-			fmt.Fprint(w, `{"name":"repo"}`)
-		case "POST /repos/test/repo/issues":
-			fmt.Fprint(w, `{"number":7}`)
 		case "POST /repos/test/repo/git/commits":
 			var body struct{ Signature string }
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -44,14 +40,6 @@ func TestGitHubClientAndSigning(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	repo, _, err := client.Repositories.Get(ctx, "test", "repo")
-	if err != nil || repo.GetName() != "repo" {
-		t.Fatalf("repository lookup: %v (%v)", repo, err)
-	}
-	issue, _, err := client.Issues.Create(ctx, "test", "repo", &github.IssueRequest{Title: github.String("test")})
-	if err != nil || issue.GetNumber() != 7 {
-		t.Fatalf("issue creation: %v (%v)", issue, err)
-	}
 
 	commit := &github.Commit{
 		Message: github.String("fixture"),
