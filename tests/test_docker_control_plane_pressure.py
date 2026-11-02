@@ -28,6 +28,44 @@ def channel_pair():
     return tunnel._ExecChannel(local, SimpleNamespace(close=Mock())), peer
 
 
+@pytest.mark.asyncio
+async def test_accept_then_immediate_close_discards_writer_before_relay_starts(monkeypatch):
+    accepted = asyncio.Event()
+    captured = {}
+    accept = tunnel.DockerControlPlaneTunnel._accept
+
+    def hold_accept(_self, reader, writer):
+        captured.update(reader=reader, writer=writer)
+        accepted.set()
+
+    monkeypatch.setattr(tunnel.DockerControlPlaneTunnel, "_accept", hold_accept)
+    relay = await tunnel.DockerControlPlaneTunnel.create(object(), "owned")
+    relay_started = asyncio.Event()
+    original_relay = relay._relay
+
+    async def record_start(*args):
+        relay_started.set()
+        await original_relay(*args)
+
+    monkeypatch.setattr(relay, "_relay", record_start)
+    reader, writer = await asyncio.open_connection(relay.endpoint.host, relay.endpoint.port)
+    try:
+        await asyncio.wait_for(accepted.wait(), 1)
+        accept(relay, captured["reader"], captured["writer"])
+        # No scheduling point between acceptance and shutdown: the new task
+        # is cancelled before its coroutine (and its finally block) can enter.
+        await relay.aclose()
+        assert not relay_started.is_set()
+        assert await asyncio.wait_for(reader.read(), 1) == b""
+        assert not relay._tasks
+        assert not relay._leases
+        assert not relay._writers
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        await relay.aclose()
+
+
 def test_guest_simultaneous_large_request_and_response_make_progress():
     request = (b"\x00request\xff\r\n" * (2 * 1024 * 1024 // 11 + 1))[: 2 * 1024 * 1024]
     response = (b"\x81response\x00\xff" * (2 * 1024 * 1024 // 11 + 1))[: 2 * 1024 * 1024]

@@ -304,6 +304,7 @@ class DockerControlPlaneTunnel:
         self._server.close()
         for writer in tuple(self._writers):
             writer.transport.abort()
+            self._writers.discard(writer)
         for lease in leases:
             lease.close()
         tasks = tuple(self._tasks)
