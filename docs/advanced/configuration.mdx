@@ -407,6 +407,23 @@ with `docker network rm "$STRIX_DOCKER_SANDBOX_NETWORK"`, then rerun the
 provisioning script. Network removal is an operator-controlled downtime step;
 the script never disconnects or deletes a network that may still be in use.
 
+Native macOS scans require a local Unix-socket Docker connection. Docker
+Desktop keeps the internal bridge inside its VM and does not activate port
+publication for an internal-only container. The engine instead owns an
+ephemeral `127.0.0.1` listener for each sandbox session. It forwards the Caido
+control-plane stream over the existing Docker exec API, as `pentester`, to
+only `127.0.0.1:48080` inside that container. It does not publish Docker ports,
+add network interfaces, or grant the agent host access. The listener admits
+at most eight connections, bounds frames and buffering, and closes with the
+session, including failed startup and cancellation.
+
+The sandbox retains only its configured internal network with ICC disabled;
+source and attachment mounts remain read-only. Remote TCP, TLS, and SSH Docker
+connections are unsupported for native macOS scans and fail before container
+creation. Linux workers retain their sandbox bridge route without a local
+listener; remote Linux daemon deployments must provide a reachable, isolated
+sandbox bridge route from the worker.
+
 ### Sandbox capabilities and image pinning
 
 The engine omits `NET_ADMIN` and `NET_RAW` by default. Add them only for authorized workflows that require advanced raw-socket operations such as SYN scans.
