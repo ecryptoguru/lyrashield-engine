@@ -75,7 +75,7 @@ async def test_http_upgrade_and_binary_websocket_bytes_are_preserved(monkeypatch
         await relay.aclose()
         await asyncio.gather(*workers)
     assert not relay._tasks
-    assert not relay._channels
+    assert not relay._leases
     assert all(item.sock.fileno() == -1 for item in peers)
     with pytest.raises(OSError):
         await asyncio.open_connection(relay.endpoint.host, relay.endpoint.port)
@@ -225,7 +225,7 @@ async def test_active_connection_bound_and_cleanup(monkeypatch):
         await relay.aclose()
         assert await asyncio.wait_for(reader.read(), 2) == b""
         assert not relay._tasks
-        assert not relay._channels
+        assert not relay._leases
     finally:
         for item in (writer, second_writer):
             item.close()
@@ -253,8 +253,9 @@ async def test_cancel_during_exec_open_closes_late_channel(monkeypatch):
         assert await asyncio.to_thread(entered.wait, 2)
         await asyncio.wait_for(relay.aclose(), 0.2)
         release.set()
-        while relay._opening:
-            await asyncio.sleep(0.01)
+        async with asyncio.timeout(1):
+            while relay._leases:
+                await asyncio.sleep(0.01)
         assert channel.sock.fileno() == -1
         assert not relay._tasks
     finally:

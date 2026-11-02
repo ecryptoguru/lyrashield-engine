@@ -11,6 +11,8 @@ import contextlib
 import logging
 import socket
 import struct
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,34 +23,30 @@ _CHUNK = 65536
 _MAX_FRAME = 1024 * 1024
 _MAX_CONNECTIONS = 8
 _DAEMON_TIMEOUT = 3
+_SHUTDOWN_TIMEOUT = 1
 logger = logging.getLogger(__name__)
 # Fixed argv and destination; no shell, arguments, environment, or URL derived
 # from a local HTTP client can change the exec identity or TCP destination.
-_FORWARDER = """import os, selectors, socket
+_FORWARDER = """import contextlib, os, socket, threading
 s = socket.create_connection(('127.0.0.1', 48080), timeout=3)
 s.settimeout(None)
-poll = selectors.DefaultSelector()
-poll.register(0, selectors.EVENT_READ)
-poll.register(s, selectors.EVENT_READ)
+def upload():
+    try:
+        while data := os.read(0, 65536):
+            s.sendall(data)
+        s.shutdown(socket.SHUT_WR)
+    except OSError:
+        with contextlib.suppress(OSError):
+            s.shutdown(socket.SHUT_RDWR)
+threading.Thread(target=upload, daemon=True).start()
 try:
-    while True:
-        for key, _ in poll.select():
-            if key.fileobj == 0:
-                data = os.read(0, 65536)
-                if not data:
-                    poll.unregister(0)
-                    s.shutdown(socket.SHUT_WR)
-                else:
-                    s.sendall(data)
-            else:
-                data = s.recv(65536)
-                if not data:
-                    raise SystemExit(0)
-                view = memoryview(data)
-                while view:
-                    view = view[os.write(1, view):]
+    while data := s.recv(65536):
+        view = memoryview(data)
+        while view:
+            view = view[os.write(1, view):]
 finally:
-    poll.close()
+    with contextlib.suppress(OSError):
+        s.shutdown(socket.SHUT_RDWR)
     s.close()
 """
 
@@ -59,8 +57,12 @@ class _ExecChannel:
     response: Any
 
     def close(self) -> None:
-        self.sock.close()
-        self.response.close()
+        with contextlib.suppress(OSError):
+            self.sock.shutdown(socket.SHUT_RDWR)
+        with contextlib.suppress(OSError):
+            self.sock.close()
+        with contextlib.suppress(Exception):
+            self.response.close()
 
 
 def _open_channel(api: Any, container_id: str) -> _ExecChannel:
@@ -102,6 +104,66 @@ def _open_channel(api: Any, container_id: str) -> _ExecChannel:
     except BaseException:
         response.close()
         raise
+
+
+class _ChannelLease:
+    """One connection slot, retained until its worker-owned late result closes."""
+
+    def __init__(self, release: Callable[[_ChannelLease], None]) -> None:
+        self._lock = threading.Lock()
+        self._release = release
+        self._closed = False
+        self._opening = False
+        self._channel: _ExecChannel | None = None
+
+    def begin_open(self) -> bool:
+        with self._lock:
+            if self._closed:
+                return False
+            self._opening = True
+            return True
+
+    def failed_open(self) -> None:
+        with self._lock:
+            self._opening = False
+            release = self._closed
+        if release:
+            self._release(self)
+
+    def open(self, api: Any, container_id: str) -> _ExecChannel | None:
+        try:
+            channel = _open_channel(api, container_id)
+        except BaseException:
+            self.failed_open()
+            raise
+        with self._lock:
+            if not self._closed:
+                self._channel = channel
+                self._opening = False
+                return channel
+        # This branch runs in the executor worker. Neither disposal nor slot
+        # release needs a callback on the potentially already-closed UI loop.
+        try:
+            channel.close()
+        finally:
+            with self._lock:
+                self._opening = False
+            self._release(self)
+        return None
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            channel, self._channel = self._channel, None
+            release = not self._opening
+        try:
+            if channel is not None:
+                channel.close()
+        finally:
+            if release:
+                self._release(self)
 
 
 async def _recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -151,8 +213,8 @@ class DockerControlPlaneTunnel:
         self._container_id = container_id
         self._closed = False
         self._tasks: set[asyncio.Task[None]] = set()
-        self._channels: set[_ExecChannel] = set()
-        self._opening: set[asyncio.Future[_ExecChannel]] = set()
+        self._lease_lock = threading.Lock()
+        self._leases: set[_ChannelLease] = set()
         self._writers: set[asyncio.StreamWriter] = set()
 
     @classmethod
@@ -171,36 +233,41 @@ class DockerControlPlaneTunnel:
         return tunnel
 
     def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        if self._closed or len(self._tasks) + len(self._opening) >= _MAX_CONNECTIONS:
-            writer.close()
-            return
-        task = asyncio.create_task(self._relay(reader, writer))
+        with self._lease_lock:
+            if self._closed or len(self._leases) >= _MAX_CONNECTIONS:
+                writer.transport.abort()
+                return
+            lease = _ChannelLease(self._release_lease)
+            self._leases.add(lease)
+        task = asyncio.create_task(self._relay(reader, writer, lease))
         self._writers.add(writer)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _relay(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        channel = None
-        future = None
-        abandoned = False
+    def _release_lease(self, lease: _ChannelLease) -> None:
+        with self._lease_lock:
+            self._leases.discard(lease)
+
+    async def _relay(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, lease: _ChannelLease
+    ) -> None:
         pumps: set[asyncio.Task[None]] = set()
         try:
-            future = asyncio.get_running_loop().run_in_executor(
-                None, _open_channel, self._api, self._container_id
-            )
-            self._opening.add(future)
-
-            def late_close(done: asyncio.Future[_ExecChannel]) -> None:
-                self._opening.discard(done)
-                if self._closed or abandoned:
-                    # The callback also owns any channel returned after its
-                    # connection task was cancelled/timed out.
-                    with contextlib.suppress(Exception):
-                        done.result().close()
-
-            future.add_done_callback(late_close)
+            if not lease.begin_open():
+                return
+            try:
+                future = asyncio.get_running_loop().run_in_executor(
+                    None, lease.open, self._api, self._container_id
+                )
+            except BaseException:
+                lease.failed_open()
+                raise
+            # Retrieving an abandoned exception avoids asyncio diagnostics;
+            # channel disposal and slot release are owned by the worker lease.
+            future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
             channel = await asyncio.wait_for(asyncio.shield(future), 2 * _DAEMON_TIMEOUT + 1)
-            self._channels.add(channel)
+            if channel is None:
+                return
             down = asyncio.create_task(_from_docker(channel.sock, writer))
             up = asyncio.create_task(_to_docker(reader, channel.sock))
             pumps = {up, down}
@@ -213,34 +280,39 @@ class DockerControlPlaneTunnel:
             # Exception text may contain protocol data; log only its type.
             logger.debug("Docker control-plane channel closed (%s)", type(exc).__name__)
         finally:
-            abandoned = True
-            if channel is None and future is not None and future.done():
-                with contextlib.suppress(Exception):
-                    future.result().close()
-            # Close handles before any cleanup await: delete can cancel this
-            # handler while it is already draining its own finally block.
+            # Retain every handle while draining: session deletion can abort
+            # this finalizer's writer and close its lease before cancelling it.
             writer.close()
-            self._writers.discard(writer)
-            if channel is not None:
-                self._channels.discard(channel)
-                channel.close()
-            for pump in pumps:
-                pump.cancel()
-            await asyncio.gather(*pumps, return_exceptions=True)
-            with contextlib.suppress(OSError, TimeoutError):
-                await asyncio.wait_for(writer.wait_closed(), 1)
+            try:
+                for pump in pumps:
+                    pump.cancel()
+                await asyncio.gather(*pumps, return_exceptions=True)
+                # A normal response may drain slowly; it keeps its slot and
+                # remains owned until closure. Only session shutdown aborts it.
+                with contextlib.suppress(OSError):
+                    await writer.wait_closed()
+            finally:
+                # Keep draining writers owned until closure or forced abort.
+                writer.transport.abort()
+                lease.close()
+                self._writers.discard(writer)
 
     async def aclose(self) -> None:
-        self._closed = True
+        with self._lease_lock:
+            self._closed = True
+            leases = tuple(self._leases)
         self._server.close()
         for writer in tuple(self._writers):
-            writer.close()
-        for channel in tuple(self._channels):
-            channel.close()
+            writer.transport.abort()
+        for lease in leases:
+            lease.close()
         tasks = tuple(self._tasks)
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        self._tasks.difference_update(tasks)
-        self._writers.clear()
-        await self._server.wait_closed()
+        try:
+            async with asyncio.timeout(_SHUTDOWN_TIMEOUT):
+                await asyncio.gather(*tasks, return_exceptions=True)
+                await self._server.wait_closed()
+        except TimeoutError:
+            logger.warning("Docker control-plane shutdown deadline reached after transport abort")
+        self._tasks.difference_update(task for task in tasks if task.done())
