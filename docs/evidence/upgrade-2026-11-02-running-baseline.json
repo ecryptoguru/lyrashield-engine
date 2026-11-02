@@ -1,0 +1,16 @@
+{
+  "observed_on_utc": "2026-11-02",
+  "method": "Read-only Azure VM Docker container and image inspection; allowlisted provenance fields only.",
+  "product_revision": "d488862bd269c07194afe87a918ca413e4a62217",
+  "engine_revision": "3001517530300ca5f602536bfadcbd3c95ad3039",
+  "worker_image_digest": "sha256:c84fe0c97554bd4003f005f86d0041b29c8cbf2cefcd0ebe038956bbf05293c0",
+  "worker_image_id": "sha256:c84fe0c97554bd4003f005f86d0041b29c8cbf2cefcd0ebe038956bbf05293c0",
+  "container_state": "running",
+  "container_health": "healthy",
+  "provenance_checks": {
+    "container_image_matches_repo_digest": true,
+    "image_labels_match_runtime_revision_environment": true,
+    "runtime_digest_matches_image_digest": true
+  },
+  "scope": "Existing release rollback baseline. This does not qualify the new candidate, a model-provider route, or a client scan."
+}
