@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { ArrowUp, ChevronDown, ChevronUp, Loader2, Sparkles } from "lucide-react";
-import { steerAgent, type TranscriptAgent } from "@/data/serverSource";
+import { controlScan, fetchCapabilities, steerAgent, type BudgetControlState, type TranscriptAgent } from "@/data/serverSource";
 import { track } from "@/lib/cta";
 import { attemptSteering } from "@/lib/steering";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,8 @@ const ROOT_TARGET_VALUE = "__root__";
 interface ScanPromptComposerProps {
   /** All agents in the run; used to resolve the root and running children. */
   agents: TranscriptAgent[];
+  runName: string;
+  canControl?: boolean;
   /**
    * Single-agent (modal) mode: pins the composer to one agent and shows a
    * static "Target: <name>" pill instead of the dropdown. Omit for the
@@ -36,15 +38,32 @@ interface ScanPromptComposerProps {
  */
 export function ScanPromptComposer({
   agents,
+  runName,
+  canControl = false,
   fixedAgentId,
   className,
 }: ScanPromptComposerProps) {
+  const submissionRef = useRef<{ key: string; id: string } | null>(null);
+  const controlRef = useRef<{ action: string; id: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [focused, setFocused] = useState(false);
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
+  const [budget, setBudget] = useState<BudgetControlState | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+
+  const refreshBudget = useCallback(async () => {
+    try {
+      const caps = await fetchCapabilities();
+      if (caps.launched_run === runName) setBudget(caps.budget);
+    } catch {
+      // Existing controls remain retryable; budget metadata is best effort.
+    }
+  }, [runName]);
+  useEffect(() => {
+    if (expanded && canControl) void refreshBudget();
+  }, [expanded, canControl, refreshBudget]);
 
   const isModal = fixedAgentId != null;
 
@@ -56,7 +75,7 @@ export function ScanPromptComposer({
 
   // Multi-agent dropdown options: running child agents plus Root (added in JSX).
   const targetOptions = useMemo(
-    () => agents.filter((a) => a.parent_id && a.status === "running"),
+    () => agents.filter((a) => a.parent_id && ["running", "waiting", "budget_paused"].includes(a.status)),
     [agents]
   );
 
@@ -125,8 +144,18 @@ export function ScanPromptComposer({
     setSending(true);
     setFeedback(null);
     const name = targetName;
-    const outcome = await attemptSteering(() => steerAgent(targetId, message), name);
+    const key = JSON.stringify([runName, targetId, message]);
+    if (submissionRef.current?.key !== key) {
+      submissionRef.current = { key, id: crypto.randomUUID() };
+    }
+    const id = submissionRef.current.id;
+    const outcome = await attemptSteering(async () => {
+      const result = await steerAgent(runName, targetId, message, id);
+      if (!result.ok && result.error !== "delivery_unknown") submissionRef.current = null;
+      return result;
+    }, name);
     if (outcome.sent) {
+      submissionRef.current = null;
       setValue("");
       setFeedback(outcome.feedback);
       track("agent_steered");
@@ -134,7 +163,30 @@ export function ScanPromptComposer({
       setFeedback(outcome.feedback);
     }
     setSending(false);
-  }, [sending, value, targetId, targetName]);
+  }, [sending, value, targetId, targetName, runName]);
+
+  const handleControl = async (action: "resume" | "increase_budget") => {
+    if (sending) return;
+    if (controlRef.current?.action !== action) {
+      controlRef.current = { action, id: crypto.randomUUID() };
+    }
+    setSending(true);
+    setFeedback("Pending control acceptance…");
+    const result = await controlScan(runName, action, controlRef.current.id);
+    if (result.ok) {
+      controlRef.current = null;
+      await refreshBudget();
+      setFeedback(action === "resume" ? "Resume accepted." : "Budget increased by one configured increment. Scan remains paused.");
+    } else {
+      if (result.error !== "delivery_unknown") controlRef.current = null;
+      setFeedback(result.error === "delivery_unknown"
+        ? "Delivery unknown. Retry the same control to check acceptance."
+        : result.error === "budget_increase_required"
+          ? "Budget exhausted. Increase the budget before resuming."
+          : "Control was not accepted. The scan may no longer be paused.");
+    }
+    setSending(false);
+  };
 
   if (!expanded) {
     return (
@@ -233,6 +285,19 @@ export function ScanPromptComposer({
         </div>
       </div>
 
+      {canControl && agents.some((agent) => agent.status === "budget_paused") && (
+        <div className="border-b border-white/10 px-5 py-3 text-xs text-[#bbb]">
+          <p>Budget paused. Messages queue until you explicitly resume.</p>
+          <p className="mt-1">{budget?.increment_usd != null && budget.limit_usd != null
+            ? `Current limit $${budget.limit_usd.toFixed(2)}. Increase adds $${budget.increment_usd.toFixed(2)} and keeps the scan paused.`
+            : "Loading configured budget amount…"}</p>
+          {budget?.resume_requires_increase && <p className="mt-1">Budget exhausted. Increase the budget before resuming.</p>}
+          <div className="mt-2 flex flex-wrap gap-3">
+            <button type="button" disabled={sending || budget?.increment_usd == null} onClick={() => void handleControl("increase_budget")} className="rounded border border-white/30 px-3 py-2 focus-visible:outline focus-visible:outline-2">Increase budget</button>
+            <button type="button" disabled={sending || budget?.resume_requires_increase === true} onClick={() => void handleControl("resume")} className="rounded border border-white/30 px-3 py-2 focus-visible:outline focus-visible:outline-2">Resume scan</button>
+          </div>
+        </div>
+      )}
       <div className="px-5 pt-4 pb-3">
         <textarea
           ref={textareaRef}
@@ -248,6 +313,7 @@ export function ScanPromptComposer({
             }
           }}
           placeholder="Send a live prompt to the running pentest…"
+          aria-label="Steering message"
           maxLength={4000}
           disabled={sending}
           className="block w-full resize-none border-0 bg-transparent p-0 text-[15px] leading-6 text-white placeholder:text-[#444] focus:outline-none disabled:opacity-60 max-h-[160px] overflow-y-auto"
@@ -255,14 +321,14 @@ export function ScanPromptComposer({
       </div>
 
       <div className="flex items-center justify-between gap-3 px-4 pb-4">
-        <div className="text-xs text-[#666]">{feedback ?? "Press Enter to send."}</div>
+        <div role="status" aria-live="polite" className="text-xs text-[#999]">{sending ? "Pending mailbox acceptance…" : feedback ?? "Press Enter to send."}</div>
         <button
           type="button"
           onClick={(event) => {
             event.stopPropagation();
             void handleSend();
           }}
-          disabled={sending || empty}
+          disabled={sending || empty || !targetId}
           className={cn(
             "inline-flex h-10 min-w-[112px] items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors",
             sending || empty
@@ -275,7 +341,7 @@ export function ScanPromptComposer({
           ) : (
             <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
           )}
-          <span>Send prompt</span>
+          <span>{sending ? "Pending…" : "Send prompt"}</span>
         </button>
       </div>
     </div>

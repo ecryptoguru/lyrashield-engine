@@ -152,7 +152,9 @@ class _ViewerState:
         self,
         run_dir: Path,
         assets_dir: Path,
-        steer_handler: Callable[[str, str], bool] | None = None,
+        steer_handler: Callable[[str, str, str], bool] | None = None,
+        control_handler: Callable[[str, str], bool] | None = None,
+        control_state_handler: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.run_dir = run_dir
         self.assets_dir = assets_dir
@@ -163,6 +165,10 @@ class _ViewerState:
         # launcher), which can deliver a message to a running agent. Absent for
         # standalone ``lyrashield view`` / finished runs, so steering is unavailable.
         self.steer_handler = steer_handler
+        self.control_handler = control_handler
+        self.control_state_handler = control_state_handler
+        self.submissions: dict[str, tuple[tuple[str, ...], dict[str, Any] | None]] = {}
+        self.submission_lock = threading.Lock()
         # Unguessable per-process capability. It is minted here, printed/opened
         # for the operator who started the server (see ``authorized_url``), and
         # exchanged for a session cookie only when presented on the initial page
@@ -240,6 +246,8 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                     self._handle_feedback()
                 elif path == "/api/agents/steer":
                     self._handle_steer()
+                elif path == "/api/scan/control":
+                    self._handle_control()
                 else:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
             except BrokenPipeError:
@@ -336,9 +344,22 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.OK, payload)
                 return
             if path == "/api/capabilities":
+                if not self._has_session():
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                    return
                 # Steering is only possible when the viewer shares a live scan's
                 # coordinator + event loop (the TUI launcher wires a handler).
-                self._send_json(HTTPStatus.OK, {"can_steer": state.steer_handler is not None})
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "can_steer": state.steer_handler is not None,
+                        "can_control": state.control_handler is not None,
+                        "launched_run": state.run_dir.name,
+                        "budget": state.control_state_handler()
+                        if state.control_state_handler
+                        else None,
+                    },
+                )
                 return
             if path == "/api/auth/status":
                 self._handle_auth_status()
@@ -489,7 +510,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             body = self._read_body()
             agent_id = body.get("agent_id")
             message = body.get("message")
-            if not isinstance(agent_id, str) or not agent_id.strip():
+            if not isinstance(agent_id, str) or not agent_id.strip() or len(agent_id) > 128:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_agent_id"})
                 return
             if (
@@ -499,15 +520,105 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             ):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_message"})
                 return
-            if state.steer_handler is None:
+            handler = state.steer_handler
+            if handler is None:
                 # Standalone / finished-run viewing has no live scan to steer.
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "steering_unavailable"})
                 return
-            delivered = state.steer_handler(agent_id, message)
-            if delivered:
-                self._send_json(HTTPStatus.OK, {"ok": True})
-            else:
-                self._send_json(HTTPStatus.OK, {"ok": False, "error": "not_delivered"})
+            if not self._validate_live_submission(body):
+                return
+            submission_id = body["submission_id"]
+            self._apply_submission(
+                submission_id,
+                ("steer", agent_id, message),
+                lambda: handler(agent_id, message, submission_id),
+            )
+
+        def _validate_live_submission(self, body: dict[str, Any]) -> bool:
+            if body.get("run") != state.run_dir.name:
+                self._send_json(HTTPStatus.CONFLICT, {"error": "run_not_live"})
+                return False
+            submission_id = body.get("submission_id")
+            if not isinstance(submission_id, str) or not submission_id or len(submission_id) > 128:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_submission_id"})
+                return False
+            if read_run_summary(state.run_dir).get("finished", False):
+                self._send_json(HTTPStatus.CONFLICT, {"error": "run_not_live"})
+                return False
+            return True
+
+        def _handle_control(self) -> None:
+            if not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
+            body = self._read_body()
+            action = body.get("action")
+            if not isinstance(action, str) or action not in {"resume", "increase_budget"}:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_action"})
+                return
+            handler = state.control_handler
+            if handler is None:
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "control_unavailable"})
+                return
+            if not self._validate_live_submission(body):
+                return
+            submission_id = body["submission_id"]
+            self._apply_submission(
+                submission_id,
+                ("control", action),
+                lambda: handler(action, submission_id),
+            )
+
+        def _apply_submission(
+            self, submission_id: str, fingerprint: tuple[str, ...], apply: Callable[[], bool]
+        ) -> None:
+            with state.submission_lock:
+                previous = state.submissions.get(submission_id)
+                if previous is not None:
+                    if previous[0] != fingerprint:
+                        self._send_json(HTTPStatus.CONFLICT, {"error": "submission_conflict"})
+                        return
+                    # Only a timed-out bridge call is retryable. Its underlying
+                    # coordinator operation is still deduplicated by this ID.
+                    if previous[1] is None or not previous[1].get("_retry"):
+                        self._send_json(
+                            HTTPStatus.OK,
+                            previous[1]
+                            or {
+                                "ok": False,
+                                "error": "delivery_unknown",
+                            },
+                        )
+                        return
+                elif len(state.submissions) >= 4096:
+                    self._send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "submission_limit"})
+                    return
+                state.submissions[submission_id] = (fingerprint, None)
+            try:
+                accepted = apply()
+                error = "not_delivered"
+                if (
+                    not accepted
+                    and fingerprint == ("control", "resume")
+                    and state.control_state_handler is not None
+                    and state.control_state_handler().get("resume_requires_increase")
+                ):
+                    error = "budget_increase_required"
+                result: dict[str, Any] = (
+                    {"ok": True, "status": "queued"} if accepted else {"ok": False, "error": error}
+                )
+            except TimeoutError:
+                # The bridge keeps its future alive and deduplicates retries.
+                with state.submission_lock:
+                    state.submissions[submission_id] = (fingerprint, {"_retry": True})
+                self._send_json(HTTPStatus.OK, {"ok": False, "error": "delivery_unknown"})
+                return
+            except Exception:
+                logger.exception("operator submission failed")
+                result = {"ok": False, "error": "delivery_unknown"}
+            with state.submission_lock:
+                state.submissions[submission_id] = (fingerprint, result)
+            self._send_json(HTTPStatus.OK, result)
 
         def _send_relay_error(self, exc: auth.RelayError) -> None:
             status_by_code = {
@@ -620,7 +731,9 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 0,
     open_browser: bool = True,
-    steer_handler: Callable[[str, str], bool] | None = None,
+    steer_handler: Callable[[str, str, str], bool] | None = None,
+    control_handler: Callable[[str, str], bool] | None = None,
+    control_state_handler: Callable[[], dict[str, Any]] | None = None,
 ) -> tuple[ThreadingHTTPServer, str, str]:
     """Start the viewer server on a background thread; return (server, url, token).
 
@@ -646,7 +759,13 @@ def serve(
         raise ValueError("Viewer host must be loopback; remote HTTP bindings are not supported")
 
     assets_dir = bundle_dir()
-    state = _ViewerState(run_dir=run_dir, assets_dir=assets_dir, steer_handler=steer_handler)
+    state = _ViewerState(
+        run_dir=run_dir,
+        assets_dir=assets_dir,
+        steer_handler=steer_handler,
+        control_handler=control_handler,
+        control_state_handler=control_state_handler,
+    )
     handler = _make_handler(state)
 
     server_class: type[ThreadingHTTPServer] = ThreadingHTTPServer

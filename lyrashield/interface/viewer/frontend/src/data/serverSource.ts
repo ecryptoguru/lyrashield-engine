@@ -190,8 +190,19 @@ export async function fetchRuns(): Promise<RunsPayload> {
   };
 }
 
+export interface BudgetControlState {
+  increment_usd: number | null;
+  limit_usd: number | null;
+  paused: boolean;
+  spent_usd: number;
+  resume_requires_increase: boolean;
+}
+
 export interface Capabilities {
   can_steer: boolean;
+  can_control: boolean;
+  launched_run: string | null;
+  budget: BudgetControlState | null;
 }
 
 export type SteerResult = { ok: true } | { ok: false; error: string };
@@ -199,17 +210,47 @@ export type SteerResult = { ok: true } | { ok: false; error: string };
 /** GET /api/capabilities. can_steer is true only inside a live in-TUI scan. */
 export async function fetchCapabilities(): Promise<Capabilities> {
   const obj = (await getJson("/api/capabilities")) as Partial<Capabilities>;
-  return { can_steer: obj?.can_steer === true };
+  return {
+    can_steer: obj?.can_steer === true,
+    can_control: obj?.can_control === true,
+    launched_run: typeof obj?.launched_run === "string" ? obj.launched_run : null,
+    budget: obj?.budget ?? null,
+  };
 }
 
-/** POST /api/agents/steer. Sends a steering instruction to a running agent. */
-export async function steerAgent(agentId: string, message: string): Promise<SteerResult> {
-  const { ok, data } = await postJson("/api/agents/steer", {
-    agent_id: agentId,
-    message,
+/** Submit with a stable ID so a lost acknowledgement can be retried safely. */
+async function submitOperatorAction(path: string, body: Record<string, unknown>): Promise<SteerResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), cache: "no-store", signal: controller.signal,
+    });
+    const data = await response.json() as Record<string, unknown>;
+    if (response.ok && data.ok === true) return { ok: true };
+    return { ok: false, error: String(data.error ?? "unavailable") };
+  } catch {
+    return { ok: false, error: "delivery_unknown" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function steerAgent(
+  runName: string, agentId: string, message: string, submissionId: string
+): Promise<SteerResult> {
+  return submitOperatorAction("/api/agents/steer", {
+    run: runName, agent_id: agentId, message, submission_id: submissionId,
   });
-  if (ok && data.ok === true) return { ok: true };
-  return { ok: false, error: String(data.error ?? "unavailable") };
+}
+
+export async function controlScan(
+  runName: string, action: "resume" | "increase_budget", submissionId: string
+): Promise<SteerResult> {
+  return submitOperatorAction("/api/scan/control", {
+    run: runName, action, submission_id: submissionId,
+  });
 }
 
 export type SubmitFeedbackResult = { ok: true } | { ok: false; error: string };

@@ -61,6 +61,8 @@ export default function App() {
   // Whether this viewer can steer a live scan (true only inside the in-TUI
   // launcher that shares the running scan's coordinator + event loop).
   const [canSteer, setCanSteer] = useState(false);
+  const [canControl, setCanControl] = useState(false);
+  const [launchedRun, setLaunchedRun] = useState<string | null>(null);
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -83,7 +85,11 @@ export default function App() {
     void refreshRuns();
     // Capabilities never change over a session, so fetch once on mount.
     fetchCapabilities()
-      .then((caps) => setCanSteer(caps.can_steer))
+      .then((caps) => {
+        setCanSteer(caps.can_steer);
+        setCanControl(caps.can_control);
+        setLaunchedRun(caps.launched_run);
+      })
       .catch(() => {
         /* absence of steering is the safe default */
       });
@@ -379,7 +385,7 @@ export default function App() {
                   onRetryReport={() => setRetryCount((n) => n + 1)}
                 />
               ) : view === "agents" && agentCount > 0 ? (
-                <AgentsTab run={run} canSteer={canSteer} />
+                <AgentsTab run={run} canSteer={canSteer && launchedRun !== null && (activeRun === null || activeRun === launchedRun)} runName={launchedRun ?? ""} canControl={canControl} />
               ) : selected ? (
                 <div className="space-y-4">
                   <button
@@ -700,7 +706,7 @@ function TabButton({
   );
 }
 
-function AgentsTab({ run, canSteer }: { run: LoadedRun; canSteer: boolean }) {
+function AgentsTab({ run, canSteer, runName, canControl }: { run: LoadedRun; canSteer: boolean; runName: string; canControl: boolean }) {
   const { agents, events } = run.transcript;
   const graphAgents = useMemo(() => buildGraphAgents(agents, events), [agents, events]);
   // Clicking a graph node opens the agent's transcript in a modal; no node selected means no modal.
@@ -738,7 +744,7 @@ function AgentsTab({ run, canSteer }: { run: LoadedRun; canSteer: boolean }) {
       </div>
 
       {/* Live steering: only in-process while the scan runs. Otherwise omitted. */}
-      {steerable && <ScanPromptComposer agents={agents} />}
+      {steerable && <ScanPromptComposer agents={agents} runName={runName} canControl={canControl} />}
 
 
       <AgentDetailModal
@@ -746,6 +752,8 @@ function AgentsTab({ run, canSteer }: { run: LoadedRun; canSteer: boolean }) {
         agent={selectedAgent}
         events={events}
         steerable={steerable}
+        runName={runName}
+        canControl={canControl}
         onClose={() => setSelectedId(null)}
       />
     </div>

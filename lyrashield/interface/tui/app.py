@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 import threading
+import uuid
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
@@ -39,7 +40,13 @@ from lyrashield.artifacts.writer import (
     safe_fence,
 )
 from lyrashield.interface.tui.live_view import TuiLiveView
-from lyrashield.interface.tui.messages import send_user_message_to_agent
+from lyrashield.interface.tui.messages import (
+    Delivery,
+    deliver_operator_control,
+    deliver_user_message,
+    send_operator_control,
+    send_user_message_to_agent,
+)
 from lyrashield.interface.tui.renderers import render_tool_widget
 from lyrashield.interface.tui.renderers.agent_message_renderer import AgentMessageRenderer
 from lyrashield.interface.tui.renderers.user_message_renderer import UserMessageRenderer
@@ -64,6 +71,8 @@ class ChatTextArea(TextArea):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._app_reference: StrixTUIApp | None = None
+        self._pending_submission: tuple[str, str] | None = None
+        self._sending = False
 
     def set_app_reference(self, app: "StrixTUIApp") -> None:
         self._app_reference = app
@@ -79,13 +88,25 @@ class ChatTextArea(TextArea):
 
         if event.key == "enter" and self._app_reference:
             message = self.text.strip()
-            if message:
-                self.text = ""
-
-                self._app_reference._send_user_message(message)
-
-                event.prevent_default()
-                return
+            event.prevent_default()
+            if message and not self._sending:
+                if self._pending_submission is None or self._pending_submission[0] != message:
+                    self._pending_submission = (message, uuid.uuid4().hex)
+                self._sending = True
+                self.read_only = True
+                try:
+                    outcome = await self._app_reference._send_user_message(
+                        message, self._pending_submission[1]
+                    )
+                    if outcome == "queued":
+                        self.text = ""
+                        self._pending_submission = None
+                    elif outcome == "rejected":
+                        self._pending_submission = None
+                finally:
+                    self._sending = False
+                    self.read_only = False
+            return
 
         await super()._on_key(event)
 
@@ -1069,9 +1090,18 @@ class StrixTUIApp(App[None]):
         paused = any(status == "budget_paused" for status in statuses.values())
         if paused and not self._budget_pause_notified:
             self._budget_pause_notified = True
+            budget = self.coordinator.budget_control_state()
+            increment = budget.get("increment_usd")
+            limit = budget.get("limit_usd")
+            detail = (
+                f" Current limit ${limit:.2f}; /increase-budget adds ${increment:.2f}."
+                if isinstance(increment, (int, float)) and isinstance(limit, (int, float))
+                else ""
+            )
             self.notify(
-                "Budget limit reached \u2014 agents paused. Send a message to continue "
-                "(this extends the budget), or ctrl-q to quit.",
+                "Budget limit reached \u2014 agents paused. /increase-budget adds one "
+                "configured budget increment; /resume restarts. Messages only queue. ctrl-q quits."
+                + detail,
                 severity="warning",
                 timeout=15,
             )
@@ -1752,35 +1782,56 @@ class StrixTUIApp(App[None]):
             else:
                 node.expand()
 
-    def _send_user_message(self, message: str) -> None:
+    async def _send_user_message(self, message: str, submission_id: str) -> Delivery:
         if not self.selected_agent_id:
-            return
-
-        logger.info(
-            "TUI: user message -> %s (len=%d)",
-            self.selected_agent_id,
-            len(message),
-        )
-        target_agent_id = self.selected_agent_id
-
-        submitted = send_user_message_to_agent(
-            coordinator=self.coordinator,
-            loop=self._scan_loop,
-            live_view=self.live_view,
-            target_agent_id=target_agent_id,
-            message=message,
-        )
-        if not submitted:
-            if self._scan_completed.is_set():
-                self.notify("The scan has ended; message was not sent", severity="warning")
+            return "rejected"
+        self.notify("Pending mailbox acceptance…")
+        controls = {"/resume": "resume", "/increase-budget": "increase_budget"}
+        if message in controls:
+            outcome = await deliver_operator_control(
+                coordinator=self.coordinator,
+                loop=self._scan_loop,
+                action=controls[message],
+                submission_id=submission_id,
+            )
+        else:
+            outcome = await deliver_user_message(
+                coordinator=self.coordinator,
+                loop=self._scan_loop,
+                live_view=self.live_view,
+                target_agent_id=self.selected_agent_id,
+                message=message,
+                submission_id=submission_id,
+            )
+        if outcome == "queued":
+            if message == "/increase-budget":
+                budget = self.coordinator.budget_control_state()
+                limit = budget.get("limit_usd")
+                self.notify(
+                    f"Budget increased; limit ${limit:.2f}. Scan remains paused."
+                    if isinstance(limit, (int, float))
+                    else "Budget increased. Scan remains paused."
+                )
             else:
-                self.notify("Scan loop is not ready; message was not sent", severity="warning")
-            return
-
-        self._displayed_events.clear()
-        self._update_chat_view()
-
+                self.notify("Resume accepted" if message in controls else "Queued")
+            self._displayed_events.clear()
+            self._update_chat_view()
+        elif outcome == "unknown":
+            self.notify(
+                "Delivery unknown. Retry the unchanged draft to check acceptance.",
+                severity="warning",
+            )
+        elif message == "/resume" and self.coordinator.budget_control_state().get(
+            "resume_requires_increase"
+        ):
+            self.notify(
+                "Budget exhausted. Use /increase-budget first, then /resume.",
+                severity="warning",
+            )
+        else:
+            self.notify("Not accepted. The draft has been kept.", severity="warning")
         self.call_after_refresh(self._focus_chat_input)
+        return outcome
 
     def _get_agent_name(self, agent_id: str) -> str:
         try:
@@ -1914,7 +1965,7 @@ class StrixTUIApp(App[None]):
                 return
             run_dir = self.report_state.get_run_dir()
 
-            def _viewer_steer(agent_id: str, message: str) -> bool:
+            def _viewer_steer(agent_id: str, message: str, submission_id: str) -> bool:
                 # Reuse the exact TUI delivery path, but target the agent the
                 # web graph selected (not the TUI's current selection).
                 return send_user_message_to_agent(
@@ -1923,9 +1974,24 @@ class StrixTUIApp(App[None]):
                     live_view=self.live_view,
                     target_agent_id=agent_id,
                     message=message,
+                    submission_id=submission_id,
                 )
 
-            httpd, url, token = serve(run_dir, open_browser=True, steer_handler=_viewer_steer)
+            def _viewer_control(action: str, submission_id: str) -> bool:
+                return send_operator_control(
+                    coordinator=self.coordinator,
+                    loop=self._scan_loop,
+                    action=action,
+                    submission_id=submission_id,
+                )
+
+            httpd, url, token = serve(
+                run_dir,
+                open_browser=True,
+                steer_handler=_viewer_steer,
+                control_handler=_viewer_control,
+                control_state_handler=self.coordinator.budget_control_state,
+            )
         except Exception:
             logger.debug("failed to start local viewer", exc_info=True)
             self._set_viewer_cta("[red]Viewer failed to start[/]")

@@ -228,7 +228,9 @@ async def build_root_runtime(
     # this scan, and the finally block clears the scan-scoped hooks.
     services.set_active_hooks(hooks)
     if interactive:
-        coordinator.set_budget_extender(hooks.extend_budget)
+        coordinator.set_budget_extender(
+            hooks.extend_budget, budget_state=hooks.budget_control_state
+        )
 
     report_state = services.report_state_getter()
     if report_state is not None:

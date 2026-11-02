@@ -460,3 +460,27 @@ export LYRASHIELD_MAX_INPUT_TOKENS=64000
 export LLM_TIMEOUT="600"
 export LLM_EXTRA_HEADERS='{"X-Tenant":"acme"}'
 ```
+
+
+## Interactive budget controls
+
+An interactive scan that reaches `--max-budget-usd` pauses its agents. Messages
+sent during that pause are queued; sending a message does not restart the scan
+or authorize additional spend.
+
+Use **Increase budget** in the local browser viewer, or type `/increase-budget`
+in the TUI, to add the original configured budget amount once. For example, a
+scan started with `--max-budget-usd 1.20` increases its limit from $1.20 to $2.40.
+The interfaces show the increment and current limit before increasing it. The
+scan remains paused after an increase. Then use **Resume scan** or `/resume` to
+restart paused agents. An exhausted limit rejects resume and asks for an explicit
+increase first. Non-interactive scans keep their hard budget ceiling, and these
+controls cannot revive a stopped scan.
+
+The viewer can steer only the run that launched it. Past runs, including
+incomplete past runs, remain read-only. A **Queued** acknowledgement confirms
+mailbox acceptance, not execution or completion. **Delivery unknown** means the
+acknowledgement was lost or timed out: retry the unchanged draft or same control
+to check acceptance without duplicating it. Rejected and unknown messages keep
+the draft. Submission IDs are retained for the current process; after 4,096
+unique submissions, further new submissions are rejected to bound memory use.

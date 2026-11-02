@@ -639,10 +639,36 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._interactive = interactive
         self._deadline_notified: set[str] = set()
 
+    def budget_control_state(self) -> dict[str, Any]:
+        """Expose the concrete increment and whether existing spend prevents resume."""
+        report_state = get_global_report_state()
+        observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
+        committed = (
+            max(observed, self._committed_cost_floor)
+            + sum(tuple(self._abandoned_floors.values()))
+            + sum(tuple(self._agent_abandoned_floors.values()))
+        )
+        reserved = sum(tuple(self._reservations.values())) + sum(
+            tuple(self._agent_reservations.values())
+        )
+        return {
+            "increment_usd": self._budget_increment,
+            "limit_usd": self._max_budget_usd,
+            "spent_usd": committed,
+            "resume_requires_increase": (
+                self._max_budget_usd is not None and committed + reserved >= self._max_budget_usd
+            ),
+        }
+
     def extend_budget(self) -> None:
+        if not self._interactive:
+            raise ValueError("Budget increases require an interactive scan")
         if self._max_budget_usd is None or self._budget_increment is None:
-            return
-        self._max_budget_usd += self._budget_increment
+            raise ValueError("No finite budget was configured")
+        new_limit = self._max_budget_usd + self._budget_increment
+        if not math.isfinite(new_limit):
+            raise ValueError("Budget limit must remain finite")
+        self._max_budget_usd = new_limit
 
     async def reserve_out_of_band_request(
         self,

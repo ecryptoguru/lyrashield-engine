@@ -326,7 +326,7 @@ async def test_resumed_parked_root_after_reserve_is_renotified_and_finalizes(
 
 
 @pytest.mark.asyncio
-async def test_interactive_budget_pause_then_user_message_extends_and_resumes(
+async def test_interactive_budget_pause_requires_explicit_increase_and_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ledger = _FakeLedger()
@@ -336,7 +336,7 @@ async def test_interactive_budget_pause_then_user_message_extends_and_resumes(
     monkeypatch.setattr(execution, "Runner", _fake_runner(ledger, coordinator))
     monkeypatch.setattr(execution, "_compact_session", _noop_compact)
 
-    coordinator.set_budget_extender(hooks.extend_budget)
+    coordinator.set_budget_extender(hooks.extend_budget, budget_state=hooks.budget_control_state)
     await coordinator.register("root", "strix", parent_id=None)
     root_session = open_agent_session("root", tmp_path / "agents.sqlite")
 
@@ -366,6 +366,15 @@ async def test_interactive_budget_pause_then_user_message_extends_and_resumes(
         assert coordinator.budget_stopped is False
 
         assert await coordinator.send("root", {"from": "user", "content": "keep going"})
+        await asyncio.sleep(0.05)
+        assert coordinator.budget_paused
+        assert ledger.cost == pytest.approx(MAX_BUDGET)
+        assert not root_task.done()
+        assert not await coordinator.operator_control("resume", "budget-resume-exhausted")
+        assert coordinator.budget_paused
+        assert await coordinator.operator_control("increase_budget", "budget-increase-1")
+        assert coordinator.budget_paused
+        assert await coordinator.operator_control("resume", "budget-resume-1")
         await _wait_until(lambda: not coordinator.budget_paused)
         await _wait_until(lambda: ledger.cost > MAX_BUDGET)
         await _wait_until(lambda: coordinator.statuses["root"] == "waiting")

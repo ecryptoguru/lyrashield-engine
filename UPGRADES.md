@@ -17,6 +17,26 @@ states, not the current patch inventory.
 
 ## History
 
+## Explicit operator budget controls and acknowledged steering (2026-11-02)
+
+Owned lifecycle, TUI and viewer paths now distinguish mailbox acceptance from
+execution. Ordinary messages can queue during a budget pause; they never resume
+agents or increase spend. Interactive operators use separate Increase budget
+and Resume scan controls (TUI: `/increase-budget` and `/resume`). The increase
+adds the original configured `--max-budget-usd` amount and leaves the scan
+paused. Both UIs show that amount and the current limit. Exhausted budgets reject
+resume until the operator increases the limit. Headless limits and hard stops
+remain enforced.
+
+Viewer steering and controls require the process capability, the launched run's
+directory identity and a bounded submission ID. Historical runs remain read-only,
+including incomplete historical runs with matching agent IDs. Browser and TUI
+retain drafts after rejection or unknown delivery, acknowledge Queued only after
+mailbox acceptance, and reuse IDs after a lost acknowledgement. Per-process
+submission retention is capped at 4,096 entries and fails closed at capacity;
+reuse with different targets, text or actions is rejected. This change does not
+alter worker artifact schemas or the retained `strix/**` substrate.
+
 ## Sandbox apt trust anchor: keyring pin replaces the InRelease hash pin (2026-10-09)
 
 `containers/Dockerfile` pinned `KALI_APT_INRELEASE_SHA256` against the
