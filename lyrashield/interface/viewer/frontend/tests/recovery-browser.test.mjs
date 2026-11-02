@@ -20,19 +20,38 @@ async function fixture(fn, viewport = { width: 1440, height: 1000 }) {
   }
 }
 test("terminal transcript failure and history failure remain visible and independently retryable", { timeout: 20000 }, async () => fixture(async (page, url) => {
-  let transcriptFailed = true, historyFailed = true;
-  await page.route("**/api/run*", async route => { const response = await route.fetch({ maxRetries: 2 }); await route.fulfill({ json: { ...await response.json(), finished: true, status: "completed" } }); });
-  await page.route("**/api/transcript*", route => transcriptFailed ? route.fulfill({ status: 500, json: {} }) : route.continue());
-  await page.route("**/api/runs", route => historyFailed ? route.fulfill({ status: 500, json: {} }) : route.continue());
+  let releaseSummary;
+  const completedSummary = new Promise(resolve => { releaseSummary = resolve; });
+  // Test-only DOM markers change synchronously on the actual native click,
+  // before React's retry handler sends its request. Application state is untouched.
+  await page.addInitScript(() => document.addEventListener("click", event => {
+    const name = event.target instanceof Element ? event.target.closest("button")?.getAttribute("aria-label") : null;
+    if (name === "Retry transcript") document.documentElement.dataset.fixtureTranscriptRetried = "true";
+    if (name === "Retry history") document.documentElement.dataset.fixtureHistoryRetried = "true";
+  }, true));
+  await page.route("**/api/run*", async route => { const response = await route.fetch({ maxRetries: 2 }); await completedSummary; await route.fulfill({ json: { ...await response.json(), finished: true, status: "completed" } }); });
+  await page.route("**/api/transcript*", async route => await page.locator("html").getAttribute("data-fixture-transcript-retried") === "true" ? route.continue() : route.fulfill({ status: 500, json: {} }));
+  await page.route("**/api/runs", async route => await page.locator("html").getAttribute("data-fixture-history-retried") === "true" ? route.continue() : route.fulfill({ status: 500, json: {} }));
   await page.goto(url);
-  await page.getByRole("alert").filter({ hasText: "Transcript could not be loaded" }).waitFor();
-  transcriptFailed = false;
+  const transcriptAlert = page.getByRole("alert").filter({ hasText: "Transcript could not be loaded" });
+  const historyAlert = page.getByRole("alert").filter({ hasText: "History could not be loaded" });
+  await transcriptAlert.waitFor();
+  // Completion restarts the transcript resource. That background reread must
+  // still fail before the user clicks, so it cannot steal the retry button.
+  const reread = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transcript" && response.status() === 500);
+  releaseSummary();
+  await reread;
+  assert.equal(await page.locator("html").getAttribute("data-fixture-transcript-retried"), null);
+  assert.equal(await transcriptAlert.isVisible(), true);
+  const recovered = page.waitForResponse(response => new URL(response.url()).pathname === "/api/transcript" && response.status() === 200);
   await page.getByRole("button", { name: "Retry transcript", exact: true }).click();
+  await recovered;
+  await transcriptAlert.waitFor({ state: "hidden" });
+  assert.equal(await historyAlert.isVisible(), true);
   await page.getByRole("button", { name: /^Agents/ }).click();
   await page.getByRole("heading", { name: "Agent graph" }).waitFor();
   await page.getByRole("button", { name: /^Past runs/ }).click();
   await page.getByRole("alert").filter({ hasText: "History could not be loaded" }).waitFor();
-  historyFailed = false;
   await page.getByRole("button", { name: "Retry history", exact: true }).click();
   await page.getByRole("button").filter({ hasText: "past-directory" }).waitFor();
 }));
