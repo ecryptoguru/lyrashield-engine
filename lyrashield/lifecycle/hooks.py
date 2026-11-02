@@ -841,6 +841,40 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         )
         input_items.append({"role": "user", "content": content})
 
+    def _maybe_warn_soft_turn_limit(
+        self,
+        context: RunContextWrapper[dict[str, Any]],
+        input_items: list[TResponseInputItem],
+        turns_used: int | None = None,
+    ) -> None:
+        """Advisory specialist guidance only; hard turn/budget/deadline checks win."""
+        limit = context.context.get("advisory_turn_limit")
+        if context.context.get("parent_id") is None or type(limit) is not int or limit <= 0:
+            return
+        if self._max_turns is not None:
+            limit = min(limit, self._max_turns)
+        if turns_used is None:
+            requests = getattr(getattr(context, "usage", None), "requests", None)
+            if type(requests) is not int:
+                return
+            turns_used = requests + 1
+        if turns_used != max(1, limit - 10) and not (
+            turns_used >= limit and (turns_used - limit) % 5 == 0
+        ):
+            return
+        input_items.append(
+            {
+                "role": "user",
+                "content": (
+                    f"{_SYSTEM_NOTICE_TAG} [NOTICE] Specialist advisory turn target: "
+                    f"{turns_used}/{limit}. Wrap up the assigned task, file supported findings, "
+                    "state unresolved checks in result_summary, and call agent_finish. "
+                    "Continue only for concrete progress within existing scope. This advisory "
+                    "does not extend hard turn, budget, runtime, or agent-capacity limits."
+                ),
+            }
+        )
+
     def _maybe_warn_budget(
         self,
         context: RunContextWrapper[dict[str, Any]],
@@ -955,6 +989,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             turns_used = await claim(agent_id, self._max_turns)
         try:
             self._maybe_warn_turns(context, input_items, turns_used)
+            self._maybe_warn_soft_turn_limit(context, input_items, turns_used)
             self._maybe_warn_budget(context, input_items)
         except Exception:
             logger.exception("budget/turn warning injection failed")

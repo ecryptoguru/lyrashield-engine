@@ -60,7 +60,7 @@ def _resolve_sandbox_image() -> str:
     return image
 
 
-async def run_cli(args: Any) -> None:
+async def run_cli(args: Any) -> Any:
     console = Console()
     non_interactive = bool(getattr(args, "non_interactive", False))
 
@@ -195,7 +195,7 @@ async def run_cli(args: Any) -> None:
             padding=(1, 2),
         )
 
-    async def execute_scan() -> None:
+    async def execute_scan() -> Any:
         logger.info(
             "CLI launching scan: run_name=%s targets=%d interactive=%s",
             args.run_name,
@@ -216,7 +216,7 @@ async def run_cli(args: Any) -> None:
             # record the honest bounded terminal state and skip the scan.
             report_state.set_terminal_reason("runtime_deadline")
             logger.warning("Runtime allowance exhausted before scan start; skipping model work")
-            return
+            return None
         coordinator = AgentCoordinator() if deadline is not None else None
         if coordinator is not None:
             coordinator.run_deadline = deadline
@@ -233,8 +233,9 @@ async def run_cli(args: Any) -> None:
             artifact_state=report_state,
             coordinator=coordinator,
         )
+        scan_result: Any = None
         if deadline is None:
-            await run
+            scan_result = await run
         else:
 
             async def notify_wrap() -> None:
@@ -269,7 +270,7 @@ async def run_cli(args: Any) -> None:
             scan_timeout = asyncio.timeout(deadline.remaining_seconds())
             try:
                 async with scan_timeout:
-                    await run
+                    scan_result = await run
             except (TimeoutError, RunDeadlineExceededError) as exc:
                 # Only the deadline itself is salvageable. Two cases reach here:
                 # the asyncio timeout context actually expired, or the lifecycle
@@ -295,11 +296,13 @@ async def run_cli(args: Any) -> None:
                 wrap_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await wrap_task
+        return scan_result
 
+    scan_result: Any = None
     try:
         if non_interactive:
             try:
-                await execute_scan()
+                scan_result = await execute_scan()
             finally:
                 with contextlib.suppress(Exception):
                     # This outer cleanup is the last owner to run before the worker
@@ -328,7 +331,7 @@ async def run_cli(args: Any) -> None:
                 update_thread.start()
 
                 try:
-                    await execute_scan()
+                    scan_result = await execute_scan()
                 finally:
                     stop_updates.set()
                     update_thread.join(timeout=1)
@@ -367,3 +370,5 @@ async def run_cli(args: Any) -> None:
 
         console.print(final_report_panel)
         console.print()
+
+    return scan_result

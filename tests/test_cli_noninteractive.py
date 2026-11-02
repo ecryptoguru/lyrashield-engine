@@ -90,7 +90,11 @@ async def test_non_interactive_scan_bypasses_live_display() -> None:
         patch.object(cli, "ReportState", return_value=report_state),
         patch.object(cli, "set_global_report_state"),
         patch.object(cli, "_resolve_sandbox_image", return_value="sandbox@sha256:test"),
-        patch.object(cli, "run_strix_scan", new=AsyncMock()) as run_scan,
+        patch.object(
+            cli,
+            "run_strix_scan",
+            new=AsyncMock(return_value=SimpleNamespace(final_output="finish JSON")),
+        ) as run_scan,
         patch.object(
             cli.session_manager, "cleanup", new=AsyncMock(return_value="removed")
         ) as cleanup,
@@ -98,8 +102,9 @@ async def test_non_interactive_scan_bypasses_live_display() -> None:
         patch.object(cli.atexit, "register"),
         patch.object(cli.signal, "signal"),
     ):
-        await cli.run_cli(args)
+        result = await cli.run_cli(args)
 
+    assert result.final_output == "finish JSON"
     run_scan.assert_awaited_once()
     assert run_scan.call_args.kwargs["coordinator"].run_deadline.remaining_seconds() > 0
     cleanup.assert_awaited_once_with("scan-test")

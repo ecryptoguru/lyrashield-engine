@@ -41,6 +41,7 @@ from lyrashield.lifecycle.sessions import (
     strip_all_images_from_session,
 )
 from lyrashield.policy import codex
+from lyrashield.policy.loader import load_settings
 
 
 if TYPE_CHECKING:
@@ -476,6 +477,7 @@ async def spawn_child_agent(
         interactive=interactive,
         child_agent=child_agent,
         child_id=child_id,
+        skills=skills,
         name=name,
         parent_id=parent_id,
         task=task,
@@ -558,6 +560,7 @@ async def respawn_subagents(
                 interactive=interactive,
                 child_agent=child_agent,
                 child_id=child_id,
+                skills=child_skills,
                 name=name,
                 parent_id=parent_id,
                 task=str(md.get("task", "")),
@@ -1181,6 +1184,7 @@ async def _start_child_runner(
     task: str,
     initial_input: Any,
     start_parked: bool = False,
+    skills: list[str] | None = None,
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
     server_conversation: bool = False,
@@ -1198,6 +1202,9 @@ async def _start_child_runner(
     child_ctx["agent_id"] = child_id
     child_ctx["parent_id"] = parent_id
     child_ctx["task"] = task
+    child_ctx["advisory_turn_limit"] = load_settings().runtime.skill_turn_limit(
+        skills or [], hard_limit=max_turns
+    )
 
     async def _child_loop() -> None:
         # A budget stop is a clean scan-wide shutdown, not a child failure: the

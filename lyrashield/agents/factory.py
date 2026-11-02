@@ -14,6 +14,7 @@ from agents.agent import ToolsToFinalOutputResult
 from agents.sandbox import SandboxAgent
 from agents.sandbox.capabilities import Filesystem, Shell
 from agents.sandbox.errors import InvalidManifestPathError
+from agents.sandbox.session.pty_types import PTY_YIELD_TIME_MS_MAX
 from agents.tool import (
     ApplyPatchTool,
     CustomTool,
@@ -27,6 +28,7 @@ from pydantic import ValidationError
 
 from lyrashield.agents import overrides as _product_overrides
 from lyrashield.agents.prompt import render_system_prompt
+from lyrashield.agents.tool_arguments import describe_malformed_arguments
 from lyrashield.artifacts.evidence import evidence_v1_1_enabled
 from lyrashield.tools.finish.tool import finish_scan
 from lyrashield.tools.output_store import bound_and_store, bound_text
@@ -134,6 +136,8 @@ def _extract_custom_input(tool: CustomTool, raw_input: str | dict[str, Any]) -> 
             return ""
     else:
         parsed = raw_input
+    if not isinstance(parsed, dict):
+        return ""
     value = parsed.get(_custom_tool_input_field(tool))
     return value if isinstance(value, str) else ""
 
@@ -163,6 +167,9 @@ def _with_bounded_result(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
+        malformed = describe_malformed_arguments(tool.name, raw_input)
+        if malformed is not None:
+            return malformed
         return await _bound_result(await invoke_tool(ctx, raw_input))
 
     tool.on_invoke_tool = invoke
@@ -174,6 +181,9 @@ def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
+        malformed = describe_malformed_arguments(tool.name, raw_input)
+        if malformed is not None:
+            return malformed
         try:
             return await _bound_result(await invoke_tool(ctx, raw_input))
         except Exception as exc:  # noqa: BLE001 - tool errors should be model-visible results.
@@ -186,6 +196,9 @@ def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
 
 def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
     async def invoke(ctx: Any, raw_input: str) -> Any:
+        malformed = describe_malformed_arguments(tool.name, raw_input)
+        if malformed is not None:
+            return malformed
         custom_input = _extract_custom_input(tool, raw_input)
         if not custom_input:
             return f"`{_custom_tool_input_field(tool)}` must be a non-empty string."
@@ -331,10 +344,54 @@ def _redact_tool_output(result: Any, tool_name: str) -> Any:
     return result
 
 
+_EXEC_YIELD_CAP_S = PTY_YIELD_TIME_MS_MAX // 1000
+
+_EXEC_COMMAND_DESCRIPTION_NOTE = (
+    f"The wait for output is capped at {_EXEC_YIELD_CAP_S} s whatever yield_time_ms says. "
+    "A non-TTY command still running at the yield cannot be read later (write_stdin fails "
+    "on it and its output is lost): run anything longer in the background with its output "
+    "redirected to a file (`cmd > /tmp/out.log 2>&1 &`, then read the log), or start it with "
+    'tty=true and poll with write_stdin(session_id=<id>, chars="").'
+)
+
+_RUNNING_NON_TTY_NOTICE = (
+    "Note: this non-TTY process cannot be polled and its later output is lost, but the "
+    "original process remains active. Missing output does not establish failure. Inspect "
+    "its state or effects, or explicitly stop it, before retrying. For future commands, "
+    "redirect output to a log or start with tty=true so output can be polled."
+)
+
+_PROCESS_RUNNING_RE = re.compile(r"^Process running with session ID \d+$", re.MULTILINE)
+_OUTPUT_HEADER_RE = re.compile(r"^Output:\n", re.MULTILINE)
+
+
+def _annotate_running_non_tty(parsed: dict[str, Any], result: Any) -> Any:
+    if parsed.get("tty") or not isinstance(result, str):
+        return result
+    header = _OUTPUT_HEADER_RE.search(result)
+    head_end = len(result) if header is None else header.start()
+    if _PROCESS_RUNNING_RE.search(result, 0, head_end) is None:
+        return result
+    notice = _RUNNING_NON_TTY_NOTICE
+    requested = parsed.get("yield_time_ms")
+    if isinstance(requested, int | float) and requested > PTY_YIELD_TIME_MS_MAX:
+        notice = (
+            f"Note: yield_time_ms={int(requested)} was capped at {PTY_YIELD_TIME_MS_MAX} "
+            f"({_EXEC_YIELD_CAP_S} s). " + notice.removeprefix("Note: ")
+        )
+    if header is None:
+        return f"{result}\n{notice}"
+    return f"{result[: header.end()]}{notice}\n{result[header.end() :]}"
+
+
 def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
+    tool.description = f"{tool.description.rstrip()} {_EXEC_COMMAND_DESCRIPTION_NOTE}"
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
+        malformed = describe_malformed_arguments(tool.name, raw_input)
+        if malformed is not None:
+            return malformed
         try:
             parsed = json.loads(raw_input)
         except (json.JSONDecodeError, TypeError):
@@ -355,6 +412,8 @@ def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
                 "(or omitted to use the turn's cwd). "
                 f"Got: {rel!r}."
             )
+        if isinstance(parsed, dict):
+            result = _annotate_running_non_tty(parsed, result)
         return _redact_tool_output(result, tool.name)
 
     tool.on_invoke_tool = invoke
@@ -365,6 +424,9 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
+        malformed = describe_malformed_arguments(tool.name, raw_input)
+        if malformed is not None:
+            return malformed
         try:
             parsed = json.loads(raw_input)
         except json.JSONDecodeError:

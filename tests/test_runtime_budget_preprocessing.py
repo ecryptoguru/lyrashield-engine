@@ -377,6 +377,7 @@ def test_interactive_scan_never_creates_a_run_deadline(
         captured["deadline"] = getattr(args, "run_deadline", "unset")
 
     _stub_scan_environment(monkeypatch)
+    monkeypatch.setattr("lyrashield.interface.arg_parser.terminal_attached", lambda: True)
     monkeypatch.setattr(cli_main, "pull_docker_image", Mock())
     monkeypatch.setattr(cli_main, "run_tui", fake_tui)
     monkeypatch.setattr(cli_main, "_persist_run_record", Mock())

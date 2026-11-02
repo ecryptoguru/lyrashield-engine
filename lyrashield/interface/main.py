@@ -6,6 +6,7 @@ Strix Agent Interface
 
 import argparse
 import asyncio
+import json
 import logging
 import shutil
 import sys
@@ -33,7 +34,7 @@ from lyrashield.artifacts.writer import (
     write_resume_record,
     write_run_record,
 )
-from lyrashield.interface.arg_parser import parse_arguments
+from lyrashield.interface.arg_parser import FAIL_ON_SEVERITIES, parse_arguments
 from lyrashield.interface.cli import run_cli
 from lyrashield.interface.environment_gate import validate_environment
 from lyrashield.interface.image_pull import (
@@ -480,12 +481,13 @@ def main(
     )
 
     exit_reason = "user_exit"
+    scan_result: Any = None
     try:
         if args.non_interactive:
             # An allowance already spent on preprocessing means no model work:
             # the bounded terminal record above is the entire run output.
             if not deadline_exhausted:
-                asyncio.run(run_cli(args))
+                scan_result = asyncio.run(run_cli(args))
         else:
             asyncio.run(run_tui(args))
     except KeyboardInterrupt:
@@ -512,17 +514,58 @@ def main(
         display_completion_message(args, results_path)
 
     if args.non_interactive:
-        exit_code = _non_interactive_exit_code(get_global_report_state())
+        exit_code = _non_interactive_exit_code(
+            get_global_report_state(),
+            fail_on=getattr(args, "fail_on", None),
+            finish_result=getattr(scan_result, "final_output", None),
+        )
         if exit_code:
             sys.exit(exit_code)
 
 
-def _non_interactive_exit_code(report_state: Any | None) -> int:
+def findings_fail_build(reports: list[dict[str, Any]], fail_on: str | None) -> bool:
+    """Apply opt-in severity ranking; unknown or missing severities fail closed."""
+    if fail_on is None:
+        return bool(reports)
+    threshold = FAIL_ON_SEVERITIES.index(fail_on)
+    for report in reports:
+        severity = str(report.get("severity") or "").strip().lower()
+        if severity == "none":
+            continue
+        if severity not in FAIL_ON_SEVERITIES or FAIL_ON_SEVERITIES.index(severity) <= threshold:
+            return True
+    return False
+
+
+def _non_interactive_exit_code(
+    report_state: Any | None, *, fail_on: str | None = None, finish_result: Any = None
+) -> int:
     """Map an engine receipt to the worker's stable terminal contract."""
     if report_state is None:
         return 5
     if report_state.run_record.get("status") == "completed":
-        return 2 if report_state.vulnerability_reports else 0
+        if findings_fail_build(report_state.vulnerability_reports, fail_on):
+            return 2
+        if fail_on is not None:
+            # The opt-in CI gate may ignore low-severity findings, but must
+            # never turn known unfinished coverage into a passing result.
+            quality = report_state.run_record.get("scan_quality")
+            assessments = [quality] if isinstance(quality, dict) else []
+            if isinstance(finish_result, str):
+                try:
+                    finish_result = json.loads(finish_result)
+                except (ValueError, RecursionError):
+                    finish_result = None
+            if isinstance(finish_result, dict):
+                assessments.append(finish_result)
+            for assessment in assessments:
+                reasons = assessment.get("assessment_reasons", [])
+                if assessment.get("coverage_complete") is False or (
+                    isinstance(reasons, list)
+                    and any(reason != "no_findings_recorded" for reason in reasons)
+                ):
+                    return 5
+        return 0
     match report_state.run_record.get("terminal_reason"):
         case "no_change":
             return 0

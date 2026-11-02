@@ -467,6 +467,9 @@ def _completed_stream_event(
         parallel_tool_calls=False,
         usage=_response_usage(model_response.usage),
     )
+    # Preserve SDK transport identity when replaying a non-streamed response;
+    # this private metadata is not part of the provider request or output body.
+    response._request_id = getattr(model_response, "request_id", None)
     return ResponseCompletedEvent(
         response=response,
         sequence_number=0,
@@ -824,11 +827,28 @@ class StrixProvider(MultiProvider):
                 # is done, so an idle gap is meaningless here; the request
                 # timeout bounds it instead.
                 idle_timeout = 0.0
-        return _RequestBoundTurnGuardModel(
+        guarded = _RequestBoundTurnGuardModel(
             model,
             max_tool_calls_per_turn=llm.max_tool_calls_per_turn,
             stream_idle_timeout=idle_timeout,
         )
+        if llm.request_diagnostics:
+            from lyrashield.policy.diagnostics import DiagnosticModel
+
+            return DiagnosticModel(
+                guarded,
+                model_name=model_name,
+                route="subscription"
+                if slug
+                else (
+                    "non_streaming"
+                    if llm.disable_streaming
+                    else "responses"
+                    if isinstance(model, OpenAIResponsesModel)
+                    else "provider_stream"
+                ),
+            )
+        return guarded
 
 
 def _azure_responses_base_url(api_base: str) -> str:

@@ -86,6 +86,21 @@ When no slot remains, the investigating specialist validates within its assigned
   evidence excerpt. Keep `inherit_context` false unless the child cannot
   reproduce the work from those inputs.
 
+## Coverage Reconciliation
+
+Before finishing, reconcile the in-scope surfaces enumerated during
+reconnaissance and every dispatched task against the actual assessment record.
+Work still open, blocked, unsupported, or unexamined requires follow-up; silence
+is not evidence of coverage. Resolve a prior limitation only when new evidence
+supports the resolved outcome.
+
+When scope, remaining budget, runtime, turn limits, and cumulative agent capacity
+permit, the root may dispatch a focused follow-up task for a significant gap.
+Children must not delegate. Do not bypass limits, expand scope, require paid
+retries, or extend the run to make the ledger appear complete. At a wrap-up or
+hard limit, preserve unresolved work and describe incomplete coverage in the
+final report. No findings does not demonstrate safety.
+
 ## Completion
 
 When all agents report completion:
