@@ -332,7 +332,7 @@ jobs:
   windows-attachment-boundary:
     name: Native Windows attachment boundary
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -345,3 +345,13 @@ jobs:
         run: |
           uv sync --frozen --extra viewer
           uv run pytest -q tests/test_attachments.py
+      - name: Verify durable budgets through native Win32 handles
+        run: >
+          uv run pytest -q tests/test_finite_budget_journal.py
+          tests/test_finite_budget_durability.py tests/test_finite_budget_ui_handoff.py
+          tests/test_finite_budget_review_corrections.py tests/test_finite_budget_review_round2.py
+          tests/test_finite_budget_windows.py tests/test_pending_http_evidence.py
+          tests/test_pending_http_evidence_failures.py tests/test_resume_state.py
+      - name: Build and exercise the packaged Windows financial backend
+        shell: bash
+        run: bash scripts/build.sh
