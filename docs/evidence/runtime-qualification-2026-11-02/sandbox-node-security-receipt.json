@@ -1,0 +1,53 @@
+{
+  "scope": "sandbox npm lock and locally installed locked JavaScript tools; final rebuilt-image smoke remains pending",
+  "node": "24.17.0",
+  "retire": {
+    "from": "5.4.3",
+    "to": "6.1.0",
+    "reason": "Retire5 requires unpatched Zod3; upstream6 supports fixed Zod4 and replaces proxy-agent chain with documented HTTP/HTTPS proxy implementation",
+    "upstream": "https://github.com/RetireJS/retire.js/releases/tag/6.1.0",
+    "removed_vulnerable_packages": [
+      "basic-ftp5.3.1",
+      "ip-address10.7.3"
+    ]
+  },
+  "overrides": {
+    "glob": "14.0.2",
+    "minimatch": "11.0.1",
+    "zod": "4.6.6"
+  },
+  "advisories": [
+    "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5",
+    "https://github.com/isaacs/node-glob/security/advisories/GHSA-3g3m-2fjr-6pw4",
+    "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
+    "https://github.com/patrickjuchli/basic-ftp/security/advisories/GHSA-c475-qrg2-pj4r",
+    "https://github.com/beaugunderson/ip-address/security/advisories/GHSA-rxp7-6hxx-x8q5"
+  ],
+  "npm_audit": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "checks": [
+    "red:old FTP/IPv6 parsers exceed2s child-process budget; old Zod visits10000 constrained-array elements; old minimatch exceeds2s",
+    "green:brace regression, constrained-array short circuit, glob cancellation, bounded minimatch, real local Retire JSON finding, authenticated local HTTP proxy routing",
+    "four inherited address/FTP tests skip because the corresponding packages are absent from the repaired upstream dependency graph",
+    "actual ESLint CLI finds no-undef and emits JSON through glob inputs; actual js-beautify CLI formats matching globbed source files",
+    "isolated old glob cancellation regression fails with41 reads vs21 at rejection; fixed glob performs exactly1 read after first-read abort"
+  ],
+  "inputs": {
+    "containers/npm-tools/package.json": "2f2b3b536c64ca207debb5eb1a2f73f3eebc560410412183604cca178572a21f",
+    "containers/npm-tools/package-lock.json": "6a6a2a761877c4b3fc2b26cfa8d506371070e1c346a80288faca5ebf79647178",
+    "tests/test_reviewed_sandbox_npm.cjs": "0207b6e59b24ac88d61687141da91311f016f1dc0221ad886954fd14e1719b30"
+  },
+  "node_test_results": {
+    "pass": 7,
+    "skip": 4,
+    "fail": 0
+  },
+  "historical_source_revision": "63b3d06c",
+  "component_review_followup": "component-review-round1.json"
+}

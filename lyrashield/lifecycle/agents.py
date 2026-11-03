@@ -51,6 +51,8 @@ _SNAPSHOT_SCHEMA: dict[str, type] = {
     "mailboxes": dict,
     "errors": dict,
     "conversation_ids": dict,
+    "operator_stopped": list,
+    "user_wake_required": dict,
 }
 
 
@@ -86,6 +88,7 @@ class AgentCoordinator:
         self.wait_kinds: dict[str, WaitKind] = {}
         self.runtimes: dict[str, AgentRuntime] = {}
         self._parent_notified: set[str] = set()
+        self._operator_stopped: set[str] = set()
         self._lock = asyncio.Lock()
         self._snapshot_lock = asyncio.Lock()
         self._snapshot_path: Path | None = None
@@ -94,6 +97,8 @@ class AgentCoordinator:
         self._reserve_stopped = False
         self._budget_paused = False
         self._extend_budget: Callable[[], None] | None = None
+        self._budget_state: Callable[[], dict[str, Any]] | None = None
+        self._operator_submissions: dict[str, tuple[str, str]] = {}
         self.max_agents = max(1, max_agents)
         self.run_deadline: RunDeadline | None = None
 
@@ -154,36 +159,112 @@ class AgentCoordinator:
     def budget_paused(self) -> bool:
         return self._budget_paused
 
-    def set_budget_extender(self, extend: Callable[[], None]) -> None:
+    def set_budget_extender(
+        self,
+        extend: Callable[[], None],
+        *,
+        budget_state: Callable[[], dict[str, Any]] | None = None,
+    ) -> None:
         self._extend_budget = extend
+        self._budget_state = budget_state
 
-    async def pause_for_budget(self, agent_id: str) -> None:
+    def budget_control_state(self) -> dict[str, Any]:
+        """Read-only state for concrete budget controls in the operator UIs."""
+        return {
+            **(self._budget_state() if self._budget_state is not None else {}),
+            "paused": self._budget_paused,
+        }
+
+    async def pause_for_budget(self, agent_id: str, *, interrupted: bool = False) -> None:
+        """Close spending permission without inventing work for parked agents."""
         async with self._lock:
+            if (
+                agent_id not in self.statuses
+                or self.statuses[agent_id] == "stopped"
+                or self._budget_stopped
+                or self.is_shutting_down
+            ):
+                return
             self._budget_paused = True
-        await self.set_status(agent_id, "budget_paused")
+            # Spending permission is global, while each parked agent keeps its
+            # own reason for waiting. Only interrupted running work needs a
+            # budget-resume nudge; terminal and user waits are not new tasks.
+            status = self.statuses[agent_id]
+            if status == "running" or (interrupted and status == "waiting"):
+                self.statuses[agent_id] = "budget_paused"
+            for runtime in self.runtimes.values():
+                runtime.wake.set()
+        await self._maybe_snapshot()
+
+    async def operator_control(self, action: str, submission_id: str) -> bool:
+        """Apply an explicit interactive operator action once per submission.
+
+        Increasing the configured budget does not resume execution. Resume only
+        wakes budget-paused agents; hard stops and headless runs stay stopped.
+        """
+        if (
+            not isinstance(action, str)
+            or action not in {"resume", "increase_budget"}
+            or not isinstance(submission_id, str)
+            or not submission_id
+            or len(submission_id) > 128
+        ):
+            return False
+        async with self._lock:
+            fingerprint = ("control", action)
+            previous = self._operator_submissions.get(submission_id)
+            if previous is not None:
+                return previous == fingerprint
+            if (
+                self.is_shutting_down
+                or self._budget_stopped
+                or any(
+                    status == "stopped" and self.parent_of.get(aid) is None
+                    for aid, status in self.statuses.items()
+                )
+                or self._extend_budget is None
+                or not self._budget_paused
+                or len(self._operator_submissions) >= 4096
+            ):
+                return False
+            if action == "increase_budget":
+                try:
+                    self._extend_budget()
+                except ValueError:
+                    return False
+            else:
+                if self._budget_state is not None:
+                    budget_state = self._budget_state()
+                    if budget_state.get("resume_requires_increase") or budget_state.get(
+                        "pending_provider_charges"
+                    ):
+                        return False
+                self._budget_paused = False
+                for aid, status in self.statuses.items():
+                    if status != "budget_paused":
+                        continue
+                    self.statuses[aid] = "waiting"
+                    runtime = self.runtimes.setdefault(aid, AgentRuntime())
+                    runtime.mailbox.append(
+                        {
+                            "from": "system",
+                            "type": "budget_resumed",
+                            "content": "[Budget] The operator explicitly resumed the scan.",
+                        }
+                    )
+                    self.pending_counts[aid] = self.pending_counts.get(aid, 0) + 1
+                # Recheck timers and pending mail for other parked agents, but
+                # do not inject work into their preserved waiting/terminal state.
+                for runtime in self.runtimes.values():
+                    runtime.wake.set()
+            self._operator_submissions[submission_id] = fingerprint
+        await self._maybe_snapshot()
+        return True
 
     async def resume_from_budget_pause(self, *, exclude: str | None = None) -> None:
-        async with self._lock:
-            if not self._budget_paused:
-                return
-            self._budget_paused = False
-            paused = [aid for aid, status in self.statuses.items() if status == "budget_paused"]
-        if self._extend_budget is not None:
-            self._extend_budget()
-        for aid in paused:
-            await self.set_status(aid, "waiting")
-            if aid != exclude:
-                await self.send(
-                    aid,
-                    {
-                        "from": "system",
-                        "type": "budget_extended",
-                        "content": (
-                            "[Budget] The user extended the scan budget \u2014 continue your "
-                            "current task."
-                        ),
-                    },
-                )
+        """Resume explicitly without implicitly granting additional spend."""
+        del exclude  # Kept for callers of the previous explicit resume seam.
+        await self.operator_control("resume", uuid.uuid4().hex)
 
     async def reset_budget_stops(
         self,
@@ -225,6 +306,8 @@ class AgentCoordinator:
         skills: list[str] | None = None,
     ) -> None:
         async with self._lock:
+            if agent_id in self._operator_stopped:
+                return
             if (
                 parent_id is not None
                 and self.run_deadline is not None
@@ -268,6 +351,9 @@ class AgentCoordinator:
     async def mark_running(self, agent_id: str) -> None:
         async with self._lock:
             if agent_id in self.statuses and self.statuses[agent_id] in _ACTIVE_STATUSES:
+                if self._budget_paused:
+                    self.statuses[agent_id] = "budget_paused"
+                    return
                 self.statuses[agent_id] = "running"
                 self.errors.pop(agent_id, None)
                 self.wait_kinds.pop(agent_id, None)
@@ -278,9 +364,14 @@ class AgentCoordinator:
     async def park_waiting(self, agent_id: str, *, wait_kind: WaitKind) -> None:
         """Park an agent, recording what it is waiting on so the driver can time it."""
         async with self._lock:
-            if agent_id in self.statuses:
-                self.wait_kinds[agent_id] = wait_kind
-        await self.set_status(agent_id, "waiting")
+            if agent_id not in self.statuses or self.statuses[agent_id] == "stopped":
+                return
+            self.wait_kinds[agent_id] = wait_kind
+            self.statuses[agent_id] = "waiting"
+            runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
+            runtime.user_wake_required = False
+            runtime.wake.set()
+        await self._maybe_snapshot()
 
     async def record_recovery(self, agent_id: str) -> int:
         """Count a turn that ended without a lifecycle tool call; return the new total.
@@ -332,7 +423,7 @@ class AgentCoordinator:
 
     async def set_status(self, agent_id: str, status: Status, *, error: str | None = None) -> None:
         async with self._lock:
-            if agent_id not in self.statuses:
+            if agent_id not in self.statuses or agent_id in self._operator_stopped:
                 return
             self.statuses[agent_id] = status
             if error is not None:
@@ -361,16 +452,18 @@ class AgentCoordinator:
             return True
 
     def _unreachable_locked(self, agent_id: str) -> bool:
-        """Return True when no loop will ever consume a queued message.
-
-        A terminal agent whose loop is gone cannot be woken — sends to it sit
-        in a mailbox nobody drains while the sender blocks on a reply. Must be
-        called under ``self._lock``.
-        """
-        if self.statuses.get(agent_id) not in {"completed", "stopped", "crashed", "failed"}:
-            return False
+        """Reject stopped targets and runtimes whose attached driver has exited."""
         runtime = self.runtimes.get(agent_id)
-        return runtime is not None and not runtime.resumable
+        if runtime is not None and runtime.task is not None and runtime.task.done():
+            return True
+        status = self.statuses.get(agent_id)
+        if status == "stopped":
+            return True
+        return (
+            status in {"completed", "crashed", "failed"}
+            and runtime is not None
+            and not runtime.resumable
+        )
 
     async def reachability(self, agent_id: str) -> tuple[bool, Status | None]:
         """Return whether a queued message to ``agent_id`` would be consumed."""
@@ -389,9 +482,28 @@ class AgentCoordinator:
         unknown, or it is terminal and its loop does not park for wake-ups.
         """
         from_user = message.get("from") == "user"
-        if from_user and self._budget_paused:
-            await self.resume_from_budget_pause(exclude=target_agent_id)
         async with self._lock:
+            submission_id = message.get("submission_id") if from_user else None
+            fingerprint = (target_agent_id, "")
+            if submission_id is not None:
+                if (
+                    not isinstance(submission_id, str)
+                    or not submission_id
+                    or len(submission_id) > 128
+                ):
+                    return False
+                fingerprint = (target_agent_id, json.dumps(message, sort_keys=True))
+                previous = self._operator_submissions.get(submission_id)
+                if previous is not None:
+                    return previous == fingerprint
+                if len(self._operator_submissions) >= 4096:
+                    return False
+            if from_user and (
+                self._budget_stopped
+                or self.is_shutting_down
+                or self.statuses.get(target_agent_id) == "stopped"
+            ):
+                return False
             if target_agent_id not in self.statuses:
                 logger.debug("agent.send dropped unknown target=%s", target_agent_id)
                 return False
@@ -411,12 +523,20 @@ class AgentCoordinator:
             # Follow-up work is valid after a child has reported completion.
             # Without reactivation the sender can wait forever on a mailbox no
             # execution loop will ever consume.
-            if self.statuses[target_agent_id] in {"completed", "stopped"}:
+            if self._budget_paused and (
+                from_user
+                or self.statuses[target_agent_id] in _ACTIVE_STATUSES
+                or self.statuses[target_agent_id] in {"budget_paused", "completed"}
+            ):
+                self.statuses[target_agent_id] = "budget_paused"
+            elif self.statuses[target_agent_id] == "completed":
                 self.statuses[target_agent_id] = "running"
                 self.errors.pop(target_agent_id, None)
                 runtime.user_wake_required = False
             runtime.mailbox.append(dict(message))
             self.pending_counts[target_agent_id] = self.pending_counts.get(target_agent_id, 0) + 1
+            if submission_id is not None:
+                self._operator_submissions[submission_id] = fingerprint
             if from_user:
                 runtime.user_wake_required = False
                 # A real user message starts a fresh resume attempt: the prior
@@ -427,10 +547,13 @@ class AgentCoordinator:
                 self.recovery_counts.pop(target_agent_id, None)
                 self.idle_resume_counts.pop(target_agent_id, None)
                 self._parent_notified.discard(target_agent_id)
-                if self.statuses[target_agent_id] not in {"running"}:
-                    self.statuses[target_agent_id] = "waiting"
-            runtime.wake.set()
-            stream = runtime.stream
+                if self.statuses[target_agent_id] != "running":
+                    self.statuses[target_agent_id] = (
+                        "budget_paused" if self._budget_paused else "waiting"
+                    )
+            if not self._budget_paused:
+                runtime.wake.set()
+            stream = runtime.stream if not self._budget_paused else None
             interrupt_on_message = runtime.interrupt_on_message
         if stream is not None and interrupt and interrupt_on_message:
             stream.cancel(mode="immediate")
@@ -444,19 +567,31 @@ class AgentCoordinator:
                 runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
                 reserve_exit = self._reserve_stopped and self.parent_of.get(agent_id) is not None
                 pending_ready = (
-                    self.pending_counts.get(agent_id, 0) > 0 and not runtime.user_wake_required
+                    self.pending_counts.get(agent_id, 0) > 0
+                    and not runtime.user_wake_required
+                    and not self._budget_paused
                 )
-                if self._budget_stopped or reserve_exit or pending_ready:
+                if (
+                    self._budget_stopped
+                    or reserve_exit
+                    or pending_ready
+                    or self.statuses.get(agent_id) == "stopped"
+                ):
                     return True
                 wake = runtime.wake
                 wake.clear()
-            if timeout is None:
+                wait_timeout = None if self._budget_paused else timeout
+            if wait_timeout is None:
                 await wake.wait()
             else:
                 try:
-                    await asyncio.wait_for(wake.wait(), timeout)
+                    await asyncio.wait_for(wake.wait(), wait_timeout)
                 except TimeoutError:
-                    return False
+                    # A sibling may have paused while this timer was waiting.
+                    # A timer is never authorization to leave a global pause.
+                    async with self._lock:
+                        if not self._budget_paused:
+                            return False
 
     async def consume_pending(
         self,
@@ -544,15 +679,17 @@ class AgentCoordinator:
             },
         )
 
-    async def request_stop(self, agent_id: str) -> None:
+    async def request_stop(self, agent_id: str, *, preserve_terminal: bool = False) -> None:
+        """Make explicit stops sticky; cancellation cleanup can retain settled evidence."""
         parent_id: str | None = None
         was_active = False
         async with self._lock:
             status = self.statuses.get(agent_id)
             if status is None:
                 return
-            was_active = status in _ACTIVE_STATUSES
-            if was_active:
+            was_active = status in _ACTIVE_STATUSES or status == "budget_paused"
+            if not preserve_terminal or was_active or status == "stopped":
+                self._operator_stopped.add(agent_id)
                 self.statuses[agent_id] = "stopped"
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.wake.set()
@@ -712,6 +849,10 @@ class AgentCoordinator:
                 "budget_stopped": self._budget_stopped,
                 "reserve_stopped": self._reserve_stopped,
                 "budget_paused": self._budget_paused,
+                "operator_stopped": sorted(self._operator_stopped),
+                "user_wake_required": {
+                    aid: runtime.user_wake_required for aid, runtime in self.runtimes.items()
+                },
             }
 
     async def restore(self, snap: dict[str, Any]) -> None:
@@ -744,8 +885,21 @@ class AgentCoordinator:
             self._budget_stopped = bool(snap.get("budget_stopped", False))
             self._reserve_stopped = bool(snap.get("reserve_stopped", False))
             self._budget_paused = bool(snap.get("budget_paused", False))
-            for aid in self.statuses:
-                self.runtimes.setdefault(aid, AgentRuntime())
+            self._operator_stopped.update(
+                aid
+                for aid in (snap.get("operator_stopped") or [])
+                if isinstance(aid, str) and aid in self.statuses
+            )
+            wake_gates = snap.get("user_wake_required") or {}
+            for aid, status in self.statuses.items():
+                runtime = self.runtimes.setdefault(aid, AgentRuntime())
+                saved_gate = wake_gates.get(aid)
+                runtime.user_wake_required = (
+                    saved_gate if isinstance(saved_gate, bool) else status in {"failed", "crashed"}
+                )
+                if aid in self._operator_stopped:
+                    self.statuses[aid] = "stopped"
+                    runtime.wake.set()
 
     async def _maybe_snapshot(self) -> None:
         path = self._snapshot_path

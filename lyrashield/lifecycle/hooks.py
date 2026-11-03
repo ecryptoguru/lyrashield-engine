@@ -9,18 +9,27 @@ import hashlib
 import json
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from itertools import count
 from typing import TYPE_CHECKING, Any, cast
 
 from agents.lifecycle import RunHooks
+from agents.models._retry_runtime import (
+    provider_managed_retries_disabled,
+    should_disable_provider_managed_retries,
+    should_disable_websocket_pre_event_retries,
+    websocket_pre_event_retries_disabled,
+)
 
-from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.artifacts.state import ReportState, get_global_report_state
 from lyrashield.artifacts.usage import (
     _LONG_CONTEXT_THRESHOLD_TOKENS,
     _METERED_USD_PER_MILLION,
 )
 from lyrashield.lifecycle.deadline import RunDeadlineExceededError
+from lyrashield.policy.physical_requests import durable_physical_admission, finite_physical_attempt
 from lyrashield.tools.output_store import _take_prefix, _take_suffix
 
 
@@ -216,6 +225,28 @@ def _usage_value(entry: Any, field: str) -> Any:
     return getattr(entry, field, None)
 
 
+def _reported_usage(usage: Any) -> bool:
+    """SDK empty Usage() is absence, unlike an evidenced zero-use request."""
+    if usage is None:
+        return False
+    counters = [_usage_value(usage, field) for field in ("input_tokens", "output_tokens")]
+    if not all(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+        for value in counters
+    ):
+        return False
+    requests = _usage_value(usage, "requests")
+    return (
+        isinstance(requests, (int, float))
+        and not isinstance(requests, bool)
+        and math.isfinite(requests)
+        and requests > 0
+    ) or any(value > 0 for value in counters)
+
+
 def _cached_tokens_from_entry(entry: Any) -> int:
     details = _usage_value(entry, "input_tokens_details")
     if not details:
@@ -236,6 +267,8 @@ def _cache_write_tokens_from_entry(entry: Any) -> int:
     """
     details = _usage_value(entry, "input_tokens_details")
     if not details:
+        return -1
+    if getattr(details, "_lyrashield_cache_write_known", None) is False:
         return -1
     if isinstance(details, dict):
         details = cast("dict[str, Any]", details)
@@ -597,6 +630,8 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         max_input_tokens: int | None = None,
         max_turns: int | None = None,
         interactive: bool = False,
+        report_state: Any = None,
+        phase_allowance_usd: float | None = None,
     ) -> None:
         if max_budget_usd is not None and (
             not math.isfinite(max_budget_usd) or max_budget_usd <= 0
@@ -637,12 +672,127 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._budget_increment = max_budget_usd
         self._max_turns = max_turns
         self._interactive = interactive
+        self._operator_pause_check: Callable[[], bool] | None = None
         self._deadline_notified: set[str] = set()
+        state = get_global_report_state()
+        self._report_state: Any = report_state or state
+        state = self._report_state
+        self._journal = (
+            state.enable_finite_budget(max_budget_usd)
+            if max_budget_usd is not None and isinstance(state, ReportState)
+            else None
+        )
+        if self._journal is not None:
+            self._max_budget_usd = self._journal.limit
+            self._committed_cost_floor = self._journal.spent
+        self._phase_allowance_usd = phase_allowance_usd
+        self._phase_start_cost = max(
+            self._committed_cost_floor,
+            self._report_state.get_total_llm_cost() if self._report_state is not None else 0.0,
+        )
+        self._durable_requests: dict[str, str] = {}
+        self._durable_agents: dict[tuple[str, int], str] = {}
+        self._direct_attempt: ContextVar[str | None] = ContextVar(
+            "finite_direct_attempt", default=None
+        )
+
+    def physical_admission(self, input_items: Any) -> Any:
+        entry = self._input_attempts.get(id(input_items))
+        if entry is not None and entry[0] is input_items and self._journal is not None:
+            attempt = self._durable_agents.get(entry[3])
+            if attempt is not None:
+                return self._journal, attempt
+        return None
+
+    def durable_attempt(self, key: str) -> str | None:
+        return self._durable_requests.get(key)
+
+    def _durable_reserve(self, amount: float, *, kind: str = "llm") -> str | None:
+        if self._journal is None:
+            return None
+        state = self._report_state
+        if state is None:
+            raise RuntimeError("durable admission lost its report owner")
+        with state._report_artifacts_lock:
+            attempt = self._journal.reserve(amount, kind=kind)
+            state._adopt_financial_snapshot(self._journal.snapshot())
+            return attempt
+
+    def set_operator_pause_check(self, check: Callable[[], bool]) -> None:
+        """Bind auxiliary reservations to the same scan-wide execution pause."""
+        self._operator_pause_check = check
+
+    def _check_operator_pause(self, coordinator: Any = None) -> None:
+        paused = (
+            self._operator_pause_check is not None and self._operator_pause_check()
+        ) or getattr(coordinator, "budget_paused", False) is True
+        if paused:
+            if self._interactive:
+                raise BudgetPausedError("Scan is paused until the operator explicitly resumes")
+            raise BudgetExceededError("Scan is paused; headless execution cannot resume")
+
+    def budget_control_state(self) -> dict[str, Any]:
+        """Expose the concrete increment and whether existing spend prevents resume."""
+        report_state = self._report_state or get_global_report_state()
+        observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
+        committed = (
+            max(
+                observed,
+                self._committed_cost_floor,
+                self._journal.spent if self._journal is not None else 0.0,
+            )
+            + sum(tuple(self._abandoned_floors.values()))
+            + sum(tuple(self._agent_abandoned_floors.values()))
+        )
+        reserved = sum(tuple(self._reservations.values())) + sum(
+            tuple(self._agent_reservations.values())
+        )
+        return {
+            "increment_usd": self._budget_increment,
+            "limit_usd": self._max_budget_usd,
+            "spent_usd": committed,
+            "resume_requires_increase": (
+                self._max_budget_usd is not None and committed + reserved >= self._max_budget_usd
+            ),
+            "pending_provider_charges": bool(
+                self._journal is not None
+                and self._journal.snapshot()["_finite_budget_guard"]["pending"]
+            ),
+        }
+
+    @contextmanager
+    def single_provider_attempt(self) -> Iterator[None]:
+        """Prevent hidden replays inside one finite out-of-band reservation.
+
+        These frozen-SDK contexts also cover direct OpenAI and LiteLLM calls,
+        which do not run the SDK retry driver. Preserve any enclosing no-retry
+        context and reset task-local state when this request exits.
+        """
+        bounded = self._max_budget_usd is not None
+        with (
+            finite_physical_attempt(bounded),
+            durable_physical_admission(self._journal, self._direct_attempt.get()),
+            provider_managed_retries_disabled(bounded or should_disable_provider_managed_retries()),
+            websocket_pre_event_retries_disabled(
+                bounded or should_disable_websocket_pre_event_retries()
+            ),
+        ):
+            yield
 
     def extend_budget(self) -> None:
+        if not self._interactive:
+            raise ValueError("Budget increases require an interactive scan")
         if self._max_budget_usd is None or self._budget_increment is None:
-            return
-        self._max_budget_usd += self._budget_increment
+            raise ValueError("No finite budget was configured")
+        new_limit = self._max_budget_usd + self._budget_increment
+        if not math.isfinite(new_limit):
+            raise ValueError("Budget limit must remain finite")
+        if self._journal is not None:
+            state = self._report_state
+            with state._report_artifacts_lock:
+                self._journal.increase_limit(new_limit)
+                state._adopt_financial_snapshot(self._journal.snapshot())
+        self._max_budget_usd = new_limit
 
     async def reserve_out_of_band_request(
         self,
@@ -662,6 +812,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         Raises `BudgetExceededError` when the request would breach the budget;
         callers must pair this with `release_out_of_band_request`.
         """
+        self._check_operator_pause()
         if self._max_budget_usd is None:
             return
         # Reserve against the worst input bucket: the provider has not yet
@@ -676,11 +827,16 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             + max_output_tokens * output_rate * (1.5 if multiplier > 1 else 1.0)
         ) / 1_000_000
         async with self._reservation_lock:
+            self._check_operator_pause()
             self._reservations.pop(key, None)
-            report_state = get_global_report_state()
+            report_state = self._report_state or get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
             committed = (
-                max(observed, self._committed_cost_floor)
+                max(
+                    observed,
+                    self._committed_cost_floor,
+                    self._journal.spent if self._journal is not None else 0.0,
+                )
                 + sum(self._abandoned_floors.values())
                 + sum(self._agent_abandoned_floors.values())
             )
@@ -695,22 +851,69 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 raise BudgetExceededError(
                     f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
                 )
+            if self._phase_allowance_usd is not None and (
+                max(0.0, committed - self._phase_start_cost) + reserved + reservation
+                > self._phase_allowance_usd
+            ):
+                raise BudgetExceededError(
+                    "Next triage request exceeds its remaining phase allowance"
+                )
             self._reservations[key] = reservation
+            attempt = self._durable_reserve(reservation)
+            if attempt is not None:
+                self._durable_requests[key] = attempt
+                self._direct_attempt.set(attempt)
 
-    async def release_out_of_band_request(self, *, key: str, model: str, usage: Any = None) -> None:
+    def record_out_of_band_response(
+        self, *, key: str, model: str, usage: Any, response_id: str | None = None
+    ) -> None:
+        """Settle a decoded receipt synchronously before callbacks or cancellation."""
+        attempt = self._durable_requests.get(key)
+        if attempt is not None and _reported_usage(usage):
+            state = self._report_state
+            if state is None:
+                raise RuntimeError("durable admission lost its report owner")
+            state.record_sdk_usage(
+                agent_id="warmup" if key.startswith("preflight:") else key.split(":", 1)[0],
+                model=model,
+                usage=usage,
+                response_id=response_id,
+                budget_attempt=attempt,
+                budget_cost=_usage_cost_upper_bound(model, usage),
+            )
+            self._durable_requests.pop(key, None)
+
+    async def release_out_of_band_request(
+        self, *, key: str, model: str, usage: Any = None, response_id: str | None = None
+    ) -> bool:
         """Drop an out-of-band reservation and commit its observed cost."""
         async with self._reservation_lock:
+            attempt = self._durable_requests.get(key)
+            state = self._report_state or get_global_report_state()
+            self.record_out_of_band_response(
+                key=key, model=model, usage=usage, response_id=response_id
+            )
+            if (
+                attempt is not None
+                and self._journal is not None
+                and self._reservations.get(key) == 0
+            ):
+                self._journal.settle(attempt, self._journal.snapshot(), 0)
+                if state is not None:
+                    state._adopt_financial_snapshot(self._journal.snapshot())
+                self._durable_requests.pop(key, None)
             reservation = self._reservations.pop(key, None)
-            if usage is not None:
+            if _reported_usage(usage):
                 self._committed_cost_floor += _usage_cost_upper_bound(model, usage)
                 # Actual usage for this key reconciles any abandoned-attempt
                 # floor: the estimate is replaced, never added twice.
                 self._abandoned_floors.pop(key, None)
-            elif reservation is not None:
+            elif reservation is not None and reservation > 0:
                 # No usage was reported, but the provider may still bill the
                 # partial work. Keep the bounded reservation as a conservative
                 # estimated-spend floor instead of assuming a zero charge.
                 self._abandoned_floors[key] = self._abandoned_floors.get(key, 0.0) + reservation
+            return _reported_usage(usage) or reservation == 0
 
     async def reserve_web_search_call(
         self,
@@ -724,16 +927,22 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         token-rate math and reserves a fixed cost directly against the scan
         budget. Callers must pair this with ``release_web_search_call``.
         """
+        self._check_operator_pause()
         if self._max_budget_usd is None:
             return
         if not math.isfinite(estimated_cost) or estimated_cost < 0:
             estimated_cost = 0.0
         async with self._reservation_lock:
+            self._check_operator_pause()
             self._reservations.pop(key, None)
-            report_state = get_global_report_state()
+            report_state = self._report_state or get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
             committed = (
-                max(observed, self._committed_cost_floor)
+                max(
+                    observed,
+                    self._committed_cost_floor,
+                    self._journal.spent if self._journal is not None else 0.0,
+                )
                 + sum(self._abandoned_floors.values())
                 + sum(self._agent_abandoned_floors.values())
             )
@@ -743,22 +952,35 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     f"Next web search would exceed ${self._max_budget_usd:.2f}"
                 )
             self._reservations[key] = estimated_cost
+            attempt = self._durable_reserve(estimated_cost, kind="search")
+            if attempt is not None:
+                self._durable_requests[key] = attempt
 
-    async def release_web_search_call(self, *, key: str, actual_cost: float) -> None:
+    async def release_web_search_call(self, *, key: str, actual_cost: float | None) -> None:
         """Drop a web search reservation and commit the observed per-call cost.
 
         Idempotent: if the reservation key is absent (already released/committed),
         this is a no-op and does NOT add ``actual_cost`` again — duplicate
         finalization must not inflate committed cost.
         """
-        if not math.isfinite(actual_cost) or actual_cost < 0:
-            actual_cost = 0.0
+        if actual_cost is not None and (not math.isfinite(actual_cost) or actual_cost < 0):
+            actual_cost = None
         async with self._reservation_lock:
             if key not in self._reservations:
                 # Already released/committed — exactly-once finalization.
                 return
-            self._reservations.pop(key, None)
-            self._committed_cost_floor += actual_cost
+            quote = self._reservations.pop(key)
+            attempt = self._durable_requests.get(key)
+            if attempt is not None and self._journal is not None and actual_cost is not None:
+                self._journal.settle(attempt, self._journal.snapshot(), actual_cost)
+                state = self._report_state or get_global_report_state()
+                if state is not None:
+                    state._adopt_financial_snapshot(self._journal.snapshot())
+                self._durable_requests.pop(key, None)
+            if actual_cost is None:
+                self._abandoned_floors[key] = quote
+            else:
+                self._committed_cost_floor += actual_cost
 
     @property
     def compaction_trigger_tokens(self) -> int:
@@ -797,6 +1019,40 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         )
         input_items.append({"role": "user", "content": content})
 
+    def _maybe_warn_soft_turn_limit(
+        self,
+        context: RunContextWrapper[dict[str, Any]],
+        input_items: list[TResponseInputItem],
+        turns_used: int | None = None,
+    ) -> None:
+        """Advisory specialist guidance only; hard turn/budget/deadline checks win."""
+        limit = context.context.get("advisory_turn_limit")
+        if context.context.get("parent_id") is None or type(limit) is not int or limit <= 0:
+            return
+        if self._max_turns is not None:
+            limit = min(limit, self._max_turns)
+        if turns_used is None:
+            requests = getattr(getattr(context, "usage", None), "requests", None)
+            if type(requests) is not int:
+                return
+            turns_used = requests + 1
+        if turns_used != max(1, limit - 10) and not (
+            turns_used >= limit and (turns_used - limit) % 5 == 0
+        ):
+            return
+        input_items.append(
+            {
+                "role": "user",
+                "content": (
+                    f"{_SYSTEM_NOTICE_TAG} [NOTICE] Specialist advisory turn target: "
+                    f"{turns_used}/{limit}. Wrap up the assigned task, file supported findings, "
+                    "state unresolved checks in result_summary, and call agent_finish. "
+                    "Continue only for concrete progress within existing scope. This advisory "
+                    "does not extend hard turn, budget, runtime, or agent-capacity limits."
+                ),
+            }
+        )
+
     def _maybe_warn_budget(
         self,
         context: RunContextWrapper[dict[str, Any]],
@@ -804,7 +1060,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
     ) -> None:
         if self._max_budget_usd is None:
             return
-        report_state = get_global_report_state()
+        report_state = self._report_state or get_global_report_state()
         if report_state is None:
             return
         cost = report_state.get_total_llm_cost()
@@ -886,6 +1142,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
     ) -> None:
         turns_used: int | None = None
         coordinator = context.context.get("coordinator")
+        self._check_operator_pause(coordinator)
         agent_id = self._agent_id(context, agent)
         deadline = getattr(coordinator, "run_deadline", None)
         if deadline is not None:
@@ -910,6 +1167,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             turns_used = await claim(agent_id, self._max_turns)
         try:
             self._maybe_warn_turns(context, input_items, turns_used)
+            self._maybe_warn_soft_turn_limit(context, input_items, turns_used)
             self._maybe_warn_budget(context, input_items)
         except Exception:
             logger.exception("budget/turn warning injection failed")
@@ -943,6 +1201,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             ) / 1_000_000
             agent_id = self._agent_id(context, agent)
             async with self._reservation_lock:
+                self._check_operator_pause(coordinator)
                 scope = (id(context), agent_id)
                 active = self._active_attempts.get(scope)
                 previous_attempt = (
@@ -960,10 +1219,14 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     # reservation becomes a conservative estimated-spend
                     # floor instead of being written off as zero (E1.3).
                     self._agent_abandoned_floors[previous_attempt] = prior
-                report_state = get_global_report_state()
+                report_state = self._report_state or get_global_report_state()
                 observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
                 committed = (
-                    max(observed, self._committed_cost_floor)
+                    max(
+                        observed,
+                        self._committed_cost_floor,
+                        self._journal.spent if self._journal is not None else 0.0,
+                    )
                     + sum(self._abandoned_floors.values())
                     + sum(self._agent_abandoned_floors.values())
                 )
@@ -979,6 +1242,9 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     )
                 attempt_key = (agent_id, next(self._attempt_ids))
                 self._agent_reservations[attempt_key] = reservation
+                durable = self._durable_reserve(reservation)
+                if durable is not None:
+                    self._durable_agents[attempt_key] = durable
                 self._active_attempts[scope] = (context, attempt_key)
                 self._input_attempts[id(input_items)] = (
                     input_items,
@@ -993,25 +1259,14 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         agent: Agent[dict[str, Any]],
         response: ModelResponse,
     ) -> None:
-        report_state = get_global_report_state()
+        report_state = self._report_state or get_global_report_state()
         agent_name = getattr(agent, "name", None)
         if not isinstance(agent_name, str):
             agent_name = None
         agent_id = self._agent_id(context, agent)
         model = self._agent_model(agent)
 
-        if report_state is not None:
-            try:
-                report_state.record_sdk_usage(
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    model=model,
-                    usage=response.usage,
-                    response_id=response.response_id,
-                )
-            except Exception:
-                logger.exception("failed to record SDK usage for agent %s", agent_id)
-
+        reported = _reported_usage(response.usage)
         async with self._reservation_lock:
             scope = (id(context), agent_id)
             active = self._active_attempts.get(scope)
@@ -1039,30 +1294,64 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 attempt_key = active[1]
             else:
                 attempt_key = None
+            if report_state is not None and reported:
+                durable = self._durable_agents.get(attempt_key) if attempt_key is not None else None
+                if self._journal is not None and durable is None:
+                    raise RuntimeError("finite usage has no matching durable admission")
+                if durable is not None:
+                    report_state.record_sdk_usage(
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        model=model,
+                        usage=response.usage,
+                        response_id=response.response_id,
+                        budget_attempt=durable,
+                        budget_cost=_usage_cost_upper_bound(model, response.usage),
+                    )
+                    self._durable_agents.pop(attempt_key, None) if attempt_key is not None else None
+                else:
+                    try:
+                        report_state.record_sdk_usage(
+                            agent_id=agent_id,
+                            agent_name=agent_name,
+                            model=model,
+                            usage=response.usage,
+                            response_id=response.response_id,
+                        )
+                    except Exception:
+                        logger.exception("failed to record SDK usage for agent %s", agent_id)
             if attempt_key is not None:
-                self._agent_reservations.pop(attempt_key, None)
-                self._agent_abandoned_floors.pop(attempt_key, None)
-                if active is not None and active[0] is context and active[1] == attempt_key:
-                    self._active_attempts.pop(scope, None)
-                for input_id, input_entry in tuple(self._input_attempts.items()):
-                    if input_entry[1] is context and input_entry[3] == attempt_key:
-                        self._input_attempts.pop(input_id, None)
-                for response_key, bindings in tuple(self._response_attempts.items()):
-                    remaining = [
-                        binding
-                        for binding in bindings
-                        if binding[0] is not context or binding[1] != attempt_key
-                    ]
-                    if remaining:
-                        self._response_attempts[response_key] = remaining
-                    else:
-                        self._response_attempts.pop(response_key, None)
+                reservation = self._agent_reservations.pop(attempt_key, None)
+                if reported:
+                    self._agent_abandoned_floors.pop(attempt_key, None)
+                elif reservation is not None and reservation > 0:
+                    self._agent_abandoned_floors[attempt_key] = reservation
+                if reported or reservation == 0:
+                    if active is not None and active[0] is context and active[1] == attempt_key:
+                        self._active_attempts.pop(scope, None)
+                    for input_id, input_entry in tuple(self._input_attempts.items()):
+                        if input_entry[1] is context and input_entry[3] == attempt_key:
+                            self._input_attempts.pop(input_id, None)
+                    for response_key, bindings in tuple(self._response_attempts.items()):
+                        remaining = [
+                            binding
+                            for binding in bindings
+                            if binding[0] is not context or binding[1] != attempt_key
+                        ]
+                        if remaining:
+                            self._response_attempts[response_key] = remaining
+                        else:
+                            self._response_attempts.pop(response_key, None)
             self._committed_cost_floor += _usage_cost_upper_bound(model, response.usage)
 
         if self._max_budget_usd is not None:
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
             cost = (
-                max(observed, self._committed_cost_floor)
+                max(
+                    observed,
+                    self._committed_cost_floor,
+                    self._journal.spent if self._journal is not None else 0.0,
+                )
                 + sum(self._abandoned_floors.values())
                 + sum(self._agent_abandoned_floors.values())
             )

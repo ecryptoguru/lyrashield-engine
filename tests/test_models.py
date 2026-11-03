@@ -12,6 +12,7 @@ import pytest
 from agents.extensions.models.litellm_model import LitellmModel
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
+from agents.models.openai_provider import OpenAIProvider
 from agents.models.openai_responses import OpenAIResponsesModel
 
 from lyrashield.policy.models import (
@@ -32,6 +33,8 @@ from lyrashield.policy.models import (
 )
 from lyrashield.policy.settings import LlmSettings, Settings
 from strix.config import models as strix_models
+from strix.config.settings import Settings as UpstreamSettings
+from strix.llm.request_log import RequestLoggingModel
 
 
 @pytest.mark.asyncio
@@ -88,6 +91,40 @@ async def test_request_guard_marks_its_own_stream_idle_timeout() -> None:
             prompt=None,
         ):
             pass
+
+
+@pytest.mark.parametrize("idle_timeout", [0.0, None])
+@pytest.mark.asyncio
+async def test_request_guard_disabled_timer_allows_delayed_first_event(
+    idle_timeout: float | None,
+) -> None:
+    event = SimpleNamespace(type="response.created")
+
+    class Inner:
+        async def stream_response(self, *args: Any, **kwargs: Any):  # noqa: ARG002
+            await asyncio.sleep(0.01)
+            yield event
+
+    model = _RequestBoundTurnGuardModel(
+        inner=Inner(), max_tool_calls_per_turn=5, stream_idle_timeout=idle_timeout
+    )
+    async with asyncio.timeout(0.2):
+        seen = [
+            item
+            async for item in model.stream_response(
+                None,
+                [],
+                ModelSettings(),
+                [],
+                None,
+                [],
+                ModelTracing.DISABLED,
+                previous_response_id=None,
+                conversation_id=None,
+                prompt=None,
+            )
+        ]
+    assert seen == [event]
 
 
 @pytest.mark.asyncio
@@ -625,12 +662,13 @@ def test_admission_checks_exactly_the_provider_routing_selects() -> None:
 def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPatch) -> None:
     """E2: for every accepted GPT-6 fixture, StrixProvider.get_model must
     route through the same provider admission selected. This spies on the
-    actual SDK seam (super().get_model) and asserts the routed name equals
+    actual SDK provider seam and asserts the routed name equals
     the canonical ``{provider}/{model_path}`` form admission parsed — no
     fixture may pass vacuously without observed routing."""
     from lyrashield.policy import codex  # noqa: PLC0415
     from lyrashield.policy.models import StrixProvider  # noqa: PLC0415
 
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture")
     # Prevent subscription model shortcut from bypassing routing.
     monkeypatch.setattr(codex, "subscription_model", lambda _name: None)
 
@@ -665,7 +703,10 @@ def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPa
             return _spy
 
         # Bind the spy on the parent class so super().get_model() hits it.
-        parent_cls = type(provider).__mro__[1]
+        if route.provider in {None, "openai"}:
+            parent_cls = OpenAIProvider
+        else:
+            parent_cls = type(provider).__mro__[1]
         monkeypatch.setattr(parent_cls, "get_model", _make_spy(seen))
 
         raised: Exception | None = None
@@ -673,11 +714,13 @@ def test_routing_selects_same_provider_as_admission(monkeypatch: pytest.MonkeyPa
             provider.get_model(model_name)
         except RuntimeError as exc:
             raised = exc
-        # Every fixture MUST reach super().get_model — no vacuous pass.
+        # Every fixture MUST reach the SDK provider — no vacuous pass.
         assert raised is not None, f"{model_name}: did not reach super().get_model()"
         assert len(seen) == 1, f"{model_name}: expected 1 routing call, got {len(seen)}"
         routed = seen[0]
-        if route.wrapper is not None and route.provider is not None:
+        if route.provider in {None, "openai"}:
+            assert routed == route.model_path
+        elif route.wrapper is not None and route.provider is not None:
             expected_routed = f"{route.provider}/{route.model_path}"
             assert routed == expected_routed, (
                 f"{model_name}: routed {routed!r} != canonical {expected_routed!r}"
@@ -749,6 +792,9 @@ def test_routes_through_litellm_matches_the_provider(
     drift here breaks every request on that route.
     """
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    # This is a generic upstream routing fixture, not a product model route.
+    # Keep its settings schema independent of the registered product loader.
+    monkeypatch.setattr(strix_models, "load_settings", UpstreamSettings)
     assert strix_models.routes_through_litellm(model_name) is litellm
     try:
         model = strix_models.StrixProvider().get_model(model_name)
@@ -757,6 +803,8 @@ def test_routes_through_litellm_matches_the_provider(
         # proves the route is not LiteLLM's.
         assert not litellm
         return
-    while isinstance(model, strix_models._NonStreamingModel | strix_models._TurnGuardModel):
+    while isinstance(
+        model, strix_models._NonStreamingModel | strix_models._TurnGuardModel | RequestLoggingModel
+    ):
         model = model._inner
     assert isinstance(model, LitellmModel) is litellm

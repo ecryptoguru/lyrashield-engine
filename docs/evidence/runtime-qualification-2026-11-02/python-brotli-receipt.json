@@ -1,0 +1,69 @@
+{
+  "scope": "Brotli decoder component qualification in actual transient baseline containers; final combined image rebuild/scan remains pending",
+  "reason": "Debian Python _brotli statically links its own decoder; patching libbrotli1 alone is insufficient",
+  "source_package": "brotli1.2.0-4.1",
+  "upstream": "https://security-tracker.debian.org/tracker/CVE-2026-111497",
+  "authentication": {
+    "InRelease": "https://deb.debian.org/debian/dists/sid/InRelease",
+    "InRelease_sha256": "40b459178938cc0f1dbd2d481a205054f18e9b62c3a40547ab97fba7e36634ea",
+    "signers": [
+      "4CB50190207B4758A3F73A796ED0E7B82643E131",
+      "B8E5F13176D2A7A75220028078DBA3BC47EF2265"
+    ],
+    "Packages_xz_sha256": {
+      "amd64": "2ac155a2a44cdc31a8bf344df5e24fe4100adfd62d0e4a6e0a3f565f6253ea53",
+      "arm64": "2a35d08bd0ab8a6c1482aad837d7ffcad307e29e659394e011824c1f08f52bc1"
+    },
+    "validation": "Independent system-package qualification verified Release signatures with the image Debian keyring and both indexes against signed SHA256; downloaded debs match those indexes. Installer pins exact hashes without adding a repository."
+  },
+  "architectures": {
+    "amd64": {
+      "packages": {
+        "libbrotli1:Version": "1.2.0-4.1",
+        "libbrotli1:source:Version": "1.2.0-4.1",
+        "python3-brotli:Version": "1.2.0-4.1",
+        "python3-brotli:source:Version": "1.2.0-4.1"
+      },
+      "ctypes_real_decode": "pass",
+      "shared_library_sha256": "9e3475c0183fcca66b495e3d9036774c7ba569e2b9bbe579f263d9d4972e386a",
+      "system_python_real_decode": {
+        "version": "1.2.0",
+        "file": "/usr/lib/python3/dist-packages/_brotli.cpython-314-x86_64-linux-gnu.so",
+        "sha256": "7938f62f22d8b31e7da4ab313e9a5fa8365f8f6bbf8297efb440f89a5934213b"
+      },
+      "application_python_brotli": "not installed in isolated application venv",
+      "python_deb": {
+        "url": "https://deb.debian.org/debian/pool/main/b/brotli/python3-brotli_1.2.0-4.1_amd64.deb",
+        "sha256": "3b62003bf956337d2ae672b40174cd303e740ea0e013d8405e503a4b5abaf061"
+      }
+    },
+    "arm64": {
+      "packages": {
+        "libbrotli1:Version": "1.2.0-4.1",
+        "libbrotli1:source:Version": "1.2.0-4.1",
+        "python3-brotli:Version": "1.2.0-4.1",
+        "python3-brotli:source:Version": "1.2.0-4.1"
+      },
+      "ctypes_real_decode": "pass",
+      "shared_library_sha256": "35c99321b037c8999d0d28293e35c176816c9bcf8730894f64fe12723d0d581e",
+      "system_python_real_decode": {
+        "version": "1.2.0",
+        "file": "/usr/lib/python3/dist-packages/_brotli.cpython-314-aarch64-linux-gnu.so",
+        "sha256": "abe6cf5d3e8af2a5328ac004a5d762968441f407fc2116060aa41828d2c1c15b"
+      },
+      "application_python_brotli": "not installed in isolated application venv",
+      "python_deb": {
+        "url": "https://deb.debian.org/debian/pool/main/b/brotli/python3-brotli_1.2.0-4.1_arm64.deb",
+        "sha256": "0923c03d9293e45cd8f744f1de5103b97603f0ae0c54b275d8f03ebf87b29750"
+      }
+    }
+  },
+  "security_checks": [
+    "both downloaded packages verified before any installation",
+    "a fixed shared library cannot skip a vulnerable Python extension",
+    "installer after final apt-get install; final binary/source versions checked independently",
+    "exact runtime shared-library and Python extension SHA256 match authenticated package payloads",
+    "real ctypes and system-Python decode",
+    "application venv has no Brotli module; system extension audited separately"
+  ]
+}

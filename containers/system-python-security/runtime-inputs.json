@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "repository": "ecryptoguru/lyrashield-engine",
+  "release_tag": "runtime-inputs-20261102-v1",
+  "asset": "strix-runtime-inputs-20261102-v1.tar.gz",
+  "format": "ustar-gzip-store-v1",
+  "leaves_sha256": "cdf7ae002143545e6f5ef6759d7ddf033e6e8a9d38b09436951ea6c70bc03886",
+  "signed_releases": {
+    "sid": "40b459178938cc0f1dbd2d481a205054f18e9b62c3a40547ab97fba7e36634ea",
+    "kali": "99166523a2f29b8f8ad01ef6ebc7f923a8eff6ac7df885eaba175199d53356d8"
+  },
+  "bundle": {
+    "bytes": 69432518,
+    "sha256": "649a883f7949f3d789c44b6d2ee66b7dba36ee21e1f1b0b03d117c6b47c692be"
+  },
+  "raw_bytes": 69409899,
+  "files": {
+    "kali-amd64-Packages.gz": {
+      "bytes": 21829866,
+      "sha256": "7f77b3ab2570fcec766527d724d75a14af34adc56f8d322fa1d6946f19fc8a11"
+    },
+    "kali-arm64-Packages.gz": {
+      "bytes": 21686805,
+      "sha256": "c9dd9f2b3bf13f9e1e7705283805691072996f9f18078404335aeb8147329a75"
+    },
+    "python3-anyio_4.15.1-3_all.deb": {
+      "bytes": 87800,
+      "sha256": "3aac617ae1e7f5b370639559ae996c37a0a27fbe5e0a25df21b4b2d76114cd42"
+    },
+    "python3-dnspython_2.8.0-7_all.deb": {
+      "bytes": 175460,
+      "sha256": "18e94dc71e9dec0332bdfd6d8fc69f36da058ef48d773deb4f1c1dceca211547"
+    },
+    "python3-jwt_2.15.1-1_all.deb": {
+      "bytes": 43740,
+      "sha256": "e2bdfe81e1c0c45866e37e1a2f2fd190fcec24f8c5fc083e994733b0f915b1af"
+    },
+    "python3-msgpack_1.2.1-3_amd64.deb": {
+      "bytes": 114244,
+      "sha256": "0ed826b52f74816f0364c9227d02667f400760a2e66d9837398a7652e8a58603"
+    },
+    "python3-msgpack_1.2.1-3_arm64.deb": {
+      "bytes": 91708,
+      "sha256": "7b020ffa35c8d9f922cb95e55ccf9aba6286b56062491fcb3791d401b69b3301"
+    },
+    "python3-pip-whl_26.2.2+dfsg-1_all.deb": {
+      "bytes": 1466968,
+      "sha256": "5df0bb84a02838cc65483a4fa6fa876e956efc79ae265c784bb2fc2e98091644"
+    },
+    "python3-pip_26.2.2+dfsg-1_all.deb": {
+      "bytes": 1413832,
+      "sha256": "993e00276f5fbda31d08d0389f3aecc72e16c13771803df8eff31270bed752ca"
+    },
+    "python3-pyasn1_0.6.5-1_all.deb": {
+      "bytes": 70944,
+      "sha256": "b3ddc86aaa2b7b3c43394afae5f83315d45da2677db40e613276fdf2e96f52f8"
+    },
+    "python3-tornado_6.6.0-1_amd64.deb": {
+      "bytes": 423288,
+      "sha256": "2860cd2a2fce74666889bcc014adc6a992f1bae426d91735a4cc78c7584c2b39"
+    },
+    "python3-tornado_6.6.0-1_arm64.deb": {
+      "bytes": 423564,
+      "sha256": "aa10db473500b0e4a3deec3a4c895a6a6285f950c48de627bb011162732b9036"
+    },
+    "sid-amd64-Packages.xz": {
+      "bytes": 10831824,
+      "sha256": "2ac155a2a44cdc31a8bf344df5e24fe4100adfd62d0e4a6e0a3f565f6253ea53"
+    },
+    "sid-arm64-Packages.xz": {
+      "bytes": 10749856,
+      "sha256": "2a35d08bd0ab8a6c1482aad837d7ffcad307e29e659394e011824c1f08f52bc1"
+    }
+  }
+}

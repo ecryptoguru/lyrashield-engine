@@ -12,6 +12,7 @@ from litellm.utils import ProviderConfigManager
 
 from lyrashield.artifacts.state import (
     ReportState,
+    get_global_report_state,
     litellm_cost_callback,
     openrouter_stream_cost,
     set_global_report_state,
@@ -257,9 +258,13 @@ def test_streamed_openrouter_costs_ignores_entries_without_cost() -> None:
 
 
 def test_streamed_openrouter_costs_cleared_on_new_run() -> None:
-    streamed_openrouter_costs.remember("gen-stale", {"cost": 0.7})
-    set_global_report_state(ReportState(run_name="clear-stale"))
-    assert streamed_openrouter_costs.take(SimpleNamespace(id="gen-stale")) is None
+    previous_state = get_global_report_state()
+    try:
+        streamed_openrouter_costs.remember("gen-stale", {"cost": 0.7})
+        set_global_report_state(ReportState(run_name="clear-stale"))
+        assert streamed_openrouter_costs.take(SimpleNamespace(id="gen-stale")) is None
+    finally:
+        set_global_report_state(previous_state)
 
 
 def test_openrouter_stream_handler_records_cost() -> None:

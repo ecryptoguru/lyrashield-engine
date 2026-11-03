@@ -1,0 +1,21 @@
+--- a/core/utils.go
++++ b/core/utils.go
+@@ -3,6 +3,7 @@
+ import (
+ 	"bufio"
+ 	"fmt"
++	"net"
+ 	"net/http"
+ 	"net/url"
+ 	"os"
+@@ -26,6 +27,10 @@
+ }
+ 
+ func GetDomain(site *url.URL) string {
++	// publicsuffix rejects IPs in patched x/net; retain IP target crawling.
++	if net.ParseIP(site.Hostname()) != nil {
++		return site.Hostname()
++	}
+ 	domain, err := publicsuffix.EffectiveTLDPlusOne(site.Hostname())
+ 	if err != nil {
+ 		return ""

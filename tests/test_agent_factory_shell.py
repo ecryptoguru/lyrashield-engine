@@ -195,3 +195,38 @@ async def test_wrap_write_stdin_redacts_secrets_in_output() -> None:
 
     assert "MIIEowIBAAKCAQEAtest1234567890abcdef" not in result
     assert "[PRIVATE_KEY]" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_input", ['{"cmd":', "[]", "null", '{"cmd":NaN}', ""])
+async def test_malformed_owned_function_call_is_not_executed(raw_input: str) -> None:
+    captured: dict[str, str] = {}
+    wrapped = factory._with_bounded_result(_capturing_exec_tool(captured))
+    result = await wrapped.on_invoke_tool(cast("Any", None), raw_input)
+    assert captured == {}
+    assert "not executed" in result
+    assert "Re-issue" in result
+
+
+@pytest.mark.asyncio
+async def test_non_tty_running_result_explains_polling_limit() -> None:
+    wrapped = factory._wrap_exec_command(
+        _secret_returning_exec_tool("Process running with session ID 7\nOutput:\nstarted")
+    )
+    result = await wrapped.on_invoke_tool(
+        cast("Any", None), '{"cmd":"long-task", "yield_time_ms": 90000}'
+    )
+    assert "cannot be polled" in result
+    assert "30000" in result
+    assert "tty=true" in wrapped.description
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tty", [False, True])
+async def test_running_marker_in_command_output_does_not_trigger_notice(tty: bool) -> None:
+    output = "Process exited with code 0\nOutput:\nProcess running with session ID 7"
+    wrapped = factory._wrap_exec_command(_secret_returning_exec_tool(output))
+    result = await wrapped.on_invoke_tool(
+        cast("Any", None), json.dumps({"cmd": "echo marker", "tty": tty})
+    )
+    assert result == output

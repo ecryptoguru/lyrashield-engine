@@ -240,7 +240,7 @@ async def test_one_call_allowance_two_concurrent_calls_single_request(
 
 
 @pytest.mark.asyncio
-async def test_failed_call_releases_its_slot(
+async def test_failed_dispatched_call_keeps_its_uncertain_slot(
     monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
 ) -> None:
     class _FailingClient(_FakeParallelClient):
@@ -251,24 +251,23 @@ async def test_failed_call_releases_its_slot(
     args = {"query": "anything"}
     parsed = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
     assert parsed["success"] is False
-    # The failed call released its slot and reserved charge...
-    assert _web_search_enabled._web_search_inflight == 0
-    assert _web_search_enabled._web_search_reserved_cost == 0.0
+    # Dispatch may have been accepted even when its acknowledgement is lost.
+    assert _web_search_enabled._web_search_inflight == 1
+    assert _web_search_enabled._web_search_reserved_cost > 0
 
-    # ...so a retry is admitted.
+    # A retry cannot spend the uncertain dedicated allowance again.
     monkeypatch.setattr(httpx, "AsyncClient", _FakeParallelClient)
     _FakeParallelClient.calls = 0
     retried = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
-    assert retried["success"] is True
-    assert _FakeParallelClient.calls == 1
+    assert retried["success"] is False
+    assert _FakeParallelClient.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_timeout_releases_both_reservation_layers(
+async def test_timeout_keeps_both_uncertain_reservation_layers(
     monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
 ) -> None:
-    """E5: a timeout during the web_search call must release both the
-    ReportState slot and the hooks reservation."""
+    """E5: a dispatched timeout retains both uncertain reservation layers."""
 
     class _TimeoutClient(_FakeParallelClient):
         async def post(self, *_: object, **__: object) -> Any:
@@ -278,17 +277,16 @@ async def test_timeout_releases_both_reservation_layers(
     args = {"query": "slow query"}
     parsed = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
     assert parsed["success"] is False
-    # Both reservation layers released.
-    assert _web_search_enabled._web_search_inflight == 0
-    assert _web_search_enabled._web_search_reserved_cost == 0.0
+    # The dedicated allowance remains held after dispatch.
+    assert _web_search_enabled._web_search_inflight == 1
+    assert _web_search_enabled._web_search_reserved_cost > 0
 
 
 @pytest.mark.asyncio
-async def test_cancellation_releases_both_reservation_layers(
+async def test_cancellation_keeps_both_uncertain_reservation_layers(
     monkeypatch: pytest.MonkeyPatch, _web_search_enabled: ReportState
 ) -> None:
-    """E5: a task cancellation during the web_search call must release both
-    the ReportState slot and the hooks reservation."""
+    """E5: cancellation after dispatch retains both uncertain reservation layers."""
 
     class _CancellableClient(_FakeParallelClient):
         async def post(self, *_: object, **__: object) -> Any:
@@ -300,9 +298,9 @@ async def test_cancellation_releases_both_reservation_layers(
 
     with contextlib.suppress(asyncio.CancelledError):
         await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args))
-    # Both reservation layers released even after cancellation.
-    assert _web_search_enabled._web_search_inflight == 0
-    assert _web_search_enabled._web_search_reserved_cost == 0.0
+    # Cancellation after dispatch cannot prove that no charge occurred.
+    assert _web_search_enabled._web_search_inflight == 1
+    assert _web_search_enabled._web_search_reserved_cost > 0
 
 
 @pytest.mark.asyncio
@@ -322,10 +320,11 @@ async def test_timeout_releases_active_hooks_reservation(
     args = {"query": "timeout with hooks"}
     parsed = json.loads(await web_search.on_invoke_tool(_tool_ctx(args), json.dumps(args)))
     assert parsed["success"] is False
-    # ReportState slot released.
-    assert _web_search_enabled._web_search_inflight == 0
+    # Dedicated slot remains held; the shared quote becomes an unknown floor.
+    assert _web_search_enabled._web_search_inflight == 1
     # Global hooks reservation released (no lingering reservation key).
     assert len(hooks._reservations) == 0
+    assert sum(hooks._abandoned_floors.values()) > 0
 
 
 @pytest.mark.asyncio

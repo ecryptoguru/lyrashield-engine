@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import math
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from agents.agent_output import AgentOutputSchema
+from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -29,13 +31,12 @@ from lyrashield.lifecycle.hooks import (
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy.loader import load_settings
 from lyrashield.policy.models import StrixProvider, configure_sdk_model_defaults
+from lyrashield.policy.physical_requests import guard_physical_model
 from lyrashield.utils.redaction import redact_text
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from agents.model_settings import ModelSettings
 
 
 TRIAGE_INPUT_SCHEMA_VERSION = "ai-security-triage-input/1.0"
@@ -194,11 +195,25 @@ async def _request_judgement(
     limits: TriageLimits,
     on_response: Callable[[Any], None] | None = None,
 ) -> tuple[TriageJudgement, Any]:
-    # This direct call bypasses Runner. On Azure/OpenAI the native HTTP client
-    # owns bounded retries (two by default); do not add a second retry loop.
+    # This direct call bypasses Runner. A finite reservation must cover one
+    # physical submission, so hidden native retries are disabled below.
     reservation_key = f"ai-triage:{uuid4().hex}"
     system_instructions = "You are a bounded security triage assistant. Return only the schema."
     hooks = get_active_hooks()
+    if (
+        hooks is not None
+        and hooks.budget_control_state().get("limit_usd") is not None
+        and isinstance(model_settings, ModelSettings)
+    ):
+        # The direct-call quote and its physical output ceiling must agree.
+        maximum = model_settings.max_tokens
+        model_settings = model_settings.resolve(
+            ModelSettings(
+                max_tokens=min(maximum, limits.max_output_tokens)
+                if isinstance(maximum, int) and maximum > 0
+                else limits.max_output_tokens
+            )
+        )
     if hooks is not None:
         await hooks.reserve_out_of_band_request(
             key=reservation_key,
@@ -210,20 +225,28 @@ async def _request_judgement(
         )
     response: Any = None
     try:
-        response = await model.get_response(
-            system_instructions=system_instructions,
-            input=prompt,
-            model_settings=model_settings,
-            tools=[],
-            output_schema=_TRIAGE_OUTPUT_SCHEMA,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=None,
-            prompt=None,
-        )
+        with hooks.single_provider_attempt() if hooks is not None else contextlib.nullcontext():
+            response = await guard_physical_model(model).get_response(
+                system_instructions=system_instructions,
+                input=prompt,
+                model_settings=model_settings,
+                tools=[],
+                output_schema=_TRIAGE_OUTPUT_SCHEMA,
+                handoffs=[],
+                tracing=ModelTracing.DISABLED,
+                previous_response_id=None,
+                conversation_id=None,
+                prompt=None,
+            )
         # Save returned usage before reservation release or judgement parsing:
         # either can fail or be cancelled after provider work completed.
+        if hooks is not None and getattr(hooks, "_journal", None) is not None:
+            hooks.record_out_of_band_response(
+                key=reservation_key,
+                model=model_route,
+                usage=response.usage,
+                response_id=getattr(response, "response_id", None),
+            )
         if on_response is not None:
             on_response(response)
     finally:
@@ -232,6 +255,11 @@ async def _request_judgement(
                 key=reservation_key,
                 model=model_route,
                 usage=getattr(response, "usage", None),
+                **(
+                    {"response_id": getattr(response, "response_id", None)}
+                    if getattr(hooks, "_journal", None) is not None
+                    else {}
+                ),
             )
     raw = _extract_text(response)
     if not raw:
@@ -276,6 +304,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
     limits: TriageLimits | None = None,
     model: _Model | None = None,
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
+    report_state: Any = None,
 ) -> dict[str, Any]:
     """Return an additive triage artifact; never mutate deterministic findings."""
     limits = limits or TriageLimits()
@@ -364,8 +393,12 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
         active_hooks = get_active_hooks()
         triage_hooks = active_hooks or ReportUsageHooks(
             model=model_route,
-            max_budget_usd=max_budget_usd,
+            max_budget_usd=report_state._finite_budget.limit
+            if report_state is not None and report_state._finite_budget is not None
+            else max_budget_usd,
             max_output_tokens=limits.max_output_tokens,
+            report_state=report_state,
+            phase_allowance_usd=max_budget_usd if report_state is not None else None,
         )
         if active_hooks is None:
             set_active_hooks(triage_hooks)
@@ -396,7 +429,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
                 if report_state is not None
                 else None
             )
-            if report_state is not None:
+            if report_state is not None and getattr(get_active_hooks(), "_journal", None) is None:
                 report_state.record_sdk_usage(
                     agent_id="ai-security-triage",
                     agent_name="ai-security-triage",

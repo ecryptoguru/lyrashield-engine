@@ -39,7 +39,7 @@ test("terminal run states retain distinct labels while unfinished runs stay live
 test("steering failures keep a retryable outcome and successful sends are explicit", async () => {
   assert.deepEqual(
     await attemptSteering(async () => { throw new Error("offline"); }, "Root agent"),
-    { sent: false, feedback: "Could not send that message. Try again." }
+    { sent: false, feedback: "Delivery unknown. Retry the unchanged draft to check acceptance." }
   );
   assert.deepEqual(
     await attemptSteering(async () => ({ ok: false, error: "not_delivered" }), "Child"),
@@ -47,6 +47,6 @@ test("steering failures keep a retryable outcome and successful sends are explic
   );
   assert.deepEqual(
     await attemptSteering(async () => ({ ok: true }), "Root agent"),
-    { sent: true, feedback: "Sent to Root agent" }
+    { sent: true, feedback: "Queued for Root agent" }
   );
 });

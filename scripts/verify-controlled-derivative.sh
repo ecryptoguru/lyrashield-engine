@@ -46,7 +46,7 @@ ALLOWED_MODIFIED=(
   "strix/skills/vulnerabilities/semantic_confusion.md"
 )
 # Upstream files deliberately not carried: the sandbox image ships neither tool,
-# so the skills could never execute. Reviewed per the v1.6.2 disposition ledger.
+# so the skills could never execute. Reviewed per the 200a501f disposition ledger.
 REVIEWED_DELETED=(
   "strix/skills/tooling/hurl.md"
   "strix/skills/tooling/hypothesis.md"
@@ -65,6 +65,20 @@ while IFS=$'\t' read -r status path dest; do
   unexpected+=("$path (status $status${dest:+, destination $dest})")
 done < <(git diff --name-status "$BASE" -- strix/)
 
+# Ignore rules can hide importable modules and selectable skills. Inspect all
+# untracked files, including ignored files, allowing only known generated paths.
+while IFS= read -r -d '' path; do
+  case "$path" in
+    */__pycache__/*.pyc|*/__pycache__/*.pyo)
+      continue
+      ;;
+    strix/interface/viewer/frontend/node_modules/*|strix/interface/viewer/frontend/dist/*|strix/interface/viewer/frontend/.vite/*)
+      continue
+      ;;
+  esac
+  unexpected+=("$path (status untracked)")
+done < <(git ls-files --others -z -- strix/)
+
 if [[ ${#unexpected[@]} -gt 0 ]]; then
   echo "error: strix/** differs outside the reviewed micro-fork allowlist:" >&2
   for f in "${unexpected[@]}"; do
@@ -74,13 +88,13 @@ if [[ ${#unexpected[@]} -gt 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Hard footprint and exact-patch invariants for the v1.6.2 micro-fork.
+# Hard footprint and exact-patch invariants for the 200a501f micro-fork.
 # The deletion count includes the two reviewed skill removals above.
 # ---------------------------------------------------------------------------
 MAX_FILES=4
 MAX_INSERTIONS=22
 MAX_DELETIONS=201
-EXPECTED_PATCH_OID="3629e8f382fdd8eccf78553b102a25e99c73454c"
+EXPECTED_PATCH_OID="51682200fe3b9ec8fa2e0f998c80c095e7add114"
 
 # git diff --shortstat prints a single line like:
 #   " 4 files changed, 76 insertions(+), 720 deletions(-)"

@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import uuid
 from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any, cast
@@ -26,6 +27,7 @@ from lyrashield.lifecycle.compaction import is_context_overflow, maybe_compact
 from lyrashield.lifecycle.hooks import (
     BudgetExceededError,
     BudgetPausedError,
+    ReportUsageHooks,
     SubagentBudgetReservedError,
 )
 from lyrashield.lifecycle.inputs import child_initial_input
@@ -39,6 +41,7 @@ from lyrashield.lifecycle.sessions import (
     strip_all_images_from_session,
 )
 from lyrashield.policy import codex
+from lyrashield.policy.loader import load_settings
 
 
 if TYPE_CHECKING:
@@ -57,6 +60,18 @@ logger = logging.getLogger(__name__)
 StreamEventSink = Callable[[str, Any], None]
 
 _INPUT_REJECTION_CODES = frozenset({400, 404, 422})
+# Replies meaning "this model takes no images", not image errors in general: a
+# context overflow that counts "image/vision expansion" must not match.
+_IMAGE_REJECTION = re.compile(
+    r"no endpoints found that support image input"  # OpenRouter
+    r"|image_url is only supported by certain models"  # OpenAI
+    r"|is not a multimodal model|at most 0 image\(s\)"  # vLLM
+    r"|does not support image input"  # LiteLLM's Fireworks check
+    r"|doesn't support the image field"  # Bedrock Converse
+    r"|unknown variant `image_url`"  # DeepSeek, e.g. via Vercel AI Gateway
+    r"|'[^']*image[^']*' functionality not supported",  # Vercel AI Gateway (AI SDK), unverified
+    re.IGNORECASE,
+)
 _MAX_COMPACTIONS_PER_CYCLE = 2
 _MAX_CONTENT_FILTER_RETRIES = 2
 
@@ -192,6 +207,13 @@ async def _compact_session(
 _MAX_TRANSIENT_MODEL_RETRIES = 0
 
 
+def _is_image_rejection(exc: BaseException) -> bool:
+    """Only unsupported-image capability rejections allow destructive recovery."""
+    return _model_error_status_code(exc) in _INPUT_REJECTION_CODES and bool(
+        _IMAGE_REJECTION.search(str(exc))
+    )
+
+
 def _model_error_status_code(exc: BaseException) -> int | None:
     code = getattr(exc, "status_code", None)
     return code if isinstance(code, int) else None
@@ -289,6 +311,8 @@ async def run_agent_loop(
         resumable=interactive,
     )
     result: RunResultBase | None = None
+    if isinstance(hooks, ReportUsageHooks):
+        hooks.set_operator_pause_check(lambda: coordinator.budget_paused)
 
     first_cycle_input = await _seed_and_prepare_first_input(
         session, initial_input, start_parked=start_parked
@@ -306,7 +330,13 @@ async def run_agent_loop(
     if reserve_stopped and start_parked and interactive and context.get("parent_id") is None:
         await coordinator.send(agent_id, _reserve_notice())
 
-    if not (start_parked and interactive):
+    deferred_input: Any = []
+    if interactive and coordinator.budget_paused:
+        if not start_parked or await coordinator.get_status(agent_id) == "running":
+            await coordinator.pause_for_budget(agent_id, interrupted=not start_parked)
+        if not start_parked:
+            deferred_input = first_cycle_input
+    elif not (start_parked and interactive):
         await coordinator.consume_pending(agent_id)
         with contextlib.suppress(BudgetPausedError):
             result = await _run_until_lifecycle(
@@ -337,7 +367,7 @@ async def run_agent_loop(
             return result
 
         current_status = await coordinator.get_status(agent_id)
-        if current_status not in {"running", "waiting"}:
+        if current_status == "stopped":
             return result
 
         if coordinator.budget_stopped:
@@ -347,6 +377,15 @@ async def run_agent_loop(
         if coordinator.reserve_stopped and context.get("parent_id") is not None:
             await coordinator.set_status(agent_id, "stopped")
             raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
+
+        if coordinator.budget_paused:
+            if current_status in {"running", "waiting"}:
+                await coordinator.pause_for_budget(agent_id)
+            continue
+        if current_status == "budget_paused":
+            continue
+        if current_status not in {"running", "waiting"}:
+            return result
 
         if woke:
             # Real input is real progress, so the nudge budget starts over. A bare
@@ -382,7 +421,7 @@ async def run_agent_loop(
                 agent,
                 coordinator,
                 agent_id,
-                initial_input=[],
+                initial_input=deferred_input,
                 run_config=run_config,
                 context=context,
                 max_turns=max_turns,
@@ -391,6 +430,8 @@ async def run_agent_loop(
                 event_sink=event_sink,
                 hooks=hooks,
             )
+
+            deferred_input = []
 
 
 async def spawn_child_agent(
@@ -436,6 +477,7 @@ async def spawn_child_agent(
         interactive=interactive,
         child_agent=child_agent,
         child_id=child_id,
+        skills=skills,
         name=name,
         parent_id=parent_id,
         task=task,
@@ -518,6 +560,7 @@ async def respawn_subagents(
                 interactive=interactive,
                 child_agent=child_agent,
                 child_id=child_id,
+                skills=child_skills,
                 name=name,
                 parent_id=parent_id,
                 task=str(md.get("task", "")),
@@ -580,6 +623,10 @@ async def _run_until_lifecycle(
         if coordinator.reserve_stopped and context.get("parent_id") is not None:
             await coordinator.set_status(agent_id, "stopped")
             raise SubagentBudgetReservedError("scan reached the sub-agent budget reserve")
+
+        if interactive and coordinator.budget_paused:
+            await coordinator.pause_for_budget(agent_id, interrupted=True)
+            raise BudgetPausedError("Scan is paused until the operator explicitly resumes")
 
         if interactive:
             result = await _run_cycle_parked(
@@ -743,6 +790,11 @@ async def _run_cycle_parked(
         return None
 
 
+def _check_operator_pause(coordinator: AgentCoordinator, *, interactive: bool) -> None:
+    if interactive and coordinator.budget_paused:
+        raise BudgetPausedError("Scan is paused until the operator explicitly resumes")
+
+
 async def _run_cycle(
     agent: Any,
     coordinator: AgentCoordinator,
@@ -766,6 +818,9 @@ async def _run_cycle(
         pre_run_items: list[Any] = []
         try:
             await coordinator.mark_running(agent_id)
+            if await coordinator.get_status(agent_id) == "stopped":
+                return None
+            _check_operator_pause(coordinator, interactive=interactive)
             if session is not None:
                 max_images = context.get("max_context_images")
                 if isinstance(max_images, int):
@@ -779,6 +834,9 @@ async def _run_cycle(
                     logger.exception("proactive compaction failed for %s", agent_id)
                 with contextlib.suppress(Exception):
                     pre_run_items = list(await session.get_items())
+            if await coordinator.get_status(agent_id) == "stopped":
+                return None
+            _check_operator_pause(coordinator, interactive=interactive)
             stream = Runner.run_streamed(
                 agent,
                 input=input_data,
@@ -829,7 +887,7 @@ async def _run_cycle(
                 await coordinator.track_conversation_id(agent_id)
         except BudgetPausedError as exc:
             logger.info("agent %s paused at the scan budget limit: %s", agent_id, exc)
-            await coordinator.pause_for_budget(agent_id)
+            await coordinator.pause_for_budget(agent_id, interrupted=True)
             raise
         except SubagentBudgetReservedError as exc:
             logger.info("sub-agent %s stopped at the budget reserve: %s", agent_id, exc)
@@ -844,11 +902,7 @@ async def _run_cycle(
             await coordinator.trigger_budget_stop()
             raise
         except Exception as exc:
-            if (
-                image_strips < 3
-                and session is not None
-                and getattr(exc, "status_code", None) in _INPUT_REJECTION_CODES
-            ):
+            if image_strips < 3 and session is not None and _is_image_rejection(exc):
                 try:
                     stripped = await strip_all_images_from_session(session)
                 except Exception:
@@ -1130,6 +1184,7 @@ async def _start_child_runner(
     task: str,
     initial_input: Any,
     start_parked: bool = False,
+    skills: list[str] | None = None,
     event_sink: StreamEventSink | None = None,
     hooks: RunHooks[dict[str, Any]] | None = None,
     server_conversation: bool = False,
@@ -1147,6 +1202,9 @@ async def _start_child_runner(
     child_ctx["agent_id"] = child_id
     child_ctx["parent_id"] = parent_id
     child_ctx["task"] = task
+    child_ctx["advisory_turn_limit"] = load_settings().runtime.skill_turn_limit(
+        skills or [], hard_limit=max_turns
+    )
 
     async def _child_loop() -> None:
         # A budget stop is a clean scan-wide shutdown, not a child failure: the
@@ -1176,7 +1234,7 @@ async def _start_child_runner(
         except asyncio.CancelledError:
             logger.info("child %s cancelled during shutdown", child_id)
             with contextlib.suppress(Exception):
-                await coordinator.request_stop(child_id)
+                await coordinator.request_stop(child_id, preserve_terminal=True)
 
     task_handle = asyncio.create_task(_child_loop(), name=f"agent-{name}-{child_id}")
     await coordinator.attach_runtime(child_id, task=task_handle)

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -13,6 +14,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from agents.agent_output import AgentOutputSchema
+from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from openai.types.responses import ResponseOutputMessage
 from pydantic import (
@@ -35,11 +37,11 @@ from lyrashield.policy.models import (
     is_gpt6_model,
     parse_model_route,
 )
+from lyrashield.policy.physical_requests import guard_physical_model
 
 
 if TYPE_CHECKING:
     from agents.items import ModelResponse
-    from agents.model_settings import ModelSettings
     from agents.models.interface import Model
 
     from lyrashield.policy.settings import DedupeSettings, Settings
@@ -140,6 +142,7 @@ def resolve_dedupe_model(
         api_key=api_key or None,
         base_url=api_base or None,
         extra_headers=extra_headers,
+        api_mode=dedupe.api_mode,
     ).get_model(model_name)
 
 
@@ -364,8 +367,8 @@ async def _request_dedupe_judgement(
     reserves explicitly. Without a reservation, dedupe traffic is only counted
     after the fact and a scan can overshoot ``max_budget_usd``.
 
-    Direct Azure/OpenAI calls use the native HTTP client's bounded retries;
-    ModelSettings.retry belongs to Runner and does not wrap this call.
+    ModelSettings.retry belongs to Runner and does not wrap this direct call.
+    Finite scan budgets therefore disable hidden native retries explicitly.
     """
     # Lazy import avoids the lifecycle-hooks/artifact-state import cycle.
     from lyrashield.lifecycle.hooks import (
@@ -374,6 +377,20 @@ async def _request_dedupe_judgement(
     )
 
     hooks = get_active_hooks()
+    if (
+        hooks is not None
+        and hooks.budget_control_state().get("limit_usd") is not None
+        and isinstance(model_settings, ModelSettings)
+    ):
+        # The direct-call quote and its physical output ceiling must agree.
+        maximum = model_settings.max_tokens
+        model_settings = model_settings.resolve(
+            ModelSettings(
+                max_tokens=min(maximum, _DEDUPE_MAX_OUTPUT_TOKENS)
+                if isinstance(maximum, int) and maximum > 0
+                else _DEDUPE_MAX_OUTPUT_TOKENS
+            )
+        )
     reservation_key = f"dedupe:{uuid4().hex}"
     if hooks is not None:
         await hooks.reserve_out_of_band_request(
@@ -387,20 +404,32 @@ async def _request_dedupe_judgement(
     response: ModelResponse | None = None
     usage_persisted = False
     try:
-        response = await model.get_response(
-            system_instructions=DEDUPE_SYSTEM_PROMPT,
-            input=user_msg,
-            model_settings=model_settings,
-            tools=[],
-            output_schema=_DEDUPE_OUTPUT_SCHEMA,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=None,
-            prompt=None,
-        )
+        with hooks.single_provider_attempt() if hooks is not None else contextlib.nullcontext():
+            response = await guard_physical_model(model).get_response(
+                system_instructions=DEDUPE_SYSTEM_PROMPT,
+                input=user_msg,
+                model_settings=model_settings,
+                tools=[],
+                output_schema=_DEDUPE_OUTPUT_SCHEMA,
+                handoffs=[],
+                tracing=ModelTracing.DISABLED,
+                previous_response_id=None,
+                conversation_id=None,
+                prompt=None,
+            )
         report_state = get_global_report_state()
-        if report_state is not None:
+        durable = hooks is not None and getattr(hooks, "durable_attempt", lambda _key: None)(
+            reservation_key
+        )
+        if durable and hooks is not None:
+            hooks.record_out_of_band_response(
+                key=reservation_key,
+                model=model_name,
+                usage=response.usage,
+                response_id=getattr(response, "response_id", None),
+            )
+            usage_persisted = True
+        if report_state is not None and not (durable):
             try:
                 usage_persisted = report_state.record_sdk_usage(
                     agent_id="dedupe",
@@ -414,13 +443,18 @@ async def _request_dedupe_judgement(
             except Exception:
                 logger.exception("failed to record SDK usage for dedupe")
     finally:
-        # Always release: a failed request must not strand its reservation and
-        # shrink the remaining budget for the rest of the scan.
+        # Settle observed usage, or retain the conservative quote when a
+        # failed/cancelled request has no proof that the provider did not bill.
         if hooks is not None:
             await hooks.release_out_of_band_request(
                 key=reservation_key,
                 model=model_name,
                 usage=(response.usage if response is not None and usage_persisted else None),
+                **(
+                    {"response_id": getattr(response, "response_id", None)}
+                    if getattr(hooks, "_journal", None) is not None
+                    else {}
+                ),
             )
     if response is None:
         raise RuntimeError("Dedupe model call did not return a response")

@@ -13,12 +13,15 @@ export async function attemptSteering(
 ): Promise<SteeringOutcome> {
   try {
     const response = await send();
-    if (response.ok) return { sent: true, feedback: `Sent to ${targetName}` };
+    if (response.ok) return { sent: true, feedback: `Queued for ${targetName}` };
+    if (response.error === "delivery_unknown") {
+      return { sent: false, feedback: "Delivery unknown. Retry the unchanged draft to check acceptance." };
+    }
     if (response.error === "not_delivered") {
       return { sent: false, feedback: "Could not reach that agent (it may have finished)." };
     }
   } catch {
-    // Leave the prompt intact so the user can retry after a transient failure.
+    return { sent: false, feedback: "Delivery unknown. Retry the unchanged draft to check acceptance." };
   }
   return { sent: false, feedback: "Could not send that message. Try again." };
 }

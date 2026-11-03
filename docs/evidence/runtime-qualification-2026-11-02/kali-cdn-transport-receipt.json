@@ -1,0 +1,23 @@
+{
+  "official_kali_documentation": "https://www.kali.org/docs/community/list-of-official-kali-sites/",
+  "suite": "kali-last-snapshot",
+  "archive_inrelease_url": "https://archive.kali.org/kali/dists/kali-last-snapshot/InRelease",
+  "cdn_inrelease_url": "https://kali.download/kali/dists/kali-last-snapshot/InRelease",
+  "identical_inrelease_sha256": "62375e475a01fed422730632651d784cc42c4145223313178c8519f9822eefc6",
+  "cdn_throughput_probe": {
+    "url": "https://kali.download/kali/pool/main/c/chromium/chromium_150.0.7871.181-1_amd64.deb",
+    "http_status": 200,
+    "bytes": 87209452,
+    "mean_bytes_per_second": 13484912
+  },
+  "bootstrap": "Install ca-certificates through the signed archive before switching runtime package acquisition to HTTPS.",
+  "unchanged_trust": {
+    "kali_archive_keyring_sha256": "42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f",
+    "signed_by": "/usr/share/keyrings/kali-archive-keyring.gpg",
+    "allow_unauthenticated": false,
+    "allow_insecure_repositories": false,
+    "allow_downgrade_to_insecure_repositories": false
+  },
+  "image_input_revision": "bcdbbd4ebbc5fcc066570ab467e398db3e6d4684",
+  "scope": "Runtime archive transport only; cached base/bootstrap and Go inputs remain unchanged."
+}

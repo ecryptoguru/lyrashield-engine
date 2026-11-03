@@ -40,6 +40,14 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
   normalized to their `/openai/v1/` base.
 </ParamField>
 
+<ParamField path="LLM_API_MODE" default="auto" type="string">
+  API selection policy: `auto`, `responses`, or `chat_completions`. Automatic
+  selection uses the admitted GPT-6 model capability and selects Responses,
+  including when `LLM_API_BASE` points to a custom gateway. Set an explicit
+  policy when the approved gateway requires one API. Root, delegate, and
+  fallback routes share this policy. Alias: `LYRASHIELD_LLM_API_MODE`.
+</ParamField>
+
 <ParamField path="LLM_API_VERSION" type="string">
   Azure API version. Also accepted: `AZURE_API_VERSION`,
   `AZURE_OPENAI_API_VERSION`.
@@ -55,6 +63,9 @@ Parallel Search may be used as an optional `web_search` tool when explicitly ena
 
 <ParamField path="LLM_TIMEOUT" default="300" type="integer">
   Request timeout in seconds for LLM calls. Alias: `LYRASHIELD_LLM_TIMEOUT`.
+  Startup preflight has a separate 30-second total allowance, bounded by this
+  request limit and the remaining trusted scan deadline. Its completed usage
+  is retained in the run ledger.
 </ParamField>
 
 <ParamField path="LYRASHIELD_REASONING_EFFORT" default="medium" type="string">
@@ -132,6 +143,31 @@ hypothetical repricings of complete receipts, not measured savings.
   `STRIX_MAX_INPUT_TOKENS`.
 </ParamField>
 
+### Local request diagnostics
+
+<ParamField path="LYRASHIELD_REQUEST_DIAGNOSTICS" default="false" type="boolean">
+  Opt in to a separate local `.state/request-diagnostics.json` file inside the run
+  directory. It retains at most 256 SDK model-call attempt records and 128 KiB, evicts
+  the oldest records, and reports a bounded `dropped` count. Writes are serialized
+  within the scan process and atomically replace a file with owner-only permissions.
+</ParamField>
+
+Records contain only available provider request/response IDs, the configured
+model and selected route, a terminal outcome, a fixed retry-reason classification,
+duration, observed time to first token, and token buckets. IDs and strings are
+limited to 128 characters and sensitive values are omitted. Headers, prompts,
+response text, raw errors, and request bodies are excluded. No diagnostics are
+sent to a telemetry service or added to the customer evidence artifacts.
+
+Time to first token is recorded only when a streamed token delta is observed;
+it is unavailable for the non-streaming fallback. Request IDs are omitted when
+the SDK adapter does not expose them. Retry reasons classify failures and do not
+assert that a retry occurred; SDK-internal HTTP retries are not logged separately.
+Diagnostics issue no requests or retries of their
+own and preserve cancellation. A process terminated before its attempt finishes
+may have no record for that attempt. Persistence failures do not change scan
+behavior.
+
 ### Programmatic tool calling (opt-in gate)
 
 <ParamField path="LYRASHIELD_PROGRAMMATIC_TOOL_CALLING" type="string">
@@ -162,6 +198,13 @@ Finding deduplication is a cheap, structured classification task. By default it 
 <ParamField path="DEDUPE_LLM_API_BASE" type="string">
   Optional custom API base URL for the deduplication model. Use when the dedupe
   model runs on a different endpoint than the main model.
+</ParamField>
+
+<ParamField path="DEDUPE_LLM_API_MODE" default="auto" type="string">
+  Dedicated dedupe API policy: `auto`, `responses`, or `chat_completions`.
+  Automatic selection uses Responses for admitted GPT-6 models independently
+  of the dedupe endpoint URL. When no dedicated dedupe model is configured,
+  the main model's API policy applies. Alias: `LYRASHIELD_DEDUPE_LLM_API_MODE`.
 </ParamField>
 
 <ParamField path="DEDUPE_LLM_EXTRA_HEADERS" type="string">
@@ -279,6 +322,23 @@ The optional `web_search` tool queries Parallel Search for real-time public secu
   always fits). Alias of `STRIX_TOOL_OUTPUT_MAX_BYTES`.
 </ParamField>
 
+## Specialist turn guidance
+
+<ParamField path="LYRASHIELD_SUBAGENT_TURN_LIMITS" type="JSON object" default="{}">
+  Optional advisory turn targets keyed by canonical `category/skill` identifiers.
+  For example: `'{"vulnerabilities/xss":30,"vulnerabilities/sql_injection":60}'`.
+  Values must be positive integers at most 10,000; names must be category-qualified,
+  and at most 128 entries are accepted. Unknown or unselected skills have no effect.
+</ParamField>
+
+The largest target among a child's selected skills applies and is clamped to the
+existing hard `--max-turns` ceiling. It is recomputed for fresh and restored
+specialists. Trusted notices advise wrap-up ten turns before the target (or on
+the first turn for smaller targets), at the target, and every five turns past it.
+The guidance never stops a specialist, increases a hard limit, launches an
+additional request, or grants more scope, budget, runtime, or agent capacity.
+The root agent receives no specialist target.
+
 ## Runtime and sandbox
 
 <ParamField path="LYRASHIELD_IMAGE" default="strix-sandbox:dev" type="string">
@@ -347,6 +407,23 @@ with `docker network rm "$STRIX_DOCKER_SANDBOX_NETWORK"`, then rerun the
 provisioning script. Network removal is an operator-controlled downtime step;
 the script never disconnects or deletes a network that may still be in use.
 
+Native macOS scans require a local Unix-socket Docker connection. Docker
+Desktop keeps the internal bridge inside its VM and does not activate port
+publication for an internal-only container. The engine instead owns an
+ephemeral `127.0.0.1` listener for each sandbox session. It forwards the Caido
+control-plane stream over the existing Docker exec API, as `pentester`, to
+only `127.0.0.1:48080` inside that container. It does not publish Docker ports,
+add network interfaces, or grant the agent host access. The listener admits
+at most eight connections, bounds frames and buffering, and closes with the
+session, including failed startup and cancellation.
+
+The sandbox retains only its configured internal network with ICC disabled;
+source and attachment mounts remain read-only. Remote TCP, TLS, and SSH Docker
+connections are unsupported for native macOS scans and fail before container
+creation. Linux workers retain their sandbox bridge route without a local
+listener; remote Linux daemon deployments must provide a reachable, isolated
+sandbox bridge route from the worker.
+
 ### Sandbox capabilities and image pinning
 
 The engine omits `NET_ADMIN` and `NET_RAW` by default. Add them only for authorized workflows that require advanced raw-socket operations such as SYN scans.
@@ -365,6 +442,99 @@ Sandbox resource caps are **default-on** (`mem_limit=2g`, `shm_size=512m`, `cpus
 | `STRIX_SANDBOX_ALLOW_HOST_GATEWAY`           | unset   | Opt-in `host.docker.internal` access. Do not enable unless an explicitly authorized local workflow requires it.                                                                                                              |
 
 The `publish-sandbox` workflow pushes one multi-architecture candidate, runs the non-root capability smoke tests against that exact digest on both supported architectures, and only then promotes the same digest to release tags. It emits an SPDX SBOM plus signed provenance/SBOM attestations for that digest. Promote the digest, never a tag, as one release unit with its worker configuration. The application repository separately verifies and publishes the worker image digest; an operator promotes that worker digest explicitly on the dedicated VM, then reconciles its running reference, OCI labels, health, and scan readiness. Neither image follows a mutable tag in production.
+
+## Evidence artifacts and pending HTTP claims
+
+<ParamField path="LYRASHIELD_RUN_RECORD_V1_1" default="false" type="boolean">
+  Enable the versioned evidence artifact family for new runs: finding evidence
+  metadata, coverage and threat-model artifacts, HTTP export and the result
+  manifest. Existing runs retain the schema version they started with.
+</ParamField>
+
+<ParamField path="LYRASHIELD_PENDING_HTTP_EVIDENCE" default="false" type="boolean">
+  When enabled together with `LYRASHIELD_RUN_RECORD_V1_1`, new runs use
+  `run.json` schema `1.2` and finding `evidence_contract_version: "1.2"`.
+  The companion artifact family remains `evidence_format: "1.1"`.
+  Enable this writer only after compatible readers are deployed and qualified.
+</ParamField>
+
+In schema 1.2, submitted proxy request IDs begin in
+`pending_http_exchange_ids`, including when a live lookup finds the ID.
+Pending claims and `http_exchange_ids` each allow up to 10 distinct numeric
+ASCII IDs of at most 128 characters. Pending IDs are correlation claims;
+they do not create verification receipts, change deduplication identity or
+prove a vulnerability.
+
+Before sandbox teardown, the engine exports captured HTTP evidence and
+reconciles eligible references. Promotion requires matching run identity,
+finding revision and report-artifact revision, the actual captured request,
+and a valid result manifest covering both `vulnerabilities.json` and
+`http_exchanges.json`. The captured request must have a SHA-256 digest and a
+host matching the finding's absolute target or endpoint URL. Exported
+references describe captured evidence; they do not upgrade the finding's
+vulnerability verification state.
+
+Missing, foreign, timed-out and omitted references stay pending and are
+reported as unavailable evidence. A partial export promotes only its valid
+subset. Each finding's export binding selects existing verified references
+first, followed by pending claims, up to 10 IDs; overflow stays pending and
+is recorded as `capacity_omitted_request_ids`. Previously validated durable
+captures may survive a later proxy outage when their manifest and revision
+bindings still validate; `reused_durable_exchanges` records that reuse.
+
+The engine stages an export before committing finding projections and
+writing `run.json` last. Caught write failures restore the prior artifacts
+and memory. An interrupted multi-file replacement is detected by manifest
+verification and fails closed on resume or ingest; the protocol is not a
+filesystem-wide crash-atomic transaction.
+
+Offline reuse requires the original receipt's exact manifest entries for both
+finding and HTTP files. The engine does not reconstruct a missing assertion
+by hashing whichever files happen to be present. Unchanged claim submissions
+do not consume finding revisions; changing authored finding content makes
+its previous capture binding stale and returns those references to pending.
+
+If demotion would exceed the 10 pending-ID limit, reconciliation records
+`evidence_export.status: "failed"` with `reason: "pending_capacity_exceeded"`
+and preserves both original claim arrays and their artifacts. Retained
+ordinary IDs in this failed result are unavailable evidence. Restore proxy
+access to reconcile the retained claims, or explicitly replace the claim set
+with the references that should remain; the engine does not silently discard
+claims or increase the authorized budget. Shared IDs selected by another
+finding are not reported as globally capacity-omitted.
+
+Fresh and reused HTTP exports must fit the complete 1 MiB serialized budget.
+Header counts and names are bounded, body samples may be removed, and any
+omitted captures remain explicit. An export that cannot fit is unavailable.
+Export work has a 20-second total allowance; sandbox cleanup has a separate
+20-second allowance and still runs when export is cancelled or times out.
+
+For development and consumer-contract qualification, run the synthetic fixture
+generator from the repository root using the project's Python environment:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/generate-http-evidence-fixtures.py \
+  --output-dir "$HTTP_EVIDENCE_FIXTURES"
+```
+
+Set `HTTP_EVIDENCE_FIXTURES` to a new, nonexistent output directory under an
+existing parent outside the source checkout. The generator uses the engine's
+installed dependencies and standard library; it does not require test-only Python packages or live provider/proxy
+access. It is a development harness, not an installed runtime command. It
+exclusively creates a private directory and refuses existing output paths,
+including symlinks. Files are published without following or replacing links;
+`summary.json` records exact hashes, byte lengths and expected claim arrays. If generation fails, inspect
+the private partial output and choose a fresh directory for another run.
+Generated cases exercise partial capture, durable reuse, capacity, explicit
+unavailable evidence,
+serialized-size limits and late results after cancellation. Reader validation
+must use the raw bytes without reformatting them.
+
+Disabling either flag does not remove support for persisted schema-1.2 runs.
+Resumed schema-1.0 and schema-1.1 runs keep their existing version and do not
+start emitting pending fields. Pending evidence and unresolved coverage
+remain explicit limitations; follow-up work stays within the authorized
+scan budget.
 
 ## Telemetry
 
@@ -460,3 +630,27 @@ export LYRASHIELD_MAX_INPUT_TOKENS=64000
 export LLM_TIMEOUT="600"
 export LLM_EXTRA_HEADERS='{"X-Tenant":"acme"}'
 ```
+
+
+## Interactive budget controls
+
+An interactive scan that reaches `--max-budget-usd` pauses its agents. Messages
+sent during that pause are queued; sending a message does not restart the scan
+or authorize additional spend.
+
+Use **Increase budget** in the local browser viewer, or type `/increase-budget`
+in the TUI, to add the original configured budget amount once. For example, a
+scan started with `--max-budget-usd 1.20` increases its limit from $1.20 to $2.40.
+The interfaces show the increment and current limit before increasing it. The
+scan remains paused after an increase. Then use **Resume scan** or `/resume` to
+restart paused agents. An exhausted limit rejects resume and asks for an explicit
+increase first. Non-interactive scans keep their hard budget ceiling, and these
+controls cannot revive a stopped scan.
+
+The viewer can steer only the run that launched it. Past runs, including
+incomplete past runs, remain read-only. A **Queued** acknowledgement confirms
+mailbox acceptance, not execution or completion. **Delivery unknown** means the
+acknowledgement was lost or timed out: retry the unchanged draft or same control
+to check acceptance without duplicating it. Rejected and unknown messages keep
+the draft. Submission IDs are retained for the current process; after 4,096
+unique submissions, further new submissions are rejected to bound memory use.

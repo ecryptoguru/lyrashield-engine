@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, Literal
 
 
@@ -114,6 +116,9 @@ class LlmSettings(BaseSettings):
             "AZURE_AI_API_BASE",
         ),
     )
+    api_mode: Literal["auto", "responses", "chat_completions"] = Field(
+        default="auto", validation_alias=AliasChoices("LLM_API_MODE", "LYRASHIELD_LLM_API_MODE")
+    )
     api_version: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -137,6 +142,10 @@ class LlmSettings(BaseSettings):
     prompt_cache: bool = Field(
         default=True,
         validation_alias=_lyra("STRIX_PROMPT_CACHE"),
+    )
+    request_diagnostics: bool = Field(
+        default=False,
+        validation_alias="LYRASHIELD_REQUEST_DIAGNOSTICS",
     )
     disable_streaming: bool = Field(
         default=False,
@@ -201,6 +210,10 @@ class DedupeSettings(BaseSettings):
         default=None,
         alias="STRIX_DEDUPE_REASONING_EFFORT",
         validation_alias=_lyra("STRIX_DEDUPE_REASONING_EFFORT"),
+    )
+    api_mode: Literal["auto", "responses", "chat_completions"] = Field(
+        default="auto",
+        validation_alias=AliasChoices("DEDUPE_LLM_API_MODE", "LYRASHIELD_DEDUPE_LLM_API_MODE"),
     )
     api_key: str | None = Field(
         default=None,
@@ -308,6 +321,65 @@ class RuntimeSettings(BaseSettings):
         default=False,
         validation_alias=_lyra("STRIX_SERVER_CONVERSATION"),
     )
+
+    subagent_turn_limits: dict[str, int] = Field(
+        default_factory=dict,
+        validation_alias="LYRASHIELD_SUBAGENT_TURN_LIMITS",
+    )
+
+    @field_validator("subagent_turn_limits", mode="before")
+    @classmethod
+    def _validated_turn_limits(cls, value: Any) -> Any:
+        # Persisted config stores environment values as JSON strings, while
+        # pydantic-settings has already decoded live environment mappings.
+        if isinstance(value, str):
+            if len(value) > 32_768:
+                raise ValueError("subagent_turn_limits JSON is too large")
+            try:
+                value = json.loads(value)
+            except (ValueError, RecursionError) as exc:
+                raise ValueError("subagent_turn_limits must contain valid JSON") from exc
+        if not isinstance(value, dict) or len(value) > 128:
+            raise ValueError("subagent_turn_limits must be a mapping with at most 128 skills")
+        for name, limit in value.items():
+            if (
+                not isinstance(name, str)
+                or len(name) > 128
+                or re.fullmatch(r"[a-z][a-z0-9_]*/[a-z0-9][a-z0-9_-]*", name) is None
+                or type(limit) is not int
+                or not 0 < limit <= 10_000
+            ):
+                raise ValueError(
+                    "turn limits require canonical category/skill names "
+                    "and positive integers <= 10000"
+                )
+        return value
+
+    def skill_turn_limit(self, skills: list[str], *, hard_limit: int) -> int | None:
+        """Largest selected advisory limit; it can never raise the hard ceiling."""
+        if not self.subagent_turn_limits or hard_limit <= 0:
+            return None
+        from strix.skills import get_available_skills  # noqa: PLC0415
+
+        canonical = {
+            f"{category}/{entry['name']}"
+            for category, entries in get_available_skills().items()
+            for entry in entries
+        }
+        selected: set[str] = set()
+        for skill in skills:
+            if skill in canonical:
+                selected.add(skill)
+            elif isinstance(skill, str) and "/" not in skill:
+                matches = {name for name in canonical if name.rsplit("/", 1)[-1] == skill}
+                if len(matches) == 1:
+                    selected.update(matches)
+        limits = [
+            self.subagent_turn_limits[name]
+            for name in selected
+            if name in self.subagent_turn_limits
+        ]
+        return min(max(limits), hard_limit) if limits else None
 
 
 class TelemetrySettings(BaseSettings):

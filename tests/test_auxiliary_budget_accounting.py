@@ -221,12 +221,16 @@ async def test_auxiliary_usage_is_durable_before_reservation_release_cancellatio
                 model_settings=ModelSettings(),
                 prompt="compare",
                 limits=service.TriageLimits(max_output_tokens=192),
-                on_response=lambda response: state.record_sdk_usage(
-                    agent_id="triage",
-                    agent_name="triage",
-                    model="openai/gpt-6-luna",
-                    usage=response.usage,
-                    response_id=response.response_id,
+                on_response=lambda response: (
+                    None
+                    if hooks._journal is not None
+                    else state.record_sdk_usage(
+                        agent_id="triage",
+                        agent_name="triage",
+                        model="openai/gpt-6-luna",
+                        usage=response.usage,
+                        response_id=response.response_id,
+                    )
                 ),
             )
         else:
@@ -285,5 +289,7 @@ async def test_dedupe_keeps_estimated_spend_when_usage_receipt_write_fails(
 
     key = reservation["key"]
     assert key not in hooks._reservations
-    assert hooks._abandoned_floors[key] > 0
-    assert hooks._committed_cost_floor == 0
+    assert key not in hooks._abandoned_floors
+    assert hooks._committed_cost_floor > 0
+    assert json.loads((tmp_path / "run.json").read_text())["llm_usage"]["requests"] == 1
+    assert state._finite_budget.snapshot()["_finite_budget_guard"]["pending"] == []

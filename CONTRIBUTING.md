@@ -1,6 +1,6 @@
 # Contributing to LyraShield Engine
 
-LyraShield Engine is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.6.2, pinned at upstream base `ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2` and modified under Apache-2.0. See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger. This guide covers changes to the engine itself; the [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai) owns product UX, worker, evidence state, and reporting.
+LyraShield Engine is a controlled derivative of [Strix](https://github.com/usestrix/strix) at exact upstream base `200a501f15a24a4152f92897a6b72af238ee69ef` and modified under Apache-2.0. See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger. This guide covers changes to the engine itself; the [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai) owns product UX, worker, evidence state, and reporting.
 
 ## Development setup
 
@@ -95,7 +95,7 @@ New changes should keep that boundary: extract LyraShield policy behind explicit
    git diff --check
    ```
 
-   That script executes exactly: `uv sync --frozen --extra viewer` (so the PDF/viewer tests actually run), `ruff check .`, `ruff format --check .`, the full `pytest` suite with `-W error::pydantic.PydanticDeprecatedSince211`, `mypy strix lyrashield_adapter lyrashield`, and `bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q`. It also diffs `strix/**` against the pinned v1.6.2 base and fails on an unlisted path, footprint growth beyond the reviewed +22/-201 lines, or any change to the pinned complete-patch digest `3629e8f382fdd8eccf78553b102a25e99c73454c`.
+   That script executes exactly: `uv sync --frozen --extra viewer` (so the PDF/viewer tests actually run), `ruff check .`, `ruff format --check .`, the full `pytest` suite with `-W error::pydantic.PydanticDeprecatedSince211`, `mypy strix lyrashield_adapter lyrashield`, and `bandit -c pyproject.toml -r strix lyrashield_adapter lyrashield -q`. It also diffs `strix/**` against the pinned 200a501f base and fails on an unlisted path, footprint growth beyond the reviewed +22/-201 lines, or any change to the pinned complete-patch digest `51682200fe3b9ec8fa2e0f998c80c095e7add114`.
 
    The following are **separate gates** this script does not run — do not claim a local green gate covers them:
 

@@ -1,0 +1,122 @@
+[
+  {
+    "target": {
+      "python_version": "3.12",
+      "python_full_version": "3.12.0",
+      "sys_platform": "linux",
+      "platform_system": "Linux",
+      "platform_machine": "x86_64",
+      "os_name": "posix",
+      "implementation_name": "cpython",
+      "platform_python_implementation": "CPython"
+    },
+    "distributions": 136,
+    "advisories": 0,
+    "requirements_sha256": "cf0493b2acc9edf7403d2d138c4772a7a03ffb8ea4d51a6c8cf6076795b7b794",
+    "audit_sha256": "d5d46716650507e09cac38c9d114794dd25e56f02c1e3bf8afc182211134576a",
+    "linux_keyring_distributions": {
+      "jeepney": "0.9.0",
+      "secretstorage": "3.5.0"
+    }
+  },
+  {
+    "target": {
+      "python_version": "3.12",
+      "python_full_version": "3.12.0",
+      "sys_platform": "linux",
+      "platform_system": "Linux",
+      "platform_machine": "aarch64",
+      "os_name": "posix",
+      "implementation_name": "cpython",
+      "platform_python_implementation": "CPython"
+    },
+    "distributions": 136,
+    "advisories": 0,
+    "requirements_sha256": "cf0493b2acc9edf7403d2d138c4772a7a03ffb8ea4d51a6c8cf6076795b7b794",
+    "audit_sha256": "d5d46716650507e09cac38c9d114794dd25e56f02c1e3bf8afc182211134576a",
+    "linux_keyring_distributions": {
+      "jeepney": "0.9.0",
+      "secretstorage": "3.5.0"
+    }
+  },
+  {
+    "target": {
+      "python_version": "3.13",
+      "python_full_version": "3.13.0",
+      "sys_platform": "linux",
+      "platform_system": "Linux",
+      "platform_machine": "x86_64",
+      "os_name": "posix",
+      "implementation_name": "cpython",
+      "platform_python_implementation": "CPython"
+    },
+    "distributions": 136,
+    "advisories": 0,
+    "requirements_sha256": "cf0493b2acc9edf7403d2d138c4772a7a03ffb8ea4d51a6c8cf6076795b7b794",
+    "audit_sha256": "d5d46716650507e09cac38c9d114794dd25e56f02c1e3bf8afc182211134576a",
+    "linux_keyring_distributions": {
+      "jeepney": "0.9.0",
+      "secretstorage": "3.5.0"
+    }
+  },
+  {
+    "target": {
+      "python_version": "3.13",
+      "python_full_version": "3.13.0",
+      "sys_platform": "linux",
+      "platform_system": "Linux",
+      "platform_machine": "aarch64",
+      "os_name": "posix",
+      "implementation_name": "cpython",
+      "platform_python_implementation": "CPython"
+    },
+    "distributions": 136,
+    "advisories": 0,
+    "requirements_sha256": "cf0493b2acc9edf7403d2d138c4772a7a03ffb8ea4d51a6c8cf6076795b7b794",
+    "audit_sha256": "d5d46716650507e09cac38c9d114794dd25e56f02c1e3bf8afc182211134576a",
+    "linux_keyring_distributions": {
+      "jeepney": "0.9.0",
+      "secretstorage": "3.5.0"
+    }
+  },
+  {
+    "target": {
+      "python_version": "3.14",
+      "python_full_version": "3.14.0",
+      "sys_platform": "linux",
+      "platform_system": "Linux",
+      "platform_machine": "x86_64",
+      "os_name": "posix",
+      "implementation_name": "cpython",
+      "platform_python_implementation": "CPython"
+    },
+    "distributions": 136,
+    "advisories": 0,
+    "requirements_sha256": "cf0493b2acc9edf7403d2d138c4772a7a03ffb8ea4d51a6c8cf6076795b7b794",
+    "audit_sha256": "d5d46716650507e09cac38c9d114794dd25e56f02c1e3bf8afc182211134576a",
+    "linux_keyring_distributions": {
+      "jeepney": "0.9.0",
+      "secretstorage": "3.5.0"
+    }
+  },
+  {
+    "target": {
+      "python_version": "3.14",
+      "python_full_version": "3.14.0",
+      "sys_platform": "linux",
+      "platform_system": "Linux",
+      "platform_machine": "aarch64",
+      "os_name": "posix",
+      "implementation_name": "cpython",
+      "platform_python_implementation": "CPython"
+    },
+    "distributions": 136,
+    "advisories": 0,
+    "requirements_sha256": "cf0493b2acc9edf7403d2d138c4772a7a03ffb8ea4d51a6c8cf6076795b7b794",
+    "audit_sha256": "d5d46716650507e09cac38c9d114794dd25e56f02c1e3bf8afc182211134576a",
+    "linux_keyring_distributions": {
+      "jeepney": "0.9.0",
+      "secretstorage": "3.5.0"
+    }
+  }
+]

@@ -271,8 +271,13 @@ def build_scan_quality(
     if any(entry.get("outcome") == "needs_follow_up" for entry in coverage_entries):
         assessment_reasons.append("coverage_needs_follow_up")
 
+    if any(finding.get("pending_http_exchange_ids") for finding in vulnerability_reports):
+        assessment_reasons.append("http_evidence_pending")
+
     web_search_usage = run_record.get("web_search_usage")
     export = run_record.get("evidence_export")
+    if isinstance(export, dict) and export.get("status") == "failed":
+        assessment_reasons.append("http_evidence_unavailable")
     document: dict[str, Any] = {
         "schema": SCAN_QUALITY_SCHEMA,
         "generated_at": datetime.now(UTC).isoformat(),

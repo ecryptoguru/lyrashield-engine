@@ -1,0 +1,47 @@
+{
+  "advisory": "https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2",
+  "removed_active_root": {
+    "subject": "emSign ECC Root CA - G3",
+    "der_sha256": "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b"
+  },
+  "method": "Validate exact packaged root fingerprint; disable only its source entry; update-ca-certificates --fresh; reject remaining active PEM matching that fingerprint. Preserve packaged source and all other anchors.",
+  "fail_closed": "Unexpected G3 certificate bytes rejected before writing trust configuration.",
+  "architectures": {
+    "arm64": {
+      "baseline_image": "sha256:52e38fb8105145c7b049291c4ecc1e12d619633acd47cf97f3ab704ac2d118c0",
+      "network": "none",
+      "before": {
+        "openssl_cafile": "trusted",
+        "openssl_capath": "trusted"
+      },
+      "after": {
+        "openssl_cafile": "rejected",
+        "openssl_capath": "rejected"
+      },
+      "sandbox_testing_ca_after": {
+        "openssl_cafile": "trusted",
+        "openssl_capath": "trusted"
+      }
+    },
+    "amd64": {
+      "baseline_image": "sha256:b498ad21f38a2556bbb6f9218975d643b6b321e5e4772a9c704c1ac3176e4c01",
+      "network": "none",
+      "before": {
+        "openssl_cafile": "trusted",
+        "openssl_capath": "trusted"
+      },
+      "after": {
+        "openssl_cafile": "rejected",
+        "openssl_capath": "rejected"
+      },
+      "sandbox_testing_ca_after": {
+        "openssl_cafile": "trusted",
+        "openssl_capath": "trusted"
+      }
+    }
+  },
+  "scope": "Actual transient containers on baseline images; rebuilt final images remain a separate gate",
+  "script_sha256": "55646d528e5b58f0b7992b46aa50bce1a8c1efa853657463dc94427c67c8d061",
+  "historical_source_revision": "4d6b35d1",
+  "component_review_followup": "component-review-round1.json"
+}

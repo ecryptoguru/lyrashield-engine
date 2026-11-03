@@ -33,6 +33,7 @@ def _assert_no_internal_sdist_artifacts(paths: list[str]) -> None:
         for path in relative_paths
         if path == ".coverage"
         or path.startswith((".coverage.", ".superpowers/", "reports/", "htmlcov/", "coverage/"))
+        or path.split("/", 1)[0].startswith(".venv")
         or path in {"coverage.xml", "coverage.json"}
     ]
 
@@ -115,6 +116,7 @@ def test_wheels_exclude_go_inputs_and_retain_product_python_imports(tmp_path: Pa
         "coverage.json",
         "coverage/index.html",
         "htmlcov/index.html",
+        ".venv-candidate/lib/site-packages/dependency/tests/test_internal.py",
     ):
         artifact = sdist_root / path
         artifact.parent.mkdir(parents=True, exist_ok=True)

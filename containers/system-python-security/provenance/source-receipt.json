@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "qualification_sha256": "4499b68a97dc24edd3830c2baaef243b7e559473db91e10a2bcd8d3a8b54b9d4",
+  "upstream_patches": [
+    {
+      "commit": "8cfb02c547740e16dbfe7aba77bad84b297cec2c",
+      "url": "https://github.com/python-hyper/hpack/commit/8cfb02c547740e16dbfe7aba77bad84b297cec2c.patch",
+      "commit_patch_sha256": "e3255f505e3bd8bae8dd0194ee7a51476a074819620953c75c6dd0fc8a37f45d"
+    },
+    {
+      "commit": "292a40829feefda98c8509dcdbbb4a57af9bd6a6",
+      "url": "https://github.com/python-hyper/h2/commit/292a40829feefda98c8509dcdbbb4a57af9bd6a6.patch",
+      "commit_patch_sha256": "108964d9cd1804f6294102d760bd7118d070eecba0ee857703bab6b91a1ded96"
+    },
+    {
+      "commit": "cf198fcddc9230f06ed39f974eba0ce076b85cda",
+      "url": "https://github.com/facelessuser/soupsieve/commit/cf198fcddc9230f06ed39f974eba0ce076b85cda.patch",
+      "commit_patch_sha256": "2035deee8f883fe0900c66ee13f11d03e85df3ac29d176d74ead527722b4eb40"
+    },
+    {
+      "commit": "ce44e4996e6632871c18cdd7a7fb641be8ef34ef",
+      "url": "https://github.com/facelessuser/soupsieve/commit/ce44e4996e6632871c18cdd7a7fb641be8ef34ef.patch",
+      "commit_patch_sha256": "f097e9287a2d9f142cc38b66f5baebc75f10239c5465fbab47d4367508829b0a"
+    },
+    {
+      "commit": "74664d3fe037a354e180e305135c6bab1747a6b0",
+      "url": "https://github.com/oauthlib/oauthlib/commit/74664d3fe037a354e180e305135c6bab1747a6b0.patch",
+      "commit_patch_sha256": "032366a739d4a95cee8da517668623f1097eab155d78b906fe428c394ee62133"
+    },
+    {
+      "commit": "7b26a42b525735e4085d2e994e13802ea339d5f9",
+      "url": "https://github.com/jaraco/jaraco.context/commit/7b26a42b525735e4085d2e994e13802ea339d5f9.patch",
+      "commit_patch_sha256": "eba4c082cdc1ef43d0868e312a8809600430ec82e932439343a49a1225958c05"
+    },
+    {
+      "commit": "77a5f1c8ce00da2b0b8c5f6e9cc129920085f114",
+      "url": "https://github.com/oauthlib/oauthlib/commit/77a5f1c8ce00da2b0b8c5f6e9cc129920085f114.patch",
+      "qualification_bundle_sha256": "9602aa2e5c868c579ec0213d57ba2fce9339d2e7a37e20794337cb6b02c07880",
+      "commit_patch_sha256": "d2a674ce6a8f1d3da87d1d6b8420a0056be6a1d71391e24815071a2cbb9b0585"
+    },
+    {
+      "commit": "e05ac61989a7fb9dd7dcde6cfd72dc48328719a3",
+      "url": "https://github.com/sqlalchemy/mako/commit/e05ac61989a7fb9dd7dcde6cfd72dc48328719a3.patch",
+      "qualification_bundle_sha256": "589a5875d83e446360f9bb4e05f65f3bef937e01f4df14923a837b9f3e4e0a8a",
+      "commit_patch_sha256": "126d6070c8256f485ad8eb241a4ea536db4c7d77b11466fe4f9bc6fc651a68de"
+    }
+  ],
+  "baseline_config_digests": {
+    "arm64": "52e38fb8105145c7b049291c4ecc1e12d619633acd47cf97f3ab704ac2d118c0",
+    "amd64": "b498ad21f38a2556bbb6f9218975d643b6b321e5e4772a9c704c1ac3176e4c01"
+  },
+  "checked_archives": [
+    "arm64",
+    "amd64"
+  ],
+  "installed_and_tested_archives": [
+    "arm64"
+  ],
+  "bounded_ephemeral_test": {
+    "network": "none",
+    "memory_bytes": 536870912,
+    "cpu": 0.5,
+    "pull": false,
+    "image_build": false
+  },
+  "results": {
+    "host_pytest": 10,
+    "runtime_unittest": 14,
+    "fresh_seed_unittest": 2,
+    "late_seed_tamper_before_write": "passed",
+    "arm64_apt": "8 upgrades, zero new, zero removed",
+    "amd64": "signed Release/index/binary/source identity and digests verified; execution not tested"
+  },
+  "public_receipt_sha256": {
+    "arm64-ephemeral-amendments.json": "0c1102a19d1efa1005d12996a8259c2fc5addfccd856f67f0d34d1e4560b798f",
+    "arm64-ephemeral-smoke.log": "ae10001016e69235aeb704b84de631dd5d2a0eeb2d788eb617f2f8a2df6a0551",
+    "arm64-ephemeral-leaves.json": "3da7dc2e621fe17e8dfcf489e589257d22040d22b001717b2d9c042e2c85cea9"
+  }
+}

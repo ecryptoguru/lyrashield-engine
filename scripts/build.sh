@@ -48,7 +48,7 @@ uv sync --frozen --extra viewer
 VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 UPSTREAM_BASE=$(tr -d '[:space:]' < .lyrashield-upstream-base)
 echo -e "${YELLOW}LyraShield Engine version:${NC} $VERSION"
-echo -e "${YELLOW}Strix substrate:${NC} v1.5.3 ($UPSTREAM_BASE)"
+echo -e "${YELLOW}Strix substrate:${NC} $UPSTREAM_BASE"
 
 echo -e "\n${BLUE}Cleaning previous builds...${NC}"
 rm -rf build/ dist/

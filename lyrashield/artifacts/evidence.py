@@ -1,11 +1,14 @@
 # Modifications © 2026 LyraShield; based on upstream Strix (Apache-2.0)
-"""run.json schema 1.1 evidence fields, artifact writers, and HTTP evidence export.
+"""Versioned evidence fields, artifact writers, and durable HTTP export.
 
 This module is the owned home of the richer evidence contract:
 
 - :func:`evidence_v1_1_enabled` gates the whole 1.1 writer surface behind
   ``LYRASHIELD_RUN_RECORD_V1_1`` (default OFF) so compatible readers deploy
   before the engine emits the new fields.
+- Schema 1.2 adds separately bounded pending HTTP claims. New records require
+  both the existing evidence flag and ``LYRASHIELD_PENDING_HTTP_EVIDENCE``
+  (default OFF); persisted 1.2 records remain readable after either is disabled.
 - Finding-field normalizers (``http_exchange_ids``, ``confidence``,
   ``advisory_cvss``, ``fix_verification``) keep the finding schema additive
   and validated.
@@ -22,6 +25,7 @@ This module is the owned home of the richer evidence contract:
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import hashlib
 import json
@@ -31,8 +35,9 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
-from lyrashield.artifacts.writer import _atomic_write_text
+from lyrashield.artifacts.writer import _atomic_write_bytes, _atomic_write_text
 from lyrashield.utils.redaction import is_sensitive_key, redact_text, redact_url
 from strix.core.paths import runtime_state_dir
 
@@ -45,14 +50,18 @@ logger = logging.getLogger(__name__)
 
 RUN_RECORD_SCHEMA_VERSION_1_0 = "1.0"
 RUN_RECORD_SCHEMA_VERSION_1_1 = "1.1"
+RUN_RECORD_SCHEMA_VERSION_1_2 = "1.2"
 SUPPORTED_RUN_RECORD_SCHEMA_VERSIONS = frozenset(
-    {RUN_RECORD_SCHEMA_VERSION_1_0, RUN_RECORD_SCHEMA_VERSION_1_1}
+    {RUN_RECORD_SCHEMA_VERSION_1_0, RUN_RECORD_SCHEMA_VERSION_1_1, RUN_RECORD_SCHEMA_VERSION_1_2}
 )
 
 # Feature flag for the whole schema-1.1 writer surface: new finding fields,
 # update_vulnerability_report, coverage/threat-model artifacts, and the HTTP
 # exchange evidence export. Default OFF — readers deploy before writers.
 EVIDENCE_V1_1_ENV = "LYRASHIELD_RUN_RECORD_V1_1"
+PENDING_HTTP_EVIDENCE_ENV = "LYRASHIELD_PENDING_HTTP_EVIDENCE"
+HTTP_EVIDENCE_LOOKUP_TIMEOUT_SECONDS = 5.0
+HTTP_EVIDENCE_EXPORT_TIMEOUT_SECONDS = 20.0
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
@@ -70,13 +79,23 @@ def run_record_schema_version() -> str:
     contract never changes mid-flight.
     """
     if evidence_v1_1_enabled():
+        if os.environ.get(PENDING_HTTP_EVIDENCE_ENV, "").strip().lower() in _TRUE_VALUES:
+            return RUN_RECORD_SCHEMA_VERSION_1_2
         return RUN_RECORD_SCHEMA_VERSION_1_1
     return RUN_RECORD_SCHEMA_VERSION_1_0
 
 
 def record_supports_evidence_v1_1(run_record: dict[str, Any]) -> bool:
-    """True when this record's declared schema version is 1.1."""
-    return run_record.get("schema_version") == RUN_RECORD_SCHEMA_VERSION_1_1
+    """True when the persisted record supports the 1.1 evidence surface."""
+    return run_record.get("schema_version") in {
+        RUN_RECORD_SCHEMA_VERSION_1_1,
+        RUN_RECORD_SCHEMA_VERSION_1_2,
+    }
+
+
+def record_supports_pending_http_evidence(run_record: dict[str, Any]) -> bool:
+    """The persisted contract controls readability even after writer rollback."""
+    return run_record.get("schema_version") == RUN_RECORD_SCHEMA_VERSION_1_2
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +249,26 @@ def normalize_http_exchange_ids(raw: Any) -> tuple[list[str] | None, list[str]]:
             seen.add(request_id)
             normalized.append(request_id)
     return (None, errors) if errors else (normalized, [])
+
+
+def normalize_pending_http_exchange_ids(raw: Any) -> tuple[list[str] | None, list[str]]:
+    """Bound unverified claims separately from durable HTTP references."""
+    ids, errors = normalize_http_exchange_ids(raw)
+    return ids, [
+        error.replace("http_exchange_ids", "pending_http_exchange_ids") for error in errors
+    ]
+
+
+def select_http_export_ids(finding: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Keep independently bounded pending and durable sets; verified ids win capacity."""
+    verified, verified_errors = normalize_http_exchange_ids(finding.get("http_exchange_ids"))
+    pending, pending_errors = normalize_pending_http_exchange_ids(
+        finding.get("pending_http_exchange_ids")
+    )
+    if verified_errors or pending_errors:
+        raise ValueError("HTTP exchange claims exceed their independent bounds")
+    combined = list(dict.fromkeys(list(verified or []) + list(pending or [])))
+    return combined[:MAX_HTTP_EXCHANGE_IDS], combined[MAX_HTTP_EXCHANGE_IDS:]
 
 
 _CVSS_VECTOR_RE = re.compile(r"^CVSS:[34]\.\d/([A-Z]{1,3}:[NLHARCUPM]/*)+$")
@@ -564,6 +603,9 @@ HTTP_EXCHANGES_SCHEMA = "lyrashield-http-exchanges/1.0"
 # unbounded artifact.
 MAX_EXPORT_EXCHANGES = 64
 MAX_EXPORT_BODY_SAMPLE_BYTES = 4096
+MAX_EXPORT_HEADERS = 64
+MAX_EXPORT_HEADER_NAME_CHARS = 128
+MAX_HTTP_OMISSION_IDS = 500
 MAX_EXPORT_TOTAL_BYTES = 1_048_576
 
 # Headers that are always credentials/secret-bearing; never exported.
@@ -630,10 +672,13 @@ def _parse_headers(raw: bytes | str | None) -> dict[str, str]:
     for line in head.decode("iso-8859-1", errors="replace").splitlines()[1:]:
         if ":" not in line:
             continue
+        if len(headers) >= MAX_EXPORT_HEADERS:
+            break
         name, _, value = line.partition(":")
-        key = name.strip()
-        lowered = key.lower()
-        if lowered in _SECRET_HEADERS or is_sensitive_key(key):
+        original_key = name.strip()
+        key = original_key[:MAX_EXPORT_HEADER_NAME_CHARS]
+        lowered = original_key.lower()
+        if lowered in _SECRET_HEADERS or is_sensitive_key(original_key):
             headers[key] = "[REDACTED]"
         else:
             headers[key] = redact_text(value.strip(), include_internal_paths=True)[:512]
@@ -655,13 +700,13 @@ def _export_one_exchange(request_id: str, result: Any) -> dict[str, Any]:
             _body_of(req_raw), MAX_EXPORT_BODY_SAMPLE_BYTES
         )
         entry["request"] = {
-            "method": str(getattr(request, "method", "") or ""),
-            "host": str(getattr(request, "host", "") or ""),
+            "method": str(getattr(request, "method", "") or "")[:32],
+            "host": str(getattr(request, "host", "") or "")[:253],
             "port": getattr(request, "port", None),
             "path": redact_text(path, include_internal_paths=True)[:2048],
             "target": redact_url(target)[:2048],
             "is_tls": bool(getattr(request, "is_tls", False)),
-            "created_at": str(getattr(request, "created_at", "") or ""),
+            "created_at": str(getattr(request, "created_at", "") or "")[:128],
             "headers": _parse_headers(req_raw),
             "body_sample": redact_text(body, include_internal_paths=True),
             "body_truncated": body_truncated,
@@ -677,7 +722,7 @@ def _export_one_exchange(request_id: str, result: Any) -> dict[str, Any]:
             "status_code": getattr(response, "status_code", None),
             "length": getattr(response, "length", None),
             "roundtrip_ms": getattr(response, "roundtrip_time", None),
-            "created_at": str(getattr(response, "created_at", "") or ""),
+            "created_at": str(getattr(response, "created_at", "") or "")[:128],
             "headers": _parse_headers(resp_raw),
             "body_sample": redact_text(body, include_internal_paths=True),
             "body_truncated": body_truncated,
@@ -685,6 +730,18 @@ def _export_one_exchange(request_id: str, result: Any) -> dict[str, Any]:
             "sha256": hashlib.sha256(resp_raw).hexdigest() if resp_raw else None,
         }
     return entry
+
+
+def _exchange_matches_finding(host: str, finding: dict[str, Any]) -> bool:
+    """Fail closed when a capture cannot be assigned to this finding's host."""
+    for field in ("target", "endpoint"):
+        try:
+            expected = urlsplit(str(finding.get(field) or "")).hostname
+        except ValueError:
+            continue
+        if expected:
+            return host == expected.lower().rstrip(".")
+    return False
 
 
 async def export_http_exchange_evidence(
@@ -711,12 +768,20 @@ async def export_http_exchange_evidence(
     from lyrashield.tools.proxy import caido_api
 
     cited: dict[str, list[str]] = {}
+    capacity_omitted: list[str] = []
     for finding in findings:
         finding_id = str(finding.get("id") or "")
         ids = finding.get("http_exchange_ids")
-        if not finding_id or not isinstance(ids, list):
-            continue
-        valid = [str(v) for v in ids if isinstance(v, str) and v.strip()]
+        if record_supports_pending_http_evidence(run_record):
+            valid, overflow = select_http_export_ids(finding)
+            capacity_omitted.extend(value for value in overflow if value not in capacity_omitted)
+        else:
+            if not finding_id or not isinstance(ids, list):
+                continue
+            normalized, errors = normalize_http_exchange_ids(ids)
+            if errors:
+                continue
+            valid = normalized or []
         if valid:
             cited[finding_id] = valid[:MAX_HTTP_EXCHANGE_IDS]
 
@@ -741,14 +806,22 @@ async def export_http_exchange_evidence(
     entries: list[dict[str, Any]] = []
     missing: list[str] = []
     truncated_ids: list[str] = []
-    for request_id in requested_ids:
-        if len(entries) >= MAX_EXPORT_EXCHANGES:
+    for index, request_id in enumerate(requested_ids):
+        at_limit = (
+            index >= MAX_EXPORT_EXCHANGES
+            if record_supports_pending_http_evidence(run_record)
+            else len(entries) >= MAX_EXPORT_EXCHANGES
+        )
+        if at_limit:
             truncated_ids.append(request_id)
             continue
         try:
-            result = await _serialized_call(
-                client,
-                functools.partial(caido_api.get_request_with_client, request_id=request_id),
+            result = await asyncio.wait_for(
+                _serialized_call(
+                    client,
+                    functools.partial(caido_api.get_request_with_client, request_id=request_id),
+                ),
+                timeout=HTTP_EVIDENCE_LOOKUP_TIMEOUT_SECONDS,
             )
         except Exception:  # noqa: BLE001 — any proxy failure degrades to partial
             logger.warning("http evidence export: fetch of %s failed", request_id)
@@ -757,7 +830,31 @@ async def export_http_exchange_evidence(
         if result is None:
             missing.append(request_id)
             continue
-        entries.append(_export_one_exchange(request_id, result))
+        if record_supports_pending_http_evidence(run_record):
+            # A numeric id in a live project is insufficient: the captured
+            # request must belong to the finding's HTTP target as well.
+            request = getattr(result, "request", None)
+            returned_id = getattr(request, "id", None)
+            host = str(getattr(request, "host", "")).lower().rstrip(".")
+            if returned_id is not None and str(returned_id) != request_id:
+                missing.append(request_id)
+                continue
+            owners = [
+                finding
+                for finding in findings
+                if request_id in cited.get(str(finding.get("id")), [])
+            ]
+            allowed = all(_exchange_matches_finding(host, finding) for finding in owners)
+            if not host or not allowed:
+                missing.append(request_id)
+                continue
+        exported = _export_one_exchange(request_id, result)
+        if record_supports_pending_http_evidence(run_record) and not exported.get(
+            "request", {}
+        ).get("sha256"):
+            missing.append(request_id)
+            continue
+        entries.append(exported)
 
     document: dict[str, Any] = {
         "schema_version": HTTP_EXCHANGES_SCHEMA,
@@ -771,34 +868,44 @@ async def export_http_exchange_evidence(
         },
         "exchanges": entries,
     }
+    if record_supports_pending_http_evidence(run_record):
+        document["binding"]["finding_revisions"] = {
+            str(finding["id"]): len(finding.get("update_history") or [])
+            for finding in findings
+            if str(finding.get("id")) in cited
+        }
+        from lyrashield.artifacts.state_projection import sanitize_targets_info
+
+        document["binding"]["targets"] = sanitize_targets_info(run_record.get("targets_info") or [])
     if missing:
         document["missing_request_ids"] = missing
+    # Capacity belongs to a finding. A shared ID selected by another finding
+    # must never also be declared globally unavailable.
+    capacity_omitted = [value for value in capacity_omitted if value not in requested_ids]
+    if capacity_omitted:
+        document["capacity_omitted_request_ids"] = capacity_omitted
     if truncated_ids:
         document["truncated"] = {
             "exchange_limit": MAX_EXPORT_EXCHANGES,
             "omitted_request_ids": truncated_ids,
         }
 
-    payload = json.dumps(document, ensure_ascii=False, indent=2, default=str)
-    if len(payload.encode("utf-8")) > MAX_EXPORT_TOTAL_BYTES:
-        # Last-line budget defense: drop body samples entirely rather than
-        # write an oversized artifact. Metadata + checksums still export.
-        for entry in entries:
-            for side in ("request", "response"):
-                block = entry.get(side)
-                if isinstance(block, dict):
-                    block["body_sample"] = ""
-                    block["body_truncated"] = True
-        payload = json.dumps(document, ensure_ascii=False, indent=2, default=str)
-        prior_truncated = document.get("truncated")
-        document["truncated"] = {
-            **(prior_truncated if isinstance(prior_truncated, dict) else {}),
-            "body_samples_dropped": True,
+    payload_bytes = encode_http_exchange_document(document)
+    if payload_bytes is None:
+        return {
+            "status": "failed",
+            "reason": "export_size_exceeded",
+            "exchanges": 0,
+            "missing_request_ids": requested_ids,
         }
-        payload = json.dumps(document, ensure_ascii=False, indent=2, default=str)
+    entries = document["exchanges"]
+    missing = document.get("missing_request_ids", [])
+    truncated = document.get("truncated")
+    if isinstance(truncated, dict):
+        truncated_ids = truncated.get("omitted_request_ids", [])
 
     try:
-        _atomic_write_text(run_dir / HTTP_EXCHANGES_FILENAME, payload)
+        _atomic_write_bytes(run_dir / HTTP_EXCHANGES_FILENAME, payload_bytes)
     except (OSError, RuntimeError) as exc:
         logger.exception("http evidence export write failed")
         return {
@@ -814,18 +921,92 @@ async def export_http_exchange_evidence(
         # partial-success veneer.
         status = "failed"
     else:
-        status = "exported" if not (missing or truncated_ids) else "partial"
+        status = "exported" if not (missing or truncated_ids or capacity_omitted) else "partial"
     outcome: dict[str, Any] = {
         "status": status,
         "exchanges": len(entries),
         "artifact": HTTP_EXCHANGES_FILENAME,
-        "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        "sha256": hashlib.sha256(payload_bytes).hexdigest(),
     }
     if missing:
         outcome["missing_request_ids"] = missing
+    if capacity_omitted:
+        outcome["capacity_omitted_request_ids"] = capacity_omitted
     if truncated_ids:
         outcome["truncated"] = True
     return outcome
+
+
+def valid_http_omission_ids(raw: Any) -> bool:
+    """The reader validates the entire unavailable list before accepting it."""
+    return (
+        isinstance(raw, list)
+        and len(raw) <= MAX_HTTP_OMISSION_IDS
+        and all(isinstance(value, str) and re.fullmatch(r"[0-9]{1,128}", value) for value in raw)
+    )
+
+
+def _valid_http_omissions(document: dict[str, Any]) -> bool:
+    if any(
+        not valid_http_omission_ids(document.get(field, []))
+        for field in (
+            "missing_request_ids",
+            "capacity_omitted_request_ids",
+        )
+    ):
+        return False
+    truncated = document.get("truncated")
+    return not isinstance(truncated, dict) or valid_http_omission_ids(
+        truncated.get("omitted_request_ids", [])
+    )
+
+
+def encode_http_exchange_document(document: dict[str, Any]) -> bytes | None:
+    """Fit the complete serialized export, or decline to write any evidence.
+
+    The same budget applies after durable reuse. Binding metadata is never
+    silently removed to make an oversized artifact appear valid.
+    """
+
+    if not _valid_http_omissions(document):
+        return None
+
+    def encode() -> bytes:
+        return json.dumps(document, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+
+    payload = encode()
+    if len(payload) <= MAX_EXPORT_TOTAL_BYTES:
+        return payload
+    entries = document.get("exchanges") or []
+    for entry in entries:
+        for side in ("request", "response"):
+            block = entry.get(side)
+            if isinstance(block, dict):
+                block["body_sample"] = ""
+                block["body_truncated"] = True
+    truncated = document.get("truncated")
+    truncated = dict(truncated) if isinstance(truncated, dict) else {}
+    truncated["body_samples_dropped"] = True
+    document["truncated"] = truncated
+    payload = encode()
+    omitted = list(truncated.get("omitted_request_ids") or [])
+    while len(payload) > MAX_EXPORT_TOTAL_BYTES and entries:
+        request_id = entries.pop()["proxy_request_id"]
+        if request_id not in omitted:
+            omitted.append(request_id)
+        truncated["omitted_request_ids"] = omitted
+        truncated["exchange_limit"] = MAX_EXPORT_EXCHANGES
+        missing = document.setdefault("missing_request_ids", [])
+        if request_id not in missing:
+            missing.append(request_id)
+        if not _valid_http_omissions(document):
+            return None
+        payload = encode()
+    return (
+        payload
+        if len(payload) <= MAX_EXPORT_TOTAL_BYTES and _valid_http_omissions(document)
+        else None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -988,6 +1169,7 @@ __all__ = [
     "MAX_UPDATE_HISTORY_ENTRIES",
     "RUN_RECORD_SCHEMA_VERSION_1_0",
     "RUN_RECORD_SCHEMA_VERSION_1_1",
+    "RUN_RECORD_SCHEMA_VERSION_1_2",
     "SUPPORTED_RUN_RECORD_SCHEMA_VERSIONS",
     "THREAT_MODEL_FILENAME",
     "UPDATABLE_REPORT_FIELDS",
@@ -1001,7 +1183,9 @@ __all__ = [
     "normalize_confidence",
     "normalize_fix_verification",
     "normalize_http_exchange_ids",
+    "normalize_pending_http_exchange_ids",
     "record_supports_evidence_v1_1",
+    "record_supports_pending_http_evidence",
     "run_record_schema_version",
     "validate_revised_finding",
     "verify_result_manifest",

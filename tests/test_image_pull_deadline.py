@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import multiprocessing
 import threading
@@ -16,12 +17,10 @@ from lyrashield.interface.image_pull import _run_bounded_docker_operation, _stop
 from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
 
 
-# The fake daemon sets its event from a request the spawned worker makes, so the
-# assertion that it was reached races the worker's import and connect time. The
-# wait is bounded (it can never hang) but generous enough to absorb that startup
-# jitter: the daemon only blocks for 12s, well beyond this window, so a healthy
-# run still reaches it long before the timeout.
-_DAEMON_REACH_TIMEOUT_SECONDS = 2.0
+# Importing the CLI/TUI in a spawned worker is setup for the stage-specific
+# checks below. Bound that separately from the operation's much shorter budget.
+# The real-clock test also covers terminating a worker during startup.
+_WORKER_STARTUP_TIMEOUT_SECONDS = 10.0
 
 
 def _blocked_docker_worker(sender: Any, _image: str, _expected_digest: str) -> None:
@@ -124,6 +123,35 @@ def test_silent_docker_operation_is_terminated_and_reaped_at_deadline() -> None:
     assert {process.pid for process in multiprocessing.active_children()} <= active_before
 
 
+def test_worker_import_startup_consumes_the_real_deadline(tmp_path, monkeypatch) -> None:
+    importing = tmp_path / "importing"
+    entered = tmp_path / "entered"
+    module = tmp_path / "slow_docker_worker_import.py"
+    module.write_text(
+        "import multiprocessing, time\n"
+        "from pathlib import Path\n"
+        "if multiprocessing.current_process().name != 'MainProcess':\n"
+        f"    Path({str(importing)!r}).touch()\n"
+        "    time.sleep(12)\n"
+        "def worker(sender, image, digest):\n"
+        f"    Path({str(entered)!r}).touch()\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    worker_module = importlib.import_module(module.stem)
+    active_before = {process.pid for process in multiprocessing.active_children()}
+    started = time.monotonic()
+
+    with pytest.raises(RunDeadlineExceededError):
+        _run_bounded_docker_operation(
+            "test-image", "", RunDeadline.start(0.5), worker=worker_module.worker
+        )
+
+    assert time.monotonic() - started < 1.5
+    assert importing.exists(), "the worker must reach the deliberately blocked import"
+    assert not entered.exists(), "the deadline must stop imports before entering the worker"
+    assert {process.pid for process in multiprocessing.active_children()} <= active_before
+
+
 def test_completed_worker_wait_is_bounded_before_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
     receiver = Mock()
     receiver.poll.return_value = True
@@ -157,14 +185,22 @@ def test_docker_connection_inspect_and_pull_are_deadline_bound(
     monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
     monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
     monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
-    # Allow spawn/import overhead while leaving the fake daemon blocked far
-    # beyond the supervised deadline.
-    # A spawned worker imports the engine before reaching the daemon. Keep the
-    # deadline comfortably above that startup cost while the fake operation
-    # itself remains blocked well beyond the allowance.
-    deadline = RunDeadline.start(5.0)
     active_before = {process.pid for process in multiprocessing.active_children()}
     started = time.monotonic()
+    operation_started: float | None = None
+
+    def operation_clock() -> float:
+        nonlocal operation_started
+        now = time.monotonic()
+        if reached.is_set():
+            if operation_started is None:
+                operation_started = now
+            return now - operation_started
+        # Never let broken setup hang the test. A worker that fails to reach
+        # the stage is stopped and then fails the reachability assertion.
+        return now - started if now - started >= _WORKER_STARTUP_TIMEOUT_SECONDS else 0.0
+
+    deadline = RunDeadline.start(0.5, clock=operation_clock)
 
     try:
         with pytest.raises(RunDeadlineExceededError):
@@ -173,10 +209,12 @@ def test_docker_connection_inspect_and_pull_are_deadline_bound(
         server.shutdown()
         server.server_close()
 
-    assert reached.wait(timeout=_DAEMON_REACH_TIMEOUT_SECONDS), (
-        f"fake Docker daemon did not reach {stage} within {_DAEMON_REACH_TIMEOUT_SECONDS}s"
+    assert reached.is_set(), (
+        f"fake Docker daemon did not reach {stage} during bounded worker startup"
     )
-    assert time.monotonic() - started < 6.5
+    assert operation_started is not None
+    assert time.monotonic() - operation_started < 1.5
+    assert time.monotonic() - started < _WORKER_STARTUP_TIMEOUT_SECONDS + 1.5
     assert {process.pid for process in multiprocessing.active_children()} <= active_before
 
 

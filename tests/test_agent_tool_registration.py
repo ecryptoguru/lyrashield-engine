@@ -133,6 +133,8 @@ def test_respond_to_user_is_interactive_only() -> None:
 
     assert "respond_to_user" in [t.name for t in interactive.tools]
     assert "respond_to_user" not in [t.name for t in autonomous.tools]
+    assert "wait_for_user" not in [t.name for t in interactive.tools]
+    assert "wait_for_user" not in [t.name for t in autonomous.tools]
 
 
 def test_wait_for_agents_is_available_in_both_modes() -> None:

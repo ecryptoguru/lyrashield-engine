@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "applications": [
+    {
+      "name": "httpx",
+      "module": "github.com/projectdiscovery/httpx",
+      "version": "v1.7.5-0.20260805100627-811409809ea2",
+      "commit": "811409809ea2b1706c49452149ab454861543138",
+      "repository": "projectdiscovery/httpx",
+      "archive_sha256": "dd16801a693e7174c054ca70ad65c0f039f08304651c5ce7b8bee3cbb249c514",
+      "binary": "/home/pentester/go/bin/httpx"
+    },
+    {
+      "name": "katana",
+      "module": "github.com/projectdiscovery/katana",
+      "version": "v1.6.2-0.20260805100737-e82a2b803d9a",
+      "commit": "e82a2b803d9a9703b614fae492f648cca926b15b",
+      "repository": "projectdiscovery/katana",
+      "archive_sha256": "f377519c202fdf84a89348705854a3ae739aa92667c3f8cfd185ed9b1125f29e",
+      "binary": "/home/pentester/go/bin/katana"
+    },
+    {
+      "name": "gospider",
+      "module": "github.com/jaeles-project/gospider",
+      "version": "v1.1.7-0.20240322072418-f6cc9a78d709",
+      "commit": "f6cc9a78d709e088e55ce62e5e92ab063f1a184b",
+      "repository": "jaeles-project/gospider",
+      "archive_sha256": "854548b5ffc381de066507349a0820c36a93d8e984df690522414dba7f14e091",
+      "binary": "/home/pentester/go/bin/gospider"
+    },
+    {
+      "name": "interactsh-client",
+      "module": "github.com/projectdiscovery/interactsh",
+      "version": "v1.3.1",
+      "commit": "810180a230fe2265385ed45695a6635b5026452a",
+      "repository": "projectdiscovery/interactsh",
+      "archive_sha256": "a1672ea671ec2c0f647a3c0253d9e51d863f8824281aa3bd78160ae55d726883",
+      "binary": "/home/pentester/go/bin/interactsh-client"
+    },
+    {
+      "name": "vulnx",
+      "module": "github.com/projectdiscovery/vulnx/v2",
+      "version": "v2.0.3-0.20260805101100-08c124da690a",
+      "commit": "08c124da690a5c6acba802998931be13d6ca78ba",
+      "repository": "projectdiscovery/cvemap",
+      "archive_sha256": "f56d3b8df559a5bdffb19fe03fa6e9e1809536c20b53d2147c95c0cf92b50f05",
+      "binary": "/home/pentester/go/bin/vulnx"
+    },
+    {
+      "name": "gitleaks",
+      "module": "github.com/zricethezav/gitleaks/v8",
+      "version": "v8.30.1",
+      "commit": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+      "repository": "gitleaks/gitleaks",
+      "archive_sha256": "6b2638a733b85619dc80bdf28e84e4fed7e526a761ab5c148fbf67695aea2115",
+      "binary": "/usr/local/bin/gitleaks"
+    },
+    {
+      "name": "trivy",
+      "module": "github.com/aquasecurity/trivy",
+      "version": "v0.73.0",
+      "commit": "40c73e5d6166dcc0346a1ab4e94499d1572854e4",
+      "repository": "aquasecurity/trivy",
+      "archive_sha256": "dd35bec9570e1968b7a3d0d9f6504e5ac2f6a87eea0eee8ddcadd44d08940ee7",
+      "binary": "/usr/local/bin/trivy"
+    },
+    {
+      "name": "trufflehog",
+      "module": "github.com/trufflesecurity/trufflehog/v3",
+      "version": "v3.99.2",
+      "commit": "e76dff8a7e57d6df0c60ad8cbf5d5cba505a8fc9",
+      "repository": "trufflesecurity/trufflehog",
+      "archive_sha256": "f288dd98b57cc8ae2dcce2b4c20c8242e6439767ae769714b00d0cafa21fc80f",
+      "binary": "/usr/local/bin/trufflehog"
+    }
+  ]
+}

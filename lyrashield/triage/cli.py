@@ -11,6 +11,14 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from lyrashield.artifacts.financial_io import FinancialDirectory
+from lyrashield.artifacts.finite_budget import active_journal, protected_run
+from lyrashield.artifacts.state import (
+    ReportState,
+    get_global_report_state,
+    set_global_report_state,
+)
+from lyrashield.lifecycle.hooks import get_active_hooks, set_active_hooks
 from lyrashield.policy.loader import load_settings
 from lyrashield.triage.service import (
     TRIAGE_OUTPUT_SCHEMA_VERSION,
@@ -103,15 +111,49 @@ def run_triage_cli(argv: Sequence[str]) -> int:
             write_artifact(args.output, dict(cached))
             return 0
 
-    artifact = asyncio.run(
-        run_triage(
-            triage_input,
-            model_route=model_route,
-            enabled=bool(args.enabled),
-            max_budget_usd=args.max_budget_usd,
-            checkpoint=lambda progress: write_artifact(args.output, progress),
+    owner = None
+    borrowed = None
+    previous_state, previous_hooks = get_global_report_state(), get_active_hooks()
+    workspace = args.input.absolute().parent
+    candidate = ReportState(workspace.name) if args.enabled else None
+    run_dir = candidate.get_run_dir(create=False, cwd=workspace) if candidate is not None else None
+    existing = run_dir is not None and protected_run(run_dir)
+    if (
+        candidate is not None
+        and run_dir is not None
+        and (args.max_budget_usd is not None or existing)
+    ):
+        owner = candidate
+        owner._run_dir = run_dir
+        # Hydration is read-only after checking/creating financial parents without
+        # traversing aliases. This is the worker's actual main scan output layout.
+        directory = FinancialDirectory(owner._run_dir, create=True)
+        directory.close()
+        owner.hydrate_from_run_dir()
+        existing = protected_run(owner._run_dir, owner.run_record)
+        borrowed = active_journal(owner._run_dir)
+        owner.enable_finite_budget(
+            None if existing else owner.get_total_llm_cost() + float(args.max_budget_usd)
         )
-    )
+        set_global_report_state(owner)
+        set_active_hooks(None)
+    try:
+        artifact = asyncio.run(
+            run_triage(
+                triage_input,
+                model_route=model_route,
+                enabled=bool(args.enabled),
+                max_budget_usd=args.max_budget_usd,
+                checkpoint=lambda progress: write_artifact(args.output, progress),
+                report_state=owner,
+            )
+        )
+    finally:
+        if owner is not None:
+            set_global_report_state(previous_state)
+            set_active_hooks(previous_hooks)
+            if owner._finite_budget is not None and owner._finite_budget is not borrowed:
+                owner._finite_budget.close()
     write_artifact(args.output, artifact)
     if cache_path is not None and artifact["status"] == "COMPLETED":
         write_artifact(cache_path, artifact)

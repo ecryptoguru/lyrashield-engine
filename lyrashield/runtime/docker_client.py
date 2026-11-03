@@ -33,6 +33,7 @@ import inspect
 import io
 import logging
 import os
+import platform
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -68,6 +69,7 @@ logger = logging.getLogger(__name__)
 
 _SANDBOX_NETWORK_ENV = "STRIX_DOCKER_SANDBOX_NETWORK"
 _SANDBOX_HOST_GATEWAY_ENV = "STRIX_SANDBOX_ALLOW_HOST_GATEWAY"
+_CONTROL_PLANE_PORT = 48080
 _REQUIRED_CREATE_CONTAINER_PARAMETERS = frozenset(
     {"self", "image", "manifest", "exposed_ports", "session_id"},
 )
@@ -222,6 +224,25 @@ def _apply_sandbox_network(create_kwargs: dict[str, Any]) -> None:
             env.append(f"STRIX_DOCKER_SANDBOX_NETWORK={network}")
         elif isinstance(env, dict):
             env["STRIX_DOCKER_SANDBOX_NETWORK"] = network
+
+
+def _uses_desktop_control_plane(docker_client: Any) -> bool:
+    """Only a native macOS client using a local Unix transport can use host loopback."""
+    if platform.system() != "Darwin":
+        return False
+    # Inspect the connected transport, not the current environment/context:
+    # docker-py normalizes Unix sockets to localhost, SSH to a distinct URL,
+    # and TCP/TLS to HTTP(S). Remote daemon loopback belongs to that daemon.
+    if getattr(getattr(docker_client, "api", None), "base_url", None) != (
+        "http+docker://localhost"
+    ):
+        raise RuntimeError(
+            "macOS sandbox control-plane routing requires a local Unix socket Docker "
+            "connection. Remote TCP/TLS/SSH and unknown transports are unsupported "
+            "on macOS; use local Docker Desktop or a Linux worker with verified "
+            "sandbox bridge routing."
+        )
+    return True
 
 
 _DEFAULT_SANDBOX_MEM_LIMIT = "2g"
@@ -466,6 +487,35 @@ class LyraShieldDockerSandboxSession(DockerSandboxSession):
 
         attrs = cast("dict[str, Any]", getattr(self._container, "attrs", {}) or {})
         network_settings = cast("dict[str, Any]", attrs.get("NetworkSettings", {}) or {})
+        if _uses_desktop_control_plane(self._docker_client):
+            if port != _CONTROL_PLANE_PORT:
+                raise ExposedPortUnavailableError(
+                    port=port,
+                    exposed_ports=self.state.exposed_ports,
+                    reason="backend_unavailable",
+                    context={"backend": "docker", "detail": "unowned_control_plane_port"},
+                )
+            # One tunnel per session, also for restored Docker sessions. Its
+            # listener and every attached exec are owned until delete().
+            if not hasattr(self, "_control_plane_lock"):
+                self._control_plane_lock = asyncio.Lock()
+            async with self._control_plane_lock:
+                if getattr(self, "_control_plane_deleted", False):
+                    raise ExposedPortUnavailableError(
+                        port=port,
+                        exposed_ports=self.state.exposed_ports,
+                        reason="backend_unavailable",
+                        context={"backend": "docker", "detail": "session_deleted"},
+                    )
+                if getattr(self, "_control_plane_tunnel", None) is None:
+                    from lyrashield.runtime.docker_control_plane import (  # noqa: PLC0415
+                        DockerControlPlaneTunnel,
+                    )
+
+                    self._control_plane_tunnel = await DockerControlPlaneTunnel.create(
+                        self._docker_client.api, self.container_id
+                    )
+                return self._control_plane_tunnel.endpoint
         networks = cast("dict[str, Any]", network_settings.get("Networks", {}) or {})
         endpoint = cast("dict[str, Any]", networks.get(self.sandbox_network) or {})
         ip = endpoint.get("IPAddress") or endpoint.get("GlobalIPv6Address")
@@ -473,16 +523,18 @@ class LyraShieldDockerSandboxSession(DockerSandboxSession):
             host = f"[{ip}]" if ":" in ip else ip
             return ExposedPortEndpoint(host=host, port=port, tls=False)
 
-        # Custom-network lookup failed; the container may not have joined the
-        # configured network, or ports were published to the host. Fall back to
-        # the SDK's default host-port resolver before giving up.
-        logger.debug(
-            "Custom-network IP lookup failed for port %s on network %s; "
-            "falling back to SDK default resolver",
-            port,
-            self.sandbox_network,
+        # Linux workers use the admitted bridge route. Never substitute a
+        # remote daemon's loopback binding for the worker's missing route.
+        raise ExposedPortUnavailableError(
+            port=port,
+            exposed_ports=self.state.exposed_ports,
+            reason="backend_unavailable",
+            context={
+                "backend": "docker",
+                "detail": "sandbox_bridge_address_missing",
+                "network": self.sandbox_network,
+            },
         )
-        return await super()._resolve_exposed_port(port)
 
 
 class StrixDockerSandboxClient(DockerSandboxClient):
@@ -505,7 +557,7 @@ class StrixDockerSandboxClient(DockerSandboxClient):
     # backend before ``create()``. Each item is ``{source, target, read_only}``.
     strix_bind_mounts: list[dict[str, Any]]
 
-    async def _create_container(  # noqa: PLR0912 - mirrors the pinned SDK container builder
+    async def _create_container(  # noqa: PLR0912, PLR0915 - mirrors the pinned SDK builder
         self,
         image: str,
         *,
@@ -513,6 +565,12 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         exposed_ports: tuple[int, ...] = (),
         session_id: uuid.UUID | None = None,
     ) -> Container:
+        if (
+            exposed_ports
+            and _uses_desktop_control_plane(self.docker_client)
+            and exposed_ports != (_CONTROL_PLANE_PORT,)
+        ):
+            raise RuntimeError("macOS sandbox routing is restricted to owned TCP 48080")
         # ----- BEGIN VERBATIM COPY of DockerSandboxClient._create_container -----
         # SDK ref: src/agents/sandbox/sandboxes/docker.py:1434-1477 (v0.14.6).
         # Image inspect/pull runs before the scan through the bounded helper in
@@ -628,6 +686,15 @@ class StrixDockerSandboxClient(DockerSandboxClient):
 
     async def delete(self, session: SandboxSession) -> SandboxSession:
         inner = getattr(session, "_inner")  # noqa: B009
+        inner._control_plane_deleted = True
+        lock = getattr(inner, "_control_plane_lock", None)
+        if lock is not None:
+            # Resolution may be allocating a listener when cleanup arrives.
+            # Serialize the handoff so no late listener escapes this owner.
+            async with lock:
+                tunnel = getattr(inner, "_control_plane_tunnel", None)
+                if tunnel is not None:
+                    await tunnel.aclose()
         container_id = getattr(getattr(inner, "state", None), "container_id", None)
         if container_id:
             # Best-effort kill: NotFound/APIError cover a gone or unhappy

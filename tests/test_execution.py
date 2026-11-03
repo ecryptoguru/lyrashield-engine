@@ -413,57 +413,34 @@ async def test_pause_for_budget_sets_flag_and_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_from_budget_pause_extends_and_nudges(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_explicit_resume_does_not_extend_budget() -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
-    await coordinator.register("child-a", "recon", parent_id="root")
-    await coordinator.register("child-b", "recon", parent_id="root")
+    await coordinator.register("child", "recon", parent_id="root")
     await coordinator.pause_for_budget("root")
-    await coordinator.pause_for_budget("child-a")
-    await coordinator.pause_for_budget("child-b")
-
+    await coordinator.pause_for_budget("child")
     extensions: list[int] = []
     coordinator.set_budget_extender(lambda: extensions.append(1))
-
-    sent: list[tuple[str, dict[str, Any]]] = []
-
-    async def _record(target_agent_id: str, message: dict[str, Any]) -> bool:
-        sent.append((target_agent_id, message))
-        return True
-
-    monkeypatch.setattr(coordinator, "send", _record)
-
-    await coordinator.resume_from_budget_pause(exclude="root")
-
-    assert coordinator.budget_paused is False
-    assert len(extensions) == 1
-    assert all(coordinator.statuses[aid] == "waiting" for aid in ("root", "child-a", "child-b"))
-    assert sorted(target for target, _ in sent) == ["child-a", "child-b"]
-    assert all(message["type"] == "budget_extended" for _, message in sent)
-
-    await coordinator.resume_from_budget_pause(exclude="root")
-    assert len(extensions) == 1
+    await coordinator.resume_from_budget_pause()
+    assert not coordinator.budget_paused
+    assert extensions == []
+    assert all(coordinator.statuses[aid] == "waiting" for aid in ("root", "child"))
+    assert coordinator.pending_counts == {"root": 1, "child": 1}
 
 
 @pytest.mark.asyncio
-async def test_user_send_resumes_budget_pause(tmp_path: Any) -> None:
+async def test_user_send_preserves_budget_pause(tmp_path: Any) -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
     session = SQLiteSession("root", tmp_path / "agents.db")
     await coordinator.attach_runtime("root", session=session)
     await coordinator.pause_for_budget("root")
-
     extensions: list[int] = []
     coordinator.set_budget_extender(lambda: extensions.append(1))
-
-    delivered = await coordinator.send("root", {"from": "user", "content": "keep going"})
-
-    assert delivered is True
-    assert coordinator.budget_paused is False
-    assert len(extensions) == 1
-    assert coordinator.statuses["root"] == "waiting"
+    assert await coordinator.send("root", {"from": "user", "content": "keep going"})
+    assert coordinator.budget_paused
+    assert extensions == []
+    assert coordinator.statuses["root"] == "budget_paused"
     assert coordinator.pending_counts["root"] == 1
     session.close()
 
@@ -548,9 +525,9 @@ async def test_non_user_send_preserves_failed_resume_state() -> None:
 async def test_reset_budget_stops_clears_pause_and_normalizes_statuses() -> None:
     coordinator = AgentCoordinator()
     await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.pause_for_budget("root")
     await coordinator.trigger_budget_stop()
     await coordinator.claim_reserve_notification()
-    await coordinator.pause_for_budget("root")
 
     await coordinator.reset_budget_stops(budget_stopped=False, reserve_stopped=False)
 

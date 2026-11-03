@@ -487,7 +487,7 @@ def test_unauthorized_client_cannot_acquire_capability(
 
     delivered: list[tuple[str, str]] = []
 
-    def handler(agent_id: str, message: str) -> bool:
+    def handler(agent_id: str, message: str, _submission_id: str) -> bool:
         delivered.append((agent_id, message))
         return True
 
@@ -609,13 +609,18 @@ def test_steer_requires_session_cookie(tmp_path: Path, monkeypatch: pytest.Monke
 
     delivered: list[tuple[str, str]] = []
 
-    def handler(agent_id: str, message: str) -> bool:
+    def handler(agent_id: str, message: str, _submission_id: str) -> bool:
         delivered.append((agent_id, message))
         return True
 
     httpd, url, token = serve(run_dir, open_browser=False, steer_handler=handler)
     try:
-        body = {"agent_id": "root", "message": "focus on auth"}
+        body = {
+            "agent_id": "root",
+            "message": "focus on auth",
+            "run": "steer",
+            "submission_id": "steer-1",
+        }
         # No cookie: rejected before reaching the live coordinator.
         status, _ = _post(url, "/api/agents/steer", body)
         assert status == 403
@@ -804,6 +809,114 @@ def test_server_rejects_path_traversal(tmp_path: Path, monkeypatch: pytest.Monke
         # A traversal target must never leak the file; it falls back to index.html.
         _, _, body = _get(f"{url}/..%2f..%2fsecret.txt")
         assert b"top secret" not in body
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_steering_is_run_bound_validated_and_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _make_run(tmp_path, "live", status="running", end_time=None)
+    _make_run(tmp_path, "history", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+    accepted: list[tuple[str, str, str]] = []
+
+    def handler(agent_id: str, message: str, submission_id: str) -> bool:
+        accepted.append((agent_id, message, submission_id))
+        return True
+
+    httpd, url, token = serve(run_dir, open_browser=False, steer_handler=handler)
+    try:
+        cookie = _session_cookie(url, token)
+        body = {"agent_id": "root", "message": "review", "run": "history", "submission_id": "s-1"}
+        assert _post(url, "/api/agents/steer", body, cookie=cookie)[0] == 409
+        body["run"] = "live"
+        assert (
+            _post(url, "/api/agents/steer", {**body, "submission_id": "x" * 129}, cookie=cookie)[0]
+            == 400
+        )
+        assert accepted == []
+        for _ in range(2):
+            status, raw = _post(url, "/api/agents/steer", body, cookie=cookie)
+            assert status == 200
+            assert json.loads(raw) == {"ok": True, "status": "queued"}
+        assert accepted == [("root", "review", "s-1")]
+        assert (
+            _post(url, "/api/agents/steer", {**body, "message": "changed"}, cookie=cookie)[0] == 409
+        )
+        summary = json.loads((run_dir / "run.json").read_text())
+        summary["status"] = "completed"
+        summary["end_time"] = "2026-01-01T00:00:00Z"
+        (run_dir / "run.json").write_text(json.dumps(summary))
+        assert (
+            _post(url, "/api/agents/steer", {**body, "submission_id": "s-2"}, cookie=cookie)[0]
+            == 409
+        )
+        assert len(accepted) == 1
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_scan_controls_require_capability_run_and_explicit_valid_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _make_run(tmp_path, "live", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+    controls: list[str] = []
+
+    def control(action: str, _submission_id: str) -> bool:
+        controls.append(action)
+        return True
+
+    httpd, url, token = serve(run_dir, open_browser=False, control_handler=control)
+    try:
+        body = {"action": "resume", "run": "live", "submission_id": "control-1"}
+        assert _post(url, "/api/scan/control", body)[0] == 403
+        cookie = _session_cookie(url, token)
+        assert _post(url, "/api/scan/control", {**body, "run": "other"}, cookie=cookie)[0] == 409
+        assert _post(url, "/api/scan/control", {**body, "action": "go"}, cookie=cookie)[0] == 400
+        assert controls == []
+        assert json.loads(_post(url, "/api/scan/control", body, cookie=cookie)[1])["ok"]
+        assert json.loads(_post(url, "/api/scan/control", body, cookie=cookie)[1])["ok"]
+        assert controls == ["resume"]
+        assert (
+            _post(url, "/api/scan/control", {**body, "action": "increase_budget"}, cookie=cookie)[0]
+            == 409
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_unknown_delivery_retains_submission_identity_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _make_run(tmp_path, "live", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+    attempts: list[str] = []
+
+    def handler(_agent_id: str, _message: str, submission_id: str) -> bool:
+        attempts.append(submission_id)
+        if len(attempts) == 1:
+            raise TimeoutError("bridge still pending")
+        return True
+
+    httpd, url, token = serve(run_dir, open_browser=False, steer_handler=handler)
+    try:
+        cookie = _session_cookie(url, token)
+        body = {"agent_id": "root", "message": "review", "run": "live", "submission_id": "retry"}
+        assert json.loads(_post(url, "/api/agents/steer", body, cookie=cookie)[1]) == {
+            "ok": False,
+            "error": "delivery_unknown",
+        }
+        assert (
+            _post(url, "/api/agents/steer", {**body, "message": "changed"}, cookie=cookie)[0] == 409
+        )
+        assert json.loads(_post(url, "/api/agents/steer", body, cookie=cookie)[1])["ok"]
+        assert json.loads(_post(url, "/api/agents/steer", body, cookie=cookie)[1])["ok"]
+        assert attempts == ["retry", "retry"]
     finally:
         httpd.shutdown()
         httpd.server_close()

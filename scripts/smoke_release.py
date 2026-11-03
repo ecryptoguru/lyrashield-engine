@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from smoke_budget_release import check_budget_boundary
+
 
 def main() -> int:
     binary = Path(sys.argv[1])
@@ -35,6 +37,12 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+
+    try:
+        check_budget_boundary(binary)
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(f"Binary budget smoke test failed: {error}", file=sys.stderr)  # noqa: T201
+        return 1
 
     return 0
 

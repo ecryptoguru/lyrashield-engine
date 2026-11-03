@@ -75,7 +75,12 @@ def test_python_locks_meet_the_reviewed_security_floors() -> None:
 
 def test_npm_lock_meets_the_reviewed_parser_and_address_floors() -> None:
     lock = json.loads((ROOT / "containers/npm-tools/package-lock.json").read_text(encoding="utf-8"))
-    floors = {"brace-expansion": "5.0.11", "ip-address": "10.7.1"}
+    floors = {
+        "brace-expansion": "5.0.11",
+        "glob": "14.0.2",
+        "minimatch": "11.0.1",
+        "zod": "4.6.6",
+    }
     actual = {name: lock["packages"][f"node_modules/{name}"]["version"] for name in floors}
     below_floor = {
         name: {"actual": actual[name], "minimum": minimum}
@@ -83,6 +88,8 @@ def test_npm_lock_meets_the_reviewed_parser_and_address_floors() -> None:
         if Version(actual[name]) < Version(minimum)
     }
     assert not below_floor, f"sandbox npm packages below reviewed security floors: {below_floor}"
+    # Retire 6 uses its own HTTP/HTTPS proxy client, removing this old chain.
+    assert not any(path.endswith(("/basic-ftp", "/ip-address")) for path in lock["packages"])
 
 
 def _locked_version(name: str) -> str:

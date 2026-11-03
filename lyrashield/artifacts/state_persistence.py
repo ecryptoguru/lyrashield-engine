@@ -80,7 +80,7 @@ def initial_run_record(
         "seq": 0,
         "turn_count": 0,
     }
-    if record["schema_version"] == _evidence.RUN_RECORD_SCHEMA_VERSION_1_1:
+    if _evidence.record_supports_evidence_v1_1(record):
         record["evidence_format"] = _evidence.RUN_RECORD_SCHEMA_VERSION_1_1
     if extra:
         # Required contract fields are immutable here: extra must not

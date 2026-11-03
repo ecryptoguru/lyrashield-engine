@@ -49,4 +49,5 @@ def test_help_preserves_scan_cli_flag_surface(
         "--runtime-budget-seconds",
         "--run-name",
         "--resume",
+        "--fail-on",
     }

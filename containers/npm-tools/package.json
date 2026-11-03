@@ -7,7 +7,12 @@
     "agent-browser": "0.26.0",
     "eslint": "10.8.1",
     "js-beautify": "2.0.3",
-    "retire": "5.4.3",
+    "retire": "6.1.0",
     "tree-sitter-cli": "0.26.12"
+  },
+  "overrides": {
+    "glob": "14.0.2",
+    "minimatch": "11.0.1",
+    "zod": "4.6.6"
   }
 }

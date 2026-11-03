@@ -229,17 +229,25 @@ jobs:
         if: steps.changed_paths.outputs.docs_only != 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      - name: Hydrate qualified runtime inputs
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 containers/system-python-security/hydrate_runtime_inputs.py --download
+
       - name: Build sandbox image
         if: steps.changed_paths.outputs.docs_only != 'true'
-        run: |
-          docker buildx build \
-            -f containers/Dockerfile \
-            -t lyrashield-sandbox:ci \
-            --cache-from type=gha,scope=engine-sandbox-v1 \
-            --cache-to type=gha,mode=max,scope=engine-sandbox-v1 \
-            --load \
-            --progress=plain \
-            .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: containers/Dockerfile
+          tags: lyrashield-sandbox:ci
+          load: true
+          push: false
+          cache-from: type=gha,version=2,scope=engine-sandbox-v1
+          cache-to: type=gha,version=2,mode=max,scope=engine-sandbox-v1
 
       - name: Smoke sandbox image
         if: steps.changed_paths.outputs.docs_only != 'true'
@@ -324,7 +332,7 @@ jobs:
   windows-attachment-boundary:
     name: Native Windows attachment boundary
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -337,3 +345,34 @@ jobs:
         run: |
           uv sync --frozen --extra viewer
           uv run pytest -q tests/test_attachments.py
+      - name: Verify durable budgets through native Win32 handles
+        run: >
+          uv run pytest -q tests/test_finite_budget_journal.py
+          tests/test_finite_budget_durability.py tests/test_finite_budget_ui_handoff.py
+          tests/test_finite_budget_review_corrections.py tests/test_finite_budget_review_round2.py
+          tests/test_finite_budget_windows.py tests/test_finite_budget_windows_namespace.py
+          tests/test_finite_budget_filesystem.py
+          tests/test_pending_http_evidence.py
+          tests/test_pending_http_evidence_failures.py tests/test_resume_state.py
+      - name: Build and exercise the packaged Windows financial backend
+        shell: bash
+        run: bash scripts/build.sh
+
+  macos-financial-boundary:
+    name: Native macOS financial boundary
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Verify durable budgets and extended ACLs on native macOS
+        run: |
+          uv sync --frozen --extra viewer
+          uv run pytest -q tests/test_finite_budget_journal.py tests/test_finite_budget_durability.py tests/test_finite_budget_ui_handoff.py tests/test_finite_budget_review_corrections.py tests/test_finite_budget_review_round2.py tests/test_finite_budget_filesystem.py tests/test_attachments.py
+      - name: Build and exercise the packaged macOS financial backend
+        run: bash scripts/build.sh

@@ -14,12 +14,12 @@ DOCKERIGNORE = Path(__file__).parents[1] / ".dockerignore"
 NPM_TOOLS = Path(__file__).parents[1] / "containers" / "npm-tools"
 
 
-def test_gitleaks_install_is_version_and_checksum_pinned() -> None:
+def test_gitleaks_install_is_source_and_checksum_pinned() -> None:
     content = DOCKERFILE.read_text(encoding="utf-8")
 
-    assert "ARG GITLEAKS_VERSION=" in content
-    assert "ARG GITLEAKS_LINUX_X64_SHA256=" in content
-    assert "ARG GITLEAKS_LINUX_ARM64_SHA256=" in content
+    sources = (DOCKERFILE.parent / "go-tools" / "sources.tsv").read_text()
+    assert "gitleaks|gitleaks/gitleaks|83d9cd684c87d95d656c1458ef04895a7f1cbd8e|" in sources
+    assert "version.Version=8.30.1" in sources
     assert "sha256sum -c -" in content
     assert "api.github.com/repos/gitleaks/gitleaks/releases/latest" not in content
 
@@ -56,8 +56,8 @@ def test_every_external_sandbox_input_is_immutable_or_hash_verified() -> None:
     assert "trivy/main/contrib/install.sh" not in content
     assert "nuclei -update-templates" not in content
     assert 'git clone --depth 1 "${repo_url}"' not in content
-    assert "ARG TRUFFLEHOG_VERSION=" in content
-    assert "ARG TRIVY_VERSION=" in content
+    assert "COPY containers/go-tools/ /opt/lyrashield/go-tools/" in content
+    assert "sh /opt/lyrashield/go-tools/build.sh /out/bin" in content
     assert "ARG CAIDO_LINUX_X64_SHA256=" in content
     assert "ARG CAIDO_LINUX_ARM64_SHA256=" in content
     assert "--require-hashes" in content
@@ -85,15 +85,14 @@ def assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(content: str) -> 
     trusted key the image happens to carry, so the hash check would be pinning
     a file that nothing forces apt to consult.
     """
-    deb_lines = [
-        line
-        for line in content.splitlines()
-        if "printf 'deb " in line and "archive.kali.org/kali" in line
-    ]
-    assert len(deb_lines) == 2, f"expected one Kali deb line per stage, found {len(deb_lines)}"
+    deb_lines = [line for line in content.splitlines() if "printf 'deb " in line]
+    assert len(deb_lines) == 4, (
+        f"expected two bootstrap and two CDN deb lines, found {len(deb_lines)}"
+    )
     for line in deb_lines:
         match = KALI_DEB_RE.match(line)
         assert match is not None, f"unparsable Kali deb line: {line}"
+        assert "http://archive.kali.org/kali" in line or "https://kali.download/kali" in line
         opts = match.group("opts") or ""
         assert f"signed-by={KALI_KEYRING_PATH}" in opts, (
             f"Kali deb line is not signed by the pinned keyring: {line}"
@@ -113,12 +112,32 @@ def test_every_kali_deb_line_is_signed_by_the_pinned_keyring() -> None:
     with pytest.raises(AssertionError):
         assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(unsigned)
 
+    unsigned_cdn = content.replace(
+        f"deb [signed-by={KALI_KEYRING_PATH}] https://kali.download/kali",
+        "deb https://kali.download/kali",
+    )
+    assert unsigned_cdn != content
+    with pytest.raises(AssertionError):
+        assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(unsigned_cdn)
+
     wrong_key = content.replace(
         f"deb [signed-by={KALI_KEYRING_PATH}] http://",
         "deb [signed-by=/etc/apt/trusted.gpg.d/other.gpg] http://",
     )
     with pytest.raises(AssertionError):
         assert_every_kali_deb_line_is_signed_by_the_pinned_keyring(wrong_key)
+
+
+def test_go_builder_bootstraps_ca_before_installing_tools_from_signed_https_cdn() -> None:
+    builder = DOCKERFILE.read_text(encoding="utf-8").split("# Runtime stage", 1)[0]
+    ca_install = "apt-get install -y --no-install-recommends ca-certificates"
+    signed_cdn = f"deb [signed-by={KALI_KEYRING_PATH}] https://kali.download/kali"
+    tools_install = "apt-get install -y --no-install-recommends curl tar git patch"
+    assert builder.index("sha256sum -c -") < builder.index(ca_install)
+    assert builder.index(ca_install) < builder.index(signed_cdn) < builder.index(tools_install)
+    assert '"$KALI_APT_SUITE" > /etc/apt/sources.list' in builder
+    assert "apt-get update" in builder[builder.index(signed_cdn) : builder.index(tools_install)]
+    assert "Verify-Peer" not in builder
 
 
 def test_caido_download_retries_transient_server_errors() -> None:

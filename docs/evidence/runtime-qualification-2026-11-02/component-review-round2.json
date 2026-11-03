@@ -1,0 +1,144 @@
+{
+  "reviewed_base": "3ed248e4da98768040b5e0a6e731b2a67a16daf5",
+  "scope": "Three residual component findings; no image build/promotion or full image security acceptance. Go/system-Python sources and dependency pins unchanged.",
+  "fixes": [
+    {
+      "id": 1,
+      "severity": "P1",
+      "change": "Validate each source X.509 DER with the already-pinned cryptography parser and exact serialization roundtrip; independently compare canonical DER fingerprints enumerated by the actual TLS context against G3. Existing complete framing, permission, missing-file and usable-store checks retained.",
+      "exact_full_smoke_reproduction": {
+        "real_tls_context_canonicalizes_trailing_g3": true,
+        "old_full_smoke": "exit0 with false pass receipt",
+        "fixed_full_smoke": "nonzero without pass receipt"
+      }
+    },
+    {
+      "id": 2,
+      "severity": "P1",
+      "change": "Require pip, pip3 and the current pipX.Y launcher independently of mutable RECORD enumeration. Each requires its canonical hashed RECORD row, admitted template/interpreter and executable mode0755.",
+      "regressions": [
+        "omitted row plus shell-script tamper rejected without mutation",
+        "mode-only non-executable launcher rejected without mutation",
+        "positive repair preserves every launcher byte and mode"
+      ]
+    },
+    {
+      "id": 3,
+      "severity": "P2",
+      "change": "Reject multiply linked existing output files during preflight before the first mutation.",
+      "regressions": [
+        "vendor.txt external hard link",
+        "CycloneDX BOM external hard link",
+        "RECORD external hard link",
+        "external bytes/inode/mode and environment snapshot unchanged on rejection"
+      ]
+    }
+  ],
+  "verification": {
+    "focused_python_tests": {
+      "passed": 55,
+      "failed": 0,
+      "command": "pytest tests/test_pip_vendor_repair.py tests/test_sandbox_system_ca.py tests/test_retire_tls_patch.py tests/test_sandbox_requirements_lock.py tests/test_sandbox_release_workflow.py tests/test_brotli_install.py tests/test_quality_environments.py -q"
+    },
+    "ruff": "pass",
+    "format_files": 4,
+    "host_real_python": "3.13",
+    "host_real_results": [
+      {
+        "round2_real_probes": [
+          "omitted versioned-launcher row and tamper rejected without mutation",
+          "non-executable current launcher rejected without mutation",
+          "hardlinked vendor.txt rejected with external bytes/inode/mode intact",
+          "full smoke rejects trailing G3 despite real TLS canonicalization, no pass receipt"
+        ],
+        "versioned_launcher": "pip3.13",
+        "launcher_modes": "0755"
+      },
+      {
+        "pip": "26.2.2",
+        "urllib3": "2.8.0",
+        "msgpack": "1.2.3",
+        "pure_python": true,
+        "cache_roundtrip": "pass",
+        "pip_download_cache_install": "pass",
+        "tls_verified_and_untrusted_rejected": "pass",
+        "compromised_root_absent_from_bundle": "pass",
+        "loopback_requests": 3
+      }
+    ],
+    "linux_components": {
+      "arm64": {
+        "baseline_image": "sha256:52e38fb8105145c7b049291c4ecc1e12d619633acd47cf97f3ab704ac2d118c0",
+        "bounds": "serial network-none component fixture;512MB/0.5CPU; pip install/repair/verifier as pentester",
+        "python": "3.14",
+        "sandbox_testing_ca_cafile": "trusted",
+        "sandbox_testing_ca_capath": "trusted",
+        "results": [
+          {
+            "round2_real_probes": [
+              "omitted versioned-launcher row and tamper rejected without mutation",
+              "non-executable current launcher rejected without mutation",
+              "hardlinked vendor.txt rejected with external bytes/inode/mode intact",
+              "full smoke rejects trailing G3 despite real TLS canonicalization, no pass receipt"
+            ],
+            "versioned_launcher": "pip3.14",
+            "launcher_modes": "0755"
+          },
+          {
+            "pip": "26.2.2",
+            "urllib3": "2.8.0",
+            "msgpack": "1.2.3",
+            "pure_python": true,
+            "cache_roundtrip": "pass",
+            "pip_download_cache_install": "pass",
+            "tls_verified_and_untrusted_rejected": "pass",
+            "compromised_root_absent_from_bundle": "pass",
+            "loopback_requests": 3
+          }
+        ],
+        "pip_check": "pass",
+        "log_sha256": "3a31e4accefa3d31e7aafda861033879fce3dc244f3588f4a03fe7c141d63a3c"
+      },
+      "amd64": {
+        "baseline_image": "sha256:b498ad21f38a2556bbb6f9218975d643b6b321e5e4772a9c704c1ac3176e4c01",
+        "bounds": "serial network-none component fixture;512MB/0.5CPU; pip install/repair/verifier as pentester",
+        "python": "3.14",
+        "sandbox_testing_ca_cafile": "trusted",
+        "sandbox_testing_ca_capath": "trusted",
+        "results": [
+          {
+            "round2_real_probes": [
+              "omitted versioned-launcher row and tamper rejected without mutation",
+              "non-executable current launcher rejected without mutation",
+              "hardlinked vendor.txt rejected with external bytes/inode/mode intact",
+              "full smoke rejects trailing G3 despite real TLS canonicalization, no pass receipt"
+            ],
+            "versioned_launcher": "pip3.14",
+            "launcher_modes": "0755"
+          },
+          {
+            "pip": "26.2.2",
+            "urllib3": "2.8.0",
+            "msgpack": "1.2.3",
+            "pure_python": true,
+            "cache_roundtrip": "pass",
+            "pip_download_cache_install": "pass",
+            "tls_verified_and_untrusted_rejected": "pass",
+            "compromised_root_absent_from_bundle": "pass",
+            "loopback_requests": 3
+          }
+        ],
+        "pip_check": "pass",
+        "log_sha256": "1c4356b43c7779dda5f90bb455a0034774afe2ef0f26aa1a240ecc6719bec4ce"
+      }
+    },
+    "observed_warning": "The pre-existing CA bundle includes a certificate with nonpositive serial. The pinned cryptography parser emits its deprecation warning; current positive controls pass. No warning suppression or trust-anchor removal was added."
+  },
+  "source_sha256": {
+    "containers/verify_ca_bundle.py": "069340357a73f212ff15ec36a34a485cc876f9a48eefee209ec709ee7ecafc4a",
+    "containers/repair_pip_vendors.py": "3773b54f743e4fcb45685f3252e7650b2ee5cce7f9ad19efa7f44d7ff9854999",
+    "tests/test_sandbox_system_ca.py": "35789ac20fd374bd0aa85e3ab1e47dc7e7a7586bc3676b1b5fce6e7a89aeee95",
+    "tests/test_pip_vendor_repair.py": "ebfbdde261fd3866de4e1def5004f65e0e2f3a4c79981f08404cb08554dd1689"
+  },
+  "remaining_gate": "Parent integration and final rebuilt-image smoke/inventory/security qualification remain separate."
+}

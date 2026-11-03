@@ -2,6 +2,7 @@
 # Controlled subprocess boundary: provenance lookup resolves Git and uses shell=False.
 # Same-name aliases below are explicit re-exports for strict mypy compatibility.
 # ruff: noqa: PLC0414
+import copy
 import logging
 import threading
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from agents.usage import Usage
 
 from lyrashield.artifacts import evidence as _evidence
 from lyrashield.artifacts import quality as _quality
+from lyrashield.artifacts.finite_budget import BudgetJournal
 from lyrashield.artifacts.repo_context import (
     _derive_repository_context as _derive_repository_context,
 )
@@ -248,6 +250,7 @@ class ReportState:
         self._raw_targets_info: list[dict[str, Any]] = []
         self._raw_local_sources: list[dict[str, Any]] = []
         self._llm_usage = LLMUsageLedger()
+        self._finite_budget: BudgetJournal | None = None
         self._provider_usage_receipts: dict[str, dict[str, Any]] = {}
         configured_model = load_settings().llm.model
         auth_mode = codex.auth_mode(configured_model)
@@ -297,8 +300,11 @@ class ReportState:
         self._scope_violations_seen = 0
         self._scope_dropped_seen = 0
 
-    def get_run_dir(self) -> Path:
-        return _get_run_dir(self, run_dir_for=run_dir_for)
+    def get_run_dir(self, *, create: bool = True, cwd: Path | None = None) -> Path:
+        if not create:
+            return self._run_dir or run_dir_for(self.run_name or self.run_id, cwd=cwd)
+        resolver = run_dir_for if cwd is None else lambda name: run_dir_for(name, cwd=cwd)
+        return _get_run_dir(self, run_dir_for=resolver)
 
     def hydrate_from_run_dir(self) -> None:
         _hydrate_from_run_dir(
@@ -376,6 +382,14 @@ class ReportState:
         """
         self.run_record["evidence_export"] = dict(outcome)
 
+    async def reconcile_http_exchange_evidence(
+        self, client: Any, *, exporter: Callable[..., Any] | None = None
+    ) -> dict[str, Any]:
+        """Resolve pending claims only through the durable export transaction."""
+        from lyrashield.artifacts.pending_http import reconcile_http_exchange_evidence
+
+        return await reconcile_http_exchange_evidence(self, client, exporter=exporter)
+
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
         # E4: return sanitized snapshots so dedupe and other consumers never
         # see raw secrets or host paths from the in-memory reports.
@@ -396,8 +410,53 @@ class ReportState:
         agent_name: str | None = None,
         model: str | None = None,
         response_id: str | None = None,
+        budget_attempt: str | None = None,
+        budget_cost: float = 0.0,
     ) -> bool:
         """Record SDK-native token usage and return whether it was persisted."""
+        if self._finite_budget is not None:
+            with self._report_artifacts_lock:
+                owner = self._finite_budget
+                self._adopt_financial_snapshot(owner.snapshot())
+                from lyrashield.artifacts.finite_budget import observation_key
+
+                identity = observation_key(model, response_id)
+                observed = owner.observation(identity)
+                if observed is not None and observed["settled"] and budget_attempt is None:
+                    return True
+                candidate = copy.deepcopy(self.run_record)
+                ledger = copy.deepcopy(self._llm_usage)
+                ledger.record(
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model=model,
+                    usage=usage,
+                    observed_cost=observed is not None,
+                    provider_receipt=self._provider_usage_receipts.pop(response_id, None)
+                    if response_id
+                    else None,
+                )
+                candidate["llm_usage"] = ledger.to_record()
+                candidate["turn_count"] = self._turn_count + 1
+                if budget_attempt is not None:
+                    if not owner.settle(
+                        budget_attempt,
+                        candidate,
+                        budget_cost,
+                        observation=identity if observed is not None else None,
+                    ):
+                        return True
+                else:
+                    owner.checkpoint_known(
+                        candidate, settled_observation=identity if observed is not None else None
+                    )
+                self._llm_usage = ledger
+                self._adopt_financial_snapshot(owner.snapshot())
+                try:
+                    return self.save_run_data()
+                except OSError:
+                    logger.exception("report projection failed after durable usage settlement")
+                    return False
         self._llm_usage.record(
             agent_id=agent_id,
             agent_name=agent_name,
@@ -410,6 +469,31 @@ class ReportState:
         self._turn_count += 1
         self._set_phase("running")
         return self.save_run_data()
+
+    def _adopt_financial_snapshot(self, record: dict[str, Any]) -> None:
+        from lyrashield.artifacts.finite_budget import GUARD
+
+        for key in ("llm_usage", "web_search_usage", GUARD):
+            if key in record:
+                self.run_record[key] = copy.deepcopy(record[key])
+            else:
+                self.run_record.pop(key, None)
+        if self._llm_usage.to_record() != record.get("llm_usage"):
+            self._hydrate_llm_usage(record.get("llm_usage"))
+        self._turn_count = max(self._turn_count, record.get("turn_count", 0))
+        self._save_seq = max(self._save_seq, record.get("seq", 0))
+        self.run_record["turn_count"] = self._turn_count
+
+    def enable_finite_budget(self, limit: float | None) -> BudgetJournal:
+        from lyrashield.artifacts.finite_budget import own_journal
+
+        if self._finite_budget is None:
+            if self._run_dir is None:
+                self._run_dir = run_dir_for(self.run_name or self.run_id)
+            self._finite_budget = own_journal(self._run_dir, self.run_record, limit)
+        self._finite_budget.restore_limit(limit)
+        self._adopt_financial_snapshot(self._finite_budget.snapshot())
+        return self._finite_budget
 
     def capture_provider_usage(self, response: Any) -> None:
         """Capture raw numeric buckets before the SDK fills absent fields with zero."""
@@ -427,7 +511,28 @@ class ReportState:
         model: str | None = None,
         response_id: str | None = None,
     ) -> None:
-        self._llm_usage.record_observed_cost(cost, model=model, response_id=response_id)
+        with self._report_artifacts_lock:
+            if self._finite_budget is None:
+                self._llm_usage.record_observed_cost(cost, model=model, response_id=response_id)
+                return
+            from lyrashield.artifacts.finite_budget import observation_key
+
+            owner = self._finite_budget
+            self._adopt_financial_snapshot(owner.snapshot())
+            identity = observation_key(model, response_id)
+            if owner.observation(identity) is not None:
+                return
+            ledger = copy.deepcopy(self._llm_usage)
+            ledger.record_observed_cost(cost, model=model, response_id=response_id)
+            candidate = copy.deepcopy(self.run_record)
+            candidate["llm_usage"] = ledger.to_record()
+            if candidate["llm_usage"] == self.run_record.get("llm_usage"):
+                return
+            saved = owner.checkpoint_known(
+                candidate, observed=(identity, cost) if identity else None
+            )
+            self._llm_usage = ledger
+            self._adopt_financial_snapshot(saved)
 
     def get_total_llm_usage(self) -> dict[str, Any]:
         return dict(self.run_record.get("llm_usage") or self._build_llm_usage_record())
@@ -486,6 +591,7 @@ class ReportState:
         mode: str,
         provider: str = "parallel",
         estimated_cost: float = 0.0,
+        budget_attempt: str | None = None,
     ) -> None:
         """Commit a reserved web-search call at its actual charge."""
         with self._web_search_lock:
@@ -493,7 +599,9 @@ class ReportState:
             self._web_search_reserved_cost = max(
                 0.0, self._web_search_reserved_cost - max(0.0, estimated_cost)
             )
-        self.record_web_search_cost(cost, query=query, mode=mode, provider=provider)
+        self.record_web_search_cost(
+            cost, query=query, mode=mode, provider=provider, budget_attempt=budget_attempt
+        )
 
     def record_web_search_cost(
         self,
@@ -502,8 +610,33 @@ class ReportState:
         query: str,
         mode: str,
         provider: str = "parallel",
+        budget_attempt: str | None = None,
     ) -> None:
         """Record a web search call's cost and append it to the run record."""
+        if self._finite_budget is not None:
+            with self._report_artifacts_lock:
+                owner = self._finite_budget
+                self._adopt_financial_snapshot(owner.snapshot())
+                ledger = copy.deepcopy(self._llm_usage)
+                ledger.record_ancillary_cost("web_search", cost)
+                candidate = copy.deepcopy(self.run_record)
+                candidate["llm_usage"] = ledger.to_record()
+                candidate.setdefault("web_search_usage", []).append(
+                    {
+                        "provider": provider,
+                        "mode": mode,
+                        "query": query,
+                        "cost": _round_cost(cost),
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
+                if budget_attempt is not None:
+                    owner.settle(budget_attempt, candidate, cost)
+                else:
+                    owner.checkpoint_known(candidate)
+                self._adopt_financial_snapshot(owner.snapshot())
+                self.save_run_data()
+                return
         if cost > 0:
             # Ancillary provider charge: stays metered even when the model
             # tokens ride a subscription (I19).

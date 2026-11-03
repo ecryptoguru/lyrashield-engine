@@ -1,6 +1,6 @@
 # LyraShield Engine
 
-LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) v1.6.2, pinned at `ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only through an exact, review-gated compatibility patch described in [UPGRADES.md](UPGRADES.md).
+LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) at the exact upstream commit `200a501f15a24a4152f92897a6b72af238ee69ef` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only through an exact, review-gated compatibility patch described in [UPGRADES.md](UPGRADES.md).
 
 See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
 
@@ -128,7 +128,7 @@ Run the full gate before opening or approving a change:
 bash scripts/verify-controlled-derivative.sh
 ```
 
-The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), strict mypy, Bandit, and the public worker contract. It also enforces the exact reviewed `strix/**` patch: two allowed modified paths plus two reviewed skill deletions, a +22/-201 footprint ceiling, and patch-object digest `3629e8f382fdd8eccf78553b102a25e99c73454c`. Any path or byte-level change outside that reviewed patch fails the gate.
+The repository is maintained as a controlled derivative (not a thin fork). The gate covers Ruff lint/format, the full test suite (`pytest`), strict mypy, and Bandit. The public worker-consumer contract runs as a separate gate. It also enforces the exact reviewed `strix/**` patch: two allowed modified paths plus two reviewed skill deletions, a +22/-201 footprint ceiling, and patch-object digest `51682200fe3b9ec8fa2e0f998c80c095e7add114`. Any path or byte-level change outside that reviewed patch fails the gate.
 
 Engine CI (`.github/workflows/ci.yml`) runs the same quality gates on every pull request and push to `main`, in addition to CLI/native build, sandbox smoke, and cross-repository worker contract checks. Mypy strict is the Python type gate. Merged revision `944a84f` recorded 1,302 passed and 1 skipped in its full pytest run; this is a revision-bound snapshot, and the executable gates remain the current source of truth.
 

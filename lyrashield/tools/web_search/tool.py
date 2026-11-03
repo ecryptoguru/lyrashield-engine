@@ -290,7 +290,7 @@ def _summarize_results(results: list[dict[str, Any]], max_results: int) -> str:
 
 
 @function_tool(timeout=15)
-async def web_search(
+async def web_search(  # noqa: PLR0912, PLR0915 - shared financial admission and settlement stay together
     ctx: RunContextWrapper,
     query: str,
     topic: Literal[
@@ -320,8 +320,9 @@ async def web_search(
     web_search_settings = settings.web_search
     api_key = web_search_settings.api_key
 
-    from lyrashield.artifacts.state import get_global_report_state
-    from lyrashield.lifecycle.hooks import get_active_hooks
+    from lyrashield.artifacts.finite_budget import FinancialStateError, protected_run
+    from lyrashield.artifacts.state import ReportState, get_global_report_state
+    from lyrashield.lifecycle.hooks import ReportUsageHooks, get_active_hooks
 
     report_state = get_global_report_state()
 
@@ -356,7 +357,23 @@ async def web_search(
                 default=str,
             )
     slot_reserved = report_state is not None
+    dispatched = False
+    financial_uncertain = False
+    finite = isinstance(report_state, ReportState) and (
+        report_state._finite_budget is not None
+        or protected_run(report_state.get_run_dir(), report_state.run_record)
+    )
     try:
+        if finite and report_state is not None:
+            owner = report_state.enable_finite_budget(None)
+            if hooks is None:
+                hooks = ReportUsageHooks(
+                    model="web-search", max_budget_usd=owner.limit, report_state=report_state
+                )
+            if hooks._journal is not owner:
+                raise FinancialStateError("search hook does not own the finite run")  # noqa: TRY301 - settle only a provably unused admission
+        elif isinstance(hooks, ReportUsageHooks) and hooks._max_budget_usd is not None:
+            raise FinancialStateError("finite search requires its scan financial owner")  # noqa: TRY301 - return bounded tool failure
         if hooks is not None:
             await hooks.reserve_web_search_call(
                 key=reservation_key,
@@ -375,6 +392,16 @@ async def web_search(
         import httpx
 
         async with httpx.AsyncClient(timeout=15) as client:
+            if finite:
+                try:
+                    attempt = hooks.durable_attempt(reservation_key) if hooks is not None else None
+                    if attempt is None or hooks is None or hooks._journal is None:
+                        raise FinancialStateError("search has no durable admission")  # noqa: TRY301 - retain uncertainty in the outer finally
+                    hooks._journal.authorize(attempt)
+                except FinancialStateError:
+                    financial_uncertain = True
+                    raise
+            dispatched = True
             response = await client.post(
                 f"{api_base}/search",
                 headers={
@@ -414,6 +441,11 @@ async def web_search(
                 query=redacted_query,
                 mode=mode,
                 estimated_cost=estimated_cost,
+                **(
+                    dict[str, Any](budget_attempt=hooks.durable_attempt(reservation_key))
+                    if hooks is not None and hooks._journal is not None
+                    else {}
+                ),
             )
             slot_reserved = False
 
@@ -433,12 +465,18 @@ async def web_search(
             default=str,
         )
     finally:
-        # Release the global-budget reservation and the per-scan slot unless
-        # the success path already committed both.
+        # After dispatch, a lost response can still be billable. Keep both
+        # the shared quote and dedicated search allowance uncertain; only
+        # pre-dispatch failures may return the allowance to the caller.
         if hooks is not None:
             await hooks.release_web_search_call(
                 key=reservation_key,
-                actual_cost=0.0,
+                actual_cost=None if dispatched or financial_uncertain else 0.0,
             )
-        if slot_reserved and report_state is not None:
+        if (
+            slot_reserved
+            and report_state is not None
+            and not dispatched
+            and not financial_uncertain
+        ):
             report_state.release_web_search_reservation(estimated_cost)

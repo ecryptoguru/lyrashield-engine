@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import litellm
@@ -9,7 +10,29 @@ from strix.report.pricing import resolve_litellm_model
 from strix.report.usage import LLMUsageLedger
 
 
-def test_resolves_common_bare_model_names() -> None:
+if TYPE_CHECKING:
+    import pytest
+
+
+def test_resolves_common_bare_model_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Resolver behavior must not depend on a network-refreshed cost catalog.
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            "deepseek/deepseek-v4-flash": {
+                "litellm_provider": "deepseek",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            },
+            "minimax/MiniMax-M3": {
+                "litellm_provider": "minimax",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            },
+        },
+    )
     resolve_litellm_model.cache_clear()
     assert resolve_litellm_model("deepseek-v4-flash") == "deepseek/deepseek-v4-flash"
     assert resolve_litellm_model("openai/deepseek-v4-flash") == "deepseek/deepseek-v4-flash"

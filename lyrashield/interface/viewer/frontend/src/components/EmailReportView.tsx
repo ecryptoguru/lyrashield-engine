@@ -4,11 +4,15 @@ import { ReportLoadError } from "@/components/ReportLoadError";
 export default function EmailReportView({
   markdown,
   error,
+  loaded,
+  loading,
   onRetry,
   onExit,
 }: {
   markdown: string | null;
   error: string | null;
+  loaded: boolean;
+  loading: boolean;
   onRetry: () => void;
   onExit: () => void;
 }) {
@@ -22,9 +26,8 @@ export default function EmailReportView({
         Download the local Markdown report. Reports may contain sensitive target details;
         store and share them carefully.
       </p>
-      {error ? (
-        <ReportLoadError message={error} onRetry={onRetry} />
-      ) : markdown ? (
+      {error && <ReportLoadError message={error} onRetry={onRetry} />}
+      {markdown ? (
         <a
           href={"data:text/markdown;charset=utf-8," + encodeURIComponent(markdown)}
           download="lyrashield-report.md"
@@ -32,9 +35,9 @@ export default function EmailReportView({
         >
           <Download className="h-4 w-4" /> Download Markdown
         </a>
-      ) : (
+      ) : loaded && !loading && !error ? (
         <p role="status" className="text-sm text-[#aaa]">No report is available for this run.</p>
-      )}
+      ) : null}
     </div>
   );
 }

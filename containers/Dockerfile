@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Builder stage: compile the Go tools here so the Go toolchain (~225MB) and the
-# module/build caches never reach the runtime image. The resulting binaries are
-# statically linked and copied into the final stage.
+# module/build caches never reach an image layer. The runtime receives static Go
+# tools and architecture-specific packages for the distro tools that require CGO.
 # ---------------------------------------------------------------------------
 # The manifest-list digest is pinned so amd64 and arm64 select the exact base
 # image tested by the release workflow. Refresh it only through the sandbox
@@ -19,6 +19,10 @@ ARG KALI_APT_SUITE=kali-last-snapshot
 # exactly the file apt trusts to authenticate the index; without it apt would
 # fall back to whatever trusted key is present in the image.
 ARG KALI_APT_KEYRING_SHA256=42a247ff5a26869e3739b6d3ad125938bb5da8e7bb43ed0791d2a190cd09c64f
+COPY --chown=root:root containers/distrust_emsign_g3.sh /opt/lyrashield/distrust_emsign_g3.sh
+
+# Bootstrap CA trust from the signed archive, then acquire builder tools through
+# the same official HTTPS CDN and signed-by policy used by the runtime stage.
 RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://archive.kali.org/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
     printf 'Package: *\nPin: release n=%s\nPin-Priority: 1001\n' "$KALI_APT_SUITE" > /etc/apt/preferences.d/kali-snapshot && \
     rm -f /etc/apt/sources.list.d/* && \
@@ -28,23 +32,35 @@ RUN printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://
     apt-get full-upgrade -y --allow-downgrades && \
     apt-get install -y kali-archive-keyring && \
     apt-get update && \
-    apt-get install -y --no-install-recommends golang-go git ca-certificates
+    apt-get install -y --no-install-recommends ca-certificates && \
+    sh /opt/lyrashield/distrust_emsign_g3.sh && \
+    printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] https://kali.download/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends curl tar git patch gcc libc6-dev libpcap0.8-dev=1.10.6-2 xz-utils
 
-ENV GOBIN=/out/bin
-ARG HTTPX_COMMIT=811409809ea2b1706c49452149ab454861543138
-ARG KATANA_COMMIT=e82a2b803d9a9703b614fae492f648cca926b15b
-ARG CVEMAP_COMMIT=08c124da690a5c6acba802998931be13d6ca78ba
-ARG GOSPIDER_COMMIT=f6cc9a78d709e088e55ce62e5e92ab063f1a184b
-ARG INTERACTSH_COMMIT=810180a230fe2265385ed45695a6635b5026452a
-RUN mkdir -p /out/bin && \
-    go install -v github.com/projectdiscovery/httpx/cmd/httpx@${HTTPX_COMMIT} && \
-    go install -v github.com/projectdiscovery/katana/cmd/katana@${KATANA_COMMIT} && \
-    go install -v github.com/jaeles-project/gospider@${GOSPIDER_COMMIT} && \
-    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@${INTERACTSH_COMMIT} && \
-    git clone --filter=blob:none https://github.com/projectdiscovery/cvemap.git /tmp/cvemap && \
-    git -C /tmp/cvemap checkout --detach "${CVEMAP_COMMIT}" && \
-    cd /tmp/cvemap && go build -o /out/bin/vulnx ./cmd/vulnx && \
-    rm -rf /tmp/cvemap
+# Official compiler archives are pinned independently of the rolling apt suite.
+# GOTOOLCHAIN=local prevents a dependency from downloading a different compiler.
+ARG GO_VERSION=1.27.3
+ARG GO_LINUX_AMD64_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+ARG GO_LINUX_ARM64_SHA256=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
+RUN set -eux; \
+    case "$(uname -m)" in \
+        x86_64) GO_ARCH=amd64; GO_SHA256="$GO_LINUX_AMD64_SHA256" ;; \
+        aarch64|arm64) GO_ARCH=arm64; GO_SHA256="$GO_LINUX_ARM64_SHA256" ;; \
+        *) echo "Unsupported architecture" >&2; exit 1 ;; \
+    esac; \
+    curl --retry 5 --retry-delay 2 --retry-max-time 120 -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o /tmp/go.tgz; \
+    echo "${GO_SHA256}  /tmp/go.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/go.tgz -C /usr/local; \
+    rm /tmp/go.tgz
+ENV PATH="/usr/local/go/bin:${PATH}" GOTOOLCHAIN=local GOSUMDB=sum.golang.org
+COPY containers/go-tools/ /opt/lyrashield/go-tools/
+# Both build scripts use one bounded cache. Delete it in the same RUN that
+# populates it so neither compiler objects nor module downloads enter a layer.
+RUN export GOPATH=/tmp/lyrashield-go-cache/modules GOCACHE=/tmp/lyrashield-go-cache/build && \
+    sh /opt/lyrashield/go-tools/build.sh /out/bin && \
+    sh /opt/lyrashield/go-tools/distro/build.sh /out/distro && \
+    rm -rf /tmp/lyrashield-go-cache
 
 # ---------------------------------------------------------------------------
 # Runtime stage
@@ -74,7 +90,16 @@ RUN useradd -m -s /bin/bash pentester && \
 RUN mkdir -p /home/pentester/tools /app/certs && \
     chown -R pentester:pentester /app/certs /home/pentester/tools
 
+COPY containers/distrust_emsign_g3.sh /opt/lyrashield/distrust_emsign_g3.sh
+
+# Bootstrap HTTPS trust through the signed archive, then use Kali's official
+# CDN for the large runtime tool set. The suite, pinned keyring, signed-by and
+# fail-closed apt signature policy remain identical to the archive bootstrap.
 RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    sh /opt/lyrashield/distrust_emsign_g3.sh && \
+    printf 'deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] https://kali.download/kali %s main contrib non-free non-free-firmware\n' "$KALI_APT_SUITE" > /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     wget curl git vim nano unzip tar \
     apt-transport-https ca-certificates gnupg lsb-release \
@@ -87,7 +112,7 @@ RUN apt-get update && \
     less procps htop \
     iproute2 iputils-ping netcat-traditional \
     nmap ncat ndiff \
-    sqlmap nuclei subfinder naabu ffuf \
+    sqlmap libpcap0.8t64=1.10.6-2 \
     nodejs npm pipx \
     libcap2-bin \
     gdb \
@@ -115,13 +140,27 @@ RUN openssl ecparam -name prime256v1 -genkey -noout -out /app/certs/ca.key && \
 
 USER root
 RUN cp /app/certs/ca.crt /usr/local/share/ca-certificates/ca.crt && \
-    update-ca-certificates
+    update-ca-certificates && \
+    sh /opt/lyrashield/distrust_emsign_g3.sh
 
 USER pentester
 WORKDIR /tmp
 
+COPY containers/verify_go_tools.py /opt/lyrashield/verify_go_tools.py
+COPY containers/go-tools/distro/verify.py /opt/lyrashield/verify_distro_go_tools.py
+COPY containers/go_compression_fixtures.py /opt/lyrashield/go_compression_fixtures.py
+
 # Go tools are built in the gobuilder stage; copy the static binaries only.
-COPY --from=gobuilder --chown=pentester:pentester /out/bin/ /home/pentester/go/bin/
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/httpx /home/pentester/go/bin/httpx
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/katana /home/pentester/go/bin/katana
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/gospider /home/pentester/go/bin/gospider
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/interactsh-client /home/pentester/go/bin/interactsh-client
+COPY --from=gobuilder --chown=pentester:pentester /out/bin/vulnx /home/pentester/go/bin/vulnx
+COPY --from=gobuilder --chown=root:root /out/bin/gitleaks /usr/local/bin/gitleaks
+COPY --from=gobuilder --chown=root:root /out/bin/trivy /usr/local/bin/trivy
+COPY --from=gobuilder --chown=root:root /out/bin/trufflehog /usr/local/bin/trufflehog
+COPY --from=gobuilder /out/share/go-tools/ /usr/local/share/lyrashield/go-tools/
+COPY containers/go-tools/distro/applications.cdx.json /usr/local/share/lyrashield/go-tools/distro/applications.cdx.json
 
 ARG NUCLEI_TEMPLATES_COMMIT=166dcb625c297785f461a567e73885e8c1ae5cf3
 RUN mkdir -p /home/pentester/.local && \
@@ -130,7 +169,9 @@ RUN mkdir -p /home/pentester/.local && \
     git -C /home/pentester/.local/nuclei-templates checkout --detach "${NUCLEI_TEMPLATES_COMMIT}"
 
 COPY --chown=pentester:pentester containers/npm-tools/package.json containers/npm-tools/package-lock.json /home/pentester/.npm-tools/
+COPY --chown=pentester:pentester containers/patch_retire_tls.cjs /tmp/patch_retire_tls.cjs
 RUN npm ci --omit=dev --prefix /home/pentester/.npm-tools && \
+    node /tmp/patch_retire_tls.cjs /home/pentester/.npm-tools/node_modules && \
     npm cache clean --force && \
     # ast-grep ships two identical binaries (`ast-grep` and `sg`); dedupe (~52MB)
     ln -sf ast-grep /home/pentester/.npm-tools/node_modules/@ast-grep/cli/sg
@@ -193,59 +234,18 @@ RUN git clone --depth 1 https://github.com/aravind0x7/JS-Snooper.git && \
 
 USER root
 
-ARG TRUFFLEHOG_VERSION=3.96.0
-ARG TRUFFLEHOG_LINUX_X64_SHA256=7105f1cd6577f058a9e39d0578f1a99c8a1e481e4d3512cd8a09acfe22a0fdc0
-ARG TRUFFLEHOG_LINUX_ARM64_SHA256=50acd4c7a3b8ebfe5083d8350956057030c44be3515dedd55b45263495c490b2
-RUN set -eux; \
-    ARCH="$(uname -m)"; \
-    case "$ARCH" in \
-        x86_64) TRUFFLEHOG_ARCH="amd64"; TRUFFLEHOG_SHA256="$TRUFFLEHOG_LINUX_X64_SHA256" ;; \
-        aarch64|arm64) TRUFFLEHOG_ARCH="arm64"; TRUFFLEHOG_SHA256="$TRUFFLEHOG_LINUX_ARM64_SHA256" ;; \
-        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${TRUFFLEHOG_ARCH}.tar.gz" -o /tmp/trufflehog.tgz; \
-    echo "${TRUFFLEHOG_SHA256}  /tmp/trufflehog.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/trufflehog.tgz -C /tmp; \
-    install -m 0755 /tmp/trufflehog /usr/local/bin/trufflehog; \
-    rm -f /tmp/trufflehog /tmp/trufflehog.tgz
-ARG GITLEAKS_VERSION=8.30.1
-ARG GITLEAKS_LINUX_X64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-ARG GITLEAKS_LINUX_ARM64_SHA256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
-RUN set -eux; \
-    ARCH="$(uname -m)"; \
-    case "$ARCH" in \
-        x86_64) GITLEAKS_ARCH="x64"; GITLEAKS_SHA256="$GITLEAKS_LINUX_X64_SHA256" ;; \
-        aarch64|arm64) GITLEAKS_ARCH="arm64"; GITLEAKS_SHA256="$GITLEAKS_LINUX_ARM64_SHA256" ;; \
-        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GITLEAKS_ARCH}.tar.gz" -o /tmp/gitleaks.tgz; \
-    echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/gitleaks.tgz -C /tmp; \
-    install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks; \
-    rm -f /tmp/gitleaks /tmp/gitleaks.tgz
-
-ARG TRIVY_VERSION=0.73.0
-ARG TRIVY_LINUX_X64_SHA256=2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b
-ARG TRIVY_LINUX_ARM64_SHA256=13833d97e8a1a5367471c372a173180157f593bece570e20d5d925fef552f5dd
-RUN set -eux; \
-    ARCH="$(uname -m)"; \
-    case "$ARCH" in \
-        x86_64) TRIVY_ARCH="64bit"; TRIVY_SHA256="$TRIVY_LINUX_X64_SHA256" ;; \
-        aarch64|arm64) TRIVY_ARCH="ARM64"; TRIVY_SHA256="$TRIVY_LINUX_ARM64_SHA256" ;; \
-        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" -o /tmp/trivy.tgz; \
-    echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/trivy.tgz -C /tmp; \
-    install -m 0755 /tmp/trivy /usr/local/bin/trivy; \
-    rm -f /tmp/trivy /tmp/trivy.tgz
-
 RUN apt-get update && \
     apt-get install -y --no-install-recommends wapiti
 
 USER pentester
 
 USER root
+
+# Kali's signed kali-last-snapshot index still serves vulnerable 1.2.0-4+b1.
+# Install both Debian decoder packages, checksum-pinned for each CPU. Python's
+# extension statically bundles its decoder. Keep this after the final APT install.
+COPY containers/install_brotli.sh /opt/lyrashield/install_brotli.sh
+RUN sh /opt/lyrashield/install_brotli.sh
 
 RUN apt-get autoremove -y && \
     apt-get autoclean && \
@@ -255,6 +255,22 @@ RUN apt-get autoremove -y && \
         ! -name 'en' ! -name 'en_US' ! -name 'C' -exec rm -rf {} + && \
     # Remove package documentation and man pages not needed at runtime (~95MB)
     rm -rf /usr/share/doc/* /usr/share/doc-base/* /usr/share/man/*
+
+# Install these local packages after image-wide doc/man pruning. Apply the
+# include only to these four archives so their licenses, receipts and man page
+# survive any dpkg path exclusions without changing policy for other packages.
+RUN --mount=type=bind,from=gobuilder,source=/out/distro,target=/tmp/distro-go-debs \
+    dpkg --path-include='*' --install /tmp/distro-go-debs/*.deb && \
+    dpkg --verify ffuf naabu nuclei subfinder > /tmp/distro-go-integrity && \
+    test ! -s /tmp/distro-go-integrity && rm /tmp/distro-go-integrity
+
+# Apply qualified distro leaves/backports after every APT operation. Keep the
+# verifier and provenance available for final non-root, offline image smoke.
+COPY containers/system-python-security /opt/lyrashield/system-python-security
+RUN /usr/bin/python3 /opt/lyrashield/system-python-security/install_leaves.py \
+    --cache /opt/lyrashield/system-python-security/cache && \
+    /usr/bin/python3 /opt/lyrashield/system-python-security/amend_sources.py && \
+    /usr/bin/python3 /opt/lyrashield/system-python-security/verify_runtime.py
 
 ENV PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"
 ENV VIRTUAL_ENV="/app/.venv"
@@ -285,15 +301,18 @@ RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 COPY --chown=pentester:pentester containers/python-requirements.txt /tmp/python-requirements.txt
 COPY --chown=pentester:pentester containers/dirsearch-requirements.txt /tmp/dirsearch-requirements.txt
 COPY --chown=pentester:pentester containers/patch_dirsearch_metadata.py /tmp/patch_dirsearch_metadata.py
+COPY --chown=pentester:pentester containers/repair_pip_vendors.py /tmp/repair_pip_vendors.py
+COPY --chown=pentester:pentester containers/pip_vendor_wheels.json /tmp/pip_vendor_wheels.json
 
 USER pentester
 # Install the complete audited hash lock without re-resolving Semgrep's narrow
-# PyJWT metadata restriction; the reviewed patch and pip check enforce the graph.
+# JWT/MCP/telemetry metadata restrictions; reviewed patches and pip check enforce the graph.
 RUN python3 -m venv /app/.venv && \
-    /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/python-requirements.txt && \
+    /app/.venv/bin/pip install --force-reinstall --no-cache-dir --no-deps --require-hashes -r /tmp/python-requirements.txt && \
+    /app/.venv/bin/python /tmp/repair_pip_vendors.py && \
     /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/dirsearch-requirements.txt && \
     /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py && \
-    /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py --package semgrep && \
+    /app/.venv/bin/python /tmp/patch_dirsearch_metadata.py --package semgrep --runtime-dependencies && \
     /app/.venv/bin/pip check && \
     printf '%s\n' \
         '#!/bin/bash' \
@@ -307,6 +326,11 @@ RUN python3 -m venv /app/.venv && \
 # lyrashield/tools/proxy/caido_api.py; this COPY is its only packaging step.
 COPY --chown=root:root lyrashield/runtime/target_relay_proxy.py /opt/lyrashield/target_relay_proxy.py
 COPY --chown=root:root containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify_semgrep_pyjwt.py
+COPY --chown=root:root containers/verify_brotli.py /opt/lyrashield/verify_brotli.py
+COPY --chown=root:root containers/verify_pip_vendors.py /opt/lyrashield/verify_pip_vendors.py
+COPY --chown=root:root containers/verify_ca_bundle.py /opt/lyrashield/verify_ca_bundle.py
+COPY --chown=root:root containers/verify_go_tool_provenance.py /opt/lyrashield/verify_go_tool_provenance.py
+COPY --chown=root:root containers/go-tools/applications.json /usr/local/share/lyrashield/go-tools/applications.json
 COPY --chown=root:root lyrashield/tools/proxy/caido_api.py /opt/strix-python/caido_api.py
 ENV PYTHONPATH=/opt/strix-python
 
@@ -319,6 +343,8 @@ RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/p
     echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-tools/node_modules/.bin:/app/.venv/bin:$PATH"' >> /home/pentester/.profile
 
 USER root
+# Validate installed bytes and write root-owned receipts without venv/site startup code.
+RUN /usr/bin/python3 -I -S /opt/lyrashield/verify_go_tool_provenance.py --write-sbom /usr/local/share/lyrashield/go-tools/applications.cdx.json
 RUN install -d -m 0700 -o root -g root /run/lyrashield-relay
 RUN setcap cap_net_raw,cap_net_bind_service+eip /usr/lib/nmap/nmap
 COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

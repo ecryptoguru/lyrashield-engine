@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from rich.console import Console
 
+from lyrashield.interface.resume_picker import PickerUnavailableError, pick_run, terminal_attached
 from lyrashield.interface.resume_state import _load_resume_state
 from lyrashield.interface.utils import (
     TARGET_TYPE_CHOICES,
@@ -31,6 +32,7 @@ from strix.core.paths import run_dir_for, runtime_state_dir
 
 
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
+FAIL_ON_SEVERITIES = ("critical", "high", "medium", "low", "info")
 
 
 def get_version() -> str:
@@ -245,7 +247,18 @@ Examples:
         action="store_true",
         help=(
             "Run in non-interactive mode (no TUI, exits on completion). "
-            "Default is interactive mode with TUI."
+            "Runs headless automatically when stdin or stdout has no terminal."
+        ),
+    )
+
+    parser.add_argument(
+        "--fail-on",
+        choices=FAIL_ON_SEVERITIES,
+        default=None,
+        help=(
+            "Headless finding exit threshold: exit 2 for this severity or higher. "
+            "Default: any finding exits 2. Unknown severities fail closed; "
+            "incomplete scans keep their nonzero worker exit codes."
         ),
     )
 
@@ -344,11 +357,15 @@ Examples:
     )
 
     parser.add_argument(
+        "-r",
         "--resume",
+        nargs="?",
+        const=True,
         type=validate_run_name,
         metavar="RUN_NAME",
         help=(
             "Resume a prior scan by its run name (the dir under ./strix_runs/). "
+            "Omit RUN_NAME to choose a run in a terminal. "
             "Picks up the root + every non-terminal subagent's full LLM history "
             "and agent topology. Skips fresh run-name generation."
         ),
@@ -381,6 +398,25 @@ Examples:
                     parser.error(f"Instruction file '{instruction_path}' is empty")
         except Exception as e:
             parser.error(f"Failed to read instruction file '{instruction_path}': {e}")
+
+    # A bare -r selects a name only; loading uses the same immutable-source
+    # and attachment checks as an explicit --resume name below.
+    if args.resume is True:
+        if args.non_interactive or not terminal_attached():
+            parser.error("Run selection needs a terminal; pass --resume <run_name>")
+        try:
+            args.resume = pick_run()
+        except PickerUnavailableError as exc:
+            parser.error(str(exc))
+        if args.resume is None:
+            Console().print("No run selected.", style="dim")
+            sys.exit(0)
+
+    if not args.non_interactive and not terminal_attached():
+        args.non_interactive = True
+        Console(stderr=True).print(
+            "No terminal attached, running headless (same as -n).", style="dim"
+        )
 
     args.user_explicit_instruction = args.instruction if args.resume else None
 

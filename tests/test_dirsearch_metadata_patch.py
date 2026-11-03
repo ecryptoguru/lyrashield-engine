@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from containers.patch_dirsearch_metadata import patch_dist_info
+from containers.patch_dirsearch_metadata import SEMGREP_RUNTIME_PATCHES, patch_dist_info
 
 
 if TYPE_CHECKING:
@@ -118,5 +118,35 @@ def test_semgrep_patch_rejects_tampered_record_without_writes(tmp_path: Path) ->
     with pytest.raises(ValueError, match="does not match"):
         patch_dist_info(dist_info, "semgrep")
 
+    assert (dist_info / "METADATA").read_bytes() == original
+    assert (dist_info / "RECORD").read_bytes() == record
+
+
+def test_semgrep_security_graph_patch_is_atomic_and_record_verified(tmp_path: Path) -> None:
+    requirements = b"Requires-Dist: pyjwt[crypto]~=2.13.0\n" + b"\n".join(
+        old for old, _new in SEMGREP_RUNTIME_PATCHES
+    )
+    dist_info, original = _make_dist_info(tmp_path, requirements, "semgrep", "1.178.0")
+    patch_dist_info(dist_info, "semgrep", runtime_dependencies=True)
+    patched = (dist_info / "METADATA").read_bytes()
+    for old, new in SEMGREP_RUNTIME_PATCHES:
+        assert old + b"\n" not in patched
+        assert new + b"\n" in patched
+    assert b"Requires-Dist: pyjwt[crypto]>=2.15.1,<2.16.0\n" in patched
+    with (dist_info / "RECORD").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert rows[0][1:] == [_record_hash(patched), str(len(patched))]
+    assert patched != original
+
+
+def test_semgrep_security_graph_patch_rejects_partial_metadata_without_writes(
+    tmp_path: Path,
+) -> None:
+    dist_info, original = _make_dist_info(
+        tmp_path, b"Requires-Dist: pyjwt[crypto]~=2.13.0", "semgrep", "1.178.0"
+    )
+    record = (dist_info / "RECORD").read_bytes()
+    with pytest.raises(ValueError, match="exactly one upstream"):
+        patch_dist_info(dist_info, "semgrep", runtime_dependencies=True)
     assert (dist_info / "METADATA").read_bytes() == original
     assert (dist_info / "RECORD").read_bytes() == record

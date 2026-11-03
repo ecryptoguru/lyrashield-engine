@@ -6,6 +6,7 @@ Strix Agent Interface
 
 import argparse
 import asyncio
+import json
 import logging
 import shutil
 import sys
@@ -33,7 +34,7 @@ from lyrashield.artifacts.writer import (
     write_resume_record,
     write_run_record,
 )
-from lyrashield.interface.arg_parser import parse_arguments
+from lyrashield.interface.arg_parser import FAIL_ON_SEVERITIES, parse_arguments
 from lyrashield.interface.cli import run_cli
 from lyrashield.interface.environment_gate import validate_environment
 from lyrashield.interface.image_pull import (
@@ -99,7 +100,13 @@ def _persist_run_record(
     args: argparse.Namespace, *, terminal: dict[str, Any] | None = None
 ) -> None:
     run_dir = run_dir_for(args.run_name)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    if getattr(args, "max_budget_usd", None) is not None:
+        from lyrashield.artifacts.financial_io import FinancialDirectory
+
+        directory = FinancialDirectory(run_dir, create=True)
+        directory.close()
+    else:
+        run_dir.mkdir(parents=True, exist_ok=True)
     # The first observable run.json must already be a complete versioned
     # worker contract, so build it through the same canonical constructor
     # ReportState uses — never a partial hand-rolled dict (I10).
@@ -128,7 +135,10 @@ def _persist_run_record(
     # Validate the pre-scan contract before writing, so an incomplete record
     # never reaches the run directory (I10/C3).
     validate_run_record(run_record)
-    write_run_record(run_dir, run_record)
+    from lyrashield.artifacts.finite_budget import guarded_write
+
+    if not guarded_write(run_dir, run_record, restore=True):
+        write_run_record(run_dir, run_record)
     # Preserve the unsanitized execution fields needed for resume in a private
     # file that is not part of the public worker contract (comment #5).
     write_resume_record(
@@ -212,6 +222,61 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     console.print()
     # Upstream shows an update notice here; LyraShield Engine ships as reviewed
     # releases, so the upstream version check would suggest the wrong package.
+
+
+def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
+    """Retain successful paid probes even when a later preflight probe fails."""
+    usages = args.warm_up_usages
+    previous = get_global_report_state()
+    selected = None
+    from lyrashield.artifacts.finite_budget import protected_run
+
+    finite = getattr(args, "max_budget_usd", None) is not None or protected_run(
+        run_dir_for(args.run_name)
+    )
+    if getattr(args, "resume", None) or finite:
+        selected = ReportState(args.run_name)
+        if finite:
+            # Resolve through ReportState's normal path owner, validating and
+            # creating financial parents before hydration can create anything.
+            selected.enable_finite_budget(getattr(args, "max_budget_usd", None))
+        selected.hydrate_from_run_dir()
+        if finite:
+            owner = selected.enable_finite_budget(getattr(args, "max_budget_usd", None))
+            owner.require_resumable()
+            args.max_budget_usd = owner.limit
+            args._preflight_usage_owner = selected
+        set_global_report_state(selected)
+    try:
+        asyncio.run(
+            warm_up_llm(
+                show_model_warning=False,
+                usages=usages,
+                deadline=deadline,
+                max_budget_usd=getattr(args, "max_budget_usd", None),
+            )
+        )
+    except (SystemExit, RunDeadlineExceededError, asyncio.CancelledError) as exc:
+        state = selected or ReportState(args.run_name)
+        if selected is None:
+            state.hydrate_from_run_dir()
+        if not finite:
+            for model, usage in usages:
+                state.record_sdk_usage(
+                    agent_id="warmup", agent_name="warmup", model=model, usage=usage
+                )
+        exhausted = isinstance(exc, RunDeadlineExceededError)
+        state.set_terminal_reason("runtime_deadline" if exhausted else "llm_preflight_failed")
+        if not state.save_run_data(status="stopped" if exhausted else "failed"):
+            raise RuntimeError(
+                "Could not persist LLM preflight usage and terminal receipt"
+            ) from exc
+        usages.clear()
+        raise
+
+    finally:
+        if selected is not None:
+            set_global_report_state(previous)
 
 
 def main(
@@ -437,7 +502,7 @@ def main(
         set_global_report_state(exhausted_state)
 
     if not args.non_interactive:
-        asyncio.run(warm_up_llm(show_model_warning=False, usages=warm_up_usages))
+        _run_llm_preflight(args, deadline=deadline)
 
     _telemetry_model = load_settings().llm.model
     _telemetry_scan_mode = args.scan_mode
@@ -460,12 +525,13 @@ def main(
     )
 
     exit_reason = "user_exit"
+    scan_result: Any = None
     try:
         if args.non_interactive:
             # An allowance already spent on preprocessing means no model work:
             # the bounded terminal record above is the entire run output.
             if not deadline_exhausted:
-                asyncio.run(run_cli(args))
+                scan_result = asyncio.run(run_cli(args))
         else:
             asyncio.run(run_tui(args))
     except KeyboardInterrupt:
@@ -492,17 +558,120 @@ def main(
         display_completion_message(args, results_path)
 
     if args.non_interactive:
-        exit_code = _non_interactive_exit_code(get_global_report_state())
+        exit_code = _non_interactive_exit_code(
+            get_global_report_state(),
+            fail_on=getattr(args, "fail_on", None),
+            finish_result=scan_result,
+        )
         if exit_code:
             sys.exit(exit_code)
 
 
-def _non_interactive_exit_code(report_state: Any | None) -> int:
+def findings_fail_build(reports: list[dict[str, Any]], fail_on: str | None) -> bool:
+    """Apply opt-in severity ranking; unknown or missing severities fail closed."""
+    if fail_on is None:
+        return bool(reports)
+    threshold = FAIL_ON_SEVERITIES.index(fail_on)
+    for report in reports:
+        severity = str(report.get("severity") or "").strip().lower()
+        if severity == "none":
+            continue
+        if severity not in FAIL_ON_SEVERITIES or FAIL_ON_SEVERITIES.index(severity) <= threshold:
+            return True
+    return False
+
+
+def _current_root_finish_output(run_result: Any) -> str | None:
+    """Read only paired SDK tool items from this root invocation, never model text."""
+    from agents.items import ToolCallItem, ToolCallOutputItem
+    from agents.result import RunResultBase
+    from agents.tool import FunctionTool
+    from openai.types.responses import ResponseFunctionToolCall
+
+    if not isinstance(run_result, RunResultBase):
+        return None
+    context = run_result.context_wrapper.context
+    if (
+        not isinstance(context, dict)
+        or "parent_id" not in context
+        or context["parent_id"] is not None
+        or not isinstance(context.get("agent_id"), str)
+    ):
+        return None
+    root = run_result.last_agent
+    if not any(
+        isinstance(tool, FunctionTool) and tool.name == "finish_scan" for tool in root.tools
+    ):
+        return None
+    calls: dict[str, str] = {}
+    outputs: set[str] = set()
+    finish_output: str | None = None
+    for item in run_result.new_items:
+        if item.agent is not root:
+            continue
+        if isinstance(item, ToolCallItem) and isinstance(item.raw_item, ResponseFunctionToolCall):
+            call_id = item.raw_item.call_id
+            if not call_id or call_id in calls:
+                return None
+            calls[call_id] = item.raw_item.name
+        elif isinstance(item, ToolCallOutputItem) and isinstance(item.raw_item, dict):
+            if item.raw_item.get("type") != "function_call_output":
+                continue
+            output_id = item.raw_item.get("call_id")
+            if not isinstance(output_id, str) or output_id not in calls or output_id in outputs:
+                return None
+            outputs.add(output_id)
+            if calls[output_id] == "finish_scan":
+                if not isinstance(item.output, str) or item.raw_item.get("output") != item.output:
+                    return None
+                finish_output = item.output
+    if any(name == "finish_scan" and call_id not in outputs for call_id, name in calls.items()):
+        return None
+    return finish_output
+
+
+def _non_interactive_exit_code(
+    report_state: Any | None, *, fail_on: str | None = None, finish_result: Any = None
+) -> int:
     """Map an engine receipt to the worker's stable terminal contract."""
     if report_state is None:
         return 5
     if report_state.run_record.get("status") == "completed":
-        return 2 if report_state.vulnerability_reports else 0
+        if findings_fail_build(report_state.vulnerability_reports, fail_on):
+            return 2
+        if fail_on is not None:
+            if report_state.run_record.get("terminal_reason") == "no_change":
+                return 0
+            # The opt-in CI gate may ignore low-severity findings, but must
+            # never turn known unfinished coverage into a passing result.
+            quality = report_state.run_record.get("scan_quality")
+            assessments = [quality] if isinstance(quality, dict) else []
+            finish_result = _current_root_finish_output(finish_result)
+            if isinstance(finish_result, str):
+                try:
+                    finish_result = json.loads(finish_result)
+                except (ValueError, RecursionError):
+                    finish_result = None
+            # A completed receipt alone cannot prove complete coverage. The
+            # ordinary tool-output bound may have replaced the finish JSON
+            # with a display preview, and a resumed run may retain old quality.
+            if (
+                not isinstance(finish_result, dict)
+                or finish_result.get("success") is not True
+                or finish_result.get("scan_completed") is not True
+                or finish_result.get("coverage_complete") is not True
+                or not isinstance(finish_result.get("assessment_reasons"), list)
+            ):
+                return 5
+            assessments.append(finish_result)
+            for assessment in assessments:
+                reasons = assessment.get("assessment_reasons", [])
+                if assessment.get("coverage_complete") is False or (
+                    isinstance(reasons, list)
+                    and any(reason != "no_findings_recorded" for reason in reasons)
+                ):
+                    return 5
+        return 0
     match report_state.run_record.get("terminal_reason"):
         case "no_change":
             return 0

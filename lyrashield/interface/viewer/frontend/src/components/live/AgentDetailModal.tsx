@@ -7,10 +7,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
 } from "react";
+import { useResource } from "@/data/useRunResources";
 import { X } from "lucide-react";
 import { AgentTranscript } from "./AgentTranscript";
 import { ScanPromptComposer } from "./ScanPromptComposer";
-import type { TranscriptAgent, TranscriptEvent } from "@/data/serverSource";
+import { fetchTranscript, type Transcript, type TranscriptAgent, type TranscriptEvent } from "@/data/serverSource";
 
 /** Status -> the small leading dot color, matching the graph node styling. */
 const STATUS_DOT: Record<string, string> = {
@@ -42,13 +43,23 @@ export function AgentDetailModal({
   open,
   agent,
   events,
+  transcript,
+  selectedRun,
+  finished,
   steerable,
+  runName,
+  canControl = false,
   onClose,
 }: {
   open: boolean;
   agent: TranscriptAgent | null;
   events: TranscriptEvent[];
+  transcript: Transcript;
+  selectedRun: string | null;
+  finished: boolean;
   steerable: boolean;
+  runName: string;
+  canControl?: boolean;
   onClose: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -74,6 +85,40 @@ export function AgentDetailModal({
   }, [agent]);
   const shownAgent = agent ?? lastAgentRef.current;
   const shownAgentId = shownAgent?.id;
+  const pageKey = JSON.stringify([selectedRun, shownAgentId]);
+  const latest = useResource<Transcript>(`${pageKey}:${open}`, signal => open && shownAgentId
+    ? fetchTranscript(selectedRun, signal, { agent: shownAgentId })
+    : Promise.resolve({ agents: [], events: [] }), open && !finished);
+  const [older, setOlder] = useState<{ key: string; transcript: Transcript } | null>(null);
+  const [pageError, setPageError] = useState(false);
+  const [pageLoading, setPageLoading] = useState(false);
+  const pageRequest = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setOlder(null);
+    setPageError(false);
+    setPageLoading(false);
+    return () => pageRequest.current?.abort();
+  }, [pageKey, open]);
+  const olderPage = older?.key === pageKey ? older.transcript : null;
+  const displayedEvents = olderPage?.events ?? (transcript.windowed ? latest.data?.events ?? [] : events);
+  const cursor = (olderPage ?? latest.data ?? transcript).older_cursors?.[shownAgentId ?? ""];
+  const loadOlder = async () => {
+    if (!shownAgentId || !cursor || pageLoading) return;
+    const controller = new AbortController();
+    pageRequest.current?.abort();
+    pageRequest.current = controller;
+    setPageLoading(true);
+    setPageError(false);
+    try {
+      const page = await fetchTranscript(selectedRun, controller.signal, { agent: shownAgentId, before: cursor });
+      if (!controller.signal.aborted) setOlder({ key: pageKey, transcript: page });
+    } catch {
+      if (!controller.signal.aborted) setPageError(true);
+    } finally {
+      if (!controller.signal.aborted) setPageLoading(false);
+    }
+  };
+
 
   useEffect(() => {
     if (open) {
@@ -219,9 +264,17 @@ export function AgentDetailModal({
           </button>
         </div>
 
+        {transcript.windowed && <div className="border-b border-[#222] px-5 py-2 text-xs text-[#aaa] flex flex-wrap items-center gap-3">
+          <span role="status">{olderPage ? "Viewing older activity" : "Showing latest activity"} (up to 100 events)</span>
+          {cursor && <button type="button" disabled={pageLoading} onClick={() => void loadOlder()} className="min-h-9 underline">{pageLoading ? "Loading older activity…" : pageError ? "Retry older activity" : "Load older activity"}</button>}
+          {olderPage && <button type="button" onClick={() => { pageRequest.current?.abort(); setOlder(null); setPageLoading(false); setPageError(false); }} className="min-h-9 underline">Return to latest activity</button>}
+          {pageError && <p role="alert">Older activity could not be loaded. Current activity is retained.</p>}
+        </div>}
         <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-5">
-          {contentReady && (
-            <AgentTranscript agent={shownAgent} events={events} showHeader={false} />
+          {latest.error && <div role="alert" className="mb-3 text-sm text-red-300">Agent transcript could not be loaded. Previously loaded activity is retained. <button type="button" className="underline" onClick={latest.retry}>Retry agent transcript</button></div>}
+          {latest.loading && <p role="status" className="text-sm text-[#aaa]">Loading agent transcript…</p>}
+          {contentReady && (!transcript.windowed || latest.data) && (
+            <AgentTranscript agent={shownAgent} events={displayedEvents} showHeader={false} windowed={transcript.windowed} />
           )}
         </div>
 
@@ -229,6 +282,8 @@ export function AgentDetailModal({
           <div className="border-t border-[#222] px-5 py-3">
             <ScanPromptComposer
               agents={[shownAgent]}
+              runName={runName}
+              canControl={canControl}
               fixedAgentId={shownAgent.id}
               className="mt-0"
             />

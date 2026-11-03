@@ -2,20 +2,69 @@
 
 ## Current state
 
-The upstream base is Strix v1.6.2 at
-`ff5c8cc8e46d8e60c2bc2439f7bcb07c05ca3db2`. Product behavior lives in
+The upstream base is exact Strix commit
+`200a501f15a24a4152f92897a6b72af238ee69ef`. Product behavior lives in
 `lyrashield/**` and `lyrashield_adapter/**`; `strix/config/loader.py` retains the
 product settings seam. The reviewed `strix/**` patch changes four paths: the
-settings seam, one reviewed skill override, and two removed skills. Its
-footprint is +22/-201 with digest
-`3629e8f382fdd8eccf78553b102a25e99c73454c`. Pyright and its twelve unused
-typing/import-cycle compatibility hunks were retired under R9; strict mypy is
-the sole Python type gate. R10 brings the owned Local TUI and viewer under Ruff
-and strict mypy. The exact allowlist and current gate live in
-`scripts/verify-controlled-derivative.sh`. Dated entries below describe earlier
+settings seam, the semantic-confusion skill override, and removal of the unshipped
+Hurl and Hypothesis skills. Its footprint remains +22/-201, with digest
+`51682200fe3b9ec8fa2e0f998c80c095e7add114`. The exact allowlist, hard footprint
+ceilings, and patch digest are enforced by `scripts/verify-controlled-derivative.sh`.
+Strict mypy remains the Python type gate. Dated entries below describe earlier
 states, not the current patch inventory.
 
+This import is a candidate until the integrated owned runtime and full gate pass.
+The isolated qualification and all 26 upstream fixture dispositions are recorded
+in [the qualification snapshot](docs/evidence/strix-200a501f-qualification.md). No deployment or live
+provider qualification is implied by importing the substrate.
+
 ## History
+
+## Viewer resource recovery and measured transcript windows (2026-11-02)
+
+The owned viewer tracks summary, transcript, findings, report and history requests
+independently. GET requests have finite timeouts and are aborted on run changes
+or unmount. Failed resources keep data from the same selected run and offer
+independent retries after completion. Historical runs remain read-only, the
+launched run label remains stable, and an uncertain steering retry preserves its
+original run, target, message and submission ID until resolved or discarded.
+After completion, authenticated identical submissions can reconcile a known
+receipt without a live scan loop. Timed-out submissions use a read-only receipt
+callback; pending or cancelled work stays unknown and new writes remain forbidden.
+Native target selection, sidebar collapse/restore, IME-safe submission and an
+inline mobile privacy notice preserve keyboard and pointer access. Budget amounts
+retain sub-cent precision and open controls refresh metadata from other clients.
+
+Measured synthetic histories justified optional `/api/transcript?limit=100`
+transport: `summary=1` returns graph metadata without messages; `agent=<id>`
+returns a recent per-agent window; `before=<source-event-id>` loads older activity.
+Stable event IDs use persisted SQLite row IDs. The viewer renders at most one
+100-event page per agent modal, preserves graph totals across windows, and labels
+large event previews truncated above the 24,000-byte event limit. Full artifacts
+and the unparameterized legacy endpoint remain unchanged. The reader reuses the
+owned TUI event projector and caches at most two unchanged projections keyed by
+metadata/database/WAL inode, size and nanosecond modification time. Changed
+histories still require linear projection; this is not an indexed database reader.
+
+## Explicit operator budget controls and acknowledged steering (2026-11-02)
+
+Owned lifecycle, TUI and viewer paths now distinguish mailbox acceptance from
+execution. Ordinary messages can queue during a budget pause; they never resume
+agents or increase spend. Interactive operators use separate Increase budget
+and Resume scan controls (TUI: `/increase-budget` and `/resume`). The increase
+adds the original configured `--max-budget-usd` amount and leaves the scan
+paused. Both UIs show that amount and the current limit. Exhausted budgets reject
+resume until the operator increases the limit. Headless limits and hard stops
+remain enforced.
+
+Viewer steering and controls require the process capability, the launched run's
+directory identity and a bounded submission ID. Historical runs remain read-only,
+including incomplete historical runs with matching agent IDs. Browser and TUI
+retain drafts after rejection or unknown delivery, acknowledge Queued only after
+mailbox acceptance, and reuse IDs after a lost acknowledgement. Per-process
+submission retention is capped at 4,096 entries and fails closed at capacity;
+reuse with different targets, text or actions is rejected. This change does not
+alter worker artifact schemas or the retained `strix/**` substrate.
 
 ## Sandbox apt trust anchor: keyring pin replaces the InRelease hash pin (2026-10-09)
 

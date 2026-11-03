@@ -79,6 +79,11 @@ def _finish_assessment(
         "coverage_complete": coverage_complete,
         "coverage_gaps": coverage_gaps,
         "incomplete_agents": incomplete_agents,
+        "follow_up_guidance": (
+            ["Review the unresolved coverage entries; continue only within the authorized budget."]
+            if coverage_gaps
+            else []
+        ),
     }
 
 
@@ -103,7 +108,8 @@ def _assessment_note(*, assessment: dict[str, Any], report_section: str) -> str:
     if assessment["coverage_gaps"]:
         details.append(
             f"Coverage has {len(assessment['coverage_gaps'])} unresolved gap(s); "
-            "see the coverage record."
+            "see the coverage record. Review the open entries and continue only "
+            "within the authorized budget."
         )
     if not assessment["coverage_complete"]:
         details.append(

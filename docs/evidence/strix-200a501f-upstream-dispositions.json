@@ -1,0 +1,186 @@
+{
+  "upstream_commit": "200a501f15a24a4152f92897a6b72af238ee69ef",
+  "qualification_log_sha256": "70c484ab6173d944dfa1cd2507f5bd4143e1a9c841cf6f921a4ad03090d67b61",
+  "baseline": {
+    "failed": 26,
+    "passed": 2102,
+    "warnings": 2,
+    "seconds": 78.14,
+    "python": "3.13.14",
+    "timeout_policy": "external pytest-timeout 15 thread, qualification-only"
+  },
+  "verification": {
+    "command": "PYTHONPATH=. .venv/bin/pytest -q tests/upstream/test_budget_pause_policy.py tests/upstream/test_e2e_budget_lifecycle.py tests/upstream/test_runner_interrupt.py tests/upstream/test_runner_mcp.py tests/upstream/test_runner_rate_limit.py tests/test_runner_root_prompt_strix.py tests/upstream/test_runner_teardown.py tests/test_pricing.py --tb=short",
+    "result": "55 passed in 5.80s"
+  },
+  "fixtures": [
+    {
+      "upstream_nodeid": "tests/test_budget_pause_policy.py::test_pause_policy_parks_every_agent_at_the_limit_and_resumes_in_place",
+      "local_nodeid": "tests/upstream/test_budget_pause_policy.py::test_pause_policy_parks_every_agent_at_the_limit_and_resumes_in_place",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply the required skills=[] argument in the child-runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_budget_pause_policy.py::test_pause_policy_operator_pause_and_resume_without_a_limit",
+      "local_nodeid": "tests/upstream/test_budget_pause_policy.py::test_pause_policy_operator_pause_and_resume_without_a_limit",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply the required skills=[] argument in the child-runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_budget_pause_policy.py::test_pause_policy_keeps_in_flight_overshoot",
+      "local_nodeid": "tests/upstream/test_budget_pause_policy.py::test_pause_policy_keeps_in_flight_overshoot",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply the required skills=[] argument in the child-runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_budget_pause_policy.py::test_operator_pause_holds_under_the_stop_policy",
+      "local_nodeid": "tests/upstream/test_budget_pause_policy.py::test_operator_pause_holds_under_the_stop_policy",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply the required skills=[] argument in the child-runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_budget_pause_policy.py::test_a_resume_that_lands_before_the_park_still_continues",
+      "local_nodeid": "tests/upstream/test_budget_pause_policy.py::test_a_resume_that_lands_before_the_park_still_continues",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply the required skills=[] argument in the child-runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_e2e_budget_lifecycle.py::test_full_budget_lifecycle_reserve_then_cap",
+      "local_nodeid": "tests/upstream/test_e2e_budget_lifecycle.py::test_full_budget_lifecycle_reserve_then_cap",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply the required skills=[] argument in the child-runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_e2e_budget_lifecycle.py::test_respawned_children_after_reserve_never_spend",
+      "local_nodeid": "tests/upstream/test_e2e_budget_lifecycle.py::test_respawned_children_after_reserve_never_spend",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply the required skills=[] argument in the child-runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_pricing.py::test_resolves_common_bare_model_names",
+      "local_nodeid": "tests/test_pricing.py::test_resolves_common_bare_model_names",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "inject deterministic provider-qualified catalog entries in the resolver fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_interrupt.py::test_user_interrupt_leaves_the_root_running_for_resume[KeyboardInterrupt]",
+      "local_nodeid": "tests/upstream/test_runner_interrupt.py::test_user_interrupt_leaves_the_root_running_for_resume[KeyboardInterrupt]",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_interrupt.py::test_user_interrupt_leaves_the_root_running_for_resume[CancelledError]",
+      "local_nodeid": "tests/upstream/test_runner_interrupt.py::test_user_interrupt_leaves_the_root_running_for_resume[CancelledError]",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_interrupt.py::test_a_real_crash_still_marks_root_failed",
+      "local_nodeid": "tests/upstream/test_runner_interrupt.py::test_a_real_crash_still_marks_root_failed",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_mcp.py::test_none_default_attaches_from_the_user_config_file",
+      "local_nodeid": "tests/upstream/test_runner_mcp.py::test_none_default_attaches_from_the_user_config_file",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_mcp.py::test_supplied_requests_are_attached_and_the_user_file_is_not_read",
+      "local_nodeid": "tests/upstream/test_runner_mcp.py::test_supplied_requests_are_attached_and_the_user_file_is_not_read",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_mcp.py::test_roster_is_persisted_even_without_a_status_sink",
+      "local_nodeid": "tests/upstream/test_runner_mcp.py::test_roster_is_persisted_even_without_a_status_sink",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_mcp.py::test_warmup_listing_failure_does_not_interrupt_scan",
+      "local_nodeid": "tests/upstream/test_runner_mcp.py::test_warmup_listing_failure_does_not_interrupt_scan",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_mcp.py::test_warmed_tool_counts_reach_root_and_child_agent_builds",
+      "local_nodeid": "tests/upstream/test_runner_mcp.py::test_warmed_tool_counts_reach_root_and_child_agent_builds",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_rate_limit.py::test_persistent_rate_limit_stops_gracefully",
+      "local_nodeid": "tests/upstream/test_runner_rate_limit.py::test_persistent_rate_limit_stops_gracefully",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_root_prompt.py::test_root_prompt_options_flow_into_root_agent",
+      "local_nodeid": "tests/test_runner_root_prompt_strix.py::test_root_prompt_options_flow_into_root_agent",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_root_prompt.py::test_extra_system_prompt_context_cannot_override_scope_context",
+      "local_nodeid": "tests/test_runner_root_prompt_strix.py::test_extra_system_prompt_context_cannot_override_scope_context",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_root_prompt.py::test_root_prompt_options_default_to_none",
+      "local_nodeid": "tests/test_runner_root_prompt_strix.py::test_root_prompt_options_default_to_none",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_root_prompt.py::test_mcp_available_flag_set_when_a_connection_attaches",
+      "local_nodeid": "tests/test_runner_root_prompt_strix.py::test_mcp_available_flag_set_when_a_connection_attaches",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_root_prompt.py::test_mcp_available_flag_absent_without_a_connection",
+      "local_nodeid": "tests/test_runner_root_prompt_strix.py::test_mcp_available_flag_absent_without_a_connection",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_root_prompt.py::test_unknown_tool_calls_are_returned_to_the_model",
+      "local_nodeid": "tests/test_runner_root_prompt_strix.py::test_unknown_tool_calls_are_returned_to_the_model",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_teardown.py::test_a_live_child_is_settled_before_sessions_close",
+      "local_nodeid": "tests/upstream/test_runner_teardown.py::test_a_live_child_is_settled_before_sessions_close",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_teardown.py::test_missing_finish_is_logged_only_when_root_did_not_complete[completed-False]",
+      "local_nodeid": "tests/upstream/test_runner_teardown.py::test_missing_finish_is_logged_only_when_root_did_not_complete[completed-False]",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    },
+    {
+      "upstream_nodeid": "tests/test_runner_teardown.py::test_missing_finish_is_logged_only_when_root_did_not_complete[stopped-True]",
+      "local_nodeid": "tests/upstream/test_runner_teardown.py::test_missing_finish_is_logged_only_when_root_did_not_complete[stopped-True]",
+      "disposition": "fixture corrected; assertions retained and passing",
+      "repair": "supply telemetry.run_record_timings=False in the runner fixture"
+    }
+  ],
+  "excluded_auth_surface": {
+    "upstream_file": "tests/test_models.py",
+    "reason": "OpenRouter Claude routing entered GitHub Copilot device authorization; unsupported product provider, no interactive authorization performed",
+    "product_guards": [
+      "tests/test_lyrashield_adapter.py::test_prepare_environment_rejects_unsupported_gpt6_providers",
+      "tests/test_lyrashield_adapter.py::test_config_file_rejects_unsupported_gpt6_provider",
+      "tests/test_lyrashield_adapter.py::test_prepare_environment_rejects_non_gpt6_subscription_models",
+      "tests/test_gpt6_migration.py::test_old_and_untrusted_routes_rejected"
+    ],
+    "remaining_boundary": "No live provider or device-auth qualification. Imported generic routing helpers and admitted owned routes are tested deterministically."
+  },
+  "reviewed_patch_oid": "51682200fe3b9ec8fa2e0f998c80c095e7add114"
+}

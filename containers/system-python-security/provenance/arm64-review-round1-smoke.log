@@ -1,0 +1,142 @@
+04B54C3CDCA79751B16BC6B5225629DF75B188BD
+B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8
+827C8569F2518CC677FECA1AED65462EC8D5E4C5
+04B54C3CDCA79751B16BC6B5225629DF75B188BD
+B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8
+827C8569F2518CC677FECA1AED65462EC8D5E4C5
+both signed architecture chains VERIFIED from retained cache with rotated-online access blocked
+04B54C3CDCA79751B16BC6B5225629DF75B188BD
+B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8
+827C8569F2518CC677FECA1AED65462EC8D5E4C5
+(Reading database ... 75390 files and directories currently installed.)
+Preparing to unpack .../python3-anyio_4.15.1-3_all.deb ...
+Unpacking python3-anyio (4.15.1-3) over (4.12.1-3) ...
+Preparing to unpack .../python3-dnspython_2.8.0-7_all.deb ...
+Unpacking python3-dnspython (2.8.0-7) over (2.8.0-5) ...
+Preparing to unpack .../python3-jwt_2.15.1-1_all.deb ...
+Unpacking python3-jwt (2.15.1-1) over (2.13.0-1) ...
+Preparing to unpack .../python3-msgpack_1.2.1-3_arm64.deb ...
+Unpacking python3-msgpack (1.2.1-3) over (1.1.2-4+b1) ...
+Preparing to unpack .../python3-pip_26.2.2+dfsg-1_all.deb ...
+Unpacking python3-pip (26.2.2+dfsg-1) over (26.1.2+dfsg-1) ...
+Preparing to unpack .../python3-pip-whl_26.2.2+dfsg-1_all.deb ...
+Unpacking python3-pip-whl (26.2.2+dfsg-1) over (26.1.2+dfsg-1) ...
+Preparing to unpack .../python3-pyasn1_0.6.5-1_all.deb ...
+Unpacking python3-pyasn1 (0.6.5-1) over (0.6.4-1) ...
+Preparing to unpack .../python3-tornado_6.6.0-1_arm64.deb ...
+Unpacking python3-tornado (6.6.0-1) over (6.5.5-4) ...
+Setting up python3-anyio (4.15.1-3) ...
+Setting up python3-dnspython (2.8.0-7) ...
+Setting up python3-jwt (2.15.1-1) ...
+Setting up python3-msgpack (1.2.1-3) ...
+Setting up python3-pip (26.2.2+dfsg-1) ...
+Setting up python3-pip-whl (26.2.2+dfsg-1) ...
+Setting up python3-pyasn1 (0.6.5-1) ...
+Setting up python3-tornado (6.6.0-1) ...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Solving dependencies...
+The following packages will be upgraded:
+  python3-anyio python3-dnspython python3-jwt python3-msgpack python3-pip
+  python3-pip-whl python3-pyasn1 python3-tornado
+8 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+Inst python3-anyio [4.12.1-3] (4.15.1-3 local-deb [all])
+Inst python3-dnspython [2.8.0-5] (2.8.0-7 local-deb [all])
+Inst python3-jwt [2.13.0-1] (2.15.1-1 local-deb [all])
+Inst python3-msgpack [1.1.2-4+b1] (1.2.1-3 local-deb [arm64])
+Inst python3-pip [26.1.2+dfsg-1] (26.2.2+dfsg-1 local-deb [all])
+Inst python3-pip-whl [26.1.2+dfsg-1] (26.2.2+dfsg-1 local-deb [all])
+Inst python3-pyasn1 [0.6.4-1] (0.6.5-1 local-deb [all])
+Inst python3-tornado [6.5.5-4] (6.6.0-1 local-deb [arm64])
+Conf python3-anyio (4.15.1-3 local-deb [all])
+Conf python3-dnspython (2.8.0-7 local-deb [all])
+Conf python3-jwt (2.15.1-1 local-deb [all])
+Conf python3-msgpack (1.2.1-3 local-deb [arm64])
+Conf python3-pip (26.2.2+dfsg-1 local-deb [all])
+Conf python3-pip-whl (26.2.2+dfsg-1 local-deb [all])
+Conf python3-pyasn1 (0.6.5-1 local-deb [all])
+Conf python3-tornado (6.6.0-1 local-deb [arm64])
+test_late_bad_receipt_parent_is_safe_and_retryable (__main__.PreconditionTests.test_late_bad_receipt_parent_is_safe_and_retryable) ... ok
+test_late_seed_tamper_before_write (__main__.PreconditionTests.test_late_seed_tamper_before_write) ... ok
+test_linked_receipt_never_modifies_external_bytes (__main__.PreconditionTests.test_linked_receipt_never_modifies_external_bytes) ... ok
+test_mid_write_failure_rolls_back_and_retry_succeeds (__main__.PreconditionTests.test_mid_write_failure_rolls_back_and_retry_succeeds) ... ok
+test_source_symlink_never_modifies_internal_or_external_bytes (__main__.PreconditionTests.test_source_symlink_never_modifies_internal_or_external_bytes) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 3.919s
+
+OK
+test_actual_system_module_origins (__main__.RuntimeSecurityTests.test_actual_system_module_origins) ... ok
+test_downstream_receipts_match_installed_bytes (__main__.RuntimeSecurityTests.test_downstream_receipts_match_installed_bytes) ... ok
+test_fresh_offline_seed (__main__.RuntimeSecurityTests.test_fresh_offline_seed) ... Looking in links: /usr/share/python-wheels
+Processing /usr/share/python-wheels/setuptools-78.1.1-py3-none-any.whl
+Installing collected packages: setuptools
+Successfully installed setuptools-78.1.1
+<string>:2: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html
+fresh offline seed verified 78.1.1 2.8.0
+test_private_jaraco_tar_api (__main__.RuntimeSecurityTests.test_private_jaraco_tar_api) ... ok
+test_pip_actual_vendor_and_msgpack_fallback (__main__.RuntimeSecurityTests.test_pip_actual_vendor_and_msgpack_fallback) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.100s
+
+OK
+ok
+test_h2_duplicate_host_and_normal_http2 (__main__.RuntimeSecurityTests.test_h2_duplicate_host_and_normal_http2) ... ok
+test_hpack_integer_limits (__main__.RuntimeSecurityTests.test_hpack_integer_limits) ... ok
+test_leaf_apis_and_tool_libraries (__main__.RuntimeSecurityTests.test_leaf_apis_and_tool_libraries) ... ok
+test_mako_sibling_rejected_and_rendering (__main__.RuntimeSecurityTests.test_mako_sibling_rejected_and_rendering) ... ok
+test_ndiff_actual_xml_comparison (__main__.RuntimeSecurityTests.test_ndiff_actual_xml_comparison) ... ok
+test_oauth_device_grant_status_and_client_api (__main__.RuntimeSecurityTests.test_oauth_device_grant_status_and_client_api) ... ok
+test_oauth_device_scope_is_authoritative_even_when_empty (__main__.RuntimeSecurityTests.test_oauth_device_scope_is_authoritative_even_when_empty) ... ok
+test_oauth_pkce_malformed_input_is_protocol_error (__main__.RuntimeSecurityTests.test_oauth_pkce_malformed_input_is_protocol_error) ... ok
+test_oauth_pkce_uses_constant_time_api (__main__.RuntimeSecurityTests.test_oauth_pkce_uses_constant_time_api) ... ok
+test_pip_actual_vendor_and_msgpack_fallback (__main__.RuntimeSecurityTests.test_pip_actual_vendor_and_msgpack_fallback) ... ok
+test_private_jaraco_tar_api (__main__.RuntimeSecurityTests.test_private_jaraco_tar_api) ... ok
+test_soupsieve_valid_and_adversarial_selectors (__main__.RuntimeSecurityTests.test_soupsieve_valid_and_adversarial_selectors) ... ok
+test_wapiti_actual_html_report (__main__.RuntimeSecurityTests.test_wapiti_actual_html_report) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 5.687s
+
+OK
+test_actual_system_module_origins (__main__.RuntimeSecurityTests.test_actual_system_module_origins) ... ok
+test_downstream_receipts_match_installed_bytes (__main__.RuntimeSecurityTests.test_downstream_receipts_match_installed_bytes) ... ok
+test_fresh_offline_seed (__main__.RuntimeSecurityTests.test_fresh_offline_seed) ... Looking in links: /usr/share/python-wheels
+Processing /usr/share/python-wheels/setuptools-78.1.1-py3-none-any.whl
+Installing collected packages: setuptools
+Successfully installed setuptools-78.1.1
+<string>:2: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html
+fresh offline seed verified 78.1.1 2.8.0
+test_private_jaraco_tar_api (__main__.RuntimeSecurityTests.test_private_jaraco_tar_api) ... ok
+test_pip_actual_vendor_and_msgpack_fallback (__main__.RuntimeSecurityTests.test_pip_actual_vendor_and_msgpack_fallback) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.123s
+
+OK
+ok
+test_h2_duplicate_host_and_normal_http2 (__main__.RuntimeSecurityTests.test_h2_duplicate_host_and_normal_http2) ... ok
+test_hpack_integer_limits (__main__.RuntimeSecurityTests.test_hpack_integer_limits) ... ok
+test_leaf_apis_and_tool_libraries (__main__.RuntimeSecurityTests.test_leaf_apis_and_tool_libraries) ... ok
+test_mako_sibling_rejected_and_rendering (__main__.RuntimeSecurityTests.test_mako_sibling_rejected_and_rendering) ... ok
+test_ndiff_actual_xml_comparison (__main__.RuntimeSecurityTests.test_ndiff_actual_xml_comparison) ... ok
+test_oauth_device_grant_status_and_client_api (__main__.RuntimeSecurityTests.test_oauth_device_grant_status_and_client_api) ... ok
+test_oauth_device_scope_is_authoritative_even_when_empty (__main__.RuntimeSecurityTests.test_oauth_device_scope_is_authoritative_even_when_empty) ... ok
+test_oauth_pkce_malformed_input_is_protocol_error (__main__.RuntimeSecurityTests.test_oauth_pkce_malformed_input_is_protocol_error) ... ok
+test_oauth_pkce_uses_constant_time_api (__main__.RuntimeSecurityTests.test_oauth_pkce_uses_constant_time_api) ... ok
+test_pip_actual_vendor_and_msgpack_fallback (__main__.RuntimeSecurityTests.test_pip_actual_vendor_and_msgpack_fallback) ... ok
+test_private_jaraco_tar_api (__main__.RuntimeSecurityTests.test_private_jaraco_tar_api) ... ok
+test_soupsieve_valid_and_adversarial_selectors (__main__.RuntimeSecurityTests.test_soupsieve_valid_and_adversarial_selectors) ... ok
+test_wapiti_actual_html_report (__main__.RuntimeSecurityTests.test_wapiti_actual_html_report) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 5.201s
+
+OK
+pip 26.2.2 from /usr/lib/python3/dist-packages/pip (python 3.14)
+Mitmproxy: 12.2.3
+Python:    3.14.7
+OpenSSL:   OpenSSL 3.6.3 9 Jun 2026
+Platform:  Linux-7.0.14-linuxkit-aarch64-with-glibc2.43

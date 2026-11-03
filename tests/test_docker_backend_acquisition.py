@@ -35,7 +35,7 @@ async def test_docker_discovery_keeps_event_loop_responsive(monkeypatch) -> None
             await asyncio.sleep(0.005)
 
     session = SimpleNamespace(start=AsyncMock())
-    monkeypatch.setattr("docker.from_env", discover)
+    monkeypatch.setattr("lyrashield.runtime.docker_connection.connect_docker", discover)
     monkeypatch.setattr(StrixDockerSandboxClient, "create", AsyncMock(return_value=session))
     ticker = asyncio.create_task(heartbeat())
     try:
@@ -75,7 +75,7 @@ async def test_cancelled_discovery_closes_late_transport_without_creating_sandbo
         return transport
 
     create = AsyncMock()
-    monkeypatch.setattr("docker.from_env", discover)
+    monkeypatch.setattr("lyrashield.runtime.docker_connection.connect_docker", discover)
     monkeypatch.setattr(StrixDockerSandboxClient, "create", create)
     task = asyncio.create_task(
         backends.docker_backend(image="fixture", manifest=Manifest(), exposed_ports=())

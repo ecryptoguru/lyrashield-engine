@@ -1,0 +1,3390 @@
+{
+  "scope": "Actual baseline image findings retained before remediation; source-only dispositions apply only to the identified shipped subsets, never to system or newly built packages. No vulnerability ignore is installed.",
+  "source_revision": "bcdbbd4ebbc5fcc066570ab467e398db3e6d4684",
+  "scanner": {
+    "name": "Trivy",
+    "version": "0.73.0",
+    "database_updated_at": "2026-11-02T13:15:56.44112656Z",
+    "third_party_sbom_warning": true,
+    "os_coverage": "Kali rolling recognized; absent OS vulnerability rows do not establish a clean OS. System Python separately inventoried/audited."
+  },
+  "architectures": {
+    "arm64": {
+      "image_digest": "sha256:52e38fb8105145c7b049291c4ecc1e12d619633acd47cf97f3ab704ac2d118c0",
+      "build": "complete",
+      "functional_smoke": "pass before security repairs",
+      "raw_scan_sha256": "39992535f998b062e024bc823d031c8b4ac47b0240c4a45998363388f22e9382",
+      "scan_rows": 386,
+      "severity_counts": {
+        "HIGH": 175,
+        "MEDIUM": 169,
+        "CRITICAL": 4,
+        "LOW": 15,
+        "UNKNOWN": 23
+      },
+      "result_targets": [
+        {
+          "target": "sha256:52e38fb8105145c7b049291c4ecc1e12d619633acd47cf97f3ab704ac2d118c0 (debian kali-rolling)",
+          "type": "debian",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "Node.js",
+          "type": "node-pkg",
+          "vulnerability_rows": 4
+        },
+        {
+          "target": "Python",
+          "type": "python-pkg",
+          "vulnerability_rows": 9
+        },
+        {
+          "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 7
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-bash/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-go/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-java/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-javascript/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-json/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-python/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-typescript/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-yaml/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/go/bin/gospider",
+          "type": "gobinary",
+          "vulnerability_rows": 77
+        },
+        {
+          "target": "home/pentester/go/bin/httpx",
+          "type": "gobinary",
+          "vulnerability_rows": 27
+        },
+        {
+          "target": "home/pentester/go/bin/interactsh-client",
+          "type": "gobinary",
+          "vulnerability_rows": 50
+        },
+        {
+          "target": "home/pentester/go/bin/katana",
+          "type": "gobinary",
+          "vulnerability_rows": 32
+        },
+        {
+          "target": "home/pentester/go/bin/vulnx",
+          "type": "gobinary",
+          "vulnerability_rows": 51
+        },
+        {
+          "target": "usr/local/bin/gitleaks",
+          "type": "gobinary",
+          "vulnerability_rows": 73
+        },
+        {
+          "target": "usr/local/bin/trivy",
+          "type": "gobinary",
+          "vulnerability_rows": 56
+        }
+      ]
+    },
+    "amd64": {
+      "image_digest": "sha256:b498ad21f38a2556bbb6f9218975d643b6b321e5e4772a9c704c1ac3176e4c01",
+      "build": "complete",
+      "functional_smoke": "pass before security repairs",
+      "raw_scan_sha256": "1782323dfea154a9393738d89e206b851ad765610394b9f9a613906767b8e16c",
+      "scan_rows": 386,
+      "severity_counts": {
+        "HIGH": 175,
+        "MEDIUM": 169,
+        "CRITICAL": 4,
+        "LOW": 15,
+        "UNKNOWN": 23
+      },
+      "result_targets": [
+        {
+          "target": "sha256:b498ad21f38a2556bbb6f9218975d643b6b321e5e4772a9c704c1ac3176e4c01 (debian kali-rolling)",
+          "type": "debian",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "Node.js",
+          "type": "node-pkg",
+          "vulnerability_rows": 4
+        },
+        {
+          "target": "Python",
+          "type": "python-pkg",
+          "vulnerability_rows": 9
+        },
+        {
+          "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 7
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-bash/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-go/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-java/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-javascript/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-json/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-python/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-typescript/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/.tree-sitter/parsers/tree-sitter-yaml/Cargo.lock",
+          "type": "cargo",
+          "vulnerability_rows": 0
+        },
+        {
+          "target": "home/pentester/go/bin/gospider",
+          "type": "gobinary",
+          "vulnerability_rows": 77
+        },
+        {
+          "target": "home/pentester/go/bin/httpx",
+          "type": "gobinary",
+          "vulnerability_rows": 27
+        },
+        {
+          "target": "home/pentester/go/bin/interactsh-client",
+          "type": "gobinary",
+          "vulnerability_rows": 50
+        },
+        {
+          "target": "home/pentester/go/bin/katana",
+          "type": "gobinary",
+          "vulnerability_rows": 32
+        },
+        {
+          "target": "home/pentester/go/bin/vulnx",
+          "type": "gobinary",
+          "vulnerability_rows": 51
+        },
+        {
+          "target": "usr/local/bin/gitleaks",
+          "type": "gobinary",
+          "vulnerability_rows": 73
+        },
+        {
+          "target": "usr/local/bin/trivy",
+          "type": "gobinary",
+          "vulnerability_rows": 56
+        }
+      ]
+    }
+  },
+  "source_scope_dispositions": [
+    {
+      "component": "Dirsearch0.5.0 native/Cargo.lock",
+      "advisory_rows": [
+        "GHSA-36hh-v3qg-5jq4",
+        "GHSA-chgr-c6px-7xpp",
+        "GHSA-4w2j-m93h-cj5j",
+        "GHSA-2mjx-qc3c-rqvc",
+        "GHSA-c8m5-c952-6cm4",
+        "GHSA-h2v8-394m-p7vv",
+        "GHSA-w44r-93j7-qv28"
+      ],
+      "disposition": "Source-only lock; the corresponding native backend is not present as executable code in these images. Native compilation requires separate qualification.",
+      "proof": {
+        "native_import_available": false,
+        "native_files": [
+          "native/.gitignore",
+          "native/Cargo.lock",
+          "native/Cargo.toml",
+          "native/README.md",
+          "native/pyproject.toml",
+          "native/src/lib.rs"
+        ],
+        "native_binary_files": [],
+        "Cargo_lock_sha256": "95c5b90beadd6615ca8a74a0f445270b445b0eefd5d52c400b4b0de7eba695f2",
+        "default_backend_source": "lib/core/options.py defaults request-backend to python; native requires explicit opt-in and import dirsearch_native",
+        "functional_default_backend": "Network-none loopback HTTP fixture: default CLI found one200 path and emitted JSON;13 local requests; no native extension imported"
+      },
+      "retained": "All native source, Cargo lock, build helper and Python scanning capabilities retained."
+    },
+    {
+      "component": "pip bundled setuptools70.3.0 inventory entry",
+      "advisory_rows": [
+        "CVE-2025-47273",
+        "CVE-2026-59890",
+        "GHSA-xmj3-9gf7-h52w"
+      ],
+      "disposition": "The shipped subset is pkg_resources only. The implicated setuptools PackageIndex, sdist builder and legacy wheel installer modules are absent. The latter two findings also require macOS/Windows respectively. This does not apply to full standalone/system setuptools or its private jaraco dependency.",
+      "proof": {
+        "pip_pkg_resources_sha256": "bdb4c9d3faee5201b1423944aacaee16688d3d5ca1dadf6afb3c930d3d39df12",
+        "pip_pkg_resources_files": [
+          "_vendor/pkg_resources/LICENSE",
+          "_vendor/pkg_resources/__init__.py"
+        ],
+        "pip_setuptools_import_available": false
+      },
+      "primary_sources": [
+        "https://github.com/pypa/setuptools/security/advisories/GHSA-5rjg-fvgr-3xxf",
+        "https://github.com/pypa/setuptools/security/advisories/GHSA-h35f-9h28-mq5c",
+        "https://github.com/advisories/GHSA-xmj3-9gf7-h52w"
+      ],
+      "retained": "Unchanged pkg_resources source/license and truthful upstream inventory entry; no SBOM component deletion or vulnerability ignore."
+    }
+  ],
+  "packed_binary_gap": {
+    "component": "TruffleHog3.99.2",
+    "scope": "Full image scan missed its UPX-packed Go inventory",
+    "independent_unpacked_copy_scan": {
+      "high": 14,
+      "medium": 22,
+      "low": 3,
+      "unknown": 3
+    },
+    "status": "Go hardening lane; final rebuilt binary inventory still required"
+  },
+  "baseline_findings": [
+    {
+      "target": "Node.js",
+      "package": "basic-ftp",
+      "version": "5.3.1",
+      "id": "CVE-2026-102990",
+      "severity": "HIGH",
+      "fixed": "6.2.1"
+    },
+    {
+      "target": "Node.js",
+      "package": "glob",
+      "version": "13.0.6",
+      "id": "CVE-2026-118773",
+      "severity": "MEDIUM",
+      "fixed": "14.0.2"
+    },
+    {
+      "target": "Node.js",
+      "package": "ip-address",
+      "version": "10.7.3",
+      "id": "CVE-2026-111997",
+      "severity": "MEDIUM",
+      "fixed": "10.7.4"
+    },
+    {
+      "target": "Node.js",
+      "package": "minimatch",
+      "version": "10.2.6",
+      "id": "CVE-2026-118764",
+      "severity": "MEDIUM",
+      "fixed": "11.0.1"
+    },
+    {
+      "target": "Python",
+      "package": "certifi",
+      "version": "2026.6.17",
+      "id": "GHSA-6q48-6c7w-9gw2",
+      "severity": "CRITICAL",
+      "fixed": "2026.10.18"
+    },
+    {
+      "target": "Python",
+      "package": "msgpack",
+      "version": "1.1.2",
+      "id": "CVE-2026-114613",
+      "severity": "HIGH",
+      "fixed": "1.2.3"
+    },
+    {
+      "target": "Python",
+      "package": "msgpack",
+      "version": "1.1.2",
+      "id": "GHSA-6v7p-g79w-8964",
+      "severity": "HIGH",
+      "fixed": "1.2.1"
+    },
+    {
+      "target": "Python",
+      "package": "setuptools",
+      "version": "70.3.0",
+      "id": "CVE-2025-47273",
+      "severity": "HIGH",
+      "fixed": "78.1.1"
+    },
+    {
+      "target": "Python",
+      "package": "setuptools",
+      "version": "70.3.0",
+      "id": "CVE-2026-59890",
+      "severity": "MEDIUM",
+      "fixed": "83.0.0"
+    },
+    {
+      "target": "Python",
+      "package": "setuptools",
+      "version": "70.3.0",
+      "id": "GHSA-xmj3-9gf7-h52w",
+      "severity": "LOW",
+      "fixed": "84.1.0"
+    },
+    {
+      "target": "Python",
+      "package": "urllib3",
+      "version": "2.7.0",
+      "id": "CVE-2026-97687",
+      "severity": "HIGH",
+      "fixed": "2.8.0"
+    },
+    {
+      "target": "Python",
+      "package": "urllib3",
+      "version": "2.7.0",
+      "id": "CVE-2026-97689",
+      "severity": "HIGH",
+      "fixed": "2.8.0"
+    },
+    {
+      "target": "Python",
+      "package": "urllib3",
+      "version": "2.7.0",
+      "id": "CVE-2026-97688",
+      "severity": "MEDIUM",
+      "fixed": "2.8.0"
+    },
+    {
+      "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+      "package": "pyo3",
+      "version": "0.24.1",
+      "id": "GHSA-36hh-v3qg-5jq4",
+      "severity": "HIGH",
+      "fixed": "0.29.0"
+    },
+    {
+      "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+      "package": "pyo3",
+      "version": "0.24.1",
+      "id": "GHSA-chgr-c6px-7xpp",
+      "severity": "MEDIUM",
+      "fixed": "0.29.0"
+    },
+    {
+      "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+      "package": "quinn-proto",
+      "version": "0.11.14",
+      "id": "GHSA-4w2j-m93h-cj5j",
+      "severity": "HIGH",
+      "fixed": "0.11.15"
+    },
+    {
+      "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+      "package": "rustls",
+      "version": "0.23.40",
+      "id": "GHSA-2mjx-qc3c-rqvc",
+      "severity": "MEDIUM",
+      "fixed": "0.23.45"
+    },
+    {
+      "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+      "package": "rustls",
+      "version": "0.23.40",
+      "id": "GHSA-c8m5-c952-6cm4",
+      "severity": "MEDIUM",
+      "fixed": "0.23.46, 0.24.0-dev.2"
+    },
+    {
+      "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+      "package": "rustls",
+      "version": "0.23.40",
+      "id": "GHSA-h2v8-394m-p7vv",
+      "severity": "LOW",
+      "fixed": "0.23.46, 0.24.0-dev.2"
+    },
+    {
+      "target": "app/.venv/lib/python3.14/site-packages/dirsearch/native/Cargo.lock",
+      "package": "rustls",
+      "version": "0.23.40",
+      "id": "GHSA-w44r-93j7-qv28",
+      "severity": "LOW",
+      "fixed": "0.23.46, 0.24.0-dev.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "github.com/antchfx/xmlquery",
+      "version": "v1.2.4",
+      "id": "CVE-2020-25614",
+      "severity": "HIGH",
+      "fixed": "1.3.1"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "github.com/antchfx/xpath",
+      "version": "v1.1.8",
+      "id": "CVE-2026-32287",
+      "severity": "HIGH",
+      "fixed": "1.3.6"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "github.com/sirupsen/logrus",
+      "version": "v1.8.1",
+      "id": "CVE-2025-65637",
+      "severity": "HIGH",
+      "fixed": "1.8.3, 1.9.1, 1.9.3"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2020-29652",
+      "severity": "HIGH",
+      "fixed": "0.0.0-20201216223049-8b5274cf687f"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2021-43565",
+      "severity": "HIGH",
+      "fixed": "0.0.0-20211202192323-5770296d904e"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2022-27191",
+      "severity": "HIGH",
+      "fixed": "0.0.0-20220314234659-1baeb1ce4c0b"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2024-45337",
+      "severity": "HIGH",
+      "fixed": "0.31.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2025-22869",
+      "severity": "HIGH",
+      "fixed": "0.35.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2025-47913",
+      "severity": "HIGH",
+      "fixed": "0.43.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39828",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39829",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39830",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39831",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39832",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39835",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-42508",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-46595",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-46597",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-56854",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2023-48795",
+      "severity": "MEDIUM",
+      "fixed": "0.17.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2025-47914",
+      "severity": "MEDIUM",
+      "fixed": "0.45.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2025-58181",
+      "severity": "MEDIUM",
+      "fixed": "0.45.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39827",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39833",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-39834",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-46598",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-56855",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2026-78662",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/crypto",
+      "version": "v0.0.0-20200622213623-75b288015ac9",
+      "id": "CVE-2022-30636",
+      "severity": "UNKNOWN",
+      "fixed": "0.0.0-20220525230936-793ad666bf5e"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2021-44716",
+      "severity": "HIGH",
+      "fixed": "0.0.0-20211209124913-491a49abca63"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2022-27664",
+      "severity": "HIGH",
+      "fixed": "0.0.0-20220906165146-f3363e06e74c"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2022-41723",
+      "severity": "HIGH",
+      "fixed": "0.7.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2023-39325",
+      "severity": "HIGH",
+      "fixed": "0.17.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2023-45288",
+      "severity": "HIGH",
+      "fixed": "0.23.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2024-45338",
+      "severity": "HIGH",
+      "fixed": "0.33.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-25681",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-27136",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-33814",
+      "severity": "HIGH",
+      "fixed": "0.53.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-39821",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-46600",
+      "severity": "HIGH",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2022-41717",
+      "severity": "MEDIUM",
+      "fixed": "0.4.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2023-3978",
+      "severity": "MEDIUM",
+      "fixed": "0.13.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2025-22870",
+      "severity": "MEDIUM",
+      "fixed": "0.36.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2025-22872",
+      "severity": "MEDIUM",
+      "fixed": "0.38.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2025-47911",
+      "severity": "MEDIUM",
+      "fixed": "0.45.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2025-58190",
+      "severity": "MEDIUM",
+      "fixed": "0.45.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-25680",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-42502",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-42506",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-78661",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/net",
+      "version": "v0.0.0-20210614182718-04defd469f4e",
+      "id": "CVE-2026-97045",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/sys",
+      "version": "v0.0.0-20210423082822-04245dca01da",
+      "id": "CVE-2022-29526",
+      "severity": "MEDIUM",
+      "fixed": "0.0.0-20220412211240-33da011f77ad"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/sys",
+      "version": "v0.0.0-20210423082822-04245dca01da",
+      "id": "CVE-2026-39824",
+      "severity": "UNKNOWN",
+      "fixed": "0.44.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/text",
+      "version": "v0.3.6",
+      "id": "CVE-2021-38561",
+      "severity": "HIGH",
+      "fixed": "0.3.7"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/text",
+      "version": "v0.3.6",
+      "id": "CVE-2022-32149",
+      "severity": "HIGH",
+      "fixed": "0.3.8"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/text",
+      "version": "v0.3.6",
+      "id": "CVE-2026-56851",
+      "severity": "HIGH",
+      "fixed": "0.41.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "golang.org/x/text",
+      "version": "v0.3.6",
+      "id": "CVE-2026-56852",
+      "severity": "HIGH",
+      "fixed": "0.39.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "google.golang.org/protobuf",
+      "version": "v1.26.0",
+      "id": "CVE-2024-24786",
+      "severity": "MEDIUM",
+      "fixed": "1.33.0"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-111943",
+      "severity": "HIGH",
+      "fixed": "1.26.10, 1.27.3"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78667",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97031",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56866",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94439",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94440",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94448",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97030",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/gospider",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56857",
+      "severity": "LOW",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "github.com/klauspost/compress",
+      "version": "v1.18.2",
+      "id": "CVE-2026-63209",
+      "severity": "HIGH",
+      "fixed": "1.18.7"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "id": "CVE-2026-56854",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "id": "CVE-2026-56855",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "id": "CVE-2026-78662",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "id": "GO-2026-5932",
+      "severity": "UNKNOWN",
+      "fixed": ""
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78661",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-97045",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "golang.org/x/text",
+      "version": "v0.40.0",
+      "id": "CVE-2026-56851",
+      "severity": "HIGH",
+      "fixed": "0.41.0"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-111943",
+      "severity": "HIGH",
+      "fixed": "1.26.10, 1.27.3"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78667",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97031",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56866",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94439",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94440",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94448",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97030",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/httpx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56857",
+      "severity": "LOW",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "github.com/klauspost/compress",
+      "version": "v1.18.2",
+      "id": "CVE-2026-63209",
+      "severity": "HIGH",
+      "fixed": "1.18.7"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39828",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39829",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39830",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39831",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39832",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39835",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-42508",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-46595",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-46597",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-56854",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39827",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39833",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39834",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-46598",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-56855",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-78662",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "GO-2026-5932",
+      "severity": "UNKNOWN",
+      "fixed": ""
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-25681",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-27136",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-33814",
+      "severity": "HIGH",
+      "fixed": "0.53.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-39821",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-46600",
+      "severity": "HIGH",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-25680",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-42502",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-42506",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78661",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-97045",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/sys",
+      "version": "v0.39.0",
+      "id": "CVE-2026-39824",
+      "severity": "UNKNOWN",
+      "fixed": "0.44.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/text",
+      "version": "v0.32.0",
+      "id": "CVE-2026-56851",
+      "severity": "HIGH",
+      "fixed": "0.41.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "golang.org/x/text",
+      "version": "v0.32.0",
+      "id": "CVE-2026-56852",
+      "severity": "HIGH",
+      "fixed": "0.39.0"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-111943",
+      "severity": "HIGH",
+      "fixed": "1.26.10, 1.27.3"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78667",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97031",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56866",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94439",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94440",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94448",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97030",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/interactsh-client",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56857",
+      "severity": "LOW",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "github.com/jackc/pgx/v5",
+      "version": "v5.7.2",
+      "id": "CVE-2026-33815",
+      "severity": "CRITICAL",
+      "fixed": "5.9.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "github.com/jackc/pgx/v5",
+      "version": "v5.7.2",
+      "id": "CVE-2026-33816",
+      "severity": "CRITICAL",
+      "fixed": "5.9.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "github.com/jackc/pgx/v5",
+      "version": "v5.7.2",
+      "id": "CVE-2026-41889",
+      "severity": "LOW",
+      "fixed": "5.9.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "github.com/klauspost/compress",
+      "version": "v1.18.5",
+      "id": "CVE-2026-63209",
+      "severity": "HIGH",
+      "fixed": "1.18.7"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/crypto",
+      "version": "v0.52.0",
+      "id": "CVE-2026-56854",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/crypto",
+      "version": "v0.52.0",
+      "id": "CVE-2026-56855",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/crypto",
+      "version": "v0.52.0",
+      "id": "CVE-2026-78662",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/crypto",
+      "version": "v0.52.0",
+      "id": "GO-2026-5932",
+      "severity": "UNKNOWN",
+      "fixed": ""
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/net",
+      "version": "v0.55.0",
+      "id": "CVE-2026-46600",
+      "severity": "HIGH",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/net",
+      "version": "v0.55.0",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/net",
+      "version": "v0.55.0",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/net",
+      "version": "v0.55.0",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/net",
+      "version": "v0.55.0",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/net",
+      "version": "v0.55.0",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/net",
+      "version": "v0.55.0",
+      "id": "CVE-2026-78661",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/net",
+      "version": "v0.55.0",
+      "id": "CVE-2026-97045",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/text",
+      "version": "v0.37.0",
+      "id": "CVE-2026-56851",
+      "severity": "HIGH",
+      "fixed": "0.41.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "golang.org/x/text",
+      "version": "v0.37.0",
+      "id": "CVE-2026-56852",
+      "severity": "HIGH",
+      "fixed": "0.39.0"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-111943",
+      "severity": "HIGH",
+      "fixed": "1.26.10, 1.27.3"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78667",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97031",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56866",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94439",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94440",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94448",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97030",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/katana",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56857",
+      "severity": "LOW",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "github.com/buger/jsonparser",
+      "version": "v1.1.1",
+      "id": "CVE-2026-32285",
+      "severity": "HIGH",
+      "fixed": "1.1.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "github.com/klauspost/compress",
+      "version": "v1.18.2",
+      "id": "CVE-2026-63209",
+      "severity": "HIGH",
+      "fixed": "1.18.7"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39828",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39829",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39830",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39831",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39832",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39835",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-42508",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-46595",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-46597",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-56854",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39827",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39833",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-39834",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-46598",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-56855",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "CVE-2026-78662",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/crypto",
+      "version": "v0.46.0",
+      "id": "GO-2026-5932",
+      "severity": "UNKNOWN",
+      "fixed": ""
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-25681",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-27136",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-33814",
+      "severity": "HIGH",
+      "fixed": "0.53.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-39821",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-46600",
+      "severity": "HIGH",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-25680",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-42502",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-42506",
+      "severity": "MEDIUM",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-78661",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/net",
+      "version": "v0.48.0",
+      "id": "CVE-2026-97045",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/sys",
+      "version": "v0.41.0",
+      "id": "CVE-2026-39824",
+      "severity": "UNKNOWN",
+      "fixed": "0.44.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/text",
+      "version": "v0.32.0",
+      "id": "CVE-2026-56851",
+      "severity": "HIGH",
+      "fixed": "0.41.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "golang.org/x/text",
+      "version": "v0.32.0",
+      "id": "CVE-2026-56852",
+      "severity": "HIGH",
+      "fixed": "0.39.0"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-111943",
+      "severity": "HIGH",
+      "fixed": "1.26.10, 1.27.3"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78667",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97031",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56866",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94439",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94440",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-94448",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97030",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "home/pentester/go/bin/vulnx",
+      "package": "stdlib",
+      "version": "v1.26.7",
+      "id": "CVE-2026-56857",
+      "severity": "LOW",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "github.com/klauspost/compress",
+      "version": "v1.17.11",
+      "id": "CVE-2026-63209",
+      "severity": "HIGH",
+      "fixed": "1.18.7"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "github.com/nwaples/rardecode/v2",
+      "version": "v2.1.0",
+      "id": "CVE-2025-11579",
+      "severity": "MEDIUM",
+      "fixed": "2.2.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "github.com/ulikunitz/xz",
+      "version": "v0.5.12",
+      "id": "CVE-2025-58058",
+      "severity": "MEDIUM",
+      "fixed": "0.5.15"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2025-47913",
+      "severity": "HIGH",
+      "fixed": "0.43.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39828",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39829",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39830",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39831",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39832",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39835",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-42508",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-46595",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-46597",
+      "severity": "HIGH",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-56854",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2025-47914",
+      "severity": "MEDIUM",
+      "fixed": "0.45.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2025-58181",
+      "severity": "MEDIUM",
+      "fixed": "0.45.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39827",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39833",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-39834",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-46598",
+      "severity": "MEDIUM",
+      "fixed": "0.52.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-56855",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "CVE-2026-78662",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/crypto",
+      "version": "v0.35.0",
+      "id": "GO-2026-5932",
+      "severity": "UNKNOWN",
+      "fixed": ""
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/sys",
+      "version": "v0.30.0",
+      "id": "CVE-2026-39824",
+      "severity": "UNKNOWN",
+      "fixed": "0.44.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/text",
+      "version": "v0.22.0",
+      "id": "CVE-2026-56851",
+      "severity": "HIGH",
+      "fixed": "0.41.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "golang.org/x/text",
+      "version": "v0.22.0",
+      "id": "CVE-2026-56852",
+      "severity": "HIGH",
+      "fixed": "0.39.0"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2025-68121",
+      "severity": "CRITICAL",
+      "fixed": "1.24.13, 1.25.7, 1.26.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2025-61726",
+      "severity": "HIGH",
+      "fixed": "1.24.12, 1.25.6"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-111943",
+      "severity": "HIGH",
+      "fixed": "1.26.10, 1.27.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-25679",
+      "severity": "HIGH",
+      "fixed": "1.25.8, 1.26.1"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-27145",
+      "severity": "HIGH",
+      "fixed": "1.25.11, 1.26.4"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-32280",
+      "severity": "HIGH",
+      "fixed": "1.25.9, 1.26.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-32281",
+      "severity": "HIGH",
+      "fixed": "1.25.9, 1.26.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-32283",
+      "severity": "HIGH",
+      "fixed": "1.25.9, 1.26.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-33811",
+      "severity": "HIGH",
+      "fixed": "1.25.10, 1.26.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-33814",
+      "severity": "HIGH",
+      "fixed": "1.25.10, 1.26.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-33818",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-39820",
+      "severity": "HIGH",
+      "fixed": "1.25.10, 1.26.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-39821",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-39822",
+      "severity": "HIGH",
+      "fixed": "1.25.12, 1.26.5, 1.27.0-rc.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-39836",
+      "severity": "HIGH",
+      "fixed": "1.25.10, 1.26.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-42499",
+      "severity": "HIGH",
+      "fixed": "1.25.10, 1.26.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-42504",
+      "severity": "HIGH",
+      "fixed": "1.25.11, 1.26.4"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-56853",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-56858",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-56859",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-56860",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-56862",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-78667",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-97031",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2025-61728",
+      "severity": "MEDIUM",
+      "fixed": "1.24.12, 1.25.6"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2025-61730",
+      "severity": "MEDIUM",
+      "fixed": "1.24.12, 1.25.6"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-27142",
+      "severity": "MEDIUM",
+      "fixed": "1.25.8, 1.26.1"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-32282",
+      "severity": "MEDIUM",
+      "fixed": "1.25.9, 1.26.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-32288",
+      "severity": "MEDIUM",
+      "fixed": "1.25.9, 1.26.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-32289",
+      "severity": "MEDIUM",
+      "fixed": "1.25.9, 1.26.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-39823",
+      "severity": "MEDIUM",
+      "fixed": "1.25.10, 1.26.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-39825",
+      "severity": "MEDIUM",
+      "fixed": "1.25.10, 1.26.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-39826",
+      "severity": "MEDIUM",
+      "fixed": "1.25.10, 1.26.3"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-42505",
+      "severity": "MEDIUM",
+      "fixed": "1.25.12, 1.26.5, 1.27.0-rc.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-42507",
+      "severity": "MEDIUM",
+      "fixed": "1.25.11, 1.26.4"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-56866",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-94439",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-94440",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-94448",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-97030",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-27139",
+      "severity": "LOW",
+      "fixed": "1.25.8, 1.26.1"
+    },
+    {
+      "target": "usr/local/bin/gitleaks",
+      "package": "stdlib",
+      "version": "v1.24.11",
+      "id": "CVE-2026-56857",
+      "severity": "LOW",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/containerd/containerd/v2",
+      "version": "v2.3.3",
+      "id": "CVE-2026-95837",
+      "severity": "HIGH",
+      "fixed": "2.2.7, 2.3.4"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/containerd/containerd/v2",
+      "version": "v2.3.3",
+      "id": "CVE-2026-53493",
+      "severity": "MEDIUM",
+      "fixed": "2.0.13, 2.2.9, 2.3.6, 2.4.1"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/containerd/containerd/v2",
+      "version": "v2.3.3",
+      "id": "CVE-2026-53495",
+      "severity": "MEDIUM",
+      "fixed": "2.0.12, 2.2.8, 2.3.5"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/containerd/containerd/v2",
+      "version": "v2.3.3",
+      "id": "CVE-2026-95838",
+      "severity": "MEDIUM",
+      "fixed": "2.0.12, 2.2.8, 2.3.5"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/go-git/go-git/v5",
+      "version": "v5.19.1",
+      "id": "CVE-2026-71556",
+      "severity": "HIGH",
+      "fixed": "5.19.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/go-git/go-git/v5",
+      "version": "v5.19.1",
+      "id": "CVE-2026-71557",
+      "severity": "MEDIUM",
+      "fixed": "5.19.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/go-jose/go-jose/v4",
+      "version": "v4.1.4",
+      "id": "CVE-2026-116587",
+      "severity": "HIGH",
+      "fixed": "4.1.6"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/go-jose/go-jose/v4",
+      "version": "v4.1.4",
+      "id": "CVE-2026-116585",
+      "severity": "MEDIUM",
+      "fixed": "4.1.5"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/go-jose/go-jose/v4",
+      "version": "v4.1.4",
+      "id": "CVE-2026-116586",
+      "severity": "MEDIUM",
+      "fixed": "4.1.5"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/klauspost/compress",
+      "version": "v1.18.6",
+      "id": "CVE-2026-63209",
+      "severity": "HIGH",
+      "fixed": "1.18.7"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "github.com/moby/sys/user",
+      "version": "v0.4.0",
+      "id": "CVE-2026-61801",
+      "severity": "MEDIUM",
+      "fixed": "0.4.1"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "go.opentelemetry.io/otel/exporters/otlp/otlptrace",
+      "version": "v1.44.0",
+      "id": "CVE-2026-81870",
+      "severity": "LOW",
+      "fixed": "1.45.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc",
+      "version": "v1.44.0",
+      "id": "CVE-2026-81870",
+      "severity": "LOW",
+      "fixed": "1.45.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "go.opentelemetry.io/otel/sdk",
+      "version": "v1.44.0",
+      "id": "CVE-2026-81870",
+      "severity": "LOW",
+      "fixed": "1.45.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "id": "CVE-2026-56854",
+      "severity": "HIGH",
+      "fixed": "0.55.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "id": "CVE-2026-56855",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "id": "CVE-2026-78662",
+      "severity": "MEDIUM",
+      "fixed": "0.56.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/crypto",
+      "version": "v0.54.0",
+      "id": "GO-2026-5932",
+      "severity": "UNKNOWN",
+      "fixed": ""
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/mod",
+      "version": "v0.38.0",
+      "id": "CVE-2026-56864",
+      "severity": "HIGH",
+      "fixed": "0.40.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/mod",
+      "version": "v0.38.0",
+      "id": "CVE-2026-56865",
+      "severity": "HIGH",
+      "fixed": "0.40.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "0.60.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-78661",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/net",
+      "version": "v0.57.0",
+      "id": "CVE-2026-97045",
+      "severity": "UNKNOWN",
+      "fixed": "0.62.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "golang.org/x/text",
+      "version": "v0.40.0",
+      "id": "CVE-2026-56851",
+      "severity": "HIGH",
+      "fixed": "0.41.0"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "google.golang.org/grpc",
+      "version": "v1.82.1",
+      "id": "CVE-2026-84304",
+      "severity": "HIGH",
+      "fixed": "1.83.1"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "google.golang.org/grpc",
+      "version": "v1.82.1",
+      "id": "CVE-2026-84445",
+      "severity": "HIGH",
+      "fixed": "1.82.2, 1.83.2, 1.84.0-dev.0.20260825144003-d5a41119e0e3, 1.85.0-dev.0.20260825072537-93e31b48545e"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "google.golang.org/grpc",
+      "version": "v1.82.1",
+      "id": "CVE-2026-84303",
+      "severity": "MEDIUM",
+      "fixed": "1.83.1"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "oras.land/oras-go/v2",
+      "version": "v2.6.1",
+      "id": "CVE-2026-50163",
+      "severity": "HIGH",
+      "fixed": "2.6.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "oras.land/oras-go/v2",
+      "version": "v2.6.1",
+      "id": "CVE-2026-85731",
+      "severity": "HIGH",
+      "fixed": "2.6.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "oras.land/oras-go/v2",
+      "version": "v2.6.1",
+      "id": "CVE-2026-85732",
+      "severity": "MEDIUM",
+      "fixed": "2.6.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-111943",
+      "severity": "HIGH",
+      "fixed": "1.26.10, 1.27.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-33818",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-39821",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-46600",
+      "severity": "HIGH",
+      "fixed": "1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-56853",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-56858",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-56859",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-56860",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-56862",
+      "severity": "HIGH",
+      "fixed": "1.25.13, 1.26.6, 1.27.0-rc.3"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-78667",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-78669",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-97031",
+      "severity": "HIGH",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-56866",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-78659",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-78660",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-78663",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-94439",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-94440",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-94448",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-97030",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-97032",
+      "severity": "MEDIUM",
+      "fixed": "1.26.9, 1.27.2"
+    },
+    {
+      "target": "usr/local/bin/trivy",
+      "package": "stdlib",
+      "version": "v1.26.5",
+      "id": "CVE-2026-56857",
+      "severity": "LOW",
+      "fixed": "1.26.9, 1.27.2"
+    }
+  ]
+}

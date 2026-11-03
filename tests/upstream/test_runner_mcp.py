@@ -8,6 +8,7 @@ routine does the connecting.
 
 from __future__ import annotations
 
+import importlib
 import types
 from typing import Any
 
@@ -17,10 +18,21 @@ from agents import ModelSettings
 import strix.tools.mcp as mcp_pkg
 import strix.tools.notes.tools as notes_tools
 import strix.tools.todo.tools as todo_tools
+from strix.agents import factory
 from strix.core import runner
 from strix.core.agents import AgentCoordinator
 from strix.runtime import session_manager
 from strix.tools.mcp import McpConnectionConfig, McpConnectionRequest
+from strix.tools.mcp import client as mcp_client
+
+
+_test_mcp_client = importlib.import_module("tests.upstream.test_mcp_client")
+FakeMCPServer: Any = _test_mcp_client.FakeMCPServer
+_mcp_tool: Any = _test_mcp_client._mcp_tool
+
+
+def _built_server(server: Any) -> Any:
+    return mcp_client.BuiltMcpServer(server, None)
 
 
 def _settings() -> Any:
@@ -29,11 +41,14 @@ def _settings() -> Any:
             model="openai/gpt-4o",
             reasoning_effort="high",
             force_required_tool_choice=False,
+            parallel_tool_calls=False,
             timeout=300,
             prompt_cache=True,
             extra_headers=None,
+            extra_body=None,
         ),
         runtime=types.SimpleNamespace(max_context_images=3),
+        telemetry=types.SimpleNamespace(run_record_timings=False),
     )
 
 
@@ -62,6 +77,11 @@ def _wire_runner(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     monkeypatch.setattr(runner, "build_strix_agent", lambda **_k: object())
     monkeypatch.setattr(runner, "make_child_factory", lambda **_k: lambda **_kk: object())
     monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db: object())
+    monkeypatch.setattr(
+        mcp_client,
+        "_build_server",
+        lambda config: _built_server(FakeMCPServer(config.name, [])),
+    )
 
     async def _run_agent_loop(**_kwargs: Any) -> None:
         return None
@@ -80,13 +100,14 @@ async def test_none_default_attaches_from_the_user_config_file(
     )
     monkeypatch.setattr(mcp_pkg, "load_user_mcp_configs", lambda: [file_config])
 
-    captured: list[list[McpConnectionRequest]] = []
+    captured: list[McpConnectionRequest] = []
+    original_register = mcp_pkg.McpRegistry.register
 
-    async def _capture(requests: list[McpConnectionRequest], _registry: Any) -> list[Any]:
-        captured.append(requests)
-        return []
+    def _capture(registry: Any, request: McpConnectionRequest) -> Any:
+        captured.append(request)
+        return original_register(registry, request)
 
-    monkeypatch.setattr(mcp_pkg, "attach_mcp_requests", _capture)
+    monkeypatch.setattr(mcp_pkg.McpRegistry, "register", _capture)
 
     await runner.run_strix_scan(
         scan_config={"targets": [], "scan_mode": "deep"},
@@ -97,12 +118,11 @@ async def test_none_default_attaches_from_the_user_config_file(
 
     # Each config from the file is wrapped in a bare request: no provider, no
     # transform, no explicit purpose (purpose falls back to notes at attach time).
-    (requests,) = captured
-    assert len(requests) == 1
-    assert requests[0].config is file_config
-    assert requests[0].provider is None
-    assert requests[0].result_transform is None
-    assert requests[0].purpose is None
+    (request,) = captured
+    assert request.config is file_config
+    assert request.provider is None
+    assert request.result_transform is None
+    assert request.purpose is None
 
 
 @pytest.mark.asyncio
@@ -116,13 +136,14 @@ async def test_supplied_requests_are_attached_and_the_user_file_is_not_read(
 
     monkeypatch.setattr(mcp_pkg, "load_user_mcp_configs", _fail_if_read)
 
-    captured: list[list[McpConnectionRequest]] = []
+    captured: list[McpConnectionRequest] = []
+    original_register = mcp_pkg.McpRegistry.register
 
-    async def _capture(requests: list[McpConnectionRequest], _registry: Any) -> list[Any]:
-        captured.append(requests)
-        return []
+    def _capture(registry: Any, request: McpConnectionRequest) -> Any:
+        captured.append(request)
+        return original_register(registry, request)
 
-    monkeypatch.setattr(mcp_pkg, "attach_mcp_requests", _capture)
+    monkeypatch.setattr(mcp_pkg.McpRegistry, "register", _capture)
 
     supplied = [
         McpConnectionRequest(
@@ -139,7 +160,7 @@ async def test_supplied_requests_are_attached_and_the_user_file_is_not_read(
         mcp_connection_requests=supplied,
     )
 
-    assert captured == [supplied]
+    assert captured == supplied
 
 
 @pytest.mark.asyncio
@@ -147,27 +168,19 @@ async def test_roster_is_persisted_even_without_a_status_sink(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """The viewer reads the roster off disk, so persistence must not depend on the
-    interface status sink: with ``mcp_status_sink=None`` the connect-time roster is
-    still written, carrying only the non-secret name/provider/tool_count/dead."""
+    interface status sink: with ``mcp_status_sink=None`` the configured roster is
+    still written, carrying only non-secret lifecycle fields."""
     _wire_runner(monkeypatch, tmp_path)
     monkeypatch.setattr(
         mcp_pkg,
         "load_user_mcp_configs",
         lambda: [McpConnectionConfig(name="local_fs", transport="stdio", command="npx")],
     )
-
-    class _FakeSession:
-        is_dead = False
-
-        def set_on_dead(self, _callback: Any) -> None:
-            return None
-
-    async def _attach(_requests: list[McpConnectionRequest], registry: Any) -> list[Any]:
-        registry.add(name="local_fs", session=_FakeSession(), tool_count=3, provider=None)
-        entry = registry.get("local_fs")
-        return [types.SimpleNamespace(name="local_fs", tool_count=3, session=entry.session)]
-
-    monkeypatch.setattr(mcp_pkg, "attach_mcp_requests", _attach)
+    monkeypatch.setattr(
+        mcp_client,
+        "_build_server",
+        lambda _config: _built_server(FakeMCPServer("local_fs", [])),
+    )
 
     persisted: list[list[dict[str, Any]]] = []
 
@@ -185,4 +198,115 @@ async def test_roster_is_persisted_even_without_a_status_sink(
     )
 
     assert persisted, "roster must persist even when no status sink is attached"
-    assert persisted[-1] == [{"name": "local_fs", "provider": None, "tool_count": 3, "dead": False}]
+    assert persisted[0] == [
+        {
+            "name": "local_fs",
+            "provider": None,
+            "tool_count": 0,
+            "dead": False,
+            "state": "configured",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_warmup_listing_failure_does_not_interrupt_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    _wire_runner(monkeypatch, tmp_path)
+
+    server = FakeMCPServer("db", [])
+
+    async def _failing_list_tools(
+        run_context: Any = None,
+        agent: Any = None,
+    ) -> list[Any]:
+        del run_context, agent
+        raise RuntimeError("catalog unavailable")
+
+    server.list_tools = _failing_list_tools
+
+    monkeypatch.setattr(
+        mcp_client,
+        "_build_server",
+        lambda _config: _built_server(server),
+    )
+    root_builds: list[dict[str, Any]] = []
+    monkeypatch.setattr(runner, "build_strix_agent", lambda **kwargs: root_builds.append(kwargs))
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-mcp-list-failure",
+        image="img",
+        coordinator=AgentCoordinator(),
+        mcp_connection_requests=[
+            McpConnectionRequest(
+                config=McpConnectionConfig(name="db", url="https://mcp.example.com")
+            )
+        ],
+    )
+
+    assert len(root_builds) == 1
+
+
+@pytest.mark.asyncio
+async def test_warmed_tool_counts_reach_root_and_child_agent_builds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    _wire_runner(monkeypatch, tmp_path)
+    server = FakeMCPServer("db", [_mcp_tool(f"tool_{index}") for index in range(3)])
+    monkeypatch.setattr(mcp_client, "_build_server", lambda _config: _built_server(server))
+
+    root_builds: list[dict[str, Any]] = []
+
+    def _build_root(**kwargs: Any) -> object:
+        root_builds.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        runner,
+        "build_strix_agent",
+        _build_root,
+    )
+    child_builds: list[dict[str, Any]] = []
+
+    def _build_child(**kwargs: Any) -> object:
+        child_builds.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        factory,
+        "build_strix_agent",
+        _build_child,
+    )
+    real_make_child_factory = factory.make_child_factory
+    child_factory_capture: dict[str, Any] = {}
+
+    def _make_child_factory(**kwargs: Any) -> Any:
+        child_factory_capture["context"] = kwargs["system_prompt_context"]
+        child_factory_capture["factory"] = real_make_child_factory(**kwargs)
+        return child_factory_capture["factory"]
+
+    monkeypatch.setattr(runner, "make_child_factory", _make_child_factory)
+    request = McpConnectionRequest(
+        config=McpConnectionConfig(name="db", url="https://mcp.example.com", notes="database")
+    )
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-mcp-prompt-counts",
+        image="img",
+        coordinator=AgentCoordinator(),
+        mcp_connection_requests=[request],
+    )
+
+    root_context = root_builds[0]["system_prompt_context"]
+    assert root_context["mcp_connections"][0]["tool_count"] == 3
+    assert child_factory_capture["context"] is root_context
+    assert child_factory_capture["context"]["mcp_connections"][0]["tool_count"] == 3
+
+    child_factory_capture["factory"](name="child", skills=[])
+    assert child_builds[0]["system_prompt_context"] is child_factory_capture["context"]
+    assert child_builds[0]["system_prompt_context"]["mcp_connections"][0]["tool_count"] == 3

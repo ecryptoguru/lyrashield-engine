@@ -6,7 +6,8 @@
     "internalIdentifiers": "Inherited internal identifiers: strix.* imports, Strix* class names, .strix paths, STRIX_* env vars, strix-agent package, strix/skills substrate references. Byte-preserved for upstream compatibility.",
     "attributionHeaders": "Line-1 controlled-derivative attribution headers (Apache-2.0 NOTICE obligations).",
     "internalMechanicsDocs": "Comments/docstrings/docs describing internal upstream mechanics (fork boundary, telemetry stack, sandbox internals) \u2014 never customer-facing branding.",
-    "approvedSplits": "Exact inherited compatibility identifiers and derivative notices retained in the approved DG-14/DG-15 extraction modules; entries remain file-and-line exact."
+    "approvedSplits": "Exact inherited compatibility identifiers and derivative notices retained in the approved DG-14/DG-15 extraction modules; entries remain file-and-line exact.",
+    "upstreamQualification": "Exact upstream attribution, reviewed substrate file paths, and fixture node IDs in sanitized qualification evidence; file-and-line exact."
   },
   "source_lines": {
     "lyrashield/lifecycle/agents.py": [
@@ -418,7 +419,8 @@
       "\"\"\"Strix application settings \u2014 pydantic-settings powered.\"\"\"",
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "# and the CLI share one definition without ``strix`` importing the adapter.",
-      "# to the bare upstream ``strix`` dev CLI check for it. Lives here so the adapter"
+      "# to the bare upstream ``strix`` dev CLI check for it. Lives here so the adapter",
+      "        from strix.skills import get_available_skills  # noqa: PLC0415"
     ],
     "lyrashield/runtime/backends.py": [
       "        StrixDockerSandboxClient,",
@@ -620,7 +622,8 @@
     "docs/contributing.mdx": [
       "2. Keep generic upstream sandbox/tool/SDK plumbing close to the pinned Strix release.",
       "4. Do not add another `strix/**` modification without a reviewed upstream-compatibility reason. The hard allowlist contains the product settings seam and one reviewed skill override, plus two reviewed skill deletions; the gate pins the complete Strix patch digest.",
-      "6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate checks the pinned Strix v1.6.2 base, reviewed `strix/**` path allowlist and patch digest, and the current footprint bounds (two modified paths plus two reviewed deletions; +22/-201 lines). It runs frozen dependency sync, Ruff lint/format, the full pytest suite, strict mypy and Bandit. Package, native binary, Docker, worker-contract and deployment checks are separate gates described in the root contributor guide. Build the owned viewer with `make viewer`, then check its committed static assets for drift."
+      "6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate checks the pinned Strix v1.6.2 base, reviewed `strix/**` path allowlist and patch digest, and the current footprint bounds (two modified paths plus two reviewed deletions; +22/-201 lines). It runs frozen dependency sync, Ruff lint/format, the full pytest suite, strict mypy and Bandit. Package, native binary, Docker, worker-contract and deployment checks are separate gates described in the root contributor guide. Build the owned viewer with `make viewer`, then check its committed static assets for drift.",
+      "6. Run `bash scripts/verify-controlled-derivative.sh` and `git diff --check`. The verify gate checks the pinned Strix 200a501f base, reviewed `strix/**` path allowlist and patch digest, and the current footprint bounds (two modified paths plus two reviewed deletions; +22/-201 lines). It runs frozen dependency sync, Ruff lint/format, the full pytest suite, strict mypy and Bandit. Package, native binary, Docker, worker-contract and deployment checks are separate gates described in the root contributor guide. Build the owned viewer with `make viewer`, then check its committed static assets for drift."
     ],
     "docs/index.mdx": [
       "4. The engine writes `run.json` and `vulnerabilities.json` under `strix_runs/<run-name>/`."
@@ -814,6 +817,44 @@
     "lyrashield/interface/repo_clone.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "    base = Path(tempfile.gettempdir()) / \"strix_repos\""
+    ],
+    "lyrashield/interface/viewer/transcript_window.py": [
+      "from strix.core.paths import runtime_state_dir",
+      "from strix.interface.tui.history import _sqlite_timestamp_to_iso"
+    ],
+    "lyrashield/interface/viewer/frontend/tests/benchmark-transcript.js": [
+      "      await page.addInitScript(() => localStorage.setItem(\"strix_viewer_trust_dismissed\", \"1\"));"
+    ],
+    "lyrashield/interface/viewer/frontend/tests/recovery-browser.test.mjs": [
+      "  await page.addInitScript(() => localStorage.setItem(\"strix_viewer_sidebar_collapsed\", \"1\"));"
+    ],
+    "docs/evidence/strix-200a501f-qualification.md": [
+      "# Exact Strix substrate qualification: 200a501f",
+      "The imported `strix/**` tree is pinned to the exact upstream commit above. Product policy and compatibility remain in `lyrashield/**` and `lyrashield_adapter/**`. This snapshot qualifies the isolated substrate and compatibility changes; complete qualification of the combined runtime and SDK upgrade remains a separate gate. No release, deployment, or live-provider acceptance is implied.",
+      "| `strix/config/loader.py` | Product settings-loader registration seam, +20/-0. |",
+      "| `strix/skills/vulnerabilities/semantic_confusion.md` | Replace unshipped Hurl/Hypothesis references with scripting and property-harness guidance, +2/-2. |",
+      "| `strix/skills/tooling/hurl.md` | Reviewed deletion, -99. |",
+      "| `strix/skills/tooling/hypothesis.md` | Reviewed deletion, -100. |",
+      "The digest is computed with `git -c core.abbrev=7 diff --no-ext-diff --binary 200a501f -- strix/ | git hash-object --stdin`. The gate retains its strict path allowlist, footprint ceilings, and exact digest. It also rejects untracked substrate files even when ignore rules hide them, including restored deleted skills and importable modules. Only bytecode in `__pycache__` and the viewer frontend's exact `node_modules`, `dist`, and `.vite` directories are permitted generated locations. Generic build-directory names elsewhere do not create an exception.",
+      "The independent baseline recorded 2102 passed, 26 failed, and two warnings in 78.14 seconds on Python 3.13.14. An external pytest-timeout 15/thread bound was used only for that qualification run. Its log SHA-256 is preserved in the [fixture disposition ledger](strix-200a501f-upstream-dispositions.json).",
+      "| Frozen controlled-derivative gate | Exact patch/path/footprint checks and frozen dependency sync with the viewer extra passed. Lint stopped at three intentional upstream lazy imports in `strix/llm/request_log.py` at 853, 900, and 913; integration needs a narrow path exception. |",
+      "| Whitespace | Owned changes passed. The exact upstream generated bundle `strix/interface/viewer/static/assets/index-B1JzV4Vu.js:455` contains trailing whitespace and is preserved unchanged. |"
+    ],
+    "docs/evidence/strix-200a501f-upstream-dispositions.json": [
+      "    \"command\": \"PYTHONPATH=. .venv/bin/pytest -q tests/upstream/test_budget_pause_policy.py tests/upstream/test_e2e_budget_lifecycle.py tests/upstream/test_runner_interrupt.py tests/upstream/test_runner_mcp.py tests/upstream/test_runner_rate_limit.py tests/test_runner_root_prompt_strix.py tests/upstream/test_runner_teardown.py tests/test_pricing.py --tb=short\",",
+      "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_root_prompt_options_flow_into_root_agent\",",
+      "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_extra_system_prompt_context_cannot_override_scope_context\",",
+      "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_root_prompt_options_default_to_none\",",
+      "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_mcp_available_flag_set_when_a_connection_attaches\",",
+      "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_mcp_available_flag_absent_without_a_connection\",",
+      "      \"local_nodeid\": \"tests/test_runner_root_prompt_strix.py::test_unknown_tool_calls_are_returned_to_the_model\","
+    ],
+    "lyrashield/interface/resume_picker.py": [
+      "from strix.core.paths import runs_base_dir, runtime_state_dir"
+    ],
+    "lyrashield/policy/diagnostics.py": [
+      "from strix.core.paths import runtime_state_dir",
+      "from strix.utils.secret_files import write_secret_text"
     ]
   }
 }

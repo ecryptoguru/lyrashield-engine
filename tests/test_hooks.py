@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import litellm
 import pytest
 from agents.exceptions import MaxTurnsExceeded
+from agents.usage import Usage
 
 import lyrashield.lifecycle.hooks as hooks_mod
 from lyrashield.lifecycle.agents import AgentCoordinator
@@ -24,6 +25,13 @@ from lyrashield.lifecycle.hooks import (
     _history_groups,
     recomputed_budget_flags,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_math_ledger(monkeypatch):
+    # These tests replace the ledger dynamically; do not inherit a real run owner
+    # deliberately left by another module's streamed-cost cleanup test.
+    monkeypatch.setattr("lyrashield.artifacts.state._global_report_state", None)
 
 
 class _CountingCounter:
@@ -257,12 +265,13 @@ async def test_budget_enforcement_decision_table(
 ) -> None:
     hooks = _make_hooks(10.0)
     state = _make_report_state(cost)
+    response = SimpleNamespace(usage=Usage(requests=1), response_id=None)
     with patch("lyrashield.lifecycle.hooks.get_global_report_state", return_value=state):
         if expected is None:
-            await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), MagicMock())
+            await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), response)
         else:
             with pytest.raises(expected):
-                await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), MagicMock())
+                await hooks.on_llm_end(_make_context(parent_id=parent_id), MagicMock(), response)
     state.record_sdk_usage.assert_called_once()
 
 
@@ -712,3 +721,59 @@ def test_compact_input_items_re_estimates_only_changed_tail(
     # The grown history is a new payload (one new call), and the unchanged
     # base payload is not recomputed.
     assert len(counter.calls) == calls_after_base + 1
+
+
+@pytest.mark.asyncio
+async def test_global_operator_pause_blocks_sdk_continuation_even_after_increase() -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "root", parent_id=None)
+    await coordinator.register("child", "child", parent_id="root")
+    hooks = _make_interactive_hooks(10.0)
+    coordinator.set_budget_extender(hooks.extend_budget)
+    context = _make_context("child", "root")
+    context.context["coordinator"] = coordinator
+    await coordinator.pause_for_budget("root")
+    assert await coordinator.operator_control("increase_budget", "increase")
+    with pytest.raises(BudgetPausedError):
+        await hooks.on_llm_start(context, _agent(), "system", [])
+    assert hooks._agent_reservations == {}
+    assert hooks._active_attempts == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["sdk", "auxiliary", "search"])
+async def test_pause_while_waiting_reservation_lock_blocks_next_request(kind: str) -> None:
+    import asyncio  # noqa: PLC0415
+
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "root", parent_id=None)
+    await coordinator.register("child", "child", parent_id="root")
+    hooks = _make_interactive_hooks(10.0)
+    hooks.set_operator_pause_check(lambda: coordinator.budget_paused)
+    coordinator.set_budget_extender(hooks.extend_budget)
+    context = _make_context("child", "root")
+    context.context["coordinator"] = coordinator
+    await hooks._reservation_lock.acquire()
+    if kind == "sdk":
+        request = hooks.on_llm_start(context, _agent(), "system", [])
+    elif kind == "auxiliary":
+        request = hooks.reserve_out_of_band_request(
+            key="aux",
+            model="test-model",
+            input_tokens=1,
+            max_output_tokens=1,
+        )
+    else:
+        request = hooks.reserve_web_search_call(key="search", estimated_cost=0.01)
+    pending = asyncio.create_task(request)
+    try:
+        await asyncio.sleep(0)
+        assert not pending.done()
+        await coordinator.pause_for_budget("root")
+        assert await coordinator.operator_control("increase_budget", "increase")
+    finally:
+        hooks._reservation_lock.release()
+    with pytest.raises(BudgetPausedError):
+        await pending
+    assert hooks._reservations == {}
+    assert hooks._agent_reservations == {}

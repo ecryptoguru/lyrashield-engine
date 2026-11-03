@@ -29,7 +29,7 @@ export function TrustToast({ message }: { message: string }) {
 
   return (
     <div
-      className="fixed bottom-3 left-3 z-[60] max-w-xs rounded-lg bg-[#0a0a0a] p-3 shadow-2xl"
+      className="relative mx-3 my-3 lg:fixed lg:bottom-3 lg:left-3 lg:z-[60] lg:m-0 lg:max-w-xs rounded-lg bg-[#0a0a0a] p-3 shadow-2xl"
       style={{ border: "1px solid #2a2a2a" }}
       role="status"
     >

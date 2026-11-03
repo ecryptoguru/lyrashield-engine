@@ -9,6 +9,7 @@ pairing so the trimmed history is still valid provider input.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import logging
 from typing import TYPE_CHECKING, Any, cast
@@ -27,6 +28,7 @@ from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.lifecycle.sessions import replace_session_items, session_write_lock
 from lyrashield.policy.models import StrixProvider
+from lyrashield.policy.physical_requests import guard_physical_model
 from lyrashield.utils.redaction import redact_text
 from strix.config import load_settings
 from strix.llm.context_budget import context_window, count_tokens, output_limit
@@ -379,20 +381,29 @@ async def _summarize(
         )
     response: ModelResponse | None = None
     try:
-        response = await model_provider.get_model(model).get_response(
-            system_instructions=None,
-            input=prompt,
-            model_settings=model_settings,
-            tools=[],
-            output_schema=None,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=None,
-            prompt=None,
-        )
+        with hooks.single_provider_attempt() if hooks is not None else contextlib.nullcontext():
+            response = await guard_physical_model(model_provider.get_model(model)).get_response(
+                system_instructions=None,
+                input=prompt,
+                model_settings=model_settings,
+                tools=[],
+                output_schema=None,
+                handoffs=[],
+                tracing=ModelTracing.DISABLED,
+                previous_response_id=None,
+                conversation_id=None,
+                prompt=None,
+            )
         report_state = get_global_report_state()
-        if report_state is not None:
+        durable = hooks is not None and getattr(hooks, "_journal", None) is not None
+        if durable and hooks is not None:
+            hooks.record_out_of_band_response(
+                key=reservation_key,
+                model=model,
+                usage=response.usage,
+                response_id=getattr(response, "response_id", None),
+            )
+        if report_state is not None and not durable:
             try:
                 report_state.record_sdk_usage(
                     agent_id="compaction",
@@ -412,8 +423,8 @@ async def _summarize(
         logger.exception("compaction summary call failed for model %s", model)
         return None
     finally:
-        # Always release: a failed request must not strand its reservation and
-        # shrink the remaining budget for the rest of the scan.
+        # Settle observed usage, or retain the conservative quote when a
+        # failed/cancelled request has no proof that the provider did not bill.
         if hooks is not None:
             await hooks.release_out_of_band_request(
                 key=reservation_key,

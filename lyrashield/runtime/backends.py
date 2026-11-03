@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -26,10 +27,10 @@ async def docker_backend(
     bind_mounts: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, Any]:
     """Start a Docker session through the LyraShield adapter."""
-    import docker  # noqa: PLC0415
     from agents.sandbox.sandboxes.docker import DockerSandboxClientOptions  # noqa: PLC0415
     from agents.sandbox.types import User  # noqa: PLC0415
 
+    from lyrashield.runtime import docker_connection  # noqa: PLC0415
     from lyrashield.runtime.docker_client import (  # noqa: PLC0415
         StrixDockerSandboxClient,
         assert_sdk_docker_compatibility,
@@ -37,7 +38,7 @@ async def docker_backend(
 
     assert_sdk_docker_compatibility()
     loop = asyncio.get_running_loop()
-    discovery = loop.run_in_executor(None, docker.from_env)
+    discovery = loop.run_in_executor(None, docker_connection.connect_docker)
     try:
         transport = await asyncio.shield(discovery)
     except asyncio.CancelledError:
@@ -74,7 +75,14 @@ async def docker_backend(
         # The shared agent factory pins run_as to this SDK manifest identity.
         # Copy the caller's manifest rather than mutating a shared template.
         manifest = manifest.model_copy(update={"users": [*manifest.users, User(name="pentester")]})
-    session = await client.create(options=options, manifest=manifest)
+    try:
+        session = await client.create(options=options, manifest=manifest)
+    except BaseException:
+        # No session handle has reached the startup owner yet. In particular,
+        # unsupported native-host routing fails before a container is created.
+        with contextlib.suppress(Exception):
+            transport.close()
+        raise
     await session.start()
     return client, session
 
