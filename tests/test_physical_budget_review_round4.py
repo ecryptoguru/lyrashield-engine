@@ -18,13 +18,21 @@ from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.state import ReportState
 from lyrashield.artifacts.usage import extract_provider_usage
 from lyrashield.interface import warmup
+from lyrashield.lifecycle import hooks as durable_hooks_module
 from lyrashield.lifecycle import hooks as hooks_module
 from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
 from lyrashield.policy.models import _RequestBoundTurnGuardModel
 from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError, _UsageEvidence
 from lyrashield.policy.settings import LlmSettings, Settings
+from tests.finite_budget_fixtures import owned_hooks
 from tests.test_physical_budget_boundaries import _ByteChunks, _model, _payload, _reply, _run
 from tests.test_physical_budget_review_round2 import _chat_stream
+
+
+@pytest.fixture(autouse=True)
+def _durable_wire_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(durable_hooks_module, "_active_hooks", None)
+    monkeypatch.setitem(globals(), "ReportUsageHooks", owned_hooks(ReportUsageHooks, tmp_path))
 
 
 @pytest.mark.asyncio
@@ -260,9 +268,8 @@ def test_preflight_cache_price_bound_survives_receipt_hydration(tmp_path, monkey
     args = SimpleNamespace(run_name="raw-cache", resume=False, max_budget_usd=1, warm_up_usages=[])
     try:
         main._run_llm_preflight(args, deadline=None)
-        state = ReportState("raw-cache")
-        for route, usage in args.warm_up_usages:
-            assert state.record_sdk_usage(agent_id="warmup", model=route, usage=usage)
+        state = args._preflight_usage_owner
+        assert state.get_total_llm_cost() > 0
         restored = ReportState("raw-cache")
         restored.hydrate_from_run_dir()
         assert restored.get_total_llm_cost() == pytest.approx(0.2 if explicit else 0.25)

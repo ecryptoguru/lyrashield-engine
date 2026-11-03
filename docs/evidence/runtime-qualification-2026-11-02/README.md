@@ -152,5 +152,7 @@ pip/cache/install/TLS behavior and keep the sandbox testing CA trusted. The
 combined final-image gate remains separate.
 
 Finite physical-attempt qualification and its explicit adapter limitations are
-recorded in [physical-budget-adapters.md](physical-budget-adapters.md). Durable
-unknown-charge recovery remains a promotion gate before paid acceptance.
+recorded in [physical-budget-adapters.md](physical-budget-adapters.md). The local
+[finite-budget durability boundary](finite-budget-durability.md) now records
+process-death recovery and its explicit Windows and worker qualification gates.
+Paid acceptance still requires those separate gates.

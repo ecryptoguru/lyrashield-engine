@@ -27,12 +27,20 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI, BadRequestEr
 from lyrashield.artifacts import dedupe
 from lyrashield.artifacts import state as state_module
 from lyrashield.lifecycle import compaction
+from lyrashield.lifecycle import hooks as durable_hooks_module
 from lyrashield.lifecycle import hooks as hooks_module
 from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy.models import _completed_stream_event
 from lyrashield.policy.physical_requests import guard_physical_model
 from lyrashield.triage import service
+from tests.finite_budget_fixtures import owned_hooks
+
+
+@pytest.fixture(autouse=True)
+def _durable_wire_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(durable_hooks_module, "_active_hooks", None)
+    monkeypatch.setitem(globals(), "ReportUsageHooks", owned_hooks(ReportUsageHooks, tmp_path))
 
 
 @pytest.mark.asyncio

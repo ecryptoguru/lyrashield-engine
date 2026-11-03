@@ -445,7 +445,7 @@ def test_cancelled_dedupe_preflight_is_terminal_and_preserves_main_usage(tmp_pat
     assert not should_disable_provider_managed_retries()
 
 
-def test_capped_successful_preflight_keeps_usage_for_one_later_ui_recording(monkeypatch):
+def test_capped_successful_preflight_persists_usage_before_ui_handoff(tmp_path, monkeypatch):
     main = import_module("lyrashield.interface.main")
     args = SimpleNamespace(run_name="preflight-success-cap", warm_up_usages=[], max_budget_usd=1)
     settings = Settings(
@@ -462,9 +462,9 @@ def test_capped_successful_preflight_keeps_usage_for_one_later_ui_recording(monk
 
     root = SimpleNamespace(get_response=AsyncMock(side_effect=respond))
     judge = SimpleNamespace(get_response=AsyncMock(side_effect=respond))
-    factory = Mock(
-        side_effect=AssertionError("Successful preflight must defer ledger writes to UI")
-    )
+    owner = ReportState(args.run_name)
+    owner._run_dir = tmp_path
+    factory = Mock(return_value=owner)
     monkeypatch.setattr(warmup, "load_settings", lambda: settings)
     monkeypatch.setattr(
         warmup, "StrixProvider", lambda **_kwargs: SimpleNamespace(get_model=lambda _name: root)
@@ -475,7 +475,10 @@ def test_capped_successful_preflight_keeps_usage_for_one_later_ui_recording(monk
     assert args.warm_up_usages == [(settings.llm.model, usage), (settings.dedupe.model, usage)]
     root.get_response.assert_awaited_once()
     judge.get_response.assert_awaited_once()
-    factory.assert_not_called()
+    factory.assert_called_once_with(args.run_name)
+    assert args._preflight_usage_owner is owner
+    assert owner.run_record["llm_usage"]["requests"] == 2
+    assert owner.run_record["llm_usage"]["total_tokens"] == 18
     assert not should_disable_provider_managed_retries()
 
 

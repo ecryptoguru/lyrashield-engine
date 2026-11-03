@@ -358,6 +358,9 @@ def add_vulnerability_report(
         self._scope_violations_seen = prior_scope_violations_seen
         self._scope_dropped_seen = prior_scope_dropped_seen
         self.receipt_persisted = prior_receipt_persisted
+        from lyrashield.artifacts.finite_budget import refresh_financial_state
+
+        refresh_financial_state(self)
         try:
             restore_revision_artifacts(self.get_run_dir(), prior_artifacts)
         except Exception as recovery_error:
@@ -743,6 +746,9 @@ def update_vulnerability_report(
             self._scope_violations_seen = prior_scope_violations_seen
             self._scope_dropped_seen = prior_scope_dropped_seen
             self.receipt_persisted = prior_receipt_persisted
+            from lyrashield.artifacts.finite_budget import refresh_financial_state
+
+            refresh_financial_state(self)
             try:
                 restore_revision_artifacts(self.get_run_dir(), prior_artifacts)
             except Exception as recovery_error:

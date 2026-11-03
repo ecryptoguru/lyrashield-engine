@@ -27,6 +27,13 @@ from lyrashield.lifecycle.hooks import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_math_ledger(monkeypatch):
+    # These tests replace the ledger dynamically; do not inherit a real run owner
+    # deliberately left by another module's streamed-cost cleanup test.
+    monkeypatch.setattr("lyrashield.artifacts.state._global_report_state", None)
+
+
 class _CountingCounter:
     """Deterministic token counter that records every invocation."""
 

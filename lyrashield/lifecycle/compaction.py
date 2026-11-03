@@ -395,7 +395,15 @@ async def _summarize(
                 prompt=None,
             )
         report_state = get_global_report_state()
-        if report_state is not None:
+        durable = hooks is not None and getattr(hooks, "_journal", None) is not None
+        if durable and hooks is not None:
+            hooks.record_out_of_band_response(
+                key=reservation_key,
+                model=model,
+                usage=response.usage,
+                response_id=getattr(response, "response_id", None),
+            )
+        if report_state is not None and not durable:
             try:
                 report_state.record_sdk_usage(
                     agent_id="compaction",

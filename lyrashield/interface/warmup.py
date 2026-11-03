@@ -86,8 +86,9 @@ async def warm_up_llm(
     """Warm up the configured LLM and optional dedupe model.
 
     If ``usages`` is supplied, each model's ``response.usage`` is appended as
-    ``(model_name, usage)`` so the CLI/TUI can record warm-up tokens in the run
-    ledger. Non-interactive runs skip warm-up and leave the list empty.
+    ``(model_name, usage)`` for compatibility. Finite preflight already persists
+    this usage and hands its owner to the UI; uncapped UIs record the tuples.
+    Non-interactive runs skip warm-up and leave the list empty.
     """
     console = Console()
     logger.info("Warming up LLM connection")
@@ -133,10 +134,20 @@ async def warm_up_llm(
                     ),
                     timeout=timeout,
                 )
+            if budget is not None:
+                budget.record_out_of_band_response(
+                    key=key,
+                    model=route,
+                    usage=getattr(response, "usage", None),
+                    response_id=getattr(response, "response_id", None),
+                )
         finally:
             if budget is not None:
                 settled = await budget.release_out_of_band_request(
-                    key=key, model=route, usage=getattr(response, "usage", None)
+                    key=key,
+                    model=route,
+                    usage=getattr(response, "usage", None),
+                    response_id=getattr(response, "response_id", None),
                 )
                 if response is not None and not settled:
                     raise BudgetExceededError(

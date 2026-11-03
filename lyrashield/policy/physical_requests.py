@@ -32,6 +32,31 @@ if TYPE_CHECKING:
 
 
 _finite_attempt: ContextVar[bool] = ContextVar("lyrashield_finite_physical_attempt", default=False)
+_durable_admission: ContextVar[Any] = ContextVar("lyrashield_durable_admission", default=None)
+
+
+@contextmanager
+def durable_physical_admission(owner: Any, attempt: str | None) -> Iterator[None]:
+    token = _durable_admission.set(
+        (owner, attempt) if owner is not None and attempt is not None else None
+    )
+    try:
+        yield
+    finally:
+        _durable_admission.reset(token)
+
+
+def _authorize_durable(input_items: Any) -> None:
+    admission = _durable_admission.get()
+    if admission is None:
+        from lyrashield.lifecycle.hooks import get_active_hooks  # noqa: PLC0415
+
+        hooks = get_active_hooks()
+        admission = hooks.physical_admission(input_items) if hooks is not None else None
+    if admission is None:
+        raise PhysicalBudgetAdapterError("Finite physical dispatch requires a durable admission.")
+    owner, attempt = admission
+    owner.authorize(attempt)
 
 
 class FiniteBudgetModelSettings(ModelSettings):
@@ -440,6 +465,7 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
         self.maximum = maximum
         self.endpoint = endpoint
         self.sent = False
+        self.durable_input: Any = None
         self.usage_evidence: _UsageEvidence | None = None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -514,6 +540,7 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
             content=bytes(body),
             extensions=extensions,
         )
+        _authorize_durable(self.durable_input)
         self.sent = True
         # Auth and redirect flow run above this counter on the scoped client.
         # Reuse the resolved URL's pool/TLS transport below those flows, so
@@ -619,6 +646,7 @@ async def _physical_call(
     transport = _SinglePostTransport(
         original_http, maximum, quoted, _admitted_endpoint(resolved, original_http, quoted)
     )
+    transport.durable_input = kwargs.get("input", args[1] if len(args) > 1 else None)
     async with httpx.AsyncClient(
         transport=transport,
         timeout=original_http.timeout,

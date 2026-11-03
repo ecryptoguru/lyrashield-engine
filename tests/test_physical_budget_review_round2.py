@@ -22,12 +22,20 @@ from agents.retry import ModelRetryBackoffSettings
 from openai import APIConnectionError, AsyncOpenAI, DefaultAsyncHttpxClient
 
 from lyrashield.artifacts import state as state_module
+from lyrashield.lifecycle import hooks as durable_hooks_module
 from lyrashield.lifecycle import hooks as hooks_module
 from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy.models import _RequestBoundTurnGuardModel
 from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError, _UsageEvidence
+from tests.finite_budget_fixtures import owned_hooks
 from tests.test_physical_budget_boundaries import _ByteChunks, _model, _payload, _reply, _run
+
+
+@pytest.fixture(autouse=True)
+def _durable_wire_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(durable_hooks_module, "_active_hooks", None)
+    monkeypatch.setitem(globals(), "ReportUsageHooks", owned_hooks(ReportUsageHooks, tmp_path))
 
 
 @pytest.mark.asyncio
@@ -341,7 +349,12 @@ async def test_cancelled_decoded_stream_closes_underlying_transport():
             ):
                 pass
 
-        task = asyncio.create_task(drain())
+        hooks = ReportUsageHooks(model="openai/gpt-6-luna", max_budget_usd=1)
+        await hooks.reserve_out_of_band_request(
+            key="cancel-stream", model="openai/gpt-6-luna", input_tokens=10, max_output_tokens=128
+        )
+        with hooks.single_provider_attempt():
+            task = asyncio.create_task(drain())
         await asyncio.wait_for(waiting.wait(), 2)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

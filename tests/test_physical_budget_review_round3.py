@@ -12,10 +12,12 @@ from openai import APIConnectionError, AsyncOpenAI, DefaultAsyncHttpxClient
 from pydantic import BaseModel
 
 from lyrashield.artifacts import state as state_module
+from lyrashield.lifecycle import hooks as durable_hooks_module
 from lyrashield.lifecycle import hooks as hooks_module
 from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError
+from tests.finite_budget_fixtures import owned_hooks
 from tests.test_physical_budget_boundaries import _ByteChunks, _model, _reply, _run
 from tests.test_physical_budget_review_round2 import _chat_stream
 
@@ -29,6 +31,12 @@ def _sse_chunk(content):
         first, rest = data.split(",", 1)
         events.append(f"data: {first},\ndata: {rest}\n\n")
     return "".join(events).encode()
+
+
+@pytest.fixture(autouse=True)
+def _durable_wire_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(durable_hooks_module, "_active_hooks", None)
+    monkeypatch.setitem(globals(), "ReportUsageHooks", owned_hooks(ReportUsageHooks, tmp_path))
 
 
 @pytest.mark.asyncio

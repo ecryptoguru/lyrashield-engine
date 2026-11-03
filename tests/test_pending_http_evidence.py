@@ -9,13 +9,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from agents.usage import Usage
 
 from lyrashield.artifacts import evidence
 from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.dedupe import _prepare_report_for_comparison
+from lyrashield.artifacts.finite_budget import GUARD
 from lyrashield.artifacts.state import ReportState, set_global_report_state
 from lyrashield.artifacts.state_findings import sanitize_finding
-from lyrashield.artifacts.writer import snapshot_revision_artifacts
+from lyrashield.artifacts.writer import read_run_record, snapshot_revision_artifacts
 from lyrashield.lifecycle.finalize import FinalizeServices, cleanup_scan_resources
 from lyrashield.tools.proxy import tools
 from lyrashield.tools.reporting.tool import _verify_http_exchange_ids
@@ -417,3 +419,43 @@ async def test_reused_capture_is_removed_from_fresh_export_omissions(pending_sta
     by_id = {finding["id"]: finding for finding in pending_state.get_existing_vulnerabilities()}
     assert by_id[first]["pending_http_exchange_ids"] == ["19"]
     assert by_id[second]["http_exchange_ids"] == ["18"]
+
+
+async def test_pending_http_rollback_cannot_erase_interleaved_financial_settlement(
+    pending_state, monkeypatch
+):
+    file_claim(pending_state, ["17"])
+    owner = pending_state.enable_finite_budget(1)
+    assert pending_state.save_run_data()
+    revision = pending_state.run_record["report_artifacts_revision"]
+    paid = owner.reserve(0.6)
+    pending_state._adopt_financial_snapshot(owner.snapshot())
+    interleaved = False
+
+    def fail_after_known_settlement(*_args, **_kwargs):
+        nonlocal interleaved
+        if not interleaved:
+            interleaved = True
+            with monkeypatch.context() as patch:
+                patch.setattr(pending_state, "save_run_data", lambda **_kw: False)
+                pending_state.record_sdk_usage(
+                    agent_id="root",
+                    model="openai/gpt-6-luna",
+                    usage=Usage(requests=1, input_tokens=7, output_tokens=2, total_tokens=9),
+                    budget_attempt=paid,
+                    budget_cost=0.17,
+                )
+            owner.reserve(0.6)
+        raise OSError("report receipt projection failed")
+
+    monkeypatch.setattr(state_module, "write_run_record", fail_after_known_settlement)
+    with pytest.raises(RuntimeError, match="receipt"):
+        await pending_state.reconcile_http_exchange_evidence(Client({"17": exchange()}))
+    assert interleaved
+    assert pending_state.vulnerability_reports[0]["pending_http_exchange_ids"] == ["17"]
+    assert not pending_state.vulnerability_reports[0].get("http_exchange_ids")
+    current = read_run_record(pending_state.get_run_dir())
+    assert current["report_artifacts_revision"] == revision
+    assert current["llm_usage"]["total_tokens"] == 9
+    assert len(current[GUARD]["pending"]) == 1
+    assert pending_state.run_record[GUARD] == current[GUARD]

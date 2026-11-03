@@ -95,10 +95,11 @@ SDK native-retry suppression alone does not activate spend policy. Ordinary
 uncapped managed retries and stateful first calls retain their existing behavior.
 
 These checks enforce pre-send coverage within the admitted price/token quote.
-They do not derive provider invoices from customer billing clamps. Unknown floors
-are currently process-local: they are not reconstructed from a prior process's
-lost acknowledgement. Durable admission/uncertainty preservation across crashes
-and resume remains a separate mandatory promotion gate. Historical known-usage
-records are retained; no claim is made that unknown historical charges have been
-reconstructed. Paid acceptance must wait for that gate and the parent integration
-and scoped review gates.
+They do not derive provider invoices from customer billing clamps. The bounded
+raw-receipt admission journal now preserves newly activated pending charges
+across process death; its schema, persistence ordering, rollback protection and
+platform qualification limits are described in
+[finite-budget-durability.md](finite-budget-durability.md). Historical known-usage
+records remain readable, and unknown historical charges are not reconstructed.
+Native Windows execution, product worker lifetime fencing, parent integration,
+independent review and paid acceptance remain separate gates.

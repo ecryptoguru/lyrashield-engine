@@ -233,10 +233,12 @@ class AgentCoordinator:
                 except ValueError:
                     return False
             else:
-                if self._budget_state is not None and self._budget_state().get(
-                    "resume_requires_increase"
-                ):
-                    return False
+                if self._budget_state is not None:
+                    budget_state = self._budget_state()
+                    if budget_state.get("resume_requires_increase") or budget_state.get(
+                        "pending_provider_charges"
+                    ):
+                        return False
                 self._budget_paused = False
                 for aid, status in self.statuses.items():
                     if status != "budget_paused":

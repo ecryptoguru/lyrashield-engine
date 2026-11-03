@@ -494,6 +494,9 @@ def _commit_revision(
             state._save_seq, state._turn_count = prior_counters
             state._scope_violations_seen, state._scope_dropped_seen = prior_scope
             state.receipt_persisted = prior_receipt
+            from lyrashield.artifacts.finite_budget import refresh_financial_state
+
+            refresh_financial_state(state)
             try:
                 restore_revision_artifacts(run_dir, prior_artifacts)
             except Exception as recovery_error:

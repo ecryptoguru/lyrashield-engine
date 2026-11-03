@@ -416,6 +416,11 @@ async def web_search(  # noqa: PLR0915 - shared and dedicated charge settlement 
                 query=redacted_query,
                 mode=mode,
                 estimated_cost=estimated_cost,
+                **(
+                    dict[str, Any](budget_attempt=hooks.durable_attempt(reservation_key))
+                    if hooks is not None and hooks._journal is not None
+                    else {}
+                ),
             )
             slot_reserved = False
 

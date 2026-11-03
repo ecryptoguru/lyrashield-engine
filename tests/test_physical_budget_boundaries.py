@@ -24,6 +24,7 @@ from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.state import ReportState
 from lyrashield.interface import warmup
 from lyrashield.lifecycle import execution
+from lyrashield.lifecycle import hooks as durable_hooks_module
 from lyrashield.lifecycle import hooks as hooks_module
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.hooks import BudgetExceededError, ReportUsageHooks
@@ -32,6 +33,7 @@ from lyrashield.policy.models import StrixProvider, _RequestBoundTurnGuardModel
 from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError
 from lyrashield.policy.settings import DedupeSettings, LlmSettings, Settings
 from lyrashield.tools.web_search.tool import web_search
+from tests.finite_budget_fixtures import owned_hooks
 from tests.test_web_search import _clear_settings_cache, _tool_ctx
 
 
@@ -163,6 +165,12 @@ async def _run(
         hooks=hooks,
         run_config=RunConfig(tracing_disabled=True),
     )
+
+
+@pytest.fixture(autouse=True)
+def _durable_wire_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(durable_hooks_module, "_active_hooks", None)
+    monkeypatch.setitem(globals(), "ReportUsageHooks", owned_hooks(ReportUsageHooks, tmp_path))
 
 
 @pytest.mark.asyncio
@@ -398,7 +406,7 @@ async def test_native_dedupe_missing_usage_cannot_release_persisted_success_quot
 @pytest.mark.asyncio
 @pytest.mark.parametrize("free_quote", [False, True])
 async def test_native_dual_preflight_missing_usage_stops_unless_quote_is_free(
-    monkeypatch: pytest.MonkeyPatch, free_quote: bool
+    monkeypatch: pytest.MonkeyPatch, free_quote: bool, tmp_path
 ) -> None:
     monkeypatch.setattr(state_module, "_global_report_state", None)
     monkeypatch.setattr(warmup, "_estimate_out_of_band_input_tokens", lambda *_args: 0)
@@ -412,6 +420,9 @@ async def test_native_dual_preflight_missing_usage_stops_unless_quote_is_free(
         dedupe=DedupeSettings(_env_file=None, model="openai/gpt-6-luna"),
     )
     monkeypatch.setattr(warmup, "load_settings", lambda: settings)
+    owner = ReportState("preflight-direct")
+    owner._run_dir = tmp_path
+    monkeypatch.setattr(state_module, "_global_report_state", owner)
     usages = []
     calls = 0
 
@@ -688,12 +699,9 @@ def test_partial_resume_can_probe_remaining_allowance_and_record_once(
     model.get_response.assert_awaited_once()
     restored = ReportState("partial-ok")
     restored.hydrate_from_run_dir()
-    assert restored.get_total_llm_cost() == pytest.approx(0.75)
+    assert 0.75 < restored.get_total_llm_cost() < 0.76
+    assert args._preflight_usage_owner.get_total_llm_cost() == restored.get_total_llm_cost()
     assert args.warm_up_usages == [(settings.llm.model, usage)]
-    for route, probe_usage in args.warm_up_usages:
-        restored.record_sdk_usage(
-            agent_id="warmup", agent_name="warmup", model=route, usage=probe_usage
-        )
     assert 0.75 < restored.get_total_llm_cost() < 0.76
     assert restored.get_total_llm_usage()["total_tokens"] == 9
     assert len(restored.run_record["web_search_usage"]) == 1

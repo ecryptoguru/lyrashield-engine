@@ -161,6 +161,10 @@ def read_run_record(run_dir: Path) -> dict[str, Any]:
 
 
 def write_run_record(run_dir: Path, run_record: dict[str, Any]) -> None:
+    from lyrashield.artifacts.finite_budget import guarded_write
+
+    if guarded_write(run_dir, run_record):
+        return
     _atomic_write_text(
         run_record_path(run_dir),
         json.dumps(run_record, ensure_ascii=False, indent=2, default=str),
@@ -194,6 +198,16 @@ def restore_revision_artifacts(run_dir: Path, snapshot: dict[str, bytes | None])
                 path.unlink(missing_ok=True)
     for relative, content in snapshot.items():
         path = run_dir / relative
+        if relative == "run.json":
+            from lyrashield.artifacts.finite_budget import guarded_write, protected_run
+
+            if protected_run(run_dir):
+                if content is None:
+                    # A newly activated receipt outlives a snapshot with no prior file.
+                    continue
+                prior = json.loads(content)
+                guarded_write(run_dir, prior, restore=True)
+                continue
         if content is None:
             path.unlink(missing_ok=True)
         else:

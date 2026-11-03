@@ -11,6 +11,7 @@ import logging
 import math
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from itertools import count
 from typing import TYPE_CHECKING, Any, cast
 
@@ -22,13 +23,13 @@ from agents.models._retry_runtime import (
     websocket_pre_event_retries_disabled,
 )
 
-from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.artifacts.state import ReportState, get_global_report_state
 from lyrashield.artifacts.usage import (
     _LONG_CONTEXT_THRESHOLD_TOKENS,
     _METERED_USD_PER_MILLION,
 )
 from lyrashield.lifecycle.deadline import RunDeadlineExceededError
-from lyrashield.policy.physical_requests import finite_physical_attempt
+from lyrashield.policy.physical_requests import durable_physical_admission, finite_physical_attempt
 from lyrashield.tools.output_store import _take_prefix, _take_suffix
 
 
@@ -629,6 +630,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         max_input_tokens: int | None = None,
         max_turns: int | None = None,
         interactive: bool = False,
+        report_state: Any = None,
     ) -> None:
         if max_budget_usd is not None and (
             not math.isfinite(max_budget_usd) or max_budget_usd <= 0
@@ -671,6 +673,44 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         self._interactive = interactive
         self._operator_pause_check: Callable[[], bool] | None = None
         self._deadline_notified: set[str] = set()
+        state = get_global_report_state()
+        self._report_state: Any = report_state or state
+        state = self._report_state
+        self._journal = (
+            state.enable_finite_budget(max_budget_usd)
+            if max_budget_usd is not None and isinstance(state, ReportState)
+            else None
+        )
+        if self._journal is not None:
+            self._max_budget_usd = self._journal.limit
+            self._committed_cost_floor = self._journal.spent
+        self._durable_requests: dict[str, str] = {}
+        self._durable_agents: dict[tuple[str, int], str] = {}
+        self._direct_attempt: ContextVar[str | None] = ContextVar(
+            "finite_direct_attempt", default=None
+        )
+
+    def physical_admission(self, input_items: Any) -> Any:
+        entry = self._input_attempts.get(id(input_items))
+        if entry is not None and entry[0] is input_items and self._journal is not None:
+            attempt = self._durable_agents.get(entry[3])
+            if attempt is not None:
+                return self._journal, attempt
+        return None
+
+    def durable_attempt(self, key: str) -> str | None:
+        return self._durable_requests.get(key)
+
+    def _durable_reserve(self, amount: float, *, kind: str = "llm") -> str | None:
+        if self._journal is None:
+            return None
+        state = self._report_state
+        if state is None:
+            raise RuntimeError("durable admission lost its report owner")
+        with state._report_artifacts_lock:
+            attempt = self._journal.reserve(amount, kind=kind)
+            state._adopt_financial_snapshot(self._journal.snapshot())
+            return attempt
 
     def set_operator_pause_check(self, check: Callable[[], bool]) -> None:
         """Bind auxiliary reservations to the same scan-wide execution pause."""
@@ -687,7 +727,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
 
     def budget_control_state(self) -> dict[str, Any]:
         """Expose the concrete increment and whether existing spend prevents resume."""
-        report_state = get_global_report_state()
+        report_state = self._report_state or get_global_report_state()
         observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
         committed = (
             max(observed, self._committed_cost_floor)
@@ -704,6 +744,10 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             "resume_requires_increase": (
                 self._max_budget_usd is not None and committed + reserved >= self._max_budget_usd
             ),
+            "pending_provider_charges": bool(
+                self._journal is not None
+                and self._journal.snapshot()["_finite_budget_guard"]["pending"]
+            ),
         }
 
     @contextmanager
@@ -717,6 +761,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         bounded = self._max_budget_usd is not None
         with (
             finite_physical_attempt(bounded),
+            durable_physical_admission(self._journal, self._direct_attempt.get()),
             provider_managed_retries_disabled(bounded or should_disable_provider_managed_retries()),
             websocket_pre_event_retries_disabled(
                 bounded or should_disable_websocket_pre_event_retries()
@@ -732,6 +777,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         new_limit = self._max_budget_usd + self._budget_increment
         if not math.isfinite(new_limit):
             raise ValueError("Budget limit must remain finite")
+        if self._journal is not None:
+            state = self._report_state
+            with state._report_artifacts_lock:
+                self._journal.increase_limit(new_limit)
+                state._adopt_financial_snapshot(self._journal.snapshot())
         self._max_budget_usd = new_limit
 
     async def reserve_out_of_band_request(
@@ -769,7 +819,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         async with self._reservation_lock:
             self._check_operator_pause()
             self._reservations.pop(key, None)
-            report_state = get_global_report_state()
+            report_state = self._report_state or get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
             committed = (
                 max(observed, self._committed_cost_floor)
@@ -788,10 +838,49 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
                 )
             self._reservations[key] = reservation
+            attempt = self._durable_reserve(reservation)
+            if attempt is not None:
+                self._durable_requests[key] = attempt
+                self._direct_attempt.set(attempt)
 
-    async def release_out_of_band_request(self, *, key: str, model: str, usage: Any = None) -> bool:
+    def record_out_of_band_response(
+        self, *, key: str, model: str, usage: Any, response_id: str | None = None
+    ) -> None:
+        """Settle a decoded receipt synchronously before callbacks or cancellation."""
+        attempt = self._durable_requests.get(key)
+        if attempt is not None and _reported_usage(usage):
+            state = self._report_state
+            if state is None:
+                raise RuntimeError("durable admission lost its report owner")
+            state.record_sdk_usage(
+                agent_id="warmup" if key.startswith("preflight:") else key.split(":", 1)[0],
+                model=model,
+                usage=usage,
+                response_id=response_id,
+                budget_attempt=attempt,
+                budget_cost=_usage_cost_upper_bound(model, usage),
+            )
+            self._durable_requests.pop(key, None)
+
+    async def release_out_of_band_request(
+        self, *, key: str, model: str, usage: Any = None, response_id: str | None = None
+    ) -> bool:
         """Drop an out-of-band reservation and commit its observed cost."""
         async with self._reservation_lock:
+            attempt = self._durable_requests.get(key)
+            state = self._report_state or get_global_report_state()
+            self.record_out_of_band_response(
+                key=key, model=model, usage=usage, response_id=response_id
+            )
+            if (
+                attempt is not None
+                and self._journal is not None
+                and self._reservations.get(key) == 0
+            ):
+                self._journal.settle(attempt, self._journal.snapshot(), 0)
+                if state is not None:
+                    state._adopt_financial_snapshot(self._journal.snapshot())
+                self._durable_requests.pop(key, None)
             reservation = self._reservations.pop(key, None)
             if _reported_usage(usage):
                 self._committed_cost_floor += _usage_cost_upper_bound(model, usage)
@@ -825,7 +914,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         async with self._reservation_lock:
             self._check_operator_pause()
             self._reservations.pop(key, None)
-            report_state = get_global_report_state()
+            report_state = self._report_state or get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
             committed = (
                 max(observed, self._committed_cost_floor)
@@ -838,6 +927,9 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     f"Next web search would exceed ${self._max_budget_usd:.2f}"
                 )
             self._reservations[key] = estimated_cost
+            attempt = self._durable_reserve(estimated_cost, kind="search")
+            if attempt is not None:
+                self._durable_requests[key] = attempt
 
     async def release_web_search_call(self, *, key: str, actual_cost: float | None) -> None:
         """Drop a web search reservation and commit the observed per-call cost.
@@ -853,6 +945,13 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 # Already released/committed — exactly-once finalization.
                 return
             quote = self._reservations.pop(key)
+            attempt = self._durable_requests.get(key)
+            if attempt is not None and self._journal is not None and actual_cost is not None:
+                self._journal.settle(attempt, self._journal.snapshot(), actual_cost)
+                state = self._report_state or get_global_report_state()
+                if state is not None:
+                    state._adopt_financial_snapshot(self._journal.snapshot())
+                self._durable_requests.pop(key, None)
             if actual_cost is None:
                 self._abandoned_floors[key] = quote
             else:
@@ -936,7 +1035,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
     ) -> None:
         if self._max_budget_usd is None:
             return
-        report_state = get_global_report_state()
+        report_state = self._report_state or get_global_report_state()
         if report_state is None:
             return
         cost = report_state.get_total_llm_cost()
@@ -1095,7 +1194,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     # reservation becomes a conservative estimated-spend
                     # floor instead of being written off as zero (E1.3).
                     self._agent_abandoned_floors[previous_attempt] = prior
-                report_state = get_global_report_state()
+                report_state = self._report_state or get_global_report_state()
                 observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
                 committed = (
                     max(observed, self._committed_cost_floor)
@@ -1114,6 +1213,9 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     )
                 attempt_key = (agent_id, next(self._attempt_ids))
                 self._agent_reservations[attempt_key] = reservation
+                durable = self._durable_reserve(reservation)
+                if durable is not None:
+                    self._durable_agents[attempt_key] = durable
                 self._active_attempts[scope] = (context, attempt_key)
                 self._input_attempts[id(input_items)] = (
                     input_items,
@@ -1128,7 +1230,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         agent: Agent[dict[str, Any]],
         response: ModelResponse,
     ) -> None:
-        report_state = get_global_report_state()
+        report_state = self._report_state or get_global_report_state()
         agent_name = getattr(agent, "name", None)
         if not isinstance(agent_name, str):
             agent_name = None
@@ -1136,18 +1238,6 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         model = self._agent_model(agent)
 
         reported = _reported_usage(response.usage)
-        if report_state is not None and reported:
-            try:
-                report_state.record_sdk_usage(
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    model=model,
-                    usage=response.usage,
-                    response_id=response.response_id,
-                )
-            except Exception:
-                logger.exception("failed to record SDK usage for agent %s", agent_id)
-
         async with self._reservation_lock:
             scope = (id(context), agent_id)
             active = self._active_attempts.get(scope)
@@ -1175,6 +1265,32 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 attempt_key = active[1]
             else:
                 attempt_key = None
+            if report_state is not None and reported:
+                durable = self._durable_agents.get(attempt_key) if attempt_key is not None else None
+                if self._journal is not None and durable is None:
+                    raise RuntimeError("finite usage has no matching durable admission")
+                if durable is not None:
+                    report_state.record_sdk_usage(
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        model=model,
+                        usage=response.usage,
+                        response_id=response.response_id,
+                        budget_attempt=durable,
+                        budget_cost=_usage_cost_upper_bound(model, response.usage),
+                    )
+                    self._durable_agents.pop(attempt_key, None) if attempt_key is not None else None
+                else:
+                    try:
+                        report_state.record_sdk_usage(
+                            agent_id=agent_id,
+                            agent_name=agent_name,
+                            model=model,
+                            usage=response.usage,
+                            response_id=response.response_id,
+                        )
+                    except Exception:
+                        logger.exception("failed to record SDK usage for agent %s", agent_id)
             if attempt_key is not None:
                 reservation = self._agent_reservations.pop(attempt_key, None)
                 if reported:

@@ -418,7 +418,18 @@ async def _request_dedupe_judgement(
                 prompt=None,
             )
         report_state = get_global_report_state()
-        if report_state is not None:
+        durable = hooks is not None and getattr(hooks, "durable_attempt", lambda _key: None)(
+            reservation_key
+        )
+        if durable and hooks is not None:
+            hooks.record_out_of_band_response(
+                key=reservation_key,
+                model=model_name,
+                usage=response.usage,
+                response_id=getattr(response, "response_id", None),
+            )
+            usage_persisted = True
+        if report_state is not None and not (durable):
             try:
                 usage_persisted = report_state.record_sdk_usage(
                     agent_id="dedupe",
@@ -439,6 +450,11 @@ async def _request_dedupe_judgement(
                 key=reservation_key,
                 model=model_name,
                 usage=(response.usage if response is not None and usage_persisted else None),
+                **(
+                    {"response_id": getattr(response, "response_id", None)}
+                    if getattr(hooks, "_journal", None) is not None
+                    else {}
+                ),
             )
     if response is None:
         raise RuntimeError("Dedupe model call did not return a response")

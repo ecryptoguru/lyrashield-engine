@@ -129,7 +129,10 @@ def _persist_run_record(
     # Validate the pre-scan contract before writing, so an incomplete record
     # never reaches the run directory (I10/C3).
     validate_run_record(run_record)
-    write_run_record(run_dir, run_record)
+    from lyrashield.artifacts.finite_budget import guarded_write
+
+    if not guarded_write(run_dir, run_record, restore=True):
+        write_run_record(run_dir, run_record)
     # Preserve the unsanitized execution fields needed for resume in a private
     # file that is not part of the public worker contract (comment #5).
     write_resume_record(
@@ -220,9 +223,19 @@ def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
     usages = args.warm_up_usages
     previous = get_global_report_state()
     selected = None
-    if getattr(args, "resume", None):
+    from lyrashield.artifacts.finite_budget import protected_run
+
+    finite = getattr(args, "max_budget_usd", None) is not None or protected_run(
+        run_dir_for(args.run_name)
+    )
+    if getattr(args, "resume", None) or finite:
         selected = ReportState(args.run_name)
         selected.hydrate_from_run_dir()
+        if finite:
+            owner = selected.enable_finite_budget(getattr(args, "max_budget_usd", None))
+            owner.require_resumable()
+            args.max_budget_usd = owner.limit
+            args._preflight_usage_owner = selected
         set_global_report_state(selected)
     try:
         asyncio.run(
@@ -237,8 +250,11 @@ def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
         state = selected or ReportState(args.run_name)
         if selected is None:
             state.hydrate_from_run_dir()
-        for model, usage in usages:
-            state.record_sdk_usage(agent_id="warmup", agent_name="warmup", model=model, usage=usage)
+        if not finite:
+            for model, usage in usages:
+                state.record_sdk_usage(
+                    agent_id="warmup", agent_name="warmup", model=model, usage=usage
+                )
         exhausted = isinstance(exc, RunDeadlineExceededError)
         state.set_terminal_reason("runtime_deadline" if exhausted else "llm_preflight_failed")
         if not state.save_run_data(status="stopped" if exhausted else "failed"):

@@ -839,14 +839,28 @@ class StrixTUIApp(App[None]):
         self.args = args
         self.scan_config = self._build_scan_config(args)
 
-        self.report_state = ReportState(self.scan_config["run_name"])
-        if getattr(args, "resume", None):
+        self.report_state = getattr(args, "_preflight_usage_owner", None) or ReportState(
+            self.scan_config["run_name"]
+        )
+        if getattr(args, "resume", None) and getattr(args, "_preflight_usage_owner", None) is None:
             self.report_state.hydrate_from_run_dir()
+        from lyrashield.artifacts.finite_budget import protected_run
+
+        if getattr(args, "max_budget_usd", None) is not None or protected_run(
+            self.report_state.get_run_dir()
+        ):
+            args.max_budget_usd = self.report_state.enable_finite_budget(
+                getattr(args, "max_budget_usd", None)
+            ).limit
         self.report_state.set_scan_config(self.scan_config)
         self.report_state.save_run_data()
         set_global_report_state(self.report_state)
 
-        for warm_model, warm_usage in getattr(args, "warm_up_usages", []) or []:
+        for warm_model, warm_usage in (
+            []
+            if getattr(args, "_preflight_usage_owner", None) is not None
+            else getattr(args, "warm_up_usages", []) or []
+        ):
             self.report_state.record_sdk_usage(
                 agent_id="warmup", agent_name="warmup", model=warm_model, usage=warm_usage
             )

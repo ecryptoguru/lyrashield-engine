@@ -9,9 +9,17 @@ import pytest
 from openai import APIConnectionError, AsyncOpenAI, DefaultAsyncHttpxClient
 
 from lyrashield.artifacts import state as state_module
+from lyrashield.lifecycle import hooks as durable_hooks_module
 from lyrashield.lifecycle.hooks import ReportUsageHooks
 from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError
+from tests.finite_budget_fixtures import owned_hooks
 from tests.test_physical_budget_boundaries import _model, _reply, _run
+
+
+@pytest.fixture(autouse=True)
+def _durable_wire_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(durable_hooks_module, "_active_hooks", None)
+    monkeypatch.setitem(globals(), "ReportUsageHooks", owned_hooks(ReportUsageHooks, tmp_path))
 
 
 @pytest.mark.asyncio

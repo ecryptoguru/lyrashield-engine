@@ -23,6 +23,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+@pytest.fixture(autouse=True)
+def _isolated_math_ledger(monkeypatch):
+    # These tests replace the ledger dynamically; do not inherit a real run owner
+    # deliberately left by another module's streamed-cost cleanup test.
+    monkeypatch.setattr("lyrashield.artifacts.state._global_report_state", None)
+
+
 MAX_BUDGET = 10.0
 COST_PER_CALL = 1.0
 

@@ -240,6 +240,13 @@ async def _request_judgement(
             )
         # Save returned usage before reservation release or judgement parsing:
         # either can fail or be cancelled after provider work completed.
+        if hooks is not None and getattr(hooks, "_journal", None) is not None:
+            hooks.record_out_of_band_response(
+                key=reservation_key,
+                model=model_route,
+                usage=response.usage,
+                response_id=getattr(response, "response_id", None),
+            )
         if on_response is not None:
             on_response(response)
     finally:
@@ -248,6 +255,11 @@ async def _request_judgement(
                 key=reservation_key,
                 model=model_route,
                 usage=getattr(response, "usage", None),
+                **(
+                    {"response_id": getattr(response, "response_id", None)}
+                    if getattr(hooks, "_journal", None) is not None
+                    else {}
+                ),
             )
     raw = _extract_text(response)
     if not raw:
@@ -412,7 +424,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
                 if report_state is not None
                 else None
             )
-            if report_state is not None:
+            if report_state is not None and getattr(get_active_hooks(), "_journal", None) is None:
                 report_state.record_sdk_usage(
                     agent_id="ai-security-triage",
                     agent_name="ai-security-triage",

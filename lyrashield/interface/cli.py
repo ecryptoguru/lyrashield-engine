@@ -126,9 +126,17 @@ async def run_cli(args: Any) -> Any:
         "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
     }
 
-    report_state = ReportState(args.run_name)
-    if getattr(args, "resume", None):
+    report_state = getattr(args, "_preflight_usage_owner", None) or ReportState(args.run_name)
+    if getattr(args, "resume", None) and getattr(args, "_preflight_usage_owner", None) is None:
         report_state.hydrate_from_run_dir()
+    from lyrashield.artifacts.finite_budget import protected_run
+
+    if getattr(args, "max_budget_usd", None) is not None or protected_run(
+        report_state.get_run_dir()
+    ):
+        args.max_budget_usd = report_state.enable_finite_budget(
+            getattr(args, "max_budget_usd", None)
+        ).limit
     report_state.set_scan_config(scan_config)
     report_state.save_run_data()
 
@@ -173,7 +181,11 @@ async def run_cli(args: Any) -> Any:
 
     set_global_report_state(report_state)
 
-    for warm_model, warm_usage in getattr(args, "warm_up_usages", []) or []:
+    for warm_model, warm_usage in (
+        []
+        if getattr(args, "_preflight_usage_owner", None) is not None
+        else getattr(args, "warm_up_usages", []) or []
+    ):
         report_state.record_sdk_usage(
             agent_id="warmup", agent_name="warmup", model=warm_model, usage=warm_usage
         )
