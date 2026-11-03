@@ -267,6 +267,8 @@ def _cache_write_tokens_from_entry(entry: Any) -> int:
     details = _usage_value(entry, "input_tokens_details")
     if not details:
         return -1
+    if getattr(details, "_lyrashield_cache_write_known", None) is False:
+        return -1
     if isinstance(details, dict):
         details = cast("dict[str, Any]", details)
         if "cache_write_tokens" not in details:

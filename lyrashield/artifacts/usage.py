@@ -26,6 +26,15 @@ _LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
 
 def extract_provider_usage(response: Any) -> dict[str, Any] | None:
     """Keep only validated numeric usage from a completed raw Responses result."""
+    if (
+        getattr(
+            getattr(getattr(response, "usage", None), "input_tokens_details", None),
+            "_lyrashield_cache_write_known",
+            None,
+        )
+        is False
+    ):
+        return None
     raw = response.model_dump(exclude_unset=True) if hasattr(response, "model_dump") else response
     if not isinstance(raw, Mapping) or raw.get("status") != "completed":
         return None
@@ -519,12 +528,20 @@ def _estimate_metered_cost(usage: Usage, model: str | None) -> float | None:
         output_tokens = _int_or_zero(getattr(entry, "output_tokens", 0))
         if input_tokens + output_tokens <= 0:
             continue
-        details = _details_to_dict(getattr(entry, "input_tokens_details", None))
+        raw_details = getattr(entry, "input_tokens_details", None)
+        details = _details_to_dict(raw_details)
         # Missing cache buckets price as zero rather than suppressing the
         # estimate — unreceipted GPT-6 usage still carries a rate-card cost,
         # and _gpt6_accounting_complete already records the missing receipt.
         cached = min(_int_or_zero(details.get("cached_tokens")), input_tokens)
         cache_write = min(_int_or_zero(details.get("cache_write_tokens")), input_tokens - cached)
+        if getattr(raw_details, "_lyrashield_cache_write_known", None) is False:
+            # Unknown cache buckets retain the owned worst-input price bound;
+            # SDK-normalized zero is not a provider receipt.
+            rate = _metered_rate(model)
+            if rate is not None:
+                cached = 0
+                cache_write = input_tokens if rate[2] > rate[0] else 0
         cost = estimate_request_cost_usd(
             model,
             input_tokens=input_tokens,

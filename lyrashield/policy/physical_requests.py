@@ -19,9 +19,12 @@ from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel, OpenAIResponsesWSModel
 from agents.usage import Usage
 from agents.util._json import _to_dump_compatible
-from openai import AsyncOpenAI, NotGiven, Omit
+from openai import AsyncAzureOpenAI, AsyncOpenAI, NotGiven, Omit
 from openai._streaming import SSEDecoder
+from openai.types.chat.completion_create_params import CompletionCreateParamsBase
 from openai.types.responses import ResponseCompletedEvent
+from openai.types.responses.response_create_params import ResponseCreateParamsBase
+from openai.types.responses.response_usage import InputTokensDetails
 
 
 if TYPE_CHECKING:
@@ -84,6 +87,7 @@ class _UsageEvidence:
         self._decoder = SSEDecoder()
         self._done = False
         self._raw_counts: tuple[int | float, int | float] | None = None
+        self._cache_write_known = False
 
     def _invalidate(self) -> None:
         self.overflow = True
@@ -141,6 +145,11 @@ class _UsageEvidence:
         usage = payload.get("usage")
         if not isinstance(usage, dict):
             return
+        # A terminal receipt must identify itself. A prior content frame's ID
+        # cannot establish the authority of an anonymous usage frame.
+        if not isinstance(response_id, str) or not response_id:
+            self._invalidate()
+            return
         keys = ("prompt_tokens", "completion_tokens") if chat else ("input_tokens", "output_tokens")
         complete = all(
             isinstance(usage.get(key), (int, float))
@@ -154,6 +163,16 @@ class _UsageEvidence:
         )
         if self.reported:
             self._raw_counts = (usage[keys[0]], usage[keys[1]])
+            details = usage.get("prompt_tokens_details" if chat else "input_tokens_details")
+            cached = details.get("cached_tokens", 0) if isinstance(details, dict) else None
+            self._cache_write_known = (
+                isinstance(details, dict)
+                and type(details.get("cache_write_tokens")) is int
+                and details["cache_write_tokens"] >= 0
+                and type(cached) is int
+                and cached >= 0
+                and cached + details["cache_write_tokens"] <= usage[keys[0]]
+            )
 
     def _line(self, data: bytes | bytearray | memoryview) -> bool:
         try:
@@ -192,7 +211,27 @@ class _UsageEvidence:
                 ids.add(provider.get("response_id"))
         ids.discard(None)
         ids.discard(FAKE_RESPONSES_ID)
-        return bool(self._response_id and ids == {self._response_id})
+        matched = bool(self._response_id and ids == {self._response_id})
+        if matched:
+            # SDK defaults erase the distinction between omitted and explicit
+            # zero cache-write usage. Preserve only that authority bit locally.
+            entries = [
+                usage,
+                *(getattr(usage, "request_usage_entries", None) or []),
+                *(getattr(usage, "_agents_sdk_request_usages", None) or []),
+            ]
+            for entry in entries:
+                details = getattr(entry, "input_tokens_details", None)
+                if details is None:
+                    # Supply the DTO placeholder the SDK would otherwise create,
+                    # retaining no raw fields as evidence of reported buckets.
+                    details = InputTokensDetails.model_construct(
+                        _fields_set=set(), cached_tokens=0, cache_write_tokens=0
+                    )
+                    details.__pydantic_fields_set__.clear()
+                    entry.input_tokens_details = details
+                cast("Any", details)._lyrashield_cache_write_known = self._cache_write_known
+        return matched
 
     def feed(self, chunk: bytes) -> None:
         if self.overflow or self._done:
@@ -359,6 +398,13 @@ def _quoted_fields(
 def _validate_quoted_fields(payload: Any, expected: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise PhysicalBudgetAdapterError("Cannot verify finite generation quote fields.")
+    params = (
+        ResponseCreateParamsBase if expected.get("messages") is None else CompletionCreateParamsBase
+    )
+    if set(payload) - (set(params.__annotations__) | {"stream"}):
+        raise PhysicalBudgetAdapterError(
+            "Finite generation cannot qualify arbitrary routing fields."
+        )
     for key, value in expected.items():
         actual = payload.get(key)
         if key in {"tools", "functions"} and not actual and not value:
@@ -377,10 +423,13 @@ def _validate_quoted_fields(payload: Any, expected: dict[str, Any]) -> None:
 
 
 class _SinglePostTransport(httpx.AsyncBaseTransport):
-    def __init__(self, original: httpx.AsyncClient, maximum: int, quoted: dict[str, Any]) -> None:
+    def __init__(
+        self, original: httpx.AsyncClient, maximum: int, quoted: dict[str, Any], endpoint: httpx.URL
+    ) -> None:
         self.original = original
         self.quoted = quoted
         self.maximum = maximum
+        self.endpoint = endpoint
         self.sent = False
         self.usage_evidence: _UsageEvidence | None = None
 
@@ -391,8 +440,31 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
             )
         if request.method != "POST":
             raise PhysicalBudgetAdapterError("Finite generation requires one bounded POST.")
+        if (
+            request.url != self.endpoint
+            or request.headers.get("host") != self.endpoint.netloc.decode()
+            or request.extensions.get("sni_hostname")
+            not in (
+                None,
+                self.endpoint.host.replace("_", "-"),
+                self.endpoint.host.replace("_", "-").encode(),
+            )
+        ):
+            raise PhysicalBudgetAdapterError("Finite generation changed its admitted endpoint.")
+        if not isinstance(request.stream, httpx.AsyncByteStream):
+            raise PhysicalBudgetAdapterError("Finite generation requires an asynchronous body.")
+        body = bytearray()
         try:
-            payload = json.loads(await request.aread())
+            async for chunk in request.stream:
+                if len(chunk) > 8_388_608 - len(body):
+                    raise PhysicalBudgetAdapterError(
+                        "Finite generation request exceeds its bounded body limit."
+                    )
+                body.extend(chunk)
+        finally:
+            await request.stream.aclose()
+        try:
+            payload = json.loads(body)
         except (ValueError, UnicodeError) as exc:
             raise PhysicalBudgetAdapterError(
                 "Cannot verify the finite generation output cap."
@@ -414,6 +486,18 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
                 "Finite generation is missing its configured hard output cap."
             )
         _validate_quoted_fields(payload, self.quoted)
+        # The lower HTTP transport consumes stream, not Request._content.
+        # Send the same immutable bytes we actually inspected, with fresh framing.
+        headers = httpx.Headers(request.headers)
+        headers.pop("content-length", None)
+        headers.pop("transfer-encoding", None)
+        request = httpx.Request(
+            request.method,
+            request.url,
+            headers=headers,
+            content=bytes(body),
+            extensions=dict(request.extensions),
+        )
         self.sent = True
         # Auth and redirect flow run above this counter on the scoped client.
         # Reuse the resolved URL's pool/TLS transport below those flows, so
@@ -436,6 +520,21 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
     async def aclose(self) -> None:
         # This proxy does not own the provider's pooled client/transport.
         pass
+
+
+def _admitted_endpoint(
+    resolved: AsyncOpenAI, original_http: httpx.AsyncClient, quoted: dict[str, Any]
+) -> httpx.URL:
+    resource = "/responses" if quoted.get("messages") is None else "/chat/completions"
+    if isinstance(resolved, AsyncAzureOpenAI):
+        if resource == "/chat/completions" and "/deployments" not in resolved.base_url.path:
+            resource = f"/deployments/{quoted['model']}{resource}"
+        endpoint = AsyncAzureOpenAI._prepare_url(resolved, resource)
+    else:
+        endpoint = AsyncOpenAI._prepare_url(resolved, resource)
+    return endpoint.copy_merge_params(original_http.params).copy_merge_params(
+        resolved.qs.stringify(cast("Any", resolved.default_query))
+    )
 
 
 @asynccontextmanager
@@ -502,7 +601,9 @@ async def _physical_call(
         )
     original_http = resolved._client
     quoted = _quoted_fields(model, settings, resolved, args, kwargs)
-    transport = _SinglePostTransport(original_http, maximum, quoted)
+    transport = _SinglePostTransport(
+        original_http, maximum, quoted, _admitted_endpoint(resolved, original_http, quoted)
+    )
     async with httpx.AsyncClient(
         transport=transport,
         timeout=original_http.timeout,

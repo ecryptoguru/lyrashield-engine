@@ -14,6 +14,14 @@ Digest challenge cannot hide a second generation POST. It disables generation
 redirects and refuses a hidden second POST. It does not change a shared client,
 LiteLLM globals or a provider factory, and does not infer credentials.
 
+The guard consumes the actual outgoing stream with an 8 MiB pre-copy limit and
+sends the inspected immutable bytes with freshly derived content framing. Cached
+request content cannot stand in for the transmitted stream. The final origin,
+resource path, deployment, query and Host must retain the admitted native SDK
+endpoint, including Azure's resource-specific paths and API version. Unknown
+body keys outside the frozen official create-parameter schema fail before send;
+provider routing extensions are not admitted as ordinary generation parameters.
+
 The final wire model, input/messages, instructions, tools/functions, output
 schema, prompt/state references, context management and audio/modality/prediction
 fields must equal the frozen SDK projection of the original owned call arguments.
@@ -70,6 +78,12 @@ zero-priced route can still proceed. The observer caps total observed decoded
 bytes at 1 MiB and SSE lines at 4,096. It checks bounds before copying incoming
 spans and scans with an advancing index. Oversized or unrecognized usage remains
 conservatively unknown. It never changes response bytes or target evidence.
+
+A terminal usage frame must supply its own nonempty response ID. A preceding
+content frame does not identify an anonymous receipt. Missing or invalid raw
+cache-write buckets keep the owned conservative input-price bound even when the
+SDK supplies zero defaults. The same bound survives usage persistence and
+hydration; generated DTO placeholders do not establish a provider receipt.
 
 Finite identity is explicitly owned by the engine settings/direct-call context;
 SDK native-retry suppression alone does not activate spend policy. Ordinary
