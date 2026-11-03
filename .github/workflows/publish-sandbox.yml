@@ -191,10 +191,11 @@ jobs:
           docker buildx imagetools inspect "$image@$arm" --raw > evidence/arm64.json
           tag="$image:candidate-index-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           docker buildx imagetools create --metadata-file evidence/index-metadata.json --tag "$tag" "$image@$amd" "$image@$arm"
-          digest="$(python3 -c 'import json; print(json.load(open("evidence/index-metadata.json"))["containerimage.digest"])')"
+          digest="$(python3 -c 'import json; print(json.load(open("evidence/index-metadata.json"))["containerimage.descriptor"]["digest"])')"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker buildx imagetools inspect "$image@$digest" --raw > evidence/combined.json
-          python3 scripts/verify_sandbox_platform_index.py evidence/amd64.json evidence/arm64.json evidence/combined.json > evidence/children.json
+          python3 scripts/verify_sandbox_platform_index.py evidence/amd64.json evidence/arm64.json evidence/combined.json \
+            --amd64-digest "$amd" --arm64-digest "$arm" --metadata evidence/index-metadata.json > evidence/children.json
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
           python3 - "$amd" "$arm" "$digest" <<'PY'
           import json, os, sys
@@ -254,7 +255,7 @@ jobs:
           image="$REGISTRY/$IMAGE_NAME@$DIGEST"
           docker buildx imagetools create --tag "$REGISTRY/$IMAGE_NAME:$RELEASE_TAG" --tag "$REGISTRY/$IMAGE_NAME:$RUNTIME_REVISION" "$image"
           for tag in "$RELEASE_TAG" "$RUNTIME_REVISION"; do
-            promoted_digest="$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:$tag" | awk '/^Digest:/ { print $2; exit }')"
+            promoted_digest="$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:$tag" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')"
             test "$promoted_digest" = "$DIGEST"
           done
       - name: Record deployable immutable reference
