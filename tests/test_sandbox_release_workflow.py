@@ -25,7 +25,9 @@ def test_ci_audits_hash_pinned_container_locks_without_dependency_resolution() -
 def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
     content = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "platforms: linux/amd64,linux/arm64" in content
+    assert "runner: ubuntu-24.04\n" in content
+    assert "runner: ubuntu-24.04-arm\n" in content
+    assert "platforms: linux/${{ matrix.arch }}" in content
     smoke = SMOKE.read_text(encoding="utf-8")
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
     replay_probe = ci.split("name: Guarded replay egress probes (built image)", 1)[1].split(
@@ -33,7 +35,7 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
     )[0]
     assert "from caido_api import _ip_denial, _replay_denial as blocked" in replay_probe
     assert "blocked(url) is not None" in replay_probe
-    assert 'bash scripts/smoke-sandbox.sh "$image" "$platform"' in content
+    assert 'bash scripts/smoke-sandbox.sh "$image" "linux/$ARCH"' in content
     assert "bash scripts/smoke-sandbox.sh lyrashield-sandbox:ci" in ci
     for invariant in (
         'test "$(id -u)" != "0"',
@@ -48,11 +50,8 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
         "200|400",
     ):
         assert invariant in smoke
-    assert "candidate-${{ github.sha }}" in content
-    assert (
-        'image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"'
-        in content
-    )
+    assert "candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}" in content
+    assert 'image="$REGISTRY/$IMAGE_NAME@$DIGEST"' in content
     assert "docker_args=(--rm)" in smoke
     assert 'docker_args+=(--platform "$platform")' in smoke
     assert 'docker run "${docker_args[@]}" --network none "$image"' in smoke
@@ -72,19 +71,21 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
     assert '"$image" --test /tmp/test_reviewed_sandbox_npm.cjs' in node
     assert "docker buildx imagetools create" in content
     assert "RELEASE_TAG: ${{ github.ref_name }}" in content
-    assert 'for tag in "$RELEASE_TAG" "${{ github.sha }}"' in content
+    assert 'for tag in "$RELEASE_TAG" "$RUNTIME_REVISION"' in content
     assert "${{ env.IMAGE_NAME }}:${{ github.ref_name }}" not in content
     assert "Build the exact platform image" not in content
-    assert content.index("Smoke the exact candidate digest") < content.index(
+    assert content.index("Smoke the exact native candidate digest") < content.index(
         "Promote the smoke-qualified digest"
     )
-    assert content.index("Promote the smoke-qualified digest") < content.index(
-        "Generate an SPDX SBOM"
+    assert content.index("Sign selected runtime and qualified platform binding") < content.index(
+        "Promote the smoke-qualified digest"
     )
     assert "push: true" in content
     assert "provenance: mode=max" in content
     assert "sbom: true" in content
     assert "sbom-path: sandbox.spdx.json" in content
-    assert "subject-digest: ${{ steps.image.outputs.digest }}" in content
+    assert "subject-digest: ${{ steps.index.outputs.digest }}" in content
+    assert "engineRevision" in content and "workflowRevision" in content
+    assert "scripts/verify_sandbox_platform_index.py" in content
     assert "push-to-registry: true" in content
     assert "@v" not in content

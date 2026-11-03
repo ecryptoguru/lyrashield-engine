@@ -25,11 +25,13 @@ def test_sandbox_publish_ref_guard_keeps_tag_and_main_dispatch_boundaries() -> N
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/publish-sandbox.yml").read_text(encoding="utf-8"),
     )
-    publish = workflow["jobs"]["publish"]
+    resolve = workflow["jobs"]["resolve"]
     triggers = workflow.get("on", workflow.get(True))
 
     assert triggers["push"]["tags"] == ["sandbox-v*"]
-    assert "github.event_name == 'push'" in publish["if"]
-    assert "startsWith(github.ref, 'refs/tags/sandbox-v')" in publish["if"]
-    assert "github.event_name == 'workflow_dispatch'" in publish["if"]
-    assert "github.ref == 'refs/heads/main'" in publish["if"]
+    assert "github.event_name == 'push'" in resolve["if"]
+    assert "startsWith(github.ref, 'refs/tags/sandbox-v')" in resolve["if"]
+    assert "github.event_name == 'workflow_dispatch'" in resolve["if"]
+    assert "github.ref == 'refs/heads/main'" in resolve["if"]
+    assert workflow["jobs"]["build"]["needs"] == "resolve"
+    assert set(workflow["jobs"]["publish"]["needs"]) == {"resolve", "build"}

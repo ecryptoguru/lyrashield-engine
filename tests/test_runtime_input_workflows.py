@@ -14,7 +14,7 @@ COMMAND = "python3 containers/system-python-security/hydrate_runtime_inputs.py -
 TOKEN = "${{ github.token }}"  # noqa: S105 - workflow expression, not a credential
 WORKFLOWS = (
     ("ci.yml", "docker-smoke", "Build sandbox image"),
-    ("publish-sandbox.yml", "publish", "Build and push an unqualified candidate"),
+    ("publish-sandbox.yml", "build", "Build and push an unqualified native candidate"),
 )
 
 
@@ -34,18 +34,26 @@ def assert_hydration_contract(workflow: dict[str, Any], job_name: str, build_nam
     assert hydrate.get("if") == build.get("if")
     assert hydrate["run"] == COMMAND
     assert hydrate["env"] == {"GH_TOKEN": TOKEN}
+    if job_name == "build":
+        assert hydrate["working-directory"] == "runtime"
     assert not hydrate.get("continue-on-error")
     assert [step for step in steps if "GH_TOKEN" in step.get("env", {})] == [hydrate]
     assert workflow["permissions"]["contents"] == "read"
-    assert "permissions" not in job
+    if job_name == "build":
+        assert job["permissions"] == {"contents": "read", "packages": "write"}
+    else:
+        assert "permissions" not in job
     for scope in (workflow, job):
         assert "token" not in yaml.safe_dump(scope.get("env", {})).lower()
     # Local context plus credential-free checkout keep runner authentication out
     # of both BuildKit inputs and files copied into the build context.
     checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
     assert checkout["with"]["persist-credentials"] is False
+    if job_name == "build":
+        assert checkout["with"]["ref"] == "${{ needs.resolve.outputs.revision }}"
+        assert checkout["with"]["path"] == "runtime"
     if "uses" in build:
-        assert build["with"]["context"] == "."
+        assert build["with"]["context"] == ("runtime" if job_name == "build" else ".")
     assert "token" not in yaml.safe_dump(build).lower()
     assert not any(key.startswith("secret") for key in build.get("with", {}))
 
@@ -63,10 +71,7 @@ def test_runtime_input_hydration_precedes_each_image_build(
     else:
         assert workflow["permissions"] == {
             "contents": "read",
-            "packages": "write",
-            "id-token": "write",
-            "attestations": "write",
-            "artifact-metadata": "write",
+            "actions": "read",
         }
 
 
