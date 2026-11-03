@@ -108,6 +108,8 @@ def assert_workflow_contract(workflow):
         {"arch": "arm64", "runner": "ubuntu-24.04-arm"},
     ]
     assert build["runs-on"] == "${{ matrix.runner }}"
+    assert build["name"] == "Build sandbox (${{ matrix.arch }})"
+    assert publish["name"] == "Publish qualified sandbox index"
     resolve_source = next(step for step in resolve["steps"] if step.get("id") == "source")["run"]
     for required in (
         "git merge-base --is-ancestor",
@@ -117,6 +119,7 @@ def assert_workflow_contract(workflow):
         "^[0-9a-f]{40}$",
         'qualified_historical="992b3d9df696753c7b62a31ea58f1ca5d21055c1"',
         '"$revision" == "$GITHUB_SHA" || "$revision" == "$qualified_historical"',
+        "attempt: .run_attempt",
     ):
         assert required in resolve_source
     steps = build["steps"]
@@ -158,6 +161,7 @@ def assert_workflow_contract(workflow):
     assembly = next(step for step in publish["steps"] if step.get("id") == "index")["run"]
     assert "scripts/verify_sandbox_platform_index.py" in assembly
     assert '"engineRevision"' in assembly and '"workflowRevision"' in assembly
+    assert '"engineCiRun"' in assembly and '"engineCiAttempt"' in assembly
     assert '"platformIndexes"' in assembly and '"platformManifests"' in assembly
 
 

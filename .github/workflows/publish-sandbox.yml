@@ -20,6 +20,7 @@ env:
 
 jobs:
   resolve:
+    name: Resolve qualified engine revision
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     if: >-
@@ -28,6 +29,7 @@ jobs:
     outputs:
       revision: ${{ steps.source.outputs.revision }}
       ci_run: ${{ steps.source.outputs.ci_run }}
+      ci_attempt: ${{ steps.source.outputs.ci_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,14 +53,18 @@ jobs:
           git merge-base --is-ancestor "$revision" "$GITHUB_SHA"
           # The jq variable is interpreted by jq, not by the shell.
           # shellcheck disable=SC2016
-          ci_run="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+          ci_record="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
             -f head_sha="$revision" -f event=push -f status=success -f per_page=100 | \
-            jq -r --arg revision "$revision" \
-            '[.workflow_runs[] | select(.head_sha == $revision and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success") | .id] | max // empty')"
-          [[ "$ci_run" =~ ^[0-9]+$ ]]
-          printf 'revision=%s\nci_run=%s\n' "$revision" "$ci_run" >> "$GITHUB_OUTPUT"
+            jq -c --arg revision "$revision" \
+            '[.workflow_runs[] | select(.head_sha == $revision and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success") | {id, attempt: .run_attempt}] | max_by(.id) // empty')"
+          [[ -n "$ci_record" ]]
+          ci_run="$(jq -r '.id' <<< "$ci_record")"
+          ci_attempt="$(jq -r '.attempt' <<< "$ci_record")"
+          [[ "$ci_run" =~ ^[1-9][0-9]*$ && "$ci_attempt" =~ ^[1-9][0-9]*$ ]]
+          printf 'revision=%s\nci_run=%s\nci_attempt=%s\n' "$revision" "$ci_run" "$ci_attempt" >> "$GITHUB_OUTPUT"
 
   build:
+    name: Build sandbox (${{ matrix.arch }})
     needs: resolve
     permissions:
       contents: read
@@ -142,6 +148,7 @@ jobs:
           retention-days: 7
 
   publish:
+    name: Publish qualified sandbox index
     needs: [resolve, build]
     permissions:
       contents: read
@@ -173,6 +180,7 @@ jobs:
         env:
           RUNTIME_REVISION: ${{ needs.resolve.outputs.revision }}
           ENGINE_CI_RUN: ${{ needs.resolve.outputs.ci_run }}
+          ENGINE_CI_ATTEMPT: ${{ needs.resolve.outputs.ci_attempt }}
         run: |
           set -euo pipefail
           image="$REGISTRY/$IMAGE_NAME"
@@ -195,6 +203,7 @@ jobs:
               "engineRevision": os.environ["RUNTIME_REVISION"],
               "workflowRevision": os.environ["GITHUB_SHA"],
               "engineCiRun": os.environ["ENGINE_CI_RUN"],
+              "engineCiAttempt": os.environ["ENGINE_CI_ATTEMPT"],
               "runId": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "platformIndexes": {"amd64": sys.argv[1], "arm64": sys.argv[2]},
