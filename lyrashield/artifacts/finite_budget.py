@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import threading
 import weakref
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, Self
 from uuid import uuid4
 
-from lyrashield.artifacts.financial_io import FinancialDirectory
+from lyrashield.artifacts.financial_io import FinancialDirectory, transition_lock
 
 
 GUARD = "_finite_budget_guard"
@@ -82,6 +83,14 @@ def _decode(raw: bytes) -> dict[str, Any]:
     return data
 
 
+def observation_key(model: str | None, response_id: str | None) -> str | None:
+    if not response_id:
+        return None
+    # Response IDs retain the ledger's run-scoped identity across route aliases.
+    del model
+    return hashlib.sha256(response_id.encode()).hexdigest()
+
+
 class BudgetJournal:
     """Exclusive process owner with bounded pending IDs and snapshot CAS."""
 
@@ -94,68 +103,70 @@ class BudgetJournal:
         self._dispatched: set[str] = set()
         self._directory: FinancialDirectory | None = None
         try:
-            self.path.mkdir(parents=True, exist_ok=True)
-            self._directory = FinancialDirectory(self.path)
-            existing = self._directory.read("run.json", MAX_RECORD_BYTES)
-            current = _decode(existing) if existing is not None else copy.deepcopy(record)
-            try:
-                self._stamp_fd = self._directory.open(STAMP, private=True)
-                fresh = False
-            except FileNotFoundError:
-                if GUARD in current:
-                    raise FinancialStateError("finite guard without activation stamp") from None
-                if limit is None:
-                    raise FinancialStateError("finite activation requires a limit") from None
-                self._stamp_fd = self._directory.open(STAMP, create=True, private=True)
-                fresh = True
-            self._directory.lock(self._stamp_fd)
-            if fresh:
-                stamp = {"v": 1, "run_id": current.get("run_id"), "epoch": uuid4().hex}
-                view = memoryview(_encoded(stamp))
-                while view:
-                    written = os.write(self._stamp_fd, view)
-                    if written <= 0:
-                        raise FinancialStateError("short activation write")  # noqa: TRY301 - release verified handles before propagating failure
-                    view = view[written:]
-                os.fsync(self._stamp_fd)
-                self._directory.barrier()
-                usage = current.get("llm_usage") or {}
-                known = float(usage.get("cost") or 0)
-                current[GUARD] = {
-                    **stamp,
-                    "revision": 0,
-                    "next_attempt": 1,
-                    "limit_units": _units(float(limit) if limit is not None else 0, ceiling=False),
-                    "known_floor_units": _units(known),
-                    "usage_sha256": _hash_usage(current),
-                    "pending": [],
-                }
-                self._stamp = stamp
-                self._record = current
-                self._commit(current)
-            else:
-                os.lseek(self._stamp_fd, 0, os.SEEK_SET)
-                raw = os.read(self._stamp_fd, 1025)
-                if len(raw) > 1024:
-                    raise FinancialStateError("oversized activation stamp")  # noqa: TRY301 - release verified handles before propagating failure
-                self._stamp = _decode(raw)
-                self._record = current
-                self._validate(current)
-            if record.get("run_id") != self._stamp.get("run_id"):
-                raise FinancialStateError("foreign financial run identity")  # noqa: TRY301 - release verified handles before propagating failure
-            if (
-                limit is not None
-                and _units(limit, ceiling=False) > self._record[GUARD]["limit_units"]
-            ):
-                raise FinancialStateError("implicit budget increase refused")  # noqa: TRY301 - release verified handles before propagating failure
-            if (
-                limit is not None
-                and _units(limit, ceiling=False) < self._record[GUARD]["limit_units"]
-            ):
-                tightened = self.snapshot()
-                tightened[GUARD]["limit_units"] = _units(limit, ceiling=False)
-                tightened[GUARD]["revision"] += 1
-                self._commit(tightened)
+            self._directory = FinancialDirectory(self.path, create=True)
+            with transition_lock(self.path):
+                existing = self._directory.read("run.json", MAX_RECORD_BYTES)
+                current = _decode(existing) if existing is not None else copy.deepcopy(record)
+                try:
+                    self._stamp_fd = self._directory.open(STAMP, private=True)
+                    fresh = False
+                except FileNotFoundError:
+                    if GUARD in current:
+                        raise FinancialStateError("finite guard without activation stamp") from None
+                    if limit is None:
+                        raise FinancialStateError("finite activation requires a limit") from None
+                    self._stamp_fd = self._directory.open(STAMP, create=True, private=True)
+                    fresh = True
+                self._directory.lock(self._stamp_fd)
+                if fresh:
+                    stamp = {"v": 1, "run_id": current.get("run_id"), "epoch": uuid4().hex}
+                    view = memoryview(_encoded(stamp))
+                    while view:
+                        written = os.write(self._stamp_fd, view)
+                        if written <= 0:
+                            raise FinancialStateError("short activation write")  # noqa: TRY301 - release verified handles before propagating failure
+                        view = view[written:]
+                    os.fsync(self._stamp_fd)
+                    self._directory.barrier()
+                    usage = current.get("llm_usage") or {}
+                    known = float(usage.get("cost") or 0)
+                    current[GUARD] = {
+                        **stamp,
+                        "revision": 0,
+                        "next_attempt": 1,
+                        "limit_units": _units(
+                            float(limit) if limit is not None else 0, ceiling=False
+                        ),
+                        "known_floor_units": _units(known),
+                        "usage_sha256": _hash_usage(current),
+                        "pending": [],
+                    }
+                    self._stamp = stamp
+                    self._record = current
+                    self._commit(current)
+                else:
+                    os.lseek(self._stamp_fd, 0, os.SEEK_SET)
+                    raw = os.read(self._stamp_fd, 1025)
+                    if len(raw) > 1024:
+                        raise FinancialStateError("oversized activation stamp")  # noqa: TRY301 - release verified handles before propagating failure
+                    self._stamp = _decode(raw)
+                    self._record = current
+                    self._validate(current)
+                if record.get("run_id") != self._stamp.get("run_id"):
+                    raise FinancialStateError("foreign financial run identity")  # noqa: TRY301 - release verified handles before propagating failure
+                if (
+                    limit is not None
+                    and _units(limit, ceiling=False) > self._record[GUARD]["limit_units"]
+                ):
+                    raise FinancialStateError("implicit budget increase refused")  # noqa: TRY301 - release verified handles before propagating failure
+                if (
+                    limit is not None
+                    and _units(limit, ceiling=False) < self._record[GUARD]["limit_units"]
+                ):
+                    tightened = self.snapshot()
+                    tightened[GUARD]["limit_units"] = _units(limit, ceiling=False)
+                    tightened[GUARD]["revision"] += 1
+                    self._commit(tightened)
         except (OSError, ValueError, TypeError, KeyError) as exc:
             self.close()
             raise FinancialStateError(f"financial state unavailable: {exc}") from exc
@@ -195,7 +206,7 @@ class BudgetJournal:
             or any(guard.get(key) != self._stamp.get(key) for key in self._stamp)
         ):
             raise FinancialStateError("foreign finite activation")
-        if set(guard) != {
+        if set(guard) - {"observations"} != {
             "v",
             "run_id",
             "epoch",
@@ -234,6 +245,23 @@ class BudgetJournal:
             or len(_encoded(guard)) > MAX_GUARD_BYTES
         ):
             raise FinancialStateError("finite pending record exceeds bound")
+        observations = guard.get("observations", [])
+        if not isinstance(observations, list) or len(observations) > MAX_PENDING:
+            raise FinancialStateError("observed receipt capacity exceeded")
+        seen = set()
+        for observed in observations:
+            if (
+                not isinstance(observed, dict)
+                or set(observed) != {"key", "cost_units", "settled"}
+                or not isinstance(observed["key"], str)
+                or len(observed["key"]) != 64
+                or any(c not in "0123456789abcdef" for c in observed["key"])
+                or observed["key"] in seen
+                or not _integer(observed["cost_units"])
+                or type(observed["settled"]) is not bool
+            ):
+                raise FinancialStateError("invalid observed receipt")
+            seen.add(observed["key"])
         ids = set()
         for entry in pending:
             if not isinstance(entry, dict) or set(entry) != {"id", "quote_units", "kind"}:
@@ -349,7 +377,9 @@ class BudgetJournal:
             self._commit(current)
             return attempt
 
-    def settle(self, attempt: str, record: dict[str, Any], actual: float) -> bool:
+    def settle(
+        self, attempt: str, record: dict[str, Any], actual: float, *, observation: str | None = None
+    ) -> bool:
         with self._lock:
             current = self._current()
             guard = current[GUARD]
@@ -370,7 +400,24 @@ class BudgetJournal:
             for key in _FINANCIAL:
                 if key in record:
                     current[key] = copy.deepcopy(record[key])
-            guard["known_floor_units"] += _units(actual)
+            credit = 0
+            if observation is not None:
+                matched = next(
+                    (
+                        entry
+                        for entry in guard.get("observations", [])
+                        if entry["key"] == observation
+                    ),
+                    None,
+                )
+                if matched is None or matched["settled"]:
+                    raise FinancialStateError("observed response is missing or already settled")
+                credit = matched["cost_units"]
+                matched["settled"] = True
+            guard["known_floor_units"] = max(
+                guard["known_floor_units"] + max(0, _units(actual) - credit),
+                _units(float(current.get("llm_usage", {}).get("cost") or 0)),
+            )
             guard["pending"] = [entry for entry in guard["pending"] if entry["id"] != attempt]
             guard["revision"] += 1
             guard["usage_sha256"] = _hash_usage(current)
@@ -380,19 +427,55 @@ class BudgetJournal:
             self._dispatched.discard(attempt)
             return True
 
-    def checkpoint_known(self, record: dict[str, Any]) -> dict[str, Any]:
+    def checkpoint_known(
+        self,
+        record: dict[str, Any],
+        *,
+        observed: tuple[str, float] | None = None,
+        settled_observation: str | None = None,
+    ) -> dict[str, Any]:
         """Persist observed known usage without reconciling any pending ID."""
         with self._lock:
             current = self._current()
             if record.get(GUARD) != current[GUARD]:
                 raise FinancialStateError("stale financial checkpoint")
+            if observed is not None:
+                entries = current[GUARD].setdefault("observations", [])
+                if any(entry["key"] == observed[0] for entry in entries):
+                    return copy.deepcopy(current)
+                if len(entries) >= MAX_PENDING:
+                    self._poisoned = True
+                    raise FinancialStateError("observed receipt capacity exceeded")
+                entries.append(
+                    {"key": observed[0], "cost_units": _units(observed[1]), "settled": False}
+                )
+            if settled_observation is not None:
+                for entry in current[GUARD].get("observations", []):
+                    if entry["key"] == settled_observation:
+                        entry["settled"] = True
             for key in _FINANCIAL:
                 if key in record:
                     current[key] = copy.deepcopy(record[key])
+            current[GUARD]["known_floor_units"] = max(
+                current[GUARD]["known_floor_units"],
+                _units(float(current.get("llm_usage", {}).get("cost") or 0)),
+            )
             current[GUARD]["usage_sha256"] = _hash_usage(current)
             current[GUARD]["revision"] += 1
             self._commit(current)
             return self.snapshot()
+
+    def observation(self, key: str | None) -> dict[str, Any] | None:
+        if key is None:
+            return None
+        return next(
+            (
+                entry
+                for entry in self.snapshot()[GUARD].get("observations", [])
+                if entry["key"] == key
+            ),
+            None,
+        )
 
     def write_projection(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -448,11 +531,14 @@ class BudgetJournal:
 
 def active_journal(run_dir: Path) -> BudgetJournal | None:
     with _owners_lock:
-        return _owners.get((os.getpid(), str(run_dir.absolute())))
+        owner = _owners.get((os.getpid(), str(run_dir.absolute())))
+        return owner if owner is not None and owner._directory is not None else None
 
 
 def own_journal(run_dir: Path, record: dict[str, Any], limit: float | None) -> BudgetJournal:
-    with _owners_lock:
+    directory = FinancialDirectory(run_dir, create=True)
+    directory.close()
+    with transition_lock(run_dir), _owners_lock:
         owner = active_journal(run_dir)
         if owner is None:
             owner = BudgetJournal(run_dir, record, limit)
@@ -472,33 +558,38 @@ def protected_run(run_dir: Path, record: dict[str, Any] | None = None) -> bool:
     # An initializer's candidate need not carry the existing private guard.
     # Inspect the bounded on-disk record before deciding this is a legacy write.
     try:
-        directory = FinancialDirectory(run_dir)
+        fd = os.open(run_dir / "run.json", os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise FinancialStateError("run record is not regular")
+            raw = source.read(MAX_RECORD_BYTES + 1)
+        if len(raw) > MAX_RECORD_BYTES:
+            raise FinancialStateError("cannot classify oversized run record")
+        return GUARD in _decode(raw)
     except FileNotFoundError:
         return False
-    try:
-        raw = directory.read("run.json", MAX_RECORD_BYTES)
-        return raw is not None and GUARD in _decode(raw)
     except (OSError, ValueError, TypeError) as exc:
         raise FinancialStateError(f"cannot classify financial state: {exc}") from exc
-    finally:
-        directory.close()
 
 
 def guarded_write(run_dir: Path, record: dict[str, Any], *, restore: bool = False) -> bool:
-    if not protected_run(run_dir, record):
-        return False
-    owner = active_journal(run_dir)
-    temporary = owner is None
-    if owner is None:
-        owner = BudgetJournal(run_dir, record, None)
-    try:
-        updated = owner.restore_projection(record) if restore else owner.write_projection(record)
-        record.clear()
-        record.update(updated)
-    finally:
-        if temporary:
-            owner.close()
-    return True
+    with transition_lock(run_dir, financial=protected_run(run_dir, record)):
+        if not protected_run(run_dir, record):
+            return False
+        owner = active_journal(run_dir)
+        temporary = owner is None
+        if owner is None:
+            owner = BudgetJournal(run_dir, record, None)
+        try:
+            updated = (
+                owner.restore_projection(record) if restore else owner.write_projection(record)
+            )
+            record.clear()
+            record.update(updated)
+        finally:
+            if temporary:
+                owner.close()
+        return True
 
 
 def refresh_financial_state(state: Any) -> None:

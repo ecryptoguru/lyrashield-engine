@@ -161,14 +161,16 @@ def read_run_record(run_dir: Path) -> dict[str, Any]:
 
 
 def write_run_record(run_dir: Path, run_record: dict[str, Any]) -> None:
-    from lyrashield.artifacts.finite_budget import guarded_write
+    from lyrashield.artifacts.financial_io import transition_lock
+    from lyrashield.artifacts.finite_budget import guarded_write, protected_run
 
-    if guarded_write(run_dir, run_record):
-        return
-    _atomic_write_text(
-        run_record_path(run_dir),
-        json.dumps(run_record, ensure_ascii=False, indent=2, default=str),
-    )
+    with transition_lock(run_dir, financial=protected_run(run_dir, run_record)):
+        if guarded_write(run_dir, run_record):
+            return
+        _atomic_write_text(
+            run_record_path(run_dir),
+            json.dumps(run_record, ensure_ascii=False, indent=2, default=str),
+        )
 
 
 def snapshot_revision_artifacts(run_dir: Path) -> dict[str, bytes | None]:
@@ -199,19 +201,31 @@ def restore_revision_artifacts(run_dir: Path, snapshot: dict[str, bytes | None])
     for relative, content in snapshot.items():
         path = run_dir / relative
         if relative == "run.json":
-            from lyrashield.artifacts.finite_budget import guarded_write, protected_run
-
-            if protected_run(run_dir):
-                if content is None:
-                    # A newly activated receipt outlives a snapshot with no prior file.
-                    continue
-                prior = json.loads(content)
-                guarded_write(run_dir, prior, restore=True)
-                continue
+            _restore_run_record(run_dir, content)
+            continue
         if content is None:
             path.unlink(missing_ok=True)
         else:
             _atomic_write_bytes(path, content)
+
+
+def _restore_run_record(run_dir: Path, content: bytes | None) -> None:
+    from lyrashield.artifacts.financial_io import transition_lock
+    from lyrashield.artifacts.finite_budget import guarded_write, protected_run
+
+    try:
+        candidate = json.loads(content) if content is not None else None
+    except (ValueError, TypeError):
+        candidate = None
+    prior = candidate if isinstance(candidate, dict) else None
+    with transition_lock(run_dir, financial=protected_run(run_dir, prior)):
+        if protected_run(run_dir, prior):
+            if content is not None:
+                guarded_write(run_dir, prior if prior is not None else {}, restore=True)
+        elif content is None:
+            (run_dir / "run.json").unlink(missing_ok=True)
+        else:
+            _atomic_write_bytes(run_dir / "run.json", content)
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:

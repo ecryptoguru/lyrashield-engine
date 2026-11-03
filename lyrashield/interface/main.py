@@ -100,7 +100,13 @@ def _persist_run_record(
     args: argparse.Namespace, *, terminal: dict[str, Any] | None = None
 ) -> None:
     run_dir = run_dir_for(args.run_name)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    if getattr(args, "max_budget_usd", None) is not None:
+        from lyrashield.artifacts.financial_io import FinancialDirectory
+
+        directory = FinancialDirectory(run_dir, create=True)
+        directory.close()
+    else:
+        run_dir.mkdir(parents=True, exist_ok=True)
     # The first observable run.json must already be a complete versioned
     # worker contract, so build it through the same canonical constructor
     # ReportState uses — never a partial hand-rolled dict (I10).
@@ -230,6 +236,10 @@ def _run_llm_preflight(args: Any, *, deadline: RunDeadline | None) -> None:
     )
     if getattr(args, "resume", None) or finite:
         selected = ReportState(args.run_name)
+        if finite:
+            # Resolve through ReportState's normal path owner, validating and
+            # creating financial parents before hydration can create anything.
+            selected.enable_finite_budget(getattr(args, "max_budget_usd", None))
         selected.hydrate_from_run_dir()
         if finite:
             owner = selected.enable_finite_budget(getattr(args, "max_budget_usd", None))

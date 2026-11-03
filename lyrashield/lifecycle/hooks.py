@@ -631,6 +631,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         max_turns: int | None = None,
         interactive: bool = False,
         report_state: Any = None,
+        phase_allowance_usd: float | None = None,
     ) -> None:
         if max_budget_usd is not None and (
             not math.isfinite(max_budget_usd) or max_budget_usd <= 0
@@ -684,6 +685,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         if self._journal is not None:
             self._max_budget_usd = self._journal.limit
             self._committed_cost_floor = self._journal.spent
+        self._phase_allowance_usd = phase_allowance_usd
+        self._phase_start_cost = max(
+            self._committed_cost_floor,
+            self._report_state.get_total_llm_cost() if self._report_state is not None else 0.0,
+        )
         self._durable_requests: dict[str, str] = {}
         self._durable_agents: dict[tuple[str, int], str] = {}
         self._direct_attempt: ContextVar[str | None] = ContextVar(
@@ -730,7 +736,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         report_state = self._report_state or get_global_report_state()
         observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
         committed = (
-            max(observed, self._committed_cost_floor)
+            max(
+                observed,
+                self._committed_cost_floor,
+                self._journal.spent if self._journal is not None else 0.0,
+            )
             + sum(tuple(self._abandoned_floors.values()))
             + sum(tuple(self._agent_abandoned_floors.values()))
         )
@@ -822,7 +832,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             report_state = self._report_state or get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
             committed = (
-                max(observed, self._committed_cost_floor)
+                max(
+                    observed,
+                    self._committed_cost_floor,
+                    self._journal.spent if self._journal is not None else 0.0,
+                )
                 + sum(self._abandoned_floors.values())
                 + sum(self._agent_abandoned_floors.values())
             )
@@ -836,6 +850,13 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                     )
                 raise BudgetExceededError(
                     f"Next bounded request would exceed ${self._max_budget_usd:.2f}"
+                )
+            if self._phase_allowance_usd is not None and (
+                max(0.0, committed - self._phase_start_cost) + reserved + reservation
+                > self._phase_allowance_usd
+            ):
+                raise BudgetExceededError(
+                    "Next triage request exceeds its remaining phase allowance"
                 )
             self._reservations[key] = reservation
             attempt = self._durable_reserve(reservation)
@@ -917,7 +938,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             report_state = self._report_state or get_global_report_state()
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
             committed = (
-                max(observed, self._committed_cost_floor)
+                max(
+                    observed,
+                    self._committed_cost_floor,
+                    self._journal.spent if self._journal is not None else 0.0,
+                )
                 + sum(self._abandoned_floors.values())
                 + sum(self._agent_abandoned_floors.values())
             )
@@ -1197,7 +1222,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
                 report_state = self._report_state or get_global_report_state()
                 observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
                 committed = (
-                    max(observed, self._committed_cost_floor)
+                    max(
+                        observed,
+                        self._committed_cost_floor,
+                        self._journal.spent if self._journal is not None else 0.0,
+                    )
                     + sum(self._abandoned_floors.values())
                     + sum(self._agent_abandoned_floors.values())
                 )
@@ -1318,7 +1347,11 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         if self._max_budget_usd is not None:
             observed = report_state.get_total_llm_cost() if report_state is not None else 0.0
             cost = (
-                max(observed, self._committed_cost_floor)
+                max(
+                    observed,
+                    self._committed_cost_floor,
+                    self._journal.spent if self._journal is not None else 0.0,
+                )
                 + sum(self._abandoned_floors.values())
                 + sum(self._agent_abandoned_floors.values())
             )

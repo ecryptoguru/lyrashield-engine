@@ -125,6 +125,7 @@ class LLMUsageLedger:
         agent_name: str | None = None,
         model: str | None = None,
         provider_receipt: dict[str, Any] | None = None,
+        observed_cost: bool = False,
     ) -> bool:
         if usage is None or not _usage_has_activity(usage):
             return False
@@ -168,7 +169,11 @@ class LLMUsageLedger:
         if model:
             metadata["model"] = model
 
-        if not is_subscription and _normalized_model_key(model) not in self._observed_cost_models:
+        if (
+            not is_subscription
+            and not observed_cost
+            and _normalized_model_key(model) not in self._observed_cost_models
+        ):
             estimated = (
                 estimate_request_cost_usd(
                     model,

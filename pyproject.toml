@@ -57,6 +57,8 @@ dependencies = [
   "docker>=7.1.0",
   "textual>=6.0.0",
   "requests>=2.32.0",
+  # Owned native transition lock; already constrained and frozen transitively.
+  "filelock>=4.2.1",
   # Owned direct import (lyrashield/interface/local_sources.py URL parsing);
   # previously satisfied only transitively (DE-17).
   "yarl>=1.18,<2",

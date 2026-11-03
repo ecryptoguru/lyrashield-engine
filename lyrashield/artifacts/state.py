@@ -300,8 +300,11 @@ class ReportState:
         self._scope_violations_seen = 0
         self._scope_dropped_seen = 0
 
-    def get_run_dir(self) -> Path:
-        return _get_run_dir(self, run_dir_for=run_dir_for)
+    def get_run_dir(self, *, create: bool = True, cwd: Path | None = None) -> Path:
+        if not create:
+            return self._run_dir or run_dir_for(self.run_name or self.run_id, cwd=cwd)
+        resolver = run_dir_for if cwd is None else lambda name: run_dir_for(name, cwd=cwd)
+        return _get_run_dir(self, run_dir_for=resolver)
 
     def hydrate_from_run_dir(self) -> None:
         _hydrate_from_run_dir(
@@ -415,6 +418,12 @@ class ReportState:
             with self._report_artifacts_lock:
                 owner = self._finite_budget
                 self._adopt_financial_snapshot(owner.snapshot())
+                from lyrashield.artifacts.finite_budget import observation_key
+
+                identity = observation_key(model, response_id)
+                observed = owner.observation(identity)
+                if observed is not None and observed["settled"] and budget_attempt is None:
+                    return True
                 candidate = copy.deepcopy(self.run_record)
                 ledger = copy.deepcopy(self._llm_usage)
                 ledger.record(
@@ -422,6 +431,7 @@ class ReportState:
                     agent_name=agent_name,
                     model=model,
                     usage=usage,
+                    observed_cost=observed is not None,
                     provider_receipt=self._provider_usage_receipts.pop(response_id, None)
                     if response_id
                     else None,
@@ -429,10 +439,18 @@ class ReportState:
                 candidate["llm_usage"] = ledger.to_record()
                 candidate["turn_count"] = self._turn_count + 1
                 if budget_attempt is not None:
-                    if not owner.settle(budget_attempt, candidate, budget_cost):
+                    if not owner.settle(
+                        budget_attempt,
+                        candidate,
+                        budget_cost,
+                        observation=identity if observed is not None else None,
+                    ):
                         return True
                 else:
-                    owner.checkpoint_known(candidate)
+                    owner.checkpoint_known(
+                        candidate, settled_observation=identity if observed is not None else None
+                    )
+                self._llm_usage = ledger
                 self._adopt_financial_snapshot(owner.snapshot())
                 try:
                     return self.save_run_data()
@@ -460,7 +478,8 @@ class ReportState:
                 self.run_record[key] = copy.deepcopy(record[key])
             else:
                 self.run_record.pop(key, None)
-        self._hydrate_llm_usage(record.get("llm_usage"))
+        if self._llm_usage.to_record() != record.get("llm_usage"):
+            self._hydrate_llm_usage(record.get("llm_usage"))
         self._turn_count = max(self._turn_count, record.get("turn_count", 0))
         self._save_seq = max(self._save_seq, record.get("seq", 0))
         self.run_record["turn_count"] = self._turn_count
@@ -469,7 +488,9 @@ class ReportState:
         from lyrashield.artifacts.finite_budget import own_journal
 
         if self._finite_budget is None:
-            self._finite_budget = own_journal(self.get_run_dir(), self.run_record, limit)
+            if self._run_dir is None:
+                self._run_dir = run_dir_for(self.run_name or self.run_id)
+            self._finite_budget = own_journal(self._run_dir, self.run_record, limit)
         self._finite_budget.restore_limit(limit)
         self._adopt_financial_snapshot(self._finite_budget.snapshot())
         return self._finite_budget
@@ -491,13 +512,27 @@ class ReportState:
         response_id: str | None = None,
     ) -> None:
         with self._report_artifacts_lock:
-            if self._finite_budget is not None:
-                self._adopt_financial_snapshot(self._finite_budget.snapshot())
-            self._llm_usage.record_observed_cost(cost, model=model, response_id=response_id)
-            if self._finite_budget is not None:
-                candidate = copy.deepcopy(self.run_record)
-                candidate["llm_usage"] = self._llm_usage.to_record()
-                self._adopt_financial_snapshot(self._finite_budget.checkpoint_known(candidate))
+            if self._finite_budget is None:
+                self._llm_usage.record_observed_cost(cost, model=model, response_id=response_id)
+                return
+            from lyrashield.artifacts.finite_budget import observation_key
+
+            owner = self._finite_budget
+            self._adopt_financial_snapshot(owner.snapshot())
+            identity = observation_key(model, response_id)
+            if owner.observation(identity) is not None:
+                return
+            ledger = copy.deepcopy(self._llm_usage)
+            ledger.record_observed_cost(cost, model=model, response_id=response_id)
+            candidate = copy.deepcopy(self.run_record)
+            candidate["llm_usage"] = ledger.to_record()
+            if candidate["llm_usage"] == self.run_record.get("llm_usage"):
+                return
+            saved = owner.checkpoint_known(
+                candidate, observed=(identity, cost) if identity else None
+            )
+            self._llm_usage = ledger
+            self._adopt_financial_snapshot(saved)
 
     def get_total_llm_usage(self) -> dict[str, Any]:
         return dict(self.run_record.get("llm_usage") or self._build_llm_usage_record())

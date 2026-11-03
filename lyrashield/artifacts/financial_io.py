@@ -5,8 +5,11 @@ from __future__ import annotations
 import contextlib
 import os
 import stat
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from filelock import FileLock
 
 
 if TYPE_CHECKING:
@@ -17,20 +20,28 @@ from uuid import uuid4
 class FinancialDirectory:
     """Keep verified directory handles open so replacement cannot retarget I/O."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, create: bool = False):
         self.path = path.absolute()
         self._fd = -1
         self._windows: WindowsDirectory | None = None
         if os.name == "nt":
             from lyrashield.artifacts.financial_windows import WindowsDirectory
 
-            self._windows = WindowsDirectory(self.path)
+            self._windows = WindowsDirectory(self.path, create=create)
             return
         self._windows = None
         fd = os.open(self.path.anchor, os.O_RDONLY | os.O_DIRECTORY)
         try:
             for part in self.path.parts[1:]:
-                next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                try:
+                    next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    with contextlib.suppress(FileExistsError):
+                        os.mkdir(part, 0o700, dir_fd=fd)
+                    os.fsync(fd)
+                    next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                 os.close(fd)
                 fd = next_fd
                 info = os.fstat(fd)
@@ -134,3 +145,30 @@ class FinancialDirectory:
         elif self._fd >= 0:
             os.close(self._fd)
             self._fd = -1
+
+
+@contextlib.contextmanager
+def transition_lock(path: Path, *, financial: bool = False) -> Iterator[None]:
+    """Serialize first activation with final legacy writes, restores and unlinks.
+
+    A legacy path retains its normal permissions; paid activation separately
+    validates no-follow ownership before ever entering this lock. The native
+    lock preserves its inode/path and cannot fall back to existence-only locks.
+    """
+    directory = FinancialDirectory(path, create=True) if financial else None
+    if directory is None:
+        path.mkdir(parents=True, exist_ok=True)
+    lock = FileLock(
+        str(path.absolute() / ".finite-budget-transition"),
+        timeout=10,
+        mode=0o600,
+        is_singleton=True,
+        preserve_lock_file=True,
+        fallback_to_soft=False,
+    )
+    try:
+        with lock:
+            yield
+    finally:
+        if directory is not None:
+            directory.close()

@@ -304,6 +304,7 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
     limits: TriageLimits | None = None,
     model: _Model | None = None,
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
+    report_state: Any = None,
 ) -> dict[str, Any]:
     """Return an additive triage artifact; never mutate deterministic findings."""
     limits = limits or TriageLimits()
@@ -392,8 +393,12 @@ async def run_triage(  # noqa: PLR0912, PLR0915 - terminal states are the persis
         active_hooks = get_active_hooks()
         triage_hooks = active_hooks or ReportUsageHooks(
             model=model_route,
-            max_budget_usd=max_budget_usd,
+            max_budget_usd=report_state._finite_budget.limit
+            if report_state is not None and report_state._finite_budget is not None
+            else max_budget_usd,
             max_output_tokens=limits.max_output_tokens,
+            report_state=report_state,
+            phase_allowance_usd=max_budget_usd if report_state is not None else None,
         )
         if active_hooks is None:
             set_active_hooks(triage_hooks)

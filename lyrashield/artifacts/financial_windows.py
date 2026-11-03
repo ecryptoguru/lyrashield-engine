@@ -30,7 +30,7 @@ class _Overlapped(ctypes.Structure):
 class WindowsDirectory:
     """Hold every parent against rename and reject reparse points/unsafe ACLs."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, create: bool = False):
         if os.name != "nt":
             raise OSError("Win32 financial handles require Windows")
         win_dll = cast("Any", ctypes).WinDLL
@@ -43,7 +43,23 @@ class WindowsDirectory:
         self.owner_sid = self._token_sid(4)
         try:
             for parent in [*reversed(path.parents), path]:
-                handle = self._open(parent, create=False, directory=True)
+                try:
+                    handle = self._open(parent, create=False, directory=True)
+                except FileNotFoundError:
+                    if not create or not self.handles:
+                        raise
+                    self._check_acl(self.handles[-1], private=False)
+                    descriptor = self._descriptor()
+                    attributes = _SecurityAttributes(
+                        ctypes.sizeof(_SecurityAttributes), descriptor, 0
+                    )
+                    try:
+                        self._check(
+                            self.kernel.CreateDirectoryW(str(parent), ctypes.byref(attributes))
+                        )
+                    finally:
+                        self.kernel.LocalFree(descriptor)
+                    handle = self._open(parent, create=False, directory=True)
                 self.handles.append(handle)
             self._check_acl(self.handles[-1], private=False)
         except BaseException:
@@ -52,6 +68,7 @@ class WindowsDirectory:
 
     def _bind(self) -> None:
         signatures = [
+            (self.kernel, "CreateDirectoryW", wintypes.BOOL, [wintypes.LPCWSTR, ctypes.c_void_p]),
             (
                 self.kernel,
                 "CreateFileW",
@@ -297,7 +314,7 @@ class WindowsDirectory:
                 if (
                     not self.security.EqualSid(sid, self.sid)
                     and not any(self.security.EqualSid(sid, allowed) for allowed in trusted)
-                    and mask & (0xFFFFFFFF if private else 0x500D0116)
+                    and mask & (0xFFFFFFFF if private else 0x500D0156)
                 ):
                     raise OSError("financial ACL grants access to another principal")
         finally:

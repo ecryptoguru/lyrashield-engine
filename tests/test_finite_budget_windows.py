@@ -10,6 +10,7 @@ import pytest
 
 from lyrashield.artifacts.finite_budget import STAMP, BudgetJournal, FinancialStateError
 from lyrashield.artifacts.state_persistence import initial_run_record
+from lyrashield.artifacts.writer import read_run_record, write_run_record
 
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="requires native Windows handles and ACLs")
@@ -51,6 +52,9 @@ def test_native_windows_directory_acl_cannot_authorize_other_principal_writes(tm
     run = tmp_path / "unsafe-acl"
     run.mkdir()
     _grant(run, "(OI)(CI)M")
+    legacy = initial_run_record("unsafe-acl", auth_mode="api")
+    write_run_record(run, legacy)
+    assert read_run_record(run) == legacy
     with pytest.raises(FinancialStateError):
         BudgetJournal(run, initial_run_record("unsafe-acl", auth_mode="api"), 1)
     assert not (run / STAMP).exists()
@@ -87,3 +91,15 @@ def test_native_windows_hardlinked_financial_record_is_rejected(tmp_path):
     os.link(tmp_path / "run.json", tmp_path / "other-link.json")
     with pytest.raises(FinancialStateError):
         BudgetJournal(tmp_path, record, 1)
+
+
+def test_native_windows_directory_delete_child_ace_is_rejected(tmp_path):
+    record = initial_run_record("delete-child", auth_mode="api")
+    with BudgetJournal(tmp_path, record, 1) as owner:
+        owner.reserve(0.6)
+    # DC alone differs from generic Modify: it permits deleting children despite
+    # their own restrictive ACLs once the previous process's handles are gone.
+    _grant(tmp_path, "(DC)")
+    with pytest.raises(FinancialStateError):
+        BudgetJournal(tmp_path, record, 1)
+    assert (tmp_path / STAMP).exists()

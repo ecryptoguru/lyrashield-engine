@@ -25,6 +25,7 @@ this is not tamper-proof remote billing storage.
 | `limit_units`, `known_floor_units` | Nonnegative integer USD units of `10^-10`; quotes round up and limits round down. The known floor remains separate from the verified public token ledger. |
 | `usage_sha256` | Hash of the protected public `llm_usage` and `web_search_usage` fields. |
 | `pending` | At most 64 exact `{id, quote_units, kind}` entries; kind is `llm` or `search`. |
+| `observations` (optional) | At most 64 private `{key, cost_units, settled}` callback receipts. `key` hashes the run-scoped provider response ID. Old guards without this field remain readable. Capacity exhaustion fails closed; identities are never silently discarded. |
 
 The private guard is limited to 16 KiB and the complete financial snapshot to
 1 MiB, matching the existing worker raw receipt read bound. Invalid numbers,
@@ -33,7 +34,19 @@ stale writers and failed required barriers deny further paid admission. These
 bounds never justify deleting an unknown charge. Ordinary report writers use
 financial CAS; finding and pending HTTP evidence rollback restore projections
 while merging current protected usage, guard, and monotone receipt counters.
-The main receipt initializer follows the same preservation path.
+The main receipt initializer follows the same preservation path. A stable
+`.finite-budget-transition` native lock serializes first activation with the
+complete legacy write, raw restore, or unlink. Read-only classification does not
+apply finite ownership rules to an unactivated legacy write (including normal
+0775 directories). Missing finite directories are created through verified
+no-follow parents, before hydration or initialization can create them.
+
+Known settlement ratchets its floor to the larger of prior floor plus the new
+known upper-cost delta and the resulting cumulative public ledger. A matching
+observed callback is credited once before SDK settlement; it does not remove a
+pending ID. Duplicate callbacks, failed later projections and fresh-process
+restore preserve that identity. Only the matching owned attempt can settle a
+hold. The private observation bound prevents unbounded response history.
 
 Interactive finite preflight owns the selected fresh or resumed run immediately.
 Known probe usage is persisted before return to the UI. CLI and TUI reuse that
@@ -44,6 +57,24 @@ explicit interactive budget increase is a separate journal update. Legacy schema
 existing read/write behavior and version. Activation does not invent unknown
 historical charges.
 
+The worker's cold `ai-security-triage` command binds an explicit `ReportState` to
+the existing run-directory helper's path for the input workspace and its scan ID,
+the main scan's actual output layout. It hydrates that scan's known spend and saved total ceiling. The supplied
+`--max-budget-usd` remains a separate triage phase allowance: quotes and new
+triage costs consume it without counting prior main spend again or overwriting
+the total ceiling. A legacy unactivated scan can establish a ceiling of its
+known prior spend plus the explicitly supplied remaining allowance. Triage's
+artifact contains only its own delta; the shared receipt contains both phases.
+Disabled and cached triage returns perform no admission. A lost acknowledgement
+retains its hold and blocks another cold paid invocation.
+
+Finite `web_search` binds the same real scan owner. Missing global hooks can be
+recovered with local `ReportUsageHooks` tied to that owner; no independent model
+allowance is created. Its exact search ID is authorized once after client setup
+and immediately before POST. Missing, stale, closed, deleted-stamp or consumed
+financial authority makes zero POSTs and does not release uncertain allowances.
+Uncapped search retains its existing behavior.
+
 On POSIX, the implementation verifies directory handles, rejects symlinks and
 unsafe ownership/permissions, uses exclusive private regular files, keeps the
 owner lock stable, and requires file flush plus directory fsync around atomic
@@ -52,7 +83,8 @@ loss guarantees for every remote or removable filesystem.
 
 The Windows backend preserves native finite-run capability with qualified
 Win32 handles: no reparse traversal, held directory handles, owner/ACL checks,
-private creation, `LockFileEx`, file flush and atomic `ReplaceFileW` document
+private creation, rejection of foreign directory mutation rights (including
+`FILE_DELETE_CHILD`), `LockFileEx`, file flush and atomic `ReplaceFileW` document
 replacement. Ownership accepts the current token user or that process's
 Administrators default owner, while rejecting unprivileged shared group owners;
 Windows assigns new objects their token's
@@ -65,7 +97,7 @@ Native Windows kill/restart, lock, reparse and stale-writer execution remains a
 separate qualification gate; macOS execution does not prove Windows behavior.
 
 The additive field is ignored by the actual pinned consumer `86537799` and
-current consumer `90e24eb9` parsers for schema 1.0, 1.1 and 1.2 (six offline
+current consumer `28bf8be4` parsers for schema 1.0, 1.1 and 1.2 (six offline
 compatibility controls). Their normalized records are not this journal's
 financial authority and must never be used to reconstruct a paid resume.
 Worker workspace replacement, retries and stalled delivery require their own
