@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from lyrashield.artifacts import financial_io
+from lyrashield.artifacts.financial_io import FinancialDirectory
 from lyrashield.artifacts.finite_budget import STAMP, BudgetJournal, FinancialStateError
 from lyrashield.artifacts.state_persistence import initial_run_record
 from lyrashield.artifacts.writer import read_run_record, write_run_record
@@ -103,3 +105,60 @@ def test_native_windows_directory_delete_child_ace_is_rejected(tmp_path):
     with pytest.raises(FinancialStateError):
         BudgetJournal(tmp_path, record, 1)
     assert (tmp_path / STAMP).exists()
+
+
+@pytest.mark.parametrize("kind", ["hardlink", "wide-acl"])
+def test_native_windows_preplanted_coordination_file_is_refused_without_mutation(tmp_path, kind):
+    directory = FinancialDirectory(tmp_path)
+    victim = tmp_path / "victim"
+    fd = directory.open("victim", create=True, private=True)
+    try:
+        os.write(fd, b"retained native victim bytes")
+    finally:
+        os.close(fd)
+    directory.close()
+    path = tmp_path / ".finite-budget-transition"
+    if kind == "hardlink":
+        os.link(victim, path)
+    else:
+        directory = FinancialDirectory(tmp_path)
+        fd = directory.open(path.name, create=True, private=True)
+        try:
+            os.write(fd, b"retained native victim bytes")
+        finally:
+            os.close(fd)
+        directory.close()
+        _grant(path, "F")
+    before = path.read_bytes(), path.stat().st_nlink
+    with pytest.raises((FinancialStateError, OSError)):
+        BudgetJournal(tmp_path, initial_run_record("preplanted-native", auth_mode="api"), 1)
+    assert (path.read_bytes(), path.stat().st_nlink) == before
+    assert victim.read_bytes() == b"retained native victim bytes"
+    assert not (tmp_path / STAMP).exists()
+    if kind == "wide-acl":
+        directory = FinancialDirectory(tmp_path)
+        try:
+            with pytest.raises(OSError):
+                directory.open(path.name, private=True)
+        finally:
+            directory.close()
+
+
+def test_native_windows_actual_acquired_coordination_handle_rechecks_acl(tmp_path, monkeypatch):
+    capture = financial_io._capture_transition_fd
+    path = tmp_path / ".finite-budget-transition"
+
+    def broaden_acquired_handle(fd):
+        _grant(path, "F")
+        capture(fd)
+
+    monkeypatch.setattr(financial_io, "_capture_transition_fd", broaden_acquired_handle)
+    with pytest.raises((FinancialStateError, OSError)):
+        BudgetJournal(tmp_path, initial_run_record("native-acquired-fd", auth_mode="api"), 1)
+    assert not (tmp_path / STAMP).exists()
+    directory = financial_io.FinancialDirectory(tmp_path)
+    try:
+        with pytest.raises(OSError):
+            directory.open(path.name, private=True)
+    finally:
+        directory.close()

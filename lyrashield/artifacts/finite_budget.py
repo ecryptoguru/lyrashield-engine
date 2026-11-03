@@ -104,7 +104,7 @@ class BudgetJournal:
         self._directory: FinancialDirectory | None = None
         try:
             self._directory = FinancialDirectory(self.path, create=True)
-            with transition_lock(self.path):
+            with transition_lock(self.path, financial=True):
                 existing = self._directory.read("run.json", MAX_RECORD_BYTES)
                 current = _decode(existing) if existing is not None else copy.deepcopy(record)
                 try:
@@ -252,12 +252,14 @@ class BudgetJournal:
         for observed in observations:
             if (
                 not isinstance(observed, dict)
-                or set(observed) != {"key", "cost_units", "settled"}
+                or set(observed)
+                not in ({"key", "cost_units", "settled"}, {"key", "floor_credit_units", "settled"})
                 or not isinstance(observed["key"], str)
                 or len(observed["key"]) != 64
                 or any(c not in "0123456789abcdef" for c in observed["key"])
                 or observed["key"] in seen
-                or not _integer(observed["cost_units"])
+                or not _integer(observed.get("floor_credit_units", observed.get("cost_units")))
+                or observed.get("floor_credit_units", 0) > guard["known_floor_units"]
                 or type(observed["settled"]) is not bool
             ):
                 raise FinancialStateError("invalid observed receipt")
@@ -412,7 +414,9 @@ class BudgetJournal:
                 )
                 if matched is None or matched["settled"]:
                     raise FinancialStateError("observed response is missing or already settled")
-                credit = matched["cost_units"]
+                # Older receipts did not attribute their actual floor increment.
+                # They cannot prove any credit against this settlement.
+                credit = matched.get("floor_credit_units", 0)
                 matched["settled"] = True
             guard["known_floor_units"] = max(
                 guard["known_floor_units"] + max(0, _units(actual) - credit),
@@ -439,6 +443,8 @@ class BudgetJournal:
             current = self._current()
             if record.get(GUARD) != current[GUARD]:
                 raise FinancialStateError("stale financial checkpoint")
+            prior_floor = current[GUARD]["known_floor_units"]
+            new_observation = None
             if observed is not None:
                 entries = current[GUARD].setdefault("observations", [])
                 if any(entry["key"] == observed[0] for entry in entries):
@@ -446,9 +452,8 @@ class BudgetJournal:
                 if len(entries) >= MAX_PENDING:
                     self._poisoned = True
                     raise FinancialStateError("observed receipt capacity exceeded")
-                entries.append(
-                    {"key": observed[0], "cost_units": _units(observed[1]), "settled": False}
-                )
+                new_observation = {"key": observed[0], "floor_credit_units": 0, "settled": False}
+                entries.append(new_observation)
             if settled_observation is not None:
                 for entry in current[GUARD].get("observations", []):
                     if entry["key"] == settled_observation:
@@ -460,6 +465,10 @@ class BudgetJournal:
                 current[GUARD]["known_floor_units"],
                 _units(float(current.get("llm_usage", {}).get("cost") or 0)),
             )
+            if new_observation is not None and observed is not None:
+                new_observation["floor_credit_units"] = min(
+                    _units(observed[1]), current[GUARD]["known_floor_units"] - prior_floor
+                )
             current[GUARD]["usage_sha256"] = _hash_usage(current)
             current[GUARD]["revision"] += 1
             self._commit(current)
@@ -538,7 +547,7 @@ def active_journal(run_dir: Path) -> BudgetJournal | None:
 def own_journal(run_dir: Path, record: dict[str, Any], limit: float | None) -> BudgetJournal:
     directory = FinancialDirectory(run_dir, create=True)
     directory.close()
-    with transition_lock(run_dir), _owners_lock:
+    with transition_lock(run_dir, financial=True), _owners_lock:
         owner = active_journal(run_dir)
         if owner is None:
             owner = BudgetJournal(run_dir, record, limit)

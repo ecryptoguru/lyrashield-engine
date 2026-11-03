@@ -25,7 +25,7 @@ this is not tamper-proof remote billing storage.
 | `limit_units`, `known_floor_units` | Nonnegative integer USD units of `10^-10`; quotes round up and limits round down. The known floor remains separate from the verified public token ledger. |
 | `usage_sha256` | Hash of the protected public `llm_usage` and `web_search_usage` fields. |
 | `pending` | At most 64 exact `{id, quote_units, kind}` entries; kind is `llm` or `search`. |
-| `observations` (optional) | At most 64 private `{key, cost_units, settled}` callback receipts. `key` hashes the run-scoped provider response ID. Old guards without this field remain readable. Capacity exhaustion fails closed; identities are never silently discarded. |
+| `observations` (optional) | At most 64 private `{key, floor_credit_units, settled}` callback receipts. `key` hashes the run-scoped provider response ID. Old guards without this field and older un-attributed callback receipts remain readable. Capacity exhaustion fails closed; identities are never silently discarded. |
 
 The private guard is limited to 16 KiB and the complete financial snapshot to
 1 MiB, matching the existing worker raw receipt read bound. Invalid numbers,
@@ -43,7 +43,9 @@ no-follow parents, before hydration or initialization can create them.
 
 Known settlement ratchets its floor to the larger of prior floor plus the new
 known upper-cost delta and the resulting cumulative public ledger. A matching
-observed callback is credited once before SDK settlement; it does not remove a
+observed callback offsets only the incremental floor units that its commit
+actually added (zero, partial, or full credit), preserving prior conservative
+spend. Older receipts without attribution cannot waive a new charge; it does not remove a
 pending ID. Duplicate callbacks, failed later projections and fresh-process
 restore preserve that identity. Only the matching owned attempt can settle a
 hold. The private observation bound prevents unbounded response history.
@@ -93,6 +95,8 @@ OS-crash or power-loss namespace ordering. Microsoft documents that
 [`REPLACEFILE_WRITE_THROUGH` is unsupported](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew).
 The owner reads the locked activation range through its original handle because
 [another handle cannot access that exclusive range](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex).
+Native macOS extended-ACL qualification remains pending: mode-bit checks alone
+do not qualify those grants. Promotion is held for that bounded correction.
 Native Windows kill/restart, lock, reparse and stale-writer execution remains a
 separate qualification gate; macOS execution does not prove Windows behavior.
 

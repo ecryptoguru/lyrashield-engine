@@ -322,6 +322,21 @@ class WindowsDirectory:
                 self.kernel.LocalFree(sid)
             self.kernel.LocalFree(descriptor)
 
+    def qualify_fd(self, fd: int, *, private: bool) -> None:
+        """Check the actual native lock handle after acquisition."""
+        import msvcrt
+
+        handle = cast("Any", msvcrt).get_osfhandle(fd)
+        information = (wintypes.DWORD * 2)()
+        self._check(
+            self.kernel.GetFileInformationByHandleEx(
+                handle, 9, information, ctypes.sizeof(information)
+            )
+        )
+        if information[0] & 0x410:
+            raise OSError("financial transition handle is a reparse point or directory")
+        self._check_acl(handle, private=private)
+
     def open(self, name: str, *, create: bool, private: bool) -> int:
         import msvcrt
 

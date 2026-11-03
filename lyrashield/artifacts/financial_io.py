@@ -6,6 +6,7 @@ import contextlib
 import os
 import stat
 from collections.abc import Iterator
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -82,6 +83,27 @@ class FinancialDirectory:
         else:
             return fd
 
+    def qualify_locked_handle(self, name: str, fd: int, expected_fd: int) -> None:
+        """Qualify the held descriptor, not only a pre-lock pathname probe."""
+        actual = os.fstat(fd)
+        if not stat.S_ISREG(actual.st_mode) or actual.st_nlink != 1:
+            raise OSError("financial transition is not a single regular file")
+        if self._windows is not None:
+            self._windows.qualify_fd(fd, private=True)
+        elif actual.st_uid != os.getuid() or actual.st_mode & 0o077:
+            raise OSError("financial transition is not owned and private")
+        named_fd = self.open(name, private=True)
+        try:
+            expected, named = os.fstat(expected_fd), os.fstat(named_fd)
+            identity = (actual.st_dev, actual.st_ino)
+            if identity != (expected.st_dev, expected.st_ino) or identity != (
+                named.st_dev,
+                named.st_ino,
+            ):
+                raise OSError("financial transition handle identity changed")
+        finally:
+            os.close(named_fd)
+
     def read(self, name: str, maximum: int, *, private: bool = False) -> bytes | None:
         try:
             fd = self.open(name, private=private)
@@ -147,28 +169,64 @@ class FinancialDirectory:
             self._fd = -1
 
 
+_TRANSITION_NAME = ".finite-budget-transition"
+_transition_capture: ContextVar[int | None] = ContextVar("financial_transition_fd", default=None)
+_transition_handles: ContextVar[dict[str, int] | None] = ContextVar(
+    "financial_transition_handles", default=None
+)
+
+
+def _capture_transition_fd(fd: int) -> None:
+    """FileLock's public hook exposes the actual acquired native descriptor."""
+    _transition_capture.set(fd)
+
+
 @contextlib.contextmanager
 def transition_lock(path: Path, *, financial: bool = False) -> Iterator[None]:
-    """Serialize first activation with final legacy writes, restores and unlinks.
-
-    A legacy path retains its normal permissions; paid activation separately
-    validates no-follow ownership before ever entering this lock. The native
-    lock preserves its inode/path and cannot fall back to existence-only locks.
-    """
+    """Serialize cutover without altering an existing coordination inode."""
     directory = FinancialDirectory(path, create=True) if financial else None
-    if directory is None:
-        path.mkdir(parents=True, exist_ok=True)
-    lock = FileLock(
-        str(path.absolute() / ".finite-budget-transition"),
-        timeout=10,
-        mode=0o600,
-        is_singleton=True,
-        preserve_lock_file=True,
-        fallback_to_soft=False,
-    )
+    expected_fd = -1
     try:
+        if directory is not None:
+            try:
+                expected_fd = directory.open(_TRANSITION_NAME, private=True)
+            except FileNotFoundError:
+                expected_fd = directory.open(_TRANSITION_NAME, create=True, private=True)
+        else:
+            path.mkdir(parents=True, exist_ok=True)
+            if os.name != "nt":
+                # FileLock's default mode never chmods an existing file. Create
+                # only our missing POSIX inode privately; never truncate it.
+                flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK
+                try:
+                    created = os.open(path / _TRANSITION_NAME, flags, 0o600)
+                except FileExistsError:
+                    pass
+                else:
+                    os.close(created)
+        key = str(path.absolute() / _TRANSITION_NAME)
+        lock = FileLock(
+            key,
+            timeout=10,
+            is_singleton=True,
+            preserve_lock_file=True,
+            fallback_to_soft=False,
+            on_acquired=_capture_transition_fd,
+        )
         with lock:
-            yield
+            handles = _transition_handles.get() or {}
+            acquired_fd = _transition_capture.get() if lock.lock_counter == 1 else handles.get(key)
+            if acquired_fd is None:
+                raise OSError("financial transition has no acquired native handle")
+            token = _transition_handles.set({**handles, key: acquired_fd})
+            try:
+                if directory is not None:
+                    directory.qualify_locked_handle(_TRANSITION_NAME, acquired_fd, expected_fd)
+                yield
+            finally:
+                _transition_handles.reset(token)
     finally:
+        if expected_fd >= 0:
+            os.close(expected_fd)
         if directory is not None:
             directory.close()
