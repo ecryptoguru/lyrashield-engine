@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import stat
+import sys
 from collections.abc import Iterator
 from contextvars import ContextVar
 from pathlib import Path
@@ -16,6 +17,13 @@ from filelock import FileLock
 if TYPE_CHECKING:
     from lyrashield.artifacts.financial_windows import WindowsDirectory
 from uuid import uuid4
+
+
+def _qualify_posix_acl(fd: int, *, private: bool = False) -> None:
+    if sys.platform == "darwin":
+        from lyrashield.artifacts.financial_macos import qualify_acl
+
+        qualify_acl(fd, private=private)
 
 
 class FinancialDirectory:
@@ -33,6 +41,7 @@ class FinancialDirectory:
         self._windows = None
         fd = os.open(self.path.anchor, os.O_RDONLY | os.O_DIRECTORY)
         try:
+            _qualify_posix_acl(fd)
             for part in self.path.parts[1:]:
                 try:
                     next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
@@ -45,6 +54,7 @@ class FinancialDirectory:
                     next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                 os.close(fd)
                 fd = next_fd
+                _qualify_posix_acl(fd)
                 info = os.fstat(fd)
                 if info.st_mode & 0o022 and not (info.st_mode & stat.S_ISVTX):
                     raise OSError("financial parent is writable by others")  # noqa: TRY301 - release verified handles before propagating failure
@@ -56,7 +66,25 @@ class FinancialDirectory:
             os.close(fd)
             raise
 
+    def verify_current_path(self) -> None:
+        """A detached POSIX owner must not send or mutate its old namespace.
+
+        Rewalk every ancestor without following aliases and requalify its ACL.
+        This is a last-check guarantee, not protection against privileged changes
+        after the check or an administrator rolling back the entire directory.
+        Windows holds all ancestors against rename in its native backend.
+        """
+        if self._windows is not None:
+            return
+        current = FinancialDirectory(self.path)
+        try:
+            if not os.path.samestat(os.fstat(self._fd), os.fstat(current._fd)):
+                raise OSError("financial run directory identity changed")
+        finally:
+            current.close()
+
     def open(self, name: str, *, create: bool = False, private: bool = False) -> int:
+        self.verify_current_path()
         if self._windows is not None:
             fd = self._windows.open(name, create=create, private=private)
             info = os.fstat(fd)
@@ -69,6 +97,7 @@ class FinancialDirectory:
             flags |= os.O_CREAT | os.O_EXCL
         fd = os.open(name, flags, 0o600, dir_fd=self._fd)
         try:
+            _qualify_posix_acl(fd, private=private)
             info = os.fstat(fd)
             if (
                 not stat.S_ISREG(info.st_mode)
@@ -92,6 +121,8 @@ class FinancialDirectory:
             self._windows.qualify_fd(fd, private=True)
         elif actual.st_uid != os.getuid() or actual.st_mode & 0o077:
             raise OSError("financial transition is not owned and private")
+        if self._windows is None:
+            _qualify_posix_acl(fd, private=True)
         named_fd = self.open(name, private=True)
         try:
             expected, named = os.fstat(expected_fd), os.fstat(named_fd)
@@ -125,6 +156,7 @@ class FinancialDirectory:
         # Windows has no POSIX directory-fsync promise. Its backend qualifies
         # process-death atomic replacement, not OS/power-loss namespace ordering.
         if self._windows is None:
+            self.verify_current_path()
             os.fsync(self._fd)
 
     def replace(self, name: str, payload: bytes) -> None:
@@ -142,6 +174,7 @@ class FinancialDirectory:
             finally:
                 os.close(fd)
             if self._windows is None:
+                self.verify_current_path()
                 os.replace(temporary, name, src_dir_fd=self._fd, dst_dir_fd=self._fd)
             else:
                 self._windows.replace(temporary, name)

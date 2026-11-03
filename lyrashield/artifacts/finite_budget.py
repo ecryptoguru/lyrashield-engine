@@ -119,6 +119,7 @@ class BudgetJournal:
                     fresh = True
                 self._directory.lock(self._stamp_fd)
                 if fresh:
+                    self._directory.verify_current_path()
                     stamp = {"v": 1, "run_id": current.get("run_id"), "epoch": uuid4().hex}
                     view = memoryview(_encoded(stamp))
                     while view:
