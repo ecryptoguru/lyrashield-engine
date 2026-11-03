@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from agents.usage import Usage
 
-from lyrashield.artifacts import evidence
+from lyrashield.artifacts import evidence, writer
 from lyrashield.artifacts import state as state_module
 from lyrashield.artifacts.dedupe import _prepare_report_for_comparison
 from lyrashield.artifacts.finite_budget import GUARD
@@ -459,3 +459,29 @@ async def test_pending_http_rollback_cannot_erase_interleaved_financial_settleme
     assert current["llm_usage"]["total_tokens"] == 9
     assert len(current[GUARD]["pending"]) == 1
     assert pending_state.run_record[GUARD] == current[GUARD]
+
+
+@pytest.mark.parametrize("text_newline", ["\r\n", "\n"])
+async def test_export_digest_matches_exact_bytes_with_platform_text_newlines(
+    pending_state, monkeypatch, text_newline
+):
+    original = writer.tempfile.NamedTemporaryFile
+
+    def platform_text_file(*args, **kwargs):
+        if kwargs.get("mode") == "w":
+            kwargs["newline"] = text_newline
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(writer.tempfile, "NamedTemporaryFile", platform_text_file)
+    file_claim(pending_state, ["17"])
+    captured = exchange()
+    captured.request.path = "/café"
+    outcome = await pending_state.reconcile_http_exchange_evidence(Client({"17": captured}))
+    payload = (pending_state.get_run_dir() / evidence.HTTP_EXCHANGES_FILENAME).read_bytes()
+    assert "café" in payload.decode("utf-8")
+    assert outcome["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert b"\r\n" not in payload
+    assert pending_state.vulnerability_reports[0]["http_exchange_ids"] == ["17"]
+    assert not pending_state.vulnerability_reports[0].get("pending_http_exchange_ids")
+    manifest = pending_state.run_record["result_manifest"]
+    evidence.verify_result_manifest(pending_state.get_run_dir(), manifest)

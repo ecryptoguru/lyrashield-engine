@@ -37,7 +37,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
-from lyrashield.artifacts.writer import _atomic_write_text
+from lyrashield.artifacts.writer import _atomic_write_bytes, _atomic_write_text
 from lyrashield.utils.redaction import is_sensitive_key, redact_text, redact_url
 from strix.core.paths import runtime_state_dir
 
@@ -898,7 +898,6 @@ async def export_http_exchange_evidence(
             "exchanges": 0,
             "missing_request_ids": requested_ids,
         }
-    payload = payload_bytes.decode("utf-8")
     entries = document["exchanges"]
     missing = document.get("missing_request_ids", [])
     truncated = document.get("truncated")
@@ -906,7 +905,7 @@ async def export_http_exchange_evidence(
         truncated_ids = truncated.get("omitted_request_ids", [])
 
     try:
-        _atomic_write_text(run_dir / HTTP_EXCHANGES_FILENAME, payload)
+        _atomic_write_bytes(run_dir / HTTP_EXCHANGES_FILENAME, payload_bytes)
     except (OSError, RuntimeError) as exc:
         logger.exception("http evidence export write failed")
         return {
@@ -927,7 +926,7 @@ async def export_http_exchange_evidence(
         "status": status,
         "exchanges": len(entries),
         "artifact": HTTP_EXCHANGES_FILENAME,
-        "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        "sha256": hashlib.sha256(payload_bytes).hexdigest(),
     }
     if missing:
         outcome["missing_request_ids"] = missing
