@@ -2,6 +2,7 @@
 """Verify a two-platform image index is composed of the qualified child manifests."""
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -18,6 +19,44 @@ MANIFEST_TYPES = {
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
 }
+
+
+def created_descriptor(metadata):
+    descriptor = metadata.get("containerimage.descriptor") if isinstance(metadata, dict) else None
+    if (
+        not isinstance(descriptor, dict)
+        or not isinstance(descriptor.get("mediaType"), str)
+        or descriptor.get("mediaType") not in INDEX_TYPES
+        or not isinstance(descriptor.get("digest"), str)
+        or not DIGEST.fullmatch(descriptor["digest"])
+        or not isinstance(descriptor.get("size"), int)
+        or isinstance(descriptor["size"], bool)
+        or not 0 < descriptor["size"] <= 65536
+        or metadata.get("containerimage.digest", descriptor["digest"]) != descriptor["digest"]
+    ):
+        raise ValueError("invalid imagetools create descriptor")
+    return descriptor
+
+
+def bound_index(raw, expected_digest, descriptor=None):
+    if not raw or len(raw) > 65537:
+        raise ValueError("registry index bytes exceed bounds")
+    if not isinstance(expected_digest, str) or not DIGEST.fullmatch(expected_digest):
+        raise ValueError("invalid expected index digest")
+    # Buildx --raw can append one LF; never reserialize or normalize its bytes.
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != expected_digest:
+        if raw.endswith(b"\n"):
+            raw = raw[:-1]
+        if "sha256:" + hashlib.sha256(raw).hexdigest() != expected_digest:
+            raise ValueError("registry index bytes do not match their digest")
+    index = json.loads(raw)
+    if not isinstance(index, dict):
+        raise ValueError("expected a registry index object")  # noqa: TRY004 - invalid index data
+    if descriptor is not None and (
+        len(raw) != descriptor["size"] or index.get("mediaType") != descriptor["mediaType"]
+    ):
+        raise ValueError("registry index does not match create descriptor")
+    return index
 
 
 def platform_manifests(index):
@@ -106,12 +145,15 @@ def main():
     parser.add_argument("amd64", type=Path)
     parser.add_argument("arm64", type=Path)
     parser.add_argument("combined", type=Path)
+    parser.add_argument("--amd64-digest", required=True)
+    parser.add_argument("--arm64-digest", required=True)
+    parser.add_argument("--metadata", required=True, type=Path)
     args = parser.parse_args()
+    descriptor = created_descriptor(json.loads(args.metadata.read_bytes()))
     expected = verify(
-        *(
-            json.loads(path.read_text(encoding="utf8"))
-            for path in (args.amd64, args.arm64, args.combined)
-        )
+        bound_index(args.amd64.read_bytes(), args.amd64_digest),
+        bound_index(args.arm64.read_bytes(), args.arm64_digest),
+        bound_index(args.combined.read_bytes(), descriptor["digest"], descriptor),
     )
     sys.stdout.write(json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n")
 

@@ -1,6 +1,12 @@
 """Causal gates for native sandbox assembly and immutable runtime binding."""
 
+import hashlib
+import json
+import os
 import runpy
+import shutil
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -192,3 +198,181 @@ def test_native_workflow_binds_source_and_cannot_promote_before_qualification():
             ] = "echo unsafe"
         with pytest.raises((AssertionError, ValueError)):
             assert_workflow_contract(altered)
+
+
+def run_publisher_step(tmp_path, name, drift=""):
+    """Run the real shell/helper; only registry operations use a local CLI fixture."""
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    payloads = {
+        "amd64": json.dumps(index(descriptor("amd64", "a"))).encode(),
+        "arm64": json.dumps(index(descriptor("arm64", "b"))).encode(),
+        "combined": json.dumps(index(descriptor("amd64", "a"), descriptor("arm64", "b"))).encode(),
+    }
+    digests = {key: "sha256:" + hashlib.sha256(raw).hexdigest() for key, raw in payloads.items()}
+    for arch in ("amd64", "arm64"):
+        (evidence / arch).mkdir()
+        (evidence / arch / "digest").write_text(digests[arch])
+    metadata = {
+        "containerimage.descriptor": {
+            "mediaType": MEDIA,
+            "digest": digests["combined"],
+            "size": len(payloads["combined"]),
+        },
+        "image.name": "ghcr.io/fixture/sandbox",
+    }
+    # Exact `--format '{{json .Manifest}}'` shape: digest/size are added fields,
+    # unlike --raw registry bytes and unlike imagetools-create metadata.
+    formatted = {**json.loads(payloads["combined"]), **metadata["containerimage.descriptor"]}
+    descriptor_changes = {
+        "zero_size": ("size", 0),
+        "negative_size": ("size", -1),
+        "bool_size": ("size", True),
+        "wrong_size": ("size", 1),
+        "size_shape": ("size", "123"),
+        "wrong_media": ("mediaType", "application/json"),
+        "media_type_shape": ("mediaType", []),
+        "digest_shape": ("digest", [digests["combined"]]),
+        "malformed_digest": ("digest", "not-a-digest"),
+    }
+    if drift == "appended_lf":
+        payloads = {key: raw + b"\n" for key, raw in payloads.items()}
+    elif drift == "native_bytes":
+        payloads["amd64"] += b"\n\n"
+    elif drift == "combined_bytes":
+        payloads["combined"] += b"\n\n"
+    elif drift == "formatted_as_raw":
+        payloads["combined"] = json.dumps(formatted).encode()
+    elif drift == "legacy_metadata":
+        metadata = {"containerimage.digest": digests["combined"]}
+    elif drift == "conflicting_legacy":
+        metadata["containerimage.digest"] = "sha256:" + "f" * 64
+    elif drift in descriptor_changes:
+        field, value = descriptor_changes[drift]
+        metadata["containerimage.descriptor"][field] = value
+    elif drift == "descriptor_shape":
+        metadata["containerimage.descriptor"] = []
+    elif drift == "promoted_digest":
+        formatted["digest"] = "sha256:" + "f" * 64
+    registry = {
+        "digests": digests,
+        "metadata": metadata,
+        "formatted": formatted,
+        "payloads": {key: raw.decode() for key, raw in payloads.items()},
+    }
+    (tmp_path / "registry.json").write_text(json.dumps(registry))
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copy(ROOT / "scripts/verify_sandbox_platform_index.py", scripts)
+    docker = tmp_path / "docker"
+    docker.write_text(
+        f"#!{sys.executable}\n"
+        r"""
+import json, pathlib, sys
+p=pathlib.Path.cwd(); s=json.loads((p/'registry.json').read_text()); a=sys.argv[1:]
+assert a[:2]==['buildx','imagetools'],a
+image='ghcr.io/fixture/sandbox'
+if a[2]=='create':
+    if '--metadata-file' in a:
+        assert a[a.index('--tag')+1]==image+':candidate-index-42-1'
+        assert a[-2:]==[image+'@'+s['digests']['amd64'],image+'@'+s['digests']['arm64']]
+        pathlib.Path(a[a.index('--metadata-file')+1]).write_text(json.dumps(s['metadata']))
+    else:
+        assert a[-1]==image+'@'+s['digests']['combined']
+elif a[2]=='inspect':
+    if '--raw' in a:
+        key=next(k for k,v in s['digests'].items() if a[3]==image+'@'+v)
+        sys.stdout.write(s['payloads'][key])
+    else:
+        assert a[3] in [image+':sandbox-v-test',image+':'+'e'*40]
+        assert a[4:]==['--format','{{json .Manifest}}'],a
+        print(json.dumps(s['formatted']))
+else: raise AssertionError(a)
+"""
+    )
+    docker.chmod(0o700)
+    output = tmp_path / "output"
+    output.write_text("")
+    workflow = yaml.safe_load((ROOT / ".github/workflows/publish-sandbox.yml").read_text())
+    code = next(
+        step["run"] for step in workflow["jobs"]["publish"]["steps"] if step.get("name") == name
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+    result = subprocess.run(  # noqa: S603 - exact repository shell with private fake registry CLI
+        [bash, "-e", "-c", code],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+            "REGISTRY": "ghcr.io",
+            "IMAGE_NAME": "fixture/sandbox",
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_SHA": "d" * 40,
+            "GITHUB_OUTPUT": str(output),
+            "RUNTIME_REVISION": "e" * 40,
+            "ENGINE_CI_RUN": "500",
+            "ENGINE_CI_ATTEMPT": "2",
+            "RELEASE_TAG": "sandbox-v-test",
+            "DIGEST": digests["combined"],
+        },
+    )
+    return result, output.read_text(), evidence, digests
+
+
+@pytest.mark.parametrize("drift", ["", "appended_lf"])
+def test_assembly_accepts_imagetools_create_descriptor_metadata(tmp_path, drift):
+    result, output, evidence, digests = run_publisher_step(
+        tmp_path, "Assemble and verify qualified platform index", drift
+    )
+    assert result.returncode == 0, result.stderr
+    assert output == f"digest={digests['combined']}\n"
+    assert (
+        json.loads((evidence / "qualification.json").read_text())["indexDigest"]
+        == digests["combined"]
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "native_bytes",
+        "combined_bytes",
+        "formatted_as_raw",
+        "legacy_metadata",
+        "conflicting_legacy",
+        "zero_size",
+        "negative_size",
+        "bool_size",
+        "wrong_size",
+        "wrong_media",
+        "malformed_digest",
+        "media_type_shape",
+        "digest_shape",
+        "size_shape",
+        "descriptor_shape",
+    ],
+)
+def test_assembly_rejects_unbound_registry_bytes_and_invalid_create_metadata(tmp_path, drift):
+    result, output, evidence, _ = run_publisher_step(
+        tmp_path, "Assemble and verify qualified platform index", drift
+    )
+    assert result.returncode != 0
+    assert output == ""
+    assert not (evidence / "qualification.json").exists()
+
+
+def test_promotion_reads_documented_formatted_manifest_digest(tmp_path):
+    result, _, _, _ = run_publisher_step(tmp_path, "Promote the smoke-qualified digest")
+    assert result.returncode == 0, result.stderr
+
+
+def test_promotion_refuses_changed_formatted_tag_digest(tmp_path):
+    result, _, _, _ = run_publisher_step(
+        tmp_path, "Promote the smoke-qualified digest", "promoted_digest"
+    )
+    assert result.returncode != 0
