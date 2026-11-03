@@ -149,17 +149,44 @@ test("hung terminal transcript has a finite deadline and can be retried", { time
   for (const route of held) await route.abort().catch(() => {});
 }));
 test("terminal findings and report retry separately without blocking agent data", { timeout: 20000 }, async () => fixture(async (page, url) => {
-  let findingsFailed = true, reportFailed = true;
-  await page.route("**/api/run*", async route => { const response = await route.fetch({ maxRetries: 2 }); await route.fulfill({ json: { ...await response.json(), finished: true, status: "completed" } }); });
-  await page.route("**/api/vulnerabilities*", route => findingsFailed ? route.fulfill({ status: 500, json: {} }) : route.continue());
-  await page.route("**/api/report*", route => reportFailed ? route.fulfill({ status: 500, json: {} }) : route.continue());
+  const summary = Promise.withResolvers();
+  await page.addInitScript(() => document.addEventListener("click", event => {
+    const button = event.target instanceof Element ? event.target.closest("button") : null;
+    if (button?.getAttribute("aria-label") === "Retry findings") document.documentElement.dataset.fixtureFindingsRetried = "true";
+    if (button?.textContent?.trim() === "Retry" && button.closest('[role="alert"]')?.textContent?.includes("The report could not be loaded")) document.documentElement.dataset.fixtureReportRetried = "true";
+  }, true));
+  await page.route("**/api/run", async route => {
+    await summary.promise;
+    const response = await route.fetch({ maxRetries: 2 });
+    await route.fulfill({ json: { ...await response.json(), finished: true, status: "completed" } });
+  });
+  const retryRoute = (resource, marker) => page.route(`**/api/${resource}*`, async route => {
+    if (await page.locator("html").getAttribute(marker) === "true") await route.continue();
+    else await route.fulfill({ status: 500, json: {} });
+  });
+  await retryRoute("vulnerabilities", "data-fixture-findings-retried");
+  await retryRoute("report", "data-fixture-report-retried");
+  const responseFor = (resource, status) => page.waitForResponse(response =>
+    new URL(response.url()).pathname === `/api/${resource}` && response.status() === status);
+  const failedReads = () => Promise.all([responseFor("vulnerabilities", 500), responseFor("report", 500)]);
+  const initial = failedReads();
   await page.goto(url);
-  await page.getByRole("alert").filter({ hasText: "Findings could not be loaded" }).waitFor();
-  const reportAlert = page.getByRole("alert").filter({ hasText: "The report could not be loaded" }); await reportAlert.waitFor();
-  findingsFailed = false; await page.getByRole("button", { name: "Retry findings", exact: true }).click();
-  await page.getByRole("alert").filter({ hasText: "Findings could not be loaded" }).waitFor({ state: "hidden" });
+  await initial;
+  // Completion triggers fresh reads while both retries still belong to the user.
+  const terminal = failedReads();
+  summary.resolve();
+  await terminal;
+  const findingsAlert = page.getByRole("alert").filter({ hasText: "Findings could not be loaded" });
+  const reportAlert = page.getByRole("alert").filter({ hasText: "The report could not be loaded" });
+  await findingsAlert.waitFor(); await reportAlert.waitFor();
+  const findingsRecovered = responseFor("vulnerabilities", 200);
+  await findingsAlert.getByRole("button", { name: "Retry findings", exact: true }).click();
+  await findingsRecovered;
+  await findingsAlert.waitFor({ state: "hidden" });
   assert.equal(await reportAlert.isVisible(), true);
-  reportFailed = false; await reportAlert.getByRole("button", { name: "Retry", exact: true }).click();
+  const reportRecovered = responseFor("report", 200);
+  await reportAlert.getByRole("button", { name: "Retry", exact: true }).click();
+  await reportRecovered;
   await reportAlert.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: /^Agents/ }).click(); await page.getByRole("heading", { name: "Agent graph" }).waitFor();
 }));
