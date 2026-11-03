@@ -2,8 +2,8 @@
 
 A finite run persists its admission before a supported physical provider POST.
 An accepted request with no known charge keeps a pending admission across process
-termination and fresh-process resume. A decoded known charge updates verified
-usage and removes its exact pending ID in one financial snapshot before report
+termination and fresh-process resume. Complete terminal usage updates the known
+usage ledger and removes its exact pending ID in one financial snapshot before report
 projections or awaited auxiliary cleanup. An increase in the limit does not clear
 pending charges. Paid resume with pending charges is denied; read-only receipt
 and report viewing remains available.
@@ -49,6 +49,10 @@ spend. Older receipts without attribution cannot waive a new charge; it does not
 pending ID. Duplicate callbacks, failed later projections and fresh-process
 restore preserve that identity. Only the matching owned attempt can settle a
 hold. The private observation bound prevents unbounded response history.
+These optional separately observed non-metered LiteLLM costs are not a lifetime
+64-call limit on the ordinary native OpenAI/Azure route. Known GPT-6 rate-card
+settlements do not accumulate these identities; a real 65-call native control
+preserved admission and known spend without filling the observation set.
 
 Interactive finite preflight owns the selected fresh or resumed run immediately.
 Known probe usage is persisted before return to the UI. CLI and TUI reuse that
@@ -80,7 +84,14 @@ Uncapped search retains its existing behavior.
 On POSIX, the implementation verifies directory handles, rejects symlinks and
 unsafe ownership/permissions, uses exclusive private regular files, keeps the
 owner lock stable, and requires file flush plus directory fsync around atomic
-replacement. A failure poisons that process owner. This does not qualify power
+replacement. It rewalks the no-follow path before financial I/O so an owner
+detached by a run-directory or ancestor rename cannot authorize against its old
+handle. macOS extended ACLs are qualified through actual held descriptors:
+foreign mutation grants and foreign private-file access are refused, while
+deny-only ACLs and trusted current-owner/root grants remain valid. The acquired
+transition-lock descriptor is checked against its preopened and current-path
+identities without silently changing an existing file's permissions.
+A failure poisons that process owner. This does not qualify power
 loss guarantees for every remote or removable filesystem.
 
 The Windows backend preserves native finite-run capability with qualified
@@ -95,13 +106,13 @@ OS-crash or power-loss namespace ordering. Microsoft documents that
 [`REPLACEFILE_WRITE_THROUGH` is unsupported](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew).
 The owner reads the locked activation range through its original handle because
 [another handle cannot access that exclusive range](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex).
-Native macOS extended-ACL qualification remains pending: mode-bit checks alone
-do not qualify those grants. Promotion is held for that bounded correction.
+Native macOS extended-ACL and moved-directory controls passed on the reviewed
+source. The final combined release still requires its own native build and CI.
 Native Windows kill/restart, lock, reparse and stale-writer execution remains a
 separate qualification gate; macOS execution does not prove Windows behavior.
 
 The additive field is ignored by the actual pinned consumer `86537799` and
-current consumer `28bf8be4` parsers for schema 1.0, 1.1 and 1.2 (six offline
+additional reviewed consumer `28bf8be4` parsers for schema 1.0, 1.1 and 1.2 (six offline
 compatibility controls). Their normalized records are not this journal's
 financial authority and must never be used to reconstruct a paid resume.
 Worker workspace replacement, retries and stalled delivery require their own
@@ -114,3 +125,12 @@ concurrent owner exclusion, corrupt/missing activation pairs, flush failure,
 stale projection CAS, known settlement before projection failure, pending HTTP
 rollback interleaving, and exactly-once CLI/TUI handoff. Provider credentials,
 external targets and paid provider traffic are not used.
+
+Native release smoke uses three separate packaged CLI processes with an explicit
+clean environment, fake key and loopback deny/count server. Two tiny-cap attempts
+must each produce a fresh budget-stopped receipt with the same saved ceiling;
+the second omits the cap. A third invocation after stamp deletion must fail and
+preserve the raw run bytes. Any HTTP method reaching the loopback server fails
+the gate. Native Windows and macOS CI build and run this probe in addition to
+their platform-specific filesystem tests. Source-probe success does not qualify
+a packaged binary, and neither offline gate establishes a provider invoice.
