@@ -21,6 +21,11 @@ resource path, deployment, query and Host must retain the admitted native SDK
 endpoint, including Azure's resource-specific paths and API version. Unknown
 body keys outside the frozen official create-parameter schema fail before send;
 provider routing extensions are not admitted as ordinary generation parameters.
+Method, URL, headers, routing extensions and the resolved transport are independent
+snapshots taken before stream iteration or closure executes callbacks. Dispatch
+does not reread mutable request metadata afterward. Duplicate JSON member names,
+including escaped names and nested objects, are rejected before transmission;
+the original signed bytes are retained only when their interpretation is unique.
 
 The final wire model, input/messages, instructions, tools/functions, output
 schema, prompt/state references, context management and audio/modality/prediction

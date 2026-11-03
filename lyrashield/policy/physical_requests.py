@@ -422,6 +422,15 @@ def _validate_quoted_fields(payload: Any, expected: dict[str, Any]) -> None:
         raise PhysicalBudgetAdapterError("Finite generation cannot change its priced service tier.")
 
 
+def _unique_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise PhysicalBudgetAdapterError("Finite generation contains ambiguous JSON members.")
+        result[key] = value
+    return result
+
+
 class _SinglePostTransport(httpx.AsyncBaseTransport):
     def __init__(
         self, original: httpx.AsyncClient, maximum: int, quoted: dict[str, Any], endpoint: httpx.URL
@@ -434,16 +443,24 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
         self.usage_evidence: _UsageEvidence | None = None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Body streams may execute arbitrary async callbacks. Freeze every
+        # dispatch input before awaiting them, including nested extensions.
+        method = request.method
+        url = httpx.URL(str(request.url))
+        headers = httpx.Headers(request.headers)
+        extensions = copy.deepcopy(request.extensions)
+        stream = request.stream
+        transport = self.original._transport_for_url(url)
         if self.sent:
             raise PhysicalBudgetAdapterError(
                 "Finite budget blocked an unreserved provider compatibility replay."
             )
-        if request.method != "POST":
+        if method != "POST":
             raise PhysicalBudgetAdapterError("Finite generation requires one bounded POST.")
         if (
-            request.url != self.endpoint
-            or request.headers.get("host") != self.endpoint.netloc.decode()
-            or request.extensions.get("sni_hostname")
+            url != self.endpoint
+            or headers.get("host") != self.endpoint.netloc.decode()
+            or extensions.get("sni_hostname")
             not in (
                 None,
                 self.endpoint.host.replace("_", "-"),
@@ -451,20 +468,20 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
             )
         ):
             raise PhysicalBudgetAdapterError("Finite generation changed its admitted endpoint.")
-        if not isinstance(request.stream, httpx.AsyncByteStream):
+        if not isinstance(stream, httpx.AsyncByteStream):
             raise PhysicalBudgetAdapterError("Finite generation requires an asynchronous body.")
         body = bytearray()
         try:
-            async for chunk in request.stream:
+            async for chunk in stream:
                 if len(chunk) > 8_388_608 - len(body):
                     raise PhysicalBudgetAdapterError(
                         "Finite generation request exceeds its bounded body limit."
                     )
                 body.extend(chunk)
         finally:
-            await request.stream.aclose()
+            await stream.aclose()
         try:
-            payload = json.loads(body)
+            payload = json.loads(body, object_pairs_hook=_unique_json_members)
         except (ValueError, UnicodeError) as exc:
             raise PhysicalBudgetAdapterError(
                 "Cannot verify the finite generation output cap."
@@ -488,21 +505,19 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
         _validate_quoted_fields(payload, self.quoted)
         # The lower HTTP transport consumes stream, not Request._content.
         # Send the same immutable bytes we actually inspected, with fresh framing.
-        headers = httpx.Headers(request.headers)
         headers.pop("content-length", None)
         headers.pop("transfer-encoding", None)
         request = httpx.Request(
-            request.method,
-            request.url,
+            method,
+            url,
             headers=headers,
             content=bytes(body),
-            extensions=dict(request.extensions),
+            extensions=extensions,
         )
         self.sent = True
         # Auth and redirect flow run above this counter on the scoped client.
         # Reuse the resolved URL's pool/TLS transport below those flows, so
         # every challenge-driven physical dispatch must re-enter this guard.
-        transport = self.original._transport_for_url(request.url)
         response = await transport.handle_async_request(request)
         response.request = request
         self.original.cookies.extract_cookies(response)
