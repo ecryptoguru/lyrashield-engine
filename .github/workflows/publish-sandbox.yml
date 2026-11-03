@@ -4,28 +4,159 @@ on:
   push:
     tags: ["sandbox-v*"]
   workflow_dispatch:
+    inputs:
+      engine_revision:
+        description: "Optional full SHA of an already qualified engine commit on main"
+        type: string
+        required: false
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
+  actions: read
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/lyrashield-sandbox
 
 jobs:
-  publish:
+  resolve:
+    name: Resolve qualified engine revision
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    # Publish only from reviewed refs: a tag push (sandbox-v*) or a manual
-    # dispatch from main. Dispatch from any other ref fails closed so an
-    # arbitrary unreviewed checkout can never publish a sandbox image.
+    timeout-minutes: 10
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/sandbox-v')) ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    outputs:
+      revision: ${{ steps.source.outputs.revision }}
+      ci_run: ${{ steps.source.outputs.ci_run }}
+      ci_attempt: ${{ steps.source.outputs.ci_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve a qualified exact engine revision
+        id: source
+        env:
+          REQUESTED_RUNTIME: ${{ inputs.engine_revision }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="${REQUESTED_RUNTIME:-$GITHUB_SHA}"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          # Historical releases require an explicit, reviewed qualification.
+          # The M engine revision completed the full derivative and worker gates.
+          qualified_historical="992b3d9df696753c7b62a31ea58f1ca5d21055c1"
+          [[ "$revision" == "$GITHUB_SHA" || "$revision" == "$qualified_historical" ]]
+          test "$(git rev-parse --verify "$revision^{commit}")" = "$revision"
+          git merge-base --is-ancestor "$revision" "$GITHUB_SHA"
+          # The jq variable is interpreted by jq, not by the shell.
+          # shellcheck disable=SC2016
+          ci_record="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$revision" -f event=push -f status=success -f per_page=100 | \
+            jq -c --arg revision "$revision" \
+            '[.workflow_runs[] | select(.head_sha == $revision and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success") | {id, attempt: .run_attempt}] | max_by(.id) // empty')"
+          [[ -n "$ci_record" ]]
+          ci_run="$(jq -r '.id' <<< "$ci_record")"
+          ci_attempt="$(jq -r '.attempt' <<< "$ci_record")"
+          [[ "$ci_run" =~ ^[1-9][0-9]*$ && "$ci_attempt" =~ ^[1-9][0-9]*$ ]]
+          printf 'revision=%s\nci_run=%s\nci_attempt=%s\n' "$revision" "$ci_run" "$ci_attempt" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build sandbox (${{ matrix.arch }})
+    needs: resolve
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.revision }}
+          path: runtime
+          persist-credentials: false
+      - name: Verify selected runtime checkout
+        env:
+          RUNTIME_REVISION: ${{ needs.resolve.outputs.revision }}
+        run: test "$(git -C runtime rev-parse HEAD)" = "$RUNTIME_REVISION"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Hydrate qualified runtime inputs
+        working-directory: runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 containers/system-python-security/hydrate_runtime_inputs.py --download
+      - name: Build and push an unqualified native candidate
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: runtime
+          file: runtime/containers/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.revision }}
+          provenance: mode=max
+          sbom: true
+      - name: Smoke the exact native candidate digest
+        working-directory: runtime
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="$REGISTRY/$IMAGE_NAME@$DIGEST"
+          bash scripts/smoke-sandbox.sh "$image" "linux/$ARCH"
+      - name: Audit byte-bound Go application coordinates
+        working-directory: runtime
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME@$DIGEST"
+          bash scripts/audit-sandbox-go-applications.sh "$image" "linux/$ARCH"
+      - name: Record qualified native digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digest"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sandbox-native-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/digest
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish qualified sandbox index
+    needs: [resolve, build]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,76 +166,102 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Hydrate qualified runtime inputs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 containers/system-python-security/hydrate_runtime_inputs.py --download
-      - name: Build and push an unqualified candidate
-        id: image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          context: .
-          file: containers/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:candidate-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          provenance: mode=max
-          sbom: true
-      - name: Smoke the exact candidate digest
-        run: |
-          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
-          for platform in linux/amd64 linux/arm64; do
-            bash scripts/smoke-sandbox.sh "$image" "$platform"
-          done
-      - name: Audit byte-bound Go application coordinates
-        run: |
-          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
-          for platform in linux/amd64 linux/arm64; do
-            bash scripts/audit-sandbox-go-applications.sh "$image" "$platform"
-          done
-      - name: Promote the smoke-qualified digest
+          name: sandbox-native-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/amd64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sandbox-native-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/arm64
+      - name: Assemble and verify qualified platform index
+        id: index
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RUNTIME_REVISION: ${{ needs.resolve.outputs.revision }}
+          ENGINE_CI_RUN: ${{ needs.resolve.outputs.ci_run }}
+          ENGINE_CI_ATTEMPT: ${{ needs.resolve.outputs.ci_attempt }}
         run: |
-          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
-          docker buildx imagetools create \
-            --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$RELEASE_TAG" \
-            --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
-            "$image"
-
-          for tag in "$RELEASE_TAG" "${{ github.sha }}"; do
-            promoted_digest="$(docker buildx imagetools inspect \
-              "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$tag" | awk '/^Digest:/ { print $2; exit }')"
-            test "$promoted_digest" = "${{ steps.image.outputs.digest }}"
-          done
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          amd="$(cat evidence/amd64/digest)"
+          arm="$(cat evidence/arm64/digest)"
+          [[ "$amd" =~ ^sha256:[0-9a-f]{64}$ && "$arm" =~ ^sha256:[0-9a-f]{64}$ && "$amd" != "$arm" ]]
+          docker buildx imagetools inspect "$image@$amd" --raw > evidence/amd64.json
+          docker buildx imagetools inspect "$image@$arm" --raw > evidence/arm64.json
+          tag="$image:candidate-index-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker buildx imagetools create --metadata-file evidence/index-metadata.json --tag "$tag" "$image@$amd" "$image@$arm"
+          digest="$(python3 -c 'import json; print(json.load(open("evidence/index-metadata.json"))["containerimage.digest"])')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect "$image@$digest" --raw > evidence/combined.json
+          python3 scripts/verify_sandbox_platform_index.py evidence/amd64.json evidence/arm64.json evidence/combined.json > evidence/children.json
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          python3 - "$amd" "$arm" "$digest" <<'PY'
+          import json, os, sys
+          evidence = {
+              "schema": "lyrashield.sandbox.qualification.v1",
+              "engineRevision": os.environ["RUNTIME_REVISION"],
+              "workflowRevision": os.environ["GITHUB_SHA"],
+              "engineCiRun": os.environ["ENGINE_CI_RUN"],
+              "engineCiAttempt": os.environ["ENGINE_CI_ATTEMPT"],
+              "runId": os.environ["GITHUB_RUN_ID"],
+              "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "platformIndexes": {"amd64": sys.argv[1], "arm64": sys.argv[2]},
+              "platformManifests": json.load(open("evidence/children.json", encoding="utf8")),
+              "indexDigest": sys.argv[3],
+          }
+          with open("evidence/qualification.json", "w", encoding="utf8") as out:
+              json.dump(evidence, out, sort_keys=True, separators=(",", ":"))
+          PY
       - name: Generate an SPDX SBOM for the published digest
-        id: sbom
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.index.outputs.digest }}
           output-file: sandbox.spdx.json
-          artifact-name: lyrashield-sandbox-${{ github.sha }}.spdx.json
+          artifact-name: lyrashield-sandbox-${{ needs.resolve.outputs.revision }}.spdx.json
           upload-release-assets: false
       - name: Sign provenance for the immutable image digest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.image.outputs.digest }}
+          subject-digest: ${{ steps.index.outputs.digest }}
           push-to-registry: true
+          create-storage-record: false
+      - name: Sign selected runtime and qualified platform binding
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          predicate-type: https://lyrashieldai.com/attestations/sandbox-qualification/v1
+          predicate-path: evidence/qualification.json
+          push-to-registry: true
+          create-storage-record: false
       - name: Attest the generated SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.image.outputs.digest }}
+          subject-digest: ${{ steps.index.outputs.digest }}
           sbom-path: sandbox.spdx.json
           push-to-registry: true
-      - name: Record deployable immutable reference
+          create-storage-record: false
+      - name: Promote the smoke-qualified digest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RUNTIME_REVISION: ${{ needs.resolve.outputs.revision }}
+          DIGEST: ${{ steps.index.outputs.digest }}
         run: |
-          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
-          printf 'LYRASHIELD_IMAGE=%s\n' "$image" >> "$GITHUB_STEP_SUMMARY"
-          printf 'Verify with: gh attestation verify oci://%s -R %s\n' "$image" "${{ github.repository }}" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME@$DIGEST"
+          docker buildx imagetools create --tag "$REGISTRY/$IMAGE_NAME:$RELEASE_TAG" --tag "$REGISTRY/$IMAGE_NAME:$RUNTIME_REVISION" "$image"
+          for tag in "$RELEASE_TAG" "$RUNTIME_REVISION"; do
+            promoted_digest="$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:$tag" | awk '/^Digest:/ { print $2; exit }')"
+            test "$promoted_digest" = "$DIGEST"
+          done
+      - name: Record deployable immutable reference
+        env:
+          RUNTIME_REVISION: ${{ needs.resolve.outputs.revision }}
+          DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          image="$REGISTRY/$IMAGE_NAME@$DIGEST"
+          printf 'LYRASHIELD_IMAGE=%s\nENGINE_REVISION=%s\nWORKFLOW_REVISION=%s\n' "$image" "$RUNTIME_REVISION" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Verify with: gh attestation verify oci://%s -R %s\n' "$image" "$GITHUB_REPOSITORY" >> "$GITHUB_STEP_SUMMARY"
