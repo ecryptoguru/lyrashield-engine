@@ -166,7 +166,7 @@ def test_unrecognized_or_nonplain_exception_message_remains_generic():
 @pytest.mark.parametrize(
     "target,category",
     [
-        ("/private/../target", "ambiguous-or-traversing-path"),
+        ("/private/../target", "symlink-target-dotdot"),
         ("private/", "link-target-trailing-slash"),
         ("private\nvalue", "invalid-symlink-character"),
     ],
@@ -177,6 +177,45 @@ def test_verified_rejection_reports_only_fixed_validation_reason(root, target, c
         entry = tarfile.TarInfo("link")
         entry.type = tarfile.SYMTYPE
         entry.linkname = target
+        archive.addfile(entry)
+    data = output.getvalue()
+    compressed = gzip.compress(data)
+    descriptor = {
+        "mediaType": OCI_GZIP,
+        "digest": "sha256:" + hashlib.sha256(compressed).hexdigest(),
+        "size": len(compressed),
+    }
+    diff = "sha256:" + hashlib.sha256(data).hexdigest()
+    result = drain.diagnose_fetched_layer(Fetch(compressed), descriptor, diff, root)
+    assert result["category"] == category
+    assert "private" not in str(result)
+    assert result["catalogAccepted"] is False and result["releaseQualified"] is False
+    assert not list(root.iterdir())
+
+
+@pytest.mark.parametrize(
+    "name,kind,target,category",
+    [
+        ("private/../member", "file", "", "member-file-dotdot"),
+        ("private/./member", "file", "", "member-file-dot"),
+        ("private//member", "file", "", "member-file-empty-component"),
+        ("private//../member", "file", "", "member-file-multiple-components"),
+        ("link", "symlink", "../private", "symlink-target-dotdot"),
+        ("link", "hardlink", "private/../target", "hardlink-target-dotdot"),
+    ],
+)
+def test_verified_component_reason_has_fixed_role_without_values(
+    root, name, kind, target, category
+):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        entry = tarfile.TarInfo(name)
+        if kind == "symlink":
+            entry.type = tarfile.SYMTYPE
+            entry.linkname = target
+        elif kind == "hardlink":
+            entry.type = tarfile.LNKTYPE
+            entry.linkname = target
         archive.addfile(entry)
     data = output.getvalue()
     compressed = gzip.compress(data)

@@ -40,7 +40,19 @@ PATH_DIAGNOSTIC_ROLES = frozenset(
         "hardlink-target",
     }
 )
-PATH_DIAGNOSTIC_REASONS = frozenset({"absolute", "backslash", "nul", "multiple", "invalid-type"})
+PATH_DIAGNOSTIC_REASONS = frozenset(
+    {
+        "absolute",
+        "backslash",
+        "nul",
+        "multiple",
+        "invalid-type",
+        "dot",
+        "dotdot",
+        "empty-component",
+        "multiple-components",
+    }
+)
 PATH_DIAGNOSTIC_CATEGORIES = frozenset(
     f"{role}-{reason}" for role in PATH_DIAGNOSTIC_ROLES for reason in PATH_DIAGNOSTIC_REASONS
 )
@@ -61,6 +73,21 @@ def catalog_path(value, role, *, allow_root=False):
     try:
         return normalized_path(value, allow_root=allow_root)
     except ValueError as error:
+        if error.args == ("ambiguous or traversing path",) and isinstance(value, str):
+            remainder = value
+            while remainder.startswith("./"):
+                remainder = remainder[2:]
+            parts = remainder.rstrip("/").split("/")
+            reasons = []
+            if "." in parts:
+                reasons.append("dot")
+            if ".." in parts:
+                reasons.append("dotdot")
+            if "" in parts:
+                reasons.append("empty-component")
+            if reasons:
+                reason = reasons[0] if len(reasons) == 1 else "multiple-components"
+                raise CatalogUnsafePathError(role, reason) from None
         if error.args != ("unsafe path",):
             raise
         if not isinstance(value, str):
@@ -127,7 +154,12 @@ def entry_row(entry):
         if entry.linkname.endswith("/"):
             raise ValueError("link target ends in slash")
         if entry.issym() and entry.linkname.startswith("/"):
-            target = inert_symlink_target(entry.linkname)
+            try:
+                target = inert_symlink_target(entry.linkname)
+            except ValueError as error:
+                if error.args == ("ambiguous or traversing path",):
+                    catalog_path(entry.linkname[1:], "symlink-target")
+                raise
         else:
             target = catalog_path(
                 entry.linkname, "symlink-target" if entry.issym() else "hardlink-target"

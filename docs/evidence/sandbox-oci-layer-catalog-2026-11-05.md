@@ -82,3 +82,9 @@ Those labels describe the worker's local policy. Only a completed rejection
 drain tied to an independently authenticated descriptor/DiffID and zero fetch
 exit can associate the observation with verified layer bytes; it does not prove
 an archive defect or recover the cause of an earlier incomplete attempt.
+
+For catalog entry validation, the fixed path diagnostic may distinguish member
+kind versus symbolic- or hardlink target and classify dot, dot-dot, empty, or
+multiple ambiguous components. The classification runs only after the existing
+path policy rejects; it retains no path or component text and does not change
+acceptance. PAX or earlier framing checks may still yield only a generic reason.
