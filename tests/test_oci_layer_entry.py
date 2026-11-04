@@ -152,6 +152,13 @@ def test_non_directory_trailing_slash_is_not_normalized_into_an_entry(path):
         capture.capture_verified_layer(io.BytesIO(data), descriptor, diff, TARGET)
 
 
+def test_requested_file_with_trailing_slash_is_not_normalized():
+    data = tar([(TARGET, "file", b"binary")])
+    descriptor, diff = item(data)
+    with pytest.raises(ValueError, match="trailing slash"):
+        capture.capture_verified_layer(io.BytesIO(data), descriptor, diff, TARGET + "/")
+
+
 def test_rejects_truncated_tar_even_if_selected_file_was_captured():
     data = tar([(TARGET, "file", b"binary")])[:1024]
     descriptor, diff = item(data)

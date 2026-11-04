@@ -20,9 +20,9 @@ The result is explicitly **one entry in one layer**, not the final image file.
 All symlink and hardlink entries, even unrelated ones, fail closed. Target or
 ancestor whiteouts and opaque markers fail closed regardless of order. Unrelated
 valid whiteouts can be present, but this experiment does not apply them. It also
-rejects duplicate paths, non-directory target ancestors or trailing-slash file
-names, PAX/GNU extensions, special files, malformed whiteouts and unsupported
-tar encodings. These
+rejects duplicate paths, non-directory target ancestors, requested or header
+file names with trailing slashes, PAX/GNU extensions, special files, malformed
+whiteouts and unsupported tar encodings. These
 deliberate restrictions mean real OCI-valid layers may be rejected; they do
 not establish correct handling of general whiteout or link semantics.
 

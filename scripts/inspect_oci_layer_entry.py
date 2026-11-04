@@ -114,6 +114,8 @@ def capture_verified_layer(stream, item, expected_diff, target):
     Caller must authenticate the descriptor and close the returned temporary file.
     This function does not apply layers or establish an image filesystem.
     """
+    if isinstance(target, str) and target.endswith("/"):
+        raise ValueError("requested file has trailing slash")
     target = normalized_path(target)
     if any(part.startswith(".wh.") for part in target.split("/")):
         raise ValueError("whiteout target is unsupported")
