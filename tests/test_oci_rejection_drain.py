@@ -12,6 +12,7 @@ import pytest
 
 from scripts import verify_oci_rejection_drain as drain
 from scripts.index_verified_oci_changeset import CatalogUnsafePathError, catalog_path
+from scripts.index_verified_oci_stream import worker_failure_category
 from scripts.verify_oci_layer_binding import OCI_GZIP
 
 
@@ -143,6 +144,12 @@ def test_multiple_unsafe_characters_are_classified_without_content():
         catalog_path("/private\\value\x00", "symlink-target")
     assert caught.value.category == "symlink-target-multiple"
     assert "private" not in str(caught.value)
+
+
+def test_mutated_path_error_category_cannot_leak_content():
+    error = CatalogUnsafePathError("member-file", "absolute")
+    error.category = "secret-customer-content"
+    assert worker_failure_category(error) == "unsafe-path"
 
 
 @pytest.mark.parametrize("failure", ["compressed-digest", "diff", "truncated", "fetch-exit"])

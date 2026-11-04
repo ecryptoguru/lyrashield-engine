@@ -23,21 +23,28 @@ MAX_PATH_BYTES = 16 * 1024**2
 MAX_DB_BYTES = 128 * 1024**2
 MIN_FREE_BYTES = 2 * 1024**3
 MAX_SECONDS = 900
+PATH_DIAGNOSTIC_ROLES = frozenset(
+    {
+        "member-file",
+        "member-dir",
+        "member-symlink",
+        "member-hardlink",
+        "member-other",
+        "symlink-target",
+        "hardlink-target",
+    }
+)
+PATH_DIAGNOSTIC_REASONS = frozenset({"absolute", "backslash", "nul", "multiple", "invalid-type"})
+PATH_DIAGNOSTIC_CATEGORIES = frozenset(
+    f"{role}-{reason}" for role in PATH_DIAGNOSTIC_ROLES for reason in PATH_DIAGNOSTIC_REASONS
+)
 
 
 class CatalogUnsafePathError(ValueError):
     """Fixed path-rule and entry-role category with no archive content."""
 
     def __init__(self, role, reason):
-        if role not in {
-            "member-file",
-            "member-dir",
-            "member-symlink",
-            "member-hardlink",
-            "member-other",
-            "symlink-target",
-            "hardlink-target",
-        } or reason not in {"absolute", "backslash", "nul", "multiple", "invalid-type"}:
+        if role not in PATH_DIAGNOSTIC_ROLES or reason not in PATH_DIAGNOSTIC_REASONS:
             raise ValueError("invalid path diagnostic category")
         self.category = f"{role}-{reason}"
         super().__init__(self.category)
