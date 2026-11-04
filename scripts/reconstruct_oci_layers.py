@@ -19,6 +19,7 @@ MAX_PATH_BYTES = 16 * 1024 * 1024
 MAX_PATH_LENGTH = 4096
 MAX_SCAN_WORK = 10_000_000
 MAX_PROCESS_SECONDS = 900
+MAX_PAX_BYTES = 16 * 1024
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,47 @@ def metadata(entry):
     return entry.mode, entry.uid, entry.gid, entry.mtime
 
 
+def parse_local_pax(payload):
+    """Accept only canonical, nonempty UTF-8 path and linkpath overrides."""
+    offset, fields = 0, {}
+    while offset < len(payload):
+        separator = payload.find(b" ", offset)
+        if separator < 0:
+            raise ValueError("malformed PAX record")
+        digits = payload[offset:separator]
+        if not digits.isdigit() or len(digits) > 5:
+            raise ValueError("invalid PAX record length")
+        size = int(digits)
+        end = offset + size
+        if str(size).encode() != digits or end > len(payload) or end <= separator + 2:
+            raise ValueError("invalid PAX record length")
+        record = payload[separator + 1 : end]
+        if not record.endswith(b"\n") or b"=" not in record:
+            raise ValueError("malformed PAX record")
+        key, value = record[:-1].split(b"=", 1)
+        if key not in {b"path", b"linkpath"} or key in fields:
+            raise ValueError("unsupported or duplicate PAX key")
+        if not value or any(byte < 32 or byte == 127 for byte in value):
+            raise ValueError("invalid PAX path value")
+        fields[key] = value.decode("utf-8", "strict")
+        offset = end
+    if not fields:
+        raise ValueError("empty PAX header")
+    return fields
+
+
 class RestrictiveTarReader(StrictTarReader):
+    def __init__(self, source):
+        super().__init__(source)
+        self.awaiting_pax_member = False
+        self.local_pax = None
+
+    def consume_block(self, block):
+        if self.pax_payload is not None and self.payload_remaining <= 512:
+            payload = bytes(self.pax_payload) + bytes(block[: self.payload_remaining])
+            self.local_pax = parse_local_pax(payload)
+        super().consume_block(block)
+
     def begin_header(self, block):
         try:
             header = tarfile.TarInfo.frombuf(bytes(block), "utf-8", "surrogateescape")
@@ -82,9 +123,35 @@ class RestrictiveTarReader(StrictTarReader):
             tarfile.DIRTYPE,
             tarfile.SYMTYPE,
             tarfile.LNKTYPE,
+            tarfile.XHDTYPE,
         }:
             raise ValueError("unsupported tar type or extension")
+        if header.type == tarfile.XHDTYPE:
+            if self.awaiting_pax_member or not 0 < header.size <= MAX_PAX_BYTES:
+                raise ValueError("stacked or invalid PAX header")
+            self.awaiting_pax_member = True
+            self.local_pax = None
+        elif self.awaiting_pax_member:
+            if self.local_pax is None:
+                raise ValueError("incomplete PAX header")
+            path = self.local_pax.get(b"path")
+            link = self.local_pax.get(b"linkpath")
+            if path is not None:
+                if path.endswith("/") and not header.isdir():
+                    raise ValueError("non-directory PAX path ends in slash")
+                normalized_path(path, allow_root=header.isdir())
+            if link is not None:
+                if not (header.issym() or header.islnk()) or link.endswith("/"):
+                    raise ValueError("invalid PAX linkpath")
+                normalized_path(link)
+            self.awaiting_pax_member = False
+            self.local_pax = None
         super().begin_header(block)
+
+    def finish(self):
+        super().finish()
+        if self.awaiting_pax_member:
+            raise ValueError("PAX header without following member")
 
 
 class VirtualRoot:

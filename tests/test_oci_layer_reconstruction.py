@@ -207,13 +207,110 @@ def test_deadline_fails_without_mutating_tree():
     assert set(root.entries) == {""}
 
 
-def test_rejects_pax_extension_headers():
+def test_applies_pax_path_override():
     result = io.BytesIO()
     with tarfile.open(fileobj=result, mode="w", format=tarfile.PAX_FORMAT) as stream:
         info = tarfile.TarInfo("a" * 200)
         info.size = 1
         stream.addfile(info, io.BytesIO(b"x"))
-    with pytest.raises(ValueError, match="unsupported tar type or extension"):
+    root = VirtualRoot()
+    root.apply(result.getvalue())
+    assert root.entries["a" * 200].content == b"x"
+
+
+def pax_record(key, value):
+    body = key + b"=" + value + b"\n"
+    size = len(body) + 2
+    while len(str(size)) + 1 + len(body) != size:
+        size = len(str(size)) + 1 + len(body)
+    return str(size).encode() + b" " + body
+
+
+def pax_tar(payload, *, kind=tarfile.XHDTYPE, member_type=tarfile.REGTYPE, add_member=True):
+    result = io.BytesIO()
+    with tarfile.open(fileobj=result, mode="w", format=tarfile.USTAR_FORMAT) as stream:
+        extension = tarfile.TarInfo("PaxHeader")
+        extension.type = kind
+        extension.size = len(payload)
+        stream.addfile(extension, io.BytesIO(payload))
+        if add_member:
+            entry = tarfile.TarInfo("placeholder")
+            entry.type = member_type
+            if member_type == tarfile.SYMTYPE:
+                entry.linkname = "original"
+            else:
+                entry.size = 1
+            stream.addfile(entry, io.BytesIO(b"x") if entry.isfile() else None)
+    return result.getvalue()
+
+
+def test_applies_pax_linkpath_override():
+    root = VirtualRoot()
+    root.apply(pax_tar(pax_record(b"linkpath", b"safe-target"), member_type=tarfile.SYMTYPE))
+    assert root.entries["placeholder"].target == "safe-target"
+
+
+def test_pax_path_whiteout_is_applied_to_lower_layer():
+    root = VirtualRoot()
+    apply(root, [("old", "file", b"old")])
+    result = io.BytesIO()
+    with tarfile.open(fileobj=result, mode="w", format=tarfile.PAX_FORMAT) as stream:
+        info = tarfile.TarInfo("placeholder")
+        info.pax_headers = {"path": ".wh.old"}
+        stream.addfile(info)
+    root.apply(result.getvalue())
+    assert set(root.entries) == {""}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"invalid",
+        pax_record(b"path", b"a") + pax_record(b"path", b"b"),
+        pax_record(b"path", b""),
+        pax_record(b"path", b"../escape"),
+        pax_record(b"path", b"invalid-\xff"),
+        pax_record(b"path", b"bad\nname"),
+        pax_record(b"path", b"non-directory/"),
+        pax_record(b"path", b"a" * 16384),
+        pax_record(b"linkpath", b"safe"),
+        pax_record(b"mtime", b"0"),
+        pax_record(b"size", b"1"),
+        pax_record(b"GNU.sparse.map", b"0,1"),
+        pax_record(b"SCHILY.xattr.security.capability", b"x"),
+    ],
+)
+def test_rejects_unsupported_pax_without_partial_application(payload):
+    root = VirtualRoot()
+    apply(root, [("existing", "file", b"old")])
+    with pytest.raises((ValueError, UnicodeError)):
+        root.apply(pax_tar(payload))
+    assert root.entries["existing"].content == b"old"
+    assert set(root.entries) == {"", "existing"}
+
+
+def test_rejects_global_and_dangling_pax():
+    root = VirtualRoot()
+    for data in (
+        pax_tar(pax_record(b"path", b"a"), kind=tarfile.XGLTYPE),
+        pax_tar(pax_record(b"path", b"a"), add_member=False),
+    ):
+        with pytest.raises((ValueError, tarfile.ReadError)):
+            root.apply(data)
+    assert set(root.entries) == {""}
+
+
+def test_rejects_stacked_pax_headers():
+    result = io.BytesIO()
+    payload = pax_record(b"path", b"new")
+    with tarfile.open(fileobj=result, mode="w", format=tarfile.USTAR_FORMAT) as stream:
+        for _ in range(2):
+            header = tarfile.TarInfo("pax")
+            header.type = tarfile.XHDTYPE
+            header.size = len(payload)
+            stream.addfile(header, io.BytesIO(payload))
+        stream.addfile(tarfile.TarInfo("placeholder"))
+    with pytest.raises(ValueError, match="stacked"):
         VirtualRoot().apply(result.getvalue())
 
 
