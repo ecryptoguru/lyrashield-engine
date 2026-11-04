@@ -45,4 +45,6 @@ remain readable under their existing checks. Version 4 records `engineRuns`
 and requires every declared iteration for every case and polarity; incomplete
 receipts do not produce an engine stability value. The declared count is not
 authenticated and cannot prove that a coordinated change to the receipt and
-findings did not occur. Existing historical results are not rewritten.
+findings did not occur. A manifest-only edit can also remove a zero-findings
+iteration from every case and polarity and reduce `engineRuns` without changing
+the findings bytes or digest. Existing historical results are not rewritten.
