@@ -4,6 +4,7 @@
 import io
 import tarfile
 import time
+import unicodedata
 from dataclasses import dataclass, replace
 from typing import Optional
 
@@ -93,7 +94,10 @@ def parse_local_pax(payload):
             raise ValueError("unsupported or duplicate PAX key")
         if not value or any(byte < 32 or byte == 127 for byte in value):
             raise ValueError("invalid PAX path value")
-        fields[key] = value.decode("utf-8", "strict")
+        decoded = value.decode("utf-8", "strict")
+        if any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in decoded):
+            raise ValueError("invalid PAX path character")
+        fields[key] = decoded
         offset = end
     if not fields:
         raise ValueError("empty PAX header")
@@ -196,12 +200,16 @@ class VirtualRoot:
                     node = Node("dir", *attrs)
                 elif entry.issym():
                     normalized_path(entry.linkname)
+                    path_bytes += len(entry.linkname.encode("utf-8"))
                     node = Node("symlink", *attrs, target=entry.linkname)
                 elif entry.islnk():
                     target = normalized_path(entry.linkname)
+                    path_bytes += len(entry.linkname.encode("utf-8"))
                     node = Node("hardlink", *attrs, target=target)
                 else:
                     raise ValueError("unsupported tar entry")
+                if path_bytes > MAX_PATH_BYTES:
+                    raise ValueError("layer path limit exceeded")
                 staged.append((path, node))
         framed.finish()
         return staged
@@ -289,7 +297,14 @@ class VirtualRoot:
                 tree[path] = replace(node, mtime=None)
         if sum(len(node.content) for node in tree.values() if node.kind == "file") > MAX_TREE_BYTES:
             raise ValueError("tree byte limit exceeded")
-        if sum(len(path.encode("utf-8")) for path in tree) > MAX_PATH_BYTES:
+        if (
+            sum(
+                len(path.encode("utf-8"))
+                + (len(node.target.encode("utf-8")) if node.kind == "symlink" else 0)
+                for path, node in tree.items()
+            )
+            > MAX_PATH_BYTES
+        ):
             raise ValueError("tree path limit exceeded")
         self.entries = tree
 

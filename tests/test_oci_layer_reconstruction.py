@@ -271,6 +271,8 @@ def test_pax_path_whiteout_is_applied_to_lower_layer():
         pax_record(b"path", b"../escape"),
         pax_record(b"path", b"invalid-\xff"),
         pax_record(b"path", b"bad\nname"),
+        pax_record(b"path", "bad\u0085name".encode()),
+        pax_record(b"path", "bad\u202ename".encode()),
         pax_record(b"path", b"non-directory/"),
         pax_record(b"path", b"a" * 16384),
         pax_record(b"linkpath", b"safe"),
@@ -312,6 +314,29 @@ def test_rejects_stacked_pax_headers():
         stream.addfile(tarfile.TarInfo("placeholder"))
     with pytest.raises(ValueError, match="stacked"):
         VirtualRoot().apply(result.getvalue())
+
+
+def test_pax_link_targets_count_toward_staged_and_retained_path_limit(monkeypatch):
+    def links(entries):
+        result = io.BytesIO()
+        with tarfile.open(fileobj=result, mode="w", format=tarfile.PAX_FORMAT) as stream:
+            for name, target in entries:
+                info = tarfile.TarInfo(name)
+                info.type = tarfile.SYMTYPE
+                info.linkname = "original"
+                info.pax_headers = {"linkpath": target}
+                stream.addfile(info)
+        return result.getvalue()
+
+    root = VirtualRoot()
+    monkeypatch.setattr(reconstruction, "MAX_PATH_BYTES", 10)
+    root.apply(links([("a", "1234")]))
+    with pytest.raises(ValueError, match="path limit"):
+        root.apply(links([("b", "56789")]))
+    assert root.entries["a"].target == "1234"
+    assert set(root.entries) == {"", "a"}
+    with pytest.raises(ValueError, match="path limit"):
+        VirtualRoot().apply(links([("a", "1234"), ("b", "56789")]))
 
 
 def test_receiver_bounds_uncompressed_layer_bytes(monkeypatch):
