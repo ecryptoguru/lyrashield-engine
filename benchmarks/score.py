@@ -123,6 +123,8 @@ def engine_stability(
 
 
 def run_set_complete(manifest: dict[str, Any], corpus: dict[str, Any]) -> bool:
+    if manifest.get("detectors") not in ("engine", "deterministic", "all"):
+        return False
     scan_ids = [run.get("scanId") for run in manifest["runs"]]
     if not all(isinstance(scan_id, str) and scan_id.strip() for scan_id in scan_ids):
         return False
@@ -131,7 +133,25 @@ def run_set_complete(manifest: dict[str, Any], corpus: dict[str, Any]) -> bool:
     detectors = (
         {"engine", "deterministic"} if manifest["detectors"] == "all" else {manifest["detectors"]}
     )
-    indices = {r.get("runIndex", 0) for r in manifest["runs"] if r["detector"] == "engine"} or {0}
+    version = manifest.get("harnessVersion", 1)
+    if type(version) is int and version == 4:
+        count = manifest.get("engineRuns")
+        if "engine" in detectors:
+            if type(count) is not int or count < 1 or count > len(manifest["runs"]):
+                return False
+            indices = set(range(count))
+        else:
+            if count is not None:
+                return False
+            indices = {0}
+        if any(type(run.get("runIndex")) is not int for run in manifest["runs"]):
+            return False
+    else:
+        # Earlier manifests did not record the requested engine repeat count.
+        # A consistent-looking subset cannot prove the requested run set.
+        if "engine" in detectors:
+            return False
+        indices = {0}
     expected = {
         (case["id"], detector, variant, index)
         for case in corpus["pairs"]
@@ -231,7 +251,7 @@ def receipt_version_state(
     supports_records = type(version) is int and version >= 2
     digest_valid = (
         hashlib.sha256(findings_bytes).hexdigest() == manifest.get("findingsSha256")
-        if type(version) is int and version == 3
+        if type(version) is int and version in (3, 4)
         else None
     )
     return legacy, supports_records, digest_valid
@@ -407,7 +427,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
             "recall": None,
         }
 
-    stability = engine_stability(manifest, detected)
+    complete_run_set = run_set_complete(manifest, corpus)
 
     additional_matches = 0
     for finding_list in detected.values():
@@ -429,11 +449,12 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         or unbound_findings
         or incomplete_records
         or coverage_issues
-        or not run_set_complete(manifest, corpus)
+        or not complete_run_set
         or not corpus_matches_receipt(manifest, corpus, corpus_dir)
         or not source_identity_complete(manifest)
         else "COMPLETE"
     )
+    stability = engine_stability(manifest, detected) if status == "COMPLETE" else None
     clean_runs = [r for r in manifest["runs"] if r.get("variant") == "clean"]
 
     summary = {
@@ -486,7 +507,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         "- duplicate rate: unavailable (independent adjudication required)",
         "- additional matches within a case/run/scanner (not classified as duplicates): "
         f"{summary['additionalMatchedFindings']}",
-        f"- engine stability: {stability if stability is not None else 'n/a (single/det)'}",
+        f"- engine stability (diagnostic): {stability if stability is not None else 'unavailable'}",
         "",
         "| class | detected | cases | case-match rate (diagnostic) |",
         "|---|---|---|---|",
