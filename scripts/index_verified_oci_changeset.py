@@ -90,10 +90,10 @@ def catalog_layer(stream, expected_diff, private_root):
         raise ValueError("invalid expected diff ID")
     if not stream.seekable() or stream.tell() != 0:
         raise ValueError("layer stream must be seekable and start at zero")
-    return catalog_forward_layer(stream, expected_diff, private_root)
+    return catalog_forward_layer(stream, expected_diff, private_root, provisional=False)
 
 
-def catalog_forward_layer(stream, expected_diff, private_root):
+def catalog_forward_layer(stream, expected_diff, private_root, *, provisional=True):
     """Catalog a forward-only stream; result remains provisional to its caller.
 
     If bytes are discarded, extent offsets cannot be used until the complete
@@ -187,15 +187,16 @@ def catalog_forward_layer(stream, expected_diff, private_root):
             os.fchmod(fd, 0o400)
         finally:
             os.close(fd)
-        os.link(
-            "provisional.sqlite3",
-            "catalog.sqlite3",
-            src_dir_fd=directory,
-            dst_dir_fd=directory,
-            follow_symlinks=False,
-        )
-        published = True
-        os.unlink("provisional.sqlite3", dir_fd=directory)
+        if not provisional:
+            os.link(
+                "provisional.sqlite3",
+                "catalog.sqlite3",
+                src_dir_fd=directory,
+                dst_dir_fd=directory,
+                follow_symlinks=False,
+            )
+            published = True
+            os.unlink("provisional.sqlite3", dir_fd=directory)
         os.fsync(directory)
         return {
             "scope": "verified-single-layer-catalog-only",
@@ -203,6 +204,7 @@ def catalog_forward_layer(stream, expected_diff, private_root):
             "uncompressedBytes": source.count,
             "entries": count,
             "privateChild": child,
+            "provisional": provisional,
             "finalImageVerified": False,
             "releaseQualified": False,
         }

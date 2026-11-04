@@ -97,6 +97,9 @@ def test_forward_only_stream_can_be_cataloged_but_seekable_api_stays_strict(root
     report = catalog.catalog_forward_layer(ForwardOnly(data), digest(data), root)
     assert report["scope"] == "verified-single-layer-catalog-only"
     assert report["finalImageVerified"] is False
+    assert report["provisional"] is True
+    child = root / report["privateChild"]
+    assert sorted(entry.name for entry in child.iterdir()) == ["provisional.sqlite3"]
 
 
 def test_catalog_keeps_cross_layer_link_and_parent_resolution_open(root):

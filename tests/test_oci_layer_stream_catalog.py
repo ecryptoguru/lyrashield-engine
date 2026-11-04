@@ -1,12 +1,16 @@
 """Synthetic producer and consumer failures for the private streaming catalog."""
 
+import base64
 import gzip
 import hashlib
 import io
+import json
 import sqlite3
 import subprocess
 import sys
 import tarfile
+import time
+import zlib
 
 import pytest
 
@@ -102,3 +106,125 @@ def test_real_producer_exit_failure_after_complete_bytes_is_rejected(root):
     with pytest.raises(ValueError, match="fetch process failed"):
         catalog_fetched_layer(process, descriptor, diff, root)
     assert list(root.iterdir()) == [payload]
+
+
+def test_complete_bytes_are_only_provisional_until_fetch_exit(root):
+    data = tar()
+    compressed, descriptor, diff = inputs(data)
+
+    class InspectFetch(Fetch):
+        def wait(self, timeout=None):  # noqa: ARG002 - subprocess protocol
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                provisional = list(root.glob("stream-*/catalog-*/provisional.sqlite3"))
+                if provisional:
+                    break
+                time.sleep(0.01)
+            assert provisional
+            assert not list(root.glob("stream-*/catalog-*/catalog.sqlite3"))
+            return 1
+
+    with pytest.raises(ValueError, match="fetch process failed"):
+        catalog_fetched_layer(InspectFetch(compressed), descriptor, diff, root)
+    assert not list(root.iterdir())
+
+
+@pytest.mark.parametrize("kind", ["missing", "symlink"])
+def test_invalid_root_stops_real_fetch_child_and_closes_pipe(tmp_path, kind):
+    data = tar()
+    _, descriptor, diff = inputs(data)
+    invalid = tmp_path / "missing"
+    if kind == "symlink":
+        existing = tmp_path / "existing"
+        existing.mkdir(mode=0o700)
+        invalid.symlink_to(existing, target_is_directory=True)
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time;time.sleep(30)"], stdout=subprocess.PIPE
+    )
+    with pytest.raises(OSError):
+        catalog_fetched_layer(process, descriptor, diff, invalid)
+    assert process.poll() is not None
+    assert process.stdout.closed
+
+
+@pytest.mark.parametrize("phase", ["before-link", "after-link"])
+def test_killed_publication_leaves_no_success_receipt(root, phase):
+    compressed, descriptor, diff = inputs(tar())
+    code = r"""
+import base64, io, json, os, sys, time
+from pathlib import Path
+from scripts.index_verified_oci_stream import catalog_fetched_layer
+root=Path(sys.argv[1]); phase=sys.argv[2]; raw=base64.b64decode(sys.argv[3])
+descriptor=json.loads(sys.argv[4]); diff=sys.argv[5]; original=os.link
+def barrier(*args, **kwargs):
+    if phase == 'after-link': original(*args, **kwargs)
+    (root/'ready').write_text('ready')
+    time.sleep(30)
+    if phase == 'before-link': original(*args, **kwargs)
+os.link=barrier
+class Fetch:
+    stdout=io.BytesIO(raw)
+    def poll(self): return 0
+    def wait(self,timeout=None): return 0
+    def kill(self): pass
+catalog_fetched_layer(Fetch(),descriptor,diff,root)
+(root/'success-receipt').write_text('success')
+"""
+    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and test-owned inputs
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(root),
+            phase,
+            base64.b64encode(compressed).decode(),
+            json.dumps(descriptor),
+            diff,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while (
+            not (root / "ready").exists() and process.poll() is None and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert (root / "ready").exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+    assert not (root / "success-receipt").exists()
+    assert list(root.glob("stream-*/catalog-*/provisional.sqlite3"))
+    assert bool(list(root.glob("stream-*/catalog-*/catalog.sqlite3"))) == (phase == "after-link")
+
+
+def test_streams_synthetic_layer_above_in_memory_limit_without_retaining_tar(root):
+    size = 129 * 1024 * 1024
+    header = tarfile.TarInfo("large")
+    header.size = size
+    compressor = zlib.compressobj(wbits=31)
+    sha = hashlib.sha256()
+    compressed = io.BytesIO()
+
+    def add(data):
+        sha.update(data)
+        compressed.write(compressor.compress(data))
+
+    add(header.tobuf(format=tarfile.USTAR_FORMAT))
+    chunk = bytes(1024 * 1024)
+    for _ in range(size // len(chunk)):
+        add(chunk)
+    add(bytes(1024))
+    compressed.write(compressor.flush())
+    raw = compressed.getvalue()
+    descriptor = {
+        "mediaType": OCI_GZIP,
+        "digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "size": len(raw),
+    }
+    result = catalog_fetched_layer(Fetch(raw), descriptor, "sha256:" + sha.hexdigest(), root)
+    assert result["uncompressedBytes"] == size + 1536
+    stage = root / result["privateStage"] / result["privateChild"]
+    assert [entry.name for entry in stage.iterdir()] == ["catalog.sqlite3"]

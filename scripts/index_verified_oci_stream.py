@@ -25,13 +25,14 @@ def catalog_fetched_layer(fetch, descriptor, diff_id, private_root):
     files. This holds no source tar; future extent use requires a separately
     re-fetched, fully verified identical uncompressed stream.
     """
-    root = os.open(private_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    root = None
     stage = None
     stage_created = False
     read_fd = write_fd = None
     worker = None
     result = {}
     try:
+        root = os.open(private_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         info = os.fstat(root)
         if (
             not stat.S_ISDIR(info.st_mode)
@@ -73,6 +74,29 @@ def catalog_fetched_layer(fetch, descriptor, diff_id, private_root):
         report = result["report"]
         if report["diffId"] != diff_id or report["uncompressedBytes"] != size:
             raise ValueError("catalog result identity mismatch")
+        if report.get("provisional") is not True:
+            raise ValueError("catalog was not provisional")
+        stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+        try:
+            child_fd = os.open(
+                report["privateChild"],
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=stage_fd,
+            )
+            try:
+                os.link(
+                    "provisional.sqlite3",
+                    "catalog.sqlite3",
+                    src_dir_fd=child_fd,
+                    dst_dir_fd=child_fd,
+                    follow_symlinks=False,
+                )
+                os.unlink("provisional.sqlite3", dir_fd=child_fd)
+                os.fsync(child_fd)
+            finally:
+                os.close(child_fd)
+        finally:
+            os.close(stage_fd)
         return {
             "scope": "verified-single-layer-stream-catalog-only",
             "descriptorDigest": layer["digest"],
@@ -101,7 +125,9 @@ def catalog_fetched_layer(fetch, descriptor, diff_id, private_root):
             report = result.get("report")
             if report is not None:
                 child = Path(private_root) / stage / report["privateChild"]
-                (child / "catalog.sqlite3").unlink()
+                for name in ("provisional.sqlite3", "catalog.sqlite3"):
+                    with contextlib.suppress(FileNotFoundError):
+                        (child / name).unlink()
                 child.rmdir()
             with contextlib.suppress(FileNotFoundError):
                 os.rmdir(stage, dir_fd=root)
@@ -109,4 +135,5 @@ def catalog_fetched_layer(fetch, descriptor, diff_id, private_root):
     finally:
         if fetch.stdout is not None:
             fetch.stdout.close()
-        os.close(root)
+        if root is not None:
+            os.close(root)
