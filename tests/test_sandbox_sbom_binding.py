@@ -273,9 +273,7 @@ def test_rejects_conflicting_root_sha256(tmp_path):
     _, docs, artifact, _ = setup_evidence(tmp_path)
     path = tmp_path / "sboms" / docs["amd64"]["name"]
     document = json.loads(path.read_text())
-    document["packages"][0]["checksums"].append(
-        {"algorithm": "SHA256", "checksumValue": "f" * 64}
-    )
+    document["packages"][0]["checksums"].append({"algorithm": "SHA256", "checksumValue": "f" * 64})
     raw = json.dumps(document).encode()
     path.write_bytes(raw)
     artifact["layers"][0]["digest"] = digest(raw)
