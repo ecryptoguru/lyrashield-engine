@@ -14,8 +14,12 @@ supplied SPDX 2.3 document. If a dependency has a versioned module replacement,
 the effective replacement is compared; local or otherwise unversioned
 replacements fail as unresolved. Duplicate declarations, empty dependency
 metadata, missing or mismatched entries, malformed JSON and unsupported target
-information fail closed. A BuildKit in-toto v1 SPDX envelope is accepted as a
-container only; this tool does **not** verify its signature or subject.
+information fail closed. Package IDs must be present and unique, references
+must be well formed, and a matching dependency must have exactly one matching
+SPDX package entry. Repeated purls can legitimately describe separate binaries;
+they remain unresolved here because this prototype does not validate SPDX
+binary-to-package relationships. A BuildKit in-toto v1 SPDX envelope is accepted
+as a container only; this tool does **not** verify its signature or subject.
 
 The JSON result records the SHA-256 values of the supplied SPDX bytes, captured
 binary and selected host Go tool. It compares document-level membership only;
@@ -43,8 +47,10 @@ python3 scripts/check_go_sbom_coverage.py \
 ```
 
 This POSIX-only prototype accepts regular files, rejects final-component
-symlinks, caps the binary at 512 MiB, SPDX at 128 MiB, Go output at 16 MiB and
-the inspector at 30 seconds. It does not independently verify parent path
-components or protect against hostile writers changing files while read. No
+symlinks for binary and SPDX inputs, caps the binary at 512 MiB, SPDX at 128 MiB,
+Go output at 16 MiB and the inspector at 30 seconds. The operator-supplied Go
+tool may itself be a symlink, as in common installations. The prototype does
+not independently verify parent path components or protect against hostile
+writers changing files while read. No
 actual sandbox image, provider request, artifact publication or promotion was
 performed by the synthetic tests.

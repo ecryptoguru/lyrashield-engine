@@ -32,6 +32,7 @@ def build_info():
 
 def package(name, version, purl):
     return {
+        "SPDXID": "SPDXRef-" + hashlib.sha256(f"{name}@{version}".encode()).hexdigest(),
         "name": name,
         "versionInfo": version,
         "externalRefs": [
@@ -47,6 +48,7 @@ def package(name, version, purl):
 def sbom():
     return {
         "spdxVersion": "SPDX-2.3",
+        "SPDXID": "SPDXRef-DOCUMENT",
         "packages": [
             package("example.test/a", "v1.2.3", "pkg:golang/example.test/a@v1.2.3"),
             package(
@@ -133,6 +135,39 @@ def test_ambiguous_dependency_graph_fails_closed(mutation):
 @pytest.mark.parametrize(
     "mutation",
     [
+        "missing-document-id",
+        "missing-package-id",
+        "duplicate-id",
+        "ambiguous-purl",
+        "malformed-reference",
+        "conflicting-purl",
+    ],
+)
+def test_malformed_or_ambiguous_spdx_never_counts_as_coverage(mutation):
+    document = sbom()
+    if mutation == "missing-document-id":
+        del document["SPDXID"]
+    elif mutation == "missing-package-id":
+        del document["packages"][0]["SPDXID"]
+    elif mutation == "duplicate-id":
+        document["packages"][1]["SPDXID"] = document["packages"][0]["SPDXID"]
+    elif mutation == "ambiguous-purl":
+        duplicate = copy.deepcopy(document["packages"][0])
+        duplicate["SPDXID"] = "SPDXRef-other-instance"
+        document["packages"].append(duplicate)
+    elif mutation == "malformed-reference":
+        document["packages"][0]["externalRefs"].append({"referenceType": "purl"})
+    else:
+        conflicting = copy.deepcopy(document["packages"][0]["externalRefs"][0])
+        conflicting["referenceLocator"] = "pkg:golang/example.test/foreign@v1.2.3"
+        document["packages"][0]["externalRefs"].append(conflicting)
+    with pytest.raises(ValueError):
+        oracle.compare_go_dependencies(build_info(), document, "amd64")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
         "empty",
         "local",
         "missing-version",
@@ -209,6 +244,7 @@ def test_cli_reads_real_linux_go_binary_without_running_it(compiled_go_fixture):
     root, go, binary = compiled_go_fixture
     doc = {
         "spdxVersion": "SPDX-2.3",
+        "SPDXID": "SPDXRef-DOCUMENT",
         "packages": [package("example.test/dep", "v1.2.3", "pkg:golang/example.test/dep@v1.2.3")],
     }
     spdx = root / "sbom.json"
@@ -271,4 +307,10 @@ def test_inputs_reject_symlinks_and_non_regular_files(compiled_go_fixture):
 
 def test_duplicate_json_keys_fail_closed():
     with pytest.raises(ValueError):
-        json.loads('{"Deps":[],"Deps":[1]}', object_pairs_hook=oracle.unique_pairs)
+        oracle.parse_json('{"Deps":[],"Deps":[1]}')
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+def test_nonstandard_json_constants_fail_closed(constant):
+    with pytest.raises(ValueError):
+        oracle.parse_json('{"extra":' + constant + "}")

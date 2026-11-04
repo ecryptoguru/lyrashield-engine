@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import resource
@@ -25,6 +26,7 @@ MAX_PACKAGES = 200_000
 ARCHITECTURES = {"amd64": 62, "arm64": 183}
 MODULE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._~+/-]{0,1023}\Z")
 VERSION = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?\Z")
+SPDX_ID = re.compile(r"SPDXRef-[A-Za-z0-9.-]{1,1024}\Z")
 
 
 def unique_pairs(pairs):
@@ -34,6 +36,33 @@ def unique_pairs(pairs):
             raise ValueError("duplicate JSON key")
         result[key] = value
     return result
+
+
+def json_constant(_value):
+    raise ValueError("nonstandard JSON constant")
+
+
+def json_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("nonfinite JSON number")
+    return number
+
+
+def json_int(value):
+    if len(value) > 64:
+        raise ValueError("JSON integer exceeds bound")
+    return int(value)
+
+
+def parse_json(data):
+    return json.loads(
+        data,
+        object_pairs_hook=unique_pairs,
+        parse_constant=json_constant,
+        parse_float=json_float,
+        parse_int=json_int,
+    )
 
 
 def identity(value):
@@ -52,6 +81,35 @@ def identity(value):
     return name, version
 
 
+def spdx_package_go_identity(package):
+    name, version = package.get("name"), package.get("versionInfo")
+    references = package.get("externalRefs", [])
+    if not isinstance(references, list):
+        raise TypeError("invalid SPDX references")
+    purls = []
+    for reference in references:
+        if not isinstance(reference, dict) or any(
+            not isinstance(reference.get(field), str)
+            or not reference[field]
+            or len(reference[field]) > 4096
+            for field in ("referenceCategory", "referenceType", "referenceLocator")
+        ):
+            raise ValueError("malformed SPDX reference")
+        if reference["referenceType"] == "purl":
+            purls.append(reference)
+    if len(purls) > 1:
+        raise ValueError("conflicting SPDX purls")
+    if not purls or not purls[0]["referenceLocator"].startswith("pkg:golang/"):
+        return None
+    identity({"Path": name, "Version": version})
+    expected = f"pkg:golang/{quote(name, safe='/')}@{quote(version, safe='.-_~')}"
+    if purls[0]["referenceLocator"] != expected:
+        raise ValueError("Go purl identity mismatch")
+    if purls[0]["referenceCategory"] != "PACKAGE-MANAGER":
+        return None
+    return name, version
+
+
 def spdx_go_inventory(document):
     if not isinstance(document, dict):
         raise TypeError("unsupported SPDX document")
@@ -59,32 +117,29 @@ def spdx_go_inventory(document):
         if document.get("predicateType") != "https://spdx.dev/Document":
             raise ValueError("unsupported SPDX statement")
         document = document.get("predicate")
-    if not isinstance(document, dict) or document.get("spdxVersion") != "SPDX-2.3":
+    if (
+        not isinstance(document, dict)
+        or document.get("spdxVersion") != "SPDX-2.3"
+        or document.get("SPDXID") != "SPDXRef-DOCUMENT"
+    ):
         raise ValueError("unsupported SPDX document")
     packages = document.get("packages")
     if not isinstance(packages, list) or len(packages) > MAX_PACKAGES:
         raise ValueError("invalid SPDX package inventory")
-    inventory = set()
+    inventory = {}
+    seen_ids = set()
     for package in packages:
         if not isinstance(package, dict):
             raise TypeError("invalid SPDX package")
-        name, version = package.get("name"), package.get("versionInfo")
-        references = package.get("externalRefs", [])
-        if not isinstance(references, list):
-            raise TypeError("invalid SPDX references")
-        try:
-            identity({"Path": name, "Version": version})
-        except ValueError:
-            continue
-        expected = f"pkg:golang/{quote(name, safe='/')}@{quote(version, safe='.-_~')}"
-        for reference in references:
-            if (
-                isinstance(reference, dict)
-                and reference.get("referenceCategory") == "PACKAGE-MANAGER"
-                and reference.get("referenceType") == "purl"
-                and reference.get("referenceLocator") == expected
-            ):
-                inventory.add((name, version))
+        package_id = package.get("SPDXID")
+        if not isinstance(package_id, str) or not SPDX_ID.fullmatch(package_id):
+            raise ValueError("invalid SPDX package ID")
+        if package_id in seen_ids or package_id == "SPDXRef-DOCUMENT":
+            raise ValueError("duplicate SPDX package ID")
+        seen_ids.add(package_id)
+        go_identity = spdx_package_go_identity(package)
+        if go_identity is not None:
+            inventory.setdefault(go_identity, set()).add(package_id)
     return inventory
 
 
@@ -129,8 +184,10 @@ def compare_go_dependencies(build_info, document, architecture):
             raise ValueError("duplicate effective Go dependency")
         embedded.add(effective)
     inventory = spdx_go_inventory(document)
-    if embedded - inventory:
+    if embedded - inventory.keys():
         raise ValueError("SPDX is missing an embedded Go dependency")
+    if any(len(inventory[item]) != 1 for item in embedded):
+        raise ValueError("SPDX contains ambiguous Go dependency entries")
     return {"dependency_count": len(embedded), "matched_count": len(embedded)}
 
 
@@ -234,7 +291,7 @@ def inspect_binary(binary, go_tool, architecture):
                 raise ValueError("Go build information exceeds bound")
             if digest_file(go_tool) != tool_hash:
                 raise ValueError("Go tool changed while inspecting")
-            return json.loads(result, object_pairs_hook=unique_pairs), digest.hexdigest(), tool_hash
+            return parse_json(result), digest.hexdigest(), tool_hash
     finally:
         os.close(fd)
 
@@ -248,7 +305,7 @@ def main():
     args = parser.parse_args()
     try:
         raw = read_bounded(args.spdx, MAX_SBOM)
-        document = json.loads(raw, object_pairs_hook=unique_pairs)
+        document = parse_json(raw)
         info, binary_hash, tool_hash = inspect_binary(args.binary, args.go, args.architecture)
         result = compare_go_dependencies(info, document, args.architecture)
         result.update(
