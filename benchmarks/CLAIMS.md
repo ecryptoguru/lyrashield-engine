@@ -16,6 +16,11 @@ sign-off. A claim without a row is not publishable.
   vulnerabilities" unqualified.
 - Engine (LLM) numbers require `run_stability` across ≥3 runs; single-run
   results are not publishable claims.
+- Engine claims also require retained raw run artifacts and independently
+  verified executable identity and model/provider routing. The current runner
+  invokes `lyrashield` from `PATH`, records the checkout revision separately,
+  and deletes its temporary raw artifacts; a `COMPLETE` scorer status does
+  not close those gaps.
 - Deterministic-scanner numbers cite the scanner contract version
   (`packages/types` scanner contract) alongside the corpus revision.
 - The upstream XBEN result belongs to Strix v0.4.0 — never quoted as

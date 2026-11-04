@@ -145,41 +145,52 @@ def engine_run_receipt(repo_dir: Path, scan_id: str) -> dict[str, Any] | None:
         return None
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         return {"error": f"run.json unreadable: {exc}"}
     if not isinstance(record, dict):
         return {"error": "run.json is not an object"}
 
-    receipt: dict[str, Any] = {"schemaVersion": record.get("schema_version")}
+    receipt: dict[str, Any] = {
+        "schemaVersion": record.get("schema_version"),
+        "runId": record.get("run_id"),
+        "status": record.get("status"),
+        "phase": record.get("phase"),
+    }
     caps = record.get("sandbox_capabilities")
     if isinstance(caps, dict):
         probed = caps.get("capabilities")
         preflight = caps.get("preflight")
 
-        def _controls(key: str) -> list[str]:
+        def _controls(key: str) -> list[str] | None:
             if not isinstance(preflight, dict):
-                return []
-            return sorted(
-                str(item.get("control"))
-                for item in preflight.get(key) or []
-                if isinstance(item, dict) and item.get("control")
-            )
+                return None
+            entries = preflight.get(key)
+            if not isinstance(entries, list) or not all(
+                isinstance(item, dict) and isinstance(item.get("control"), str) and item["control"]
+                for item in entries
+            ):
+                return None
+            return sorted(item["control"] for item in entries)
 
         receipt["sandboxCapabilities"] = {
+            "schema": caps.get("schema"),
             "backend": caps.get("backend"),
-            "statuses": {
-                str(name): str(entry.get("status"))
-                for name, entry in probed.items()
-                if isinstance(entry, dict)
-            }
+            "probedAt": caps.get("probed_at"),
+            "statuses": {name: entry.get("status") for name, entry in probed.items()}
             if isinstance(probed, dict)
-            else {},
+            and all(isinstance(entry, dict) for entry in probed.values())
+            else None,
             "preflightDegradations": _controls("degradations"),
             "preflightFailures": _controls("failures"),
         }
     quality = record.get("scan_quality")
     if isinstance(quality, dict):
         observed = quality.get("observed")
+        if any(
+            quality.get(key) is not None and not isinstance(quality[key], list)
+            for key in ("surfaces", "unassessed")
+        ):
+            return {"error": "invalid scan_quality collections"}
         receipt["scanQuality"] = {
             "observed": observed if isinstance(observed, dict) else None,
             "declared": quality.get("declared")
