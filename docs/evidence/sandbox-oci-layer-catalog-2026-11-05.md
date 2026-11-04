@@ -49,3 +49,10 @@ caller must never treat a residual catalog or a child exit alone as success.
 Without retained tar bytes, catalog offsets cannot be consumed unless the exact
 uncompressed source is obtained and fully reverified again. This experiment is
 not an overlay or release qualification and is not connected to production.
+
+If the catalog worker stops early and the pipe writer receives a broken pipe,
+the streaming wrapper reports a fixed, allowlisted worker-error category once
+the worker has stopped. Unknown errors receive a generic category; archive or
+customer content from exception messages is not emitted. A category from an
+incomplete stream is diagnostic only and does not authenticate the input or
+establish the cause of any prior attempt whose worker error was not retained.

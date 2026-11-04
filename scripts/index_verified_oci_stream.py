@@ -4,6 +4,7 @@
 import contextlib
 import os
 import secrets
+import sqlite3
 import stat
 import threading
 from pathlib import Path
@@ -15,6 +16,42 @@ from scripts.verify_oci_layer_binding import verify_layer_stream
 
 JOIN_SECONDS = 60
 FETCH_EXIT_SECONDS = 10
+
+
+class CatalogWorkerError(ValueError):
+    """A fixed, non-content-bearing worker failure category."""
+
+    def __init__(self, category):
+        super().__init__(category)
+        self.category = category
+
+
+def worker_failure_category(error):
+    """Map only known constant messages; never expose archive-derived text."""
+    if isinstance(error, UnicodeError):
+        return "invalid-utf8"
+    if isinstance(error, ValueError):
+        known = {
+            "unsupported tar type or extension": "unsupported-tar-type",
+            "unsupported or duplicate PAX key": "unsupported-pax-key",
+            "unsupported metadata": "unsupported-metadata",
+            "unsafe path": "unsafe-path",
+            "invalid whiteout": "invalid-whiteout",
+            "duplicate normalized path": "duplicate-path",
+            "layer byte limit exceeded": "layer-limit",
+            "entry limit exceeded": "entry-limit",
+            "path byte limit exceeded": "path-limit",
+            "temporary storage reserve insufficient": "storage-reserve",
+        }
+        message = error.args[0] if error.args and isinstance(error.args[0], str) else ""
+        return known.get(message, "catalog-value-error")
+    if isinstance(error, sqlite3.Error):
+        return "catalog-storage-error"
+    if isinstance(error, TimeoutError):
+        return "catalog-timeout"
+    if isinstance(error, OSError):
+        return "catalog-io-error"
+    return "catalog-worker-error"
 
 
 def catalog_fetched_layer(fetch, descriptor, diff_id, private_root):
@@ -70,7 +107,7 @@ def catalog_fetched_layer(fetch, descriptor, diff_id, private_root):
         if worker.is_alive():
             raise TimeoutError("catalog worker did not finish")
         if "error" in result:
-            raise ValueError("catalog worker failed") from result["error"]
+            raise CatalogWorkerError(worker_failure_category(result["error"])) from None
         report = result["report"]
         if report["diffId"] != diff_id or report["uncompressedBytes"] != size:
             raise ValueError("catalog result identity mismatch")
@@ -109,7 +146,7 @@ def catalog_fetched_layer(fetch, descriptor, diff_id, private_root):
             "finalImageVerified": False,
             "releaseQualified": False,
         }
-    except BaseException:
+    except BaseException as error:
         if write_fd is not None:
             os.close(write_fd)
             write_fd = None
@@ -131,6 +168,13 @@ def catalog_fetched_layer(fetch, descriptor, diff_id, private_root):
                 child.rmdir()
             with contextlib.suppress(FileNotFoundError):
                 os.rmdir(stage, dir_fd=root)
+        if (
+            isinstance(error, BrokenPipeError)
+            and worker is not None
+            and not worker.is_alive()
+            and "error" in result
+        ):
+            raise CatalogWorkerError(worker_failure_category(result["error"])) from None
         raise
     finally:
         if fetch.stdout is not None:

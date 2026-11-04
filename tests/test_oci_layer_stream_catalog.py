@@ -14,6 +14,7 @@ import zlib
 
 import pytest
 
+from scripts import index_verified_oci_stream as stream_catalog
 from scripts.index_verified_oci_stream import catalog_fetched_layer
 from scripts.verify_oci_layer_binding import OCI_GZIP
 
@@ -106,6 +107,51 @@ def test_real_producer_exit_failure_after_complete_bytes_is_rejected(root):
     with pytest.raises(ValueError, match="fetch process failed"):
         catalog_fetched_layer(process, descriptor, diff, root)
     assert list(root.iterdir()) == [payload]
+
+
+def test_pipe_failure_reports_safe_worker_category_without_private_exception(root, monkeypatch):
+    data = tar() + bytes(2 * 1024 * 1024)
+    compressed, descriptor, diff = inputs(data)
+
+    def fail_early(*_args):
+        raise ValueError("unsupported tar type or extension")
+
+    monkeypatch.setattr(stream_catalog, "catalog_forward_layer", fail_early)
+    with pytest.raises(stream_catalog.CatalogWorkerError) as caught:
+        catalog_fetched_layer(Fetch(compressed), descriptor, diff, root)
+    assert caught.value.category == "unsupported-tar-type"
+    assert not list(root.iterdir())
+
+
+def test_worker_failure_redacts_unrecognized_message(root, monkeypatch):
+    data = tar() + bytes(2 * 1024 * 1024)
+    compressed, descriptor, diff = inputs(data)
+
+    def fail_early(*_args):
+        raise ValueError("secret-customer-content")
+
+    monkeypatch.setattr(stream_catalog, "catalog_forward_layer", fail_early)
+    with pytest.raises(stream_catalog.CatalogWorkerError) as caught:
+        catalog_fetched_layer(Fetch(compressed), descriptor, diff, root)
+    assert caught.value.category == "catalog-value-error"
+    assert "secret-customer-content" not in str(caught.value)
+    assert not list(root.iterdir())
+
+
+def test_worker_failure_after_complete_stream_is_sanitized(root, monkeypatch):
+    compressed, descriptor, diff = inputs(tar())
+
+    def fail_at_eof(stream, *_args):
+        while stream.read(65536):
+            pass
+        raise ValueError("secret-customer-content")
+
+    monkeypatch.setattr(stream_catalog, "catalog_forward_layer", fail_at_eof)
+    with pytest.raises(stream_catalog.CatalogWorkerError) as caught:
+        catalog_fetched_layer(Fetch(compressed), descriptor, diff, root)
+    assert caught.value.category == "catalog-value-error"
+    assert "secret-customer-content" not in str(caught.value)
+    assert not list(root.iterdir())
 
 
 def test_complete_bytes_are_only_provisional_until_fetch_exit(root):
