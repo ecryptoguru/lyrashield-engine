@@ -82,7 +82,23 @@ def identity(value):
     return name, version
 
 
-def spdx_package_go_identity(package):
+def diagnostic_unversioned_identity(name, version, reference):
+    if version == "UNKNOWN":
+        identity({"Path": name, "Version": "v0.0.0"})
+        expected = f"pkg:golang/{quote(name, safe='/')}"
+    else:
+        if len(version) > 1024 or not re.fullmatch(r"go[0-9]+\.[0-9]+\.[0-9]+", version):
+            raise ValueError("invalid Go stdlib version")
+        expected = f"pkg:golang/stdlib@{version[2:]}"
+    if (
+        reference["referenceCategory"] != "PACKAGE-MANAGER"
+        or reference["referenceLocator"] != expected
+    ):
+        raise ValueError("unversioned Go purl identity mismatch")
+    return name, None
+
+
+def spdx_package_go_identity(package, *, diagnostic=False):
     name, version = package.get("name"), package.get("versionInfo")
     references = package.get("externalRefs", [])
     if not isinstance(references, list):
@@ -103,6 +119,11 @@ def spdx_package_go_identity(package):
         raise ValueError("conflicting SPDX purls")
     if not purls or not purls[0]["referenceLocator"].startswith("pkg:golang/"):
         return None
+    if diagnostic and (
+        version == "UNKNOWN"
+        or (name == "stdlib" and isinstance(version, str) and version.startswith("go"))
+    ):
+        return diagnostic_unversioned_identity(name, version, purls[0])
     identity({"Path": name, "Version": version})
     expected = f"pkg:golang/{quote(name, safe='/')}@{quote(version, safe='.-_~')}"
     if purls[0]["referenceLocator"] != expected:
@@ -112,7 +133,7 @@ def spdx_package_go_identity(package):
     return name, version
 
 
-def spdx_go_inventory(document):
+def spdx_go_inventory(document, *, diagnostic=False):
     if not isinstance(document, dict):
         raise TypeError("unsupported SPDX document")
     if document.get("_type") == "https://in-toto.io/Statement/v1":
@@ -139,7 +160,7 @@ def spdx_go_inventory(document):
         if package_id in seen_ids or package_id == "SPDXRef-DOCUMENT":
             raise ValueError("duplicate SPDX package ID")
         seen_ids.add(package_id)
-        go_identity = spdx_package_go_identity(package)
+        go_identity = spdx_package_go_identity(package, diagnostic=diagnostic)
         if go_identity is not None:
             inventory.setdefault(go_identity, set()).add(package_id)
     return inventory
@@ -166,7 +187,7 @@ def validate_go_target(build_info, architecture):
         raise ValueError("Go target does not match requested architecture")
 
 
-def compare_go_dependencies(build_info, document, architecture):
+def go_dependency_identities(build_info, architecture):
     validate_go_target(build_info, architecture)
     dependencies = build_info.get("Deps")
     if not isinstance(dependencies, list) or not 0 < len(dependencies) <= MAX_DEPENDENCIES:
@@ -185,6 +206,35 @@ def compare_go_dependencies(build_info, document, architecture):
         if effective in embedded:
             raise ValueError("duplicate effective Go dependency")
         embedded.add(effective)
+    return embedded
+
+
+def diagnose_go_dependencies(build_info, document, architecture):
+    """Report document matches, not image coverage or authenticated provenance."""
+    embedded = go_dependency_identities(build_info, architecture)
+    inventory = spdx_go_inventory(document, diagnostic=True)
+    result = []
+    for name, version in sorted(embedded):
+        candidates = len(inventory.get((name, version), ()))
+        unversioned = len(inventory.get((name, None), ()))
+        if unversioned or candidates > 1:
+            state = "ambiguous"
+        else:
+            state = "matched" if candidates == 1 else "absent-but-unresolved"
+        result.append(
+            {
+                "name": name,
+                "version": version,
+                "state": state,
+                "candidates": candidates,
+                "unversioned_candidates": unversioned,
+            }
+        )
+    return result
+
+
+def compare_go_dependencies(build_info, document, architecture):
+    embedded = go_dependency_identities(build_info, architecture)
     inventory = spdx_go_inventory(document)
     if embedded - inventory.keys():
         raise ValueError("SPDX is missing an embedded Go dependency")
@@ -304,12 +354,21 @@ def main():
     parser.add_argument("--spdx", required=True, type=Path)
     parser.add_argument("--architecture", required=True, choices=sorted(ARCHITECTURES))
     parser.add_argument("--go", required=True, type=Path)
+    parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help="report document-level matches; never qualifies an image",
+    )
     args = parser.parse_args()
     try:
         raw = read_bounded(args.spdx, MAX_SBOM)
         document = parse_json(raw)
         info, binary_hash, tool_hash = inspect_binary(args.binary, args.go, args.architecture)
-        result = compare_go_dependencies(info, document, args.architecture)
+        if args.diagnostic:
+            dependencies = diagnose_go_dependencies(info, document, args.architecture)
+            result = {"status": "diagnostic-only", "dependencies": dependencies}
+        else:
+            result = compare_go_dependencies(info, document, args.architecture)
         result.update(
             {
                 "scope": "embedded-versioned-go-dependencies-only",
@@ -323,7 +382,7 @@ def main():
     except (OSError, ValueError, TypeError, subprocess.SubprocessError) as error:
         print(f"Go dependency coverage incomplete: {error}", file=sys.stderr)  # noqa: T201
         return 1
-    return 0
+    return 1 if args.diagnostic and any(d["state"] != "matched" for d in dependencies) else 0
 
 
 if __name__ == "__main__":

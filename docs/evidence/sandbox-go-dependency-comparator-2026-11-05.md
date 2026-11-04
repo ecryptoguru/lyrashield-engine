@@ -23,6 +23,34 @@ binary-to-package relationships. A BuildKit in-toto v1 SPDX envelope is accepted
 as a container only; this tool does **not** verify its signature or subject.
 These checks do not constitute complete SPDX schema or reference validation.
 
+The optional `--diagnostic` mode lists each valid versioned effective Go
+dependency with a document-level state. `matched` means exactly one matching
+versioned SPDX package entry; `ambiguous` means multiple matches or at least one
+same-name unversioned candidate; `absent-but-unresolved` means no matching
+versioned or recognized unversioned candidate was found. None of these states
+establishes package coverage, binary ownership or image contents. A matching
+entry may belong to another binary. The diagnostic accepts only the explicit
+`UNKNOWN` unversioned Go purl and `stdlib` forms encountered in the retained
+document; malformed, unsupported or unversioned build identities still fail
+without partial output. The strict default mode remains unchanged. Diagnostic
+output always says `diagnostic-only`, and any ambiguous or absent state exits
+nonzero; even an all-matched diagnostic does not qualify an artifact.
+
+For an offline check on 2026-11-05, the caller supplied an amd64-labelled
+historical BuildKit SPDX statement and a separately captured layer-local
+gospider ELF. The Go tool reported 31 embedded versioned dependencies. The
+diagnostic returned 22 single document-level matches, 9 ambiguous matches and
+zero absent-but-unresolved entries, and exited 1. A separate direct recount of
+the supplied statement produced the same counts. The ELF SHA-256 was
+`52c810794b104cf0b61f57cbaff90e1f108c857e854c00a203fbd71112ffc1a3`, the
+supplied SPDX bytes SHA-256 was
+`a1a22fd2266e484dc91283fbbdfd94cff7854291bc5d38a0c058d3c8caa3f75f`, and the
+operator-supplied Go tool SHA-256 was
+`3f947495f00cb7f8088a5cfd694da8dc43869b33f5e7377b048fb18922ffb7e0`.
+The ELF and Go metadata identified Linux amd64. This observation does not
+authenticate the SPDX statement or establish that its subject, the retained
+layer entry, a final overlay or a deployed image are the same artifact.
+
 The JSON result records the SHA-256 values of the supplied SPDX bytes, captured
 binary and selected host Go tool. It compares document-level membership only;
 it does not establish that SPDX relationships associate each package with the
