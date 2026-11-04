@@ -33,6 +33,109 @@ def test_marker_matching_does_not_credit_neighboring_case(tmp_path: Path) -> Non
     assert not case_matches(case, finding, tmp_path, {})
 
 
+def test_overlapping_case_locators_do_not_credit_ambiguous_findings(tmp_path: Path) -> None:
+    cases = [
+        {
+            "id": "A",
+            "class": "iac",
+            "vulnerable": "bad.yaml",
+            "clean": "safe.yaml",
+            "markerLine": 1,
+            "rulePrefixes": ["iac-compose-privileged", "iac-k8s"],
+        },
+        {
+            "id": "B",
+            "class": "iac",
+            "vulnerable": "bad.yaml",
+            "clean": "safe.yaml",
+            "markerLine": 4,
+            "rulePrefixes": ["iac-k8s-hostpath"],
+        },
+    ]
+    corpus = {"name": "test", "revision": "v1", "pairs": cases}
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    (tmp_path / "bad.yaml").write_text("privileged: true\n\n\nhostPath: /etc\n")
+    (tmp_path / "safe.yaml").write_text("safe: true\n")
+    source = {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+    runs, records = [], []
+    for case in cases:
+        for variant in ("vulnerable", "clean"):
+            case_id = case["id"]
+            scan_id = f"{case_id}-{variant}-det"
+            runs.append(
+                {
+                    "case": case_id,
+                    "detector": "deterministic",
+                    "variant": variant,
+                    "runIndex": 0,
+                    "scanId": scan_id,
+                    "returncode": 0,
+                    "emitted": 3 if case_id == "B" and variant == "vulnerable" else 2,
+                }
+            )
+            for scanner, data in (
+                ("__coverage__", {"coverageIssues": []}),
+                ("__discovery__", {"discovery": {}}),
+            ):
+                records.append(
+                    {
+                        "caseId": case_id,
+                        "variant": variant,
+                        "runIndex": 0,
+                        "scanId": scan_id,
+                        "scanner": scanner,
+                        **data,
+                    }
+                )
+    records.append(
+        {
+            "caseId": "B",
+            "variant": "vulnerable",
+            "runIndex": 0,
+            "scanId": "B-vulnerable-det",
+            "scanner": "iac",
+            "id": "iac-k8s-hostpath-bad.yaml-4",
+            "file": "bad.yaml",
+            "startLine": 4,
+        }
+    )
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    manifest = {
+        "harnessVersion": 3,
+        "detectors": "deterministic",
+        "runs": runs,
+        "corpus": "test",
+        "corpusRevision": "v1",
+        "corpusSha256": hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest(),
+        "fixtureSha256": {
+            name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+            for name in ("bad.yaml", "safe.yaml")
+        },
+        "findingsSha256": hashlib.sha256(findings.read_bytes()).hexdigest(),
+        "sources": {"engine": source, "product": source},
+        "sourcesChangedDuringRun": False,
+    }
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    result = score(tmp_path, tmp_path)
+    assert result["status"] == "INCOMPLETE"
+    assert result["detectedCases"] == 0
+    assert result["ambiguousFindings"] == 1
+    # A narrowed locator restores credit to the correct case.
+    cases[0]["rulePrefixes"] = ["iac-compose-privileged"]
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    manifest["corpusSha256"] = hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    result = score(tmp_path, tmp_path)
+    assert result["status"] == "COMPLETE"
+    assert result["detectedCases"] == 1
+    assert result["ambiguousFindings"] == 0
+
+
 def test_stability_includes_zero_hit_runs() -> None:
     manifest = {"runs": [{"detector": "engine", "runIndex": i} for i in range(3)]}
     detected = {"A": [{"scanner": "engine", "runIndex": i} for i in range(2)]}
