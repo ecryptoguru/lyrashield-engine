@@ -322,6 +322,25 @@ def test_pax_absolute_symlink_target_with_controls_still_rejects(target):
     assert set(root.entries) == {""}
 
 
+@pytest.mark.parametrize("target", ["foo\nbar", "foo\u0085bar", "foo\u202ebar"])
+@pytest.mark.parametrize("header_format", ["raw", "pax"])
+def test_relative_symlink_target_with_controls_is_rejected_in_raw_and_pax(target, header_format):
+    if header_format == "pax":
+        data = pax_tar(pax_record(b"linkpath", target.encode()), member_type=tarfile.SYMTYPE)
+    else:
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+            entry = tarfile.TarInfo("link")
+            entry.type = tarfile.SYMTYPE
+            entry.linkname = target
+            archive.addfile(entry)
+        data = output.getvalue()
+    root = VirtualRoot()
+    with pytest.raises(ValueError):
+        root.apply(data)
+    assert set(root.entries) == {""}
+
+
 def test_pax_path_whiteout_is_applied_to_lower_layer():
     root = VirtualRoot()
     apply(root, [("old", "file", b"old")])

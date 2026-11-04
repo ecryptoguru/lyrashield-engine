@@ -121,6 +121,20 @@ def test_catalog_keeps_absolute_symlink_as_inert_text(root):
     assert report["finalImageVerified"] is False
 
 
+@pytest.mark.parametrize("target", ["foo\nbar", "foo\u0085bar", "foo\u202ebar"])
+def test_catalog_rejects_raw_relative_symlink_controls(root, target):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as tf:
+        entry = tarfile.TarInfo("link")
+        entry.type = tarfile.SYMTYPE
+        entry.linkname = target
+        tf.addfile(entry)
+    data = output.getvalue()
+    with pytest.raises(ValueError):
+        catalog.catalog_layer(io.BytesIO(data), digest(data), root)
+    assert not list(root.iterdir())
+
+
 def test_indexes_synthetic_layer_above_in_memory_limit(root):
     size = 129 * 1024 * 1024
     entry = tarfile.TarInfo("large")

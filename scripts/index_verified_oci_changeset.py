@@ -132,6 +132,8 @@ def entry_row(entry):
             target = catalog_path(
                 entry.linkname, "symlink-target" if entry.issym() else "hardlink-target"
             )
+            if entry.issym():
+                inert_symlink_target(entry.linkname)
         kind = "symlink" if entry.issym() else "hardlink"
     else:
         raise ValueError("unsupported entry type")

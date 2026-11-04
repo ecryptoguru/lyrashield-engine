@@ -52,9 +52,11 @@ def normalized_path(name, allow_root=False):
 
 def inert_symlink_target(name):
     """Validate a target as data; never resolve it against the host or image."""
+    if isinstance(name, str) and any(
+        unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in name
+    ):
+        raise ValueError("invalid symlink target character")
     if isinstance(name, str) and name.startswith("/"):
-        if any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in name):
-            raise ValueError("invalid symlink target character")
         if len(name.encode("utf-8")) > MAX_PATH_LENGTH:
             raise ValueError("invalid path length")
         remainder = name[1:]
