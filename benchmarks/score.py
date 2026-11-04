@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -235,6 +236,27 @@ def receipt_version_state(
     return legacy, supports_records, digest_valid
 
 
+def source_identity_complete(manifest: dict[str, Any]) -> bool:
+    sources = manifest.get("sources")
+    if manifest.get("sourcesChangedDuringRun") is not False or not isinstance(sources, dict):
+        return False
+    clean_diff = hashlib.sha256(b"").hexdigest()
+    for name in ("engine", "product"):
+        source = sources.get(name)
+        if (
+            not isinstance(source, dict)
+            or not isinstance(source.get("revision"), str)
+            or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", source["revision"])
+            or source.get("dirty") is not False
+            or source.get("trackedDiffSha256") != clean_diff
+        ):
+            return False
+    return (
+        manifest.get("detectors") not in ("engine", "all")
+        or manifest.get("engineRevision") == sources["engine"]["revision"]
+    )
+
+
 def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
     corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
     findings_bytes = (results_dir / "findings.jsonl").read_bytes()
@@ -313,8 +335,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         or coverage_issues
         or not run_set_complete(manifest, corpus)
         or not corpus_matches_receipt(manifest, corpus, corpus_dir)
-        or manifest.get("sourcesChangedDuringRun")
-        or any(source.get("dirty") for source in manifest.get("sources", {}).values())
+        or not source_identity_complete(manifest)
         else "COMPLETE"
     )
     clean_runs = [r for r in manifest["runs"] if r.get("variant") == "clean"]
