@@ -4,7 +4,8 @@
 import io
 import tarfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Optional
 
 from scripts.check_sbom_inventory import BoundedTarInfo, StrictTarReader, iter_uncached_archive
 from scripts.verify_oci_layer_binding import verify
@@ -26,7 +27,7 @@ class Node:
     mode: int
     uid: int
     gid: int
-    mtime: int
+    mtime: Optional[int]  # noqa: UP045 - Python 3.9 support
     content: bytes = b""
     target: str = ""
 
@@ -88,7 +89,7 @@ class RestrictiveTarReader(StrictTarReader):
 
 class VirtualRoot:
     def __init__(self, deadline=None):
-        self.entries = {"": Node("dir", 0o755, 0, 0, 0)}
+        self.entries = {"": Node("dir", 0o755, 0, 0, None)}
         self.deadline = deadline if deadline is not None else time.monotonic() + MAX_PROCESS_SECONDS
 
     def check_deadline(self):
@@ -158,6 +159,7 @@ class VirtualRoot:
     def apply_whiteouts(self, tree, whiteouts):
         if len(whiteouts) * len(tree) > MAX_SCAN_WORK:
             raise ValueError("whiteout work limit exceeded")
+        touched = set()
         for path, base in whiteouts:
             self.check_deadline()
             parent = require_parent(tree, path)
@@ -167,11 +169,12 @@ class VirtualRoot:
             else:
                 victim = (parent + "/" if parent else "") + base[4:]
                 doomed = [name for name in tree if name == victim or name.startswith(victim + "/")]
+            touched.add(parent)
             for name in doomed:
                 del tree[name]
-        return len(whiteouts) * len(self.entries)
+        return len(whiteouts) * len(self.entries), touched
 
-    def apply_additions(self, tree, additions, work):
+    def apply_additions(self, tree, additions, work, touched):
         for path, entry_node in additions:
             self.check_deadline()
             node = entry_node
@@ -180,8 +183,10 @@ class VirtualRoot:
                     raise ValueError("invalid root entry")
                 tree[path] = node
                 continue
-            require_parent(tree, path)
+            parent = require_parent(tree, path)
             prior = tree.get(path)
+            if prior is None or prior.kind != "dir" or node.kind != "dir":
+                touched.add(parent)
             if prior and prior.kind == "dir" and node.kind != "dir":
                 work += len(tree)
                 if work > MAX_SCAN_WORK:
@@ -209,8 +214,12 @@ class VirtualRoot:
     def apply(self, raw):
         whiteouts, additions = self.split_changes(self.parse(raw))
         tree = self.entries.copy()
-        work = self.apply_whiteouts(tree, whiteouts)
-        self.apply_additions(tree, additions, work)
+        work, touched = self.apply_whiteouts(tree, whiteouts)
+        self.apply_additions(tree, additions, work, touched)
+        for path in touched:
+            node = tree.get(path)
+            if node is not None and node.kind == "dir":
+                tree[path] = replace(node, mtime=None)
         if sum(len(node.content) for node in tree.values() if node.kind == "file") > MAX_TREE_BYTES:
             raise ValueError("tree byte limit exceeded")
         if sum(len(path.encode("utf-8")) for path in tree) > MAX_PATH_BYTES:

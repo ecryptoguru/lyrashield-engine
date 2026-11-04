@@ -166,6 +166,40 @@ def test_refuses_nonempty_directory_replacement():
     assert root.entries["a/item"].content == b"x"
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        [("a/new", "file", b"new")],
+        [("a/old", "file", b"replacement")],
+        [("a/.wh.old", "file", b"")],
+        [("a/.wh..wh..opq", "file", b"")],
+    ],
+    ids=["add", "replace", "whiteout", "opaque"],
+)
+def test_parent_mtime_becomes_unknown_after_child_mutation(change):
+    root = VirtualRoot()
+    apply(root, [("a", "dir", None), ("a/old", "file", b"old")])
+    apply(root, [("a", "dir", None)])
+    assert root.entries["a"].mtime == 0
+    apply(root, change)
+    assert root.entries["a"].mtime is None
+
+
+def test_directory_mtime_stays_unknown_when_header_and_mutation_share_layer():
+    root = VirtualRoot()
+    apply(root, [("a", "dir", None)])
+    apply(root, [("a/new", "file", b"new"), ("a", "dir", None)])
+    assert root.entries["a"].mtime is None
+
+
+def test_directory_mtime_stays_known_when_other_directory_changes():
+    root = VirtualRoot()
+    apply(root, [("a", "dir", None), ("b", "dir", None)])
+    apply(root, [("b/file", "file", b"x")])
+    assert root.entries["a"].mtime == 0
+    assert root.entries["b"].mtime is None
+
+
 def test_deadline_fails_without_mutating_tree():
     root = VirtualRoot(deadline=0)
     with pytest.raises(TimeoutError, match="deadline"):
