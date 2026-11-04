@@ -14,6 +14,8 @@ Upstream details remain available in the [usestrix/benchmarks repository](https:
 
 The versioned starter corpora live in [`corpus/v1`](./corpus/v1/README.md) and [`corpus/v2`](./corpus/v2/corpus.json). The benchmark runner defaults to v2. See the [corpus inventory](./CORPUS-INVENTORY.md) for their contents, missing fixtures, and evaluation limits. Model-quality measurements remain separate bounded runs with retained receipts.
 
+When scoring bound records, malformed non-null finding file, rule ID, or line fields invalidate the receipt instead of earning case-match credit. Missing locations remain unmatched; a corpus-declared absence control can still match without a line. Existing historical receipts are not rewritten.
+
 ## Evaluation requirements
 
 Before changing orchestration for claimed quality gains—or publishing any result claim—build a private, versioned corpus that records:

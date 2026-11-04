@@ -68,12 +68,24 @@ def derive_marker_line(
     return cache[case_id]
 
 
+def finding_location_fields_valid(finding: dict[str, Any]) -> bool:
+    """Missing locations stay unmatched; malformed location fields invalidate records."""
+    file_name, rule_id, line = (finding.get(key) for key in ("file", "id", "startLine"))
+    return (
+        (file_name is None or isinstance(file_name, str))
+        and (rule_id is None or isinstance(rule_id, str))
+        and (line is None or (type(line) is int and line > 0))
+    )
+
+
 def case_matches(
     case: dict[str, Any],
     finding: dict[str, Any],
     corpus_dir: Path,
     marker_cache: dict[str, int | None],
 ) -> bool:
+    if not finding_location_fields_valid(finding):
+        return False
     file_name = case.get("matchFile") or Path(case["vulnerable"]).name
     finding_file = finding.get("file") or ""
     if Path(finding_file).name != Path(file_name).name:
@@ -88,7 +100,7 @@ def case_matches(
     if marker is not None and not line_exempt:
         start = finding.get("startLine")
         tolerance = LINE_TOLERANCE if prefixes else 0
-        if not isinstance(start, int) or abs(start - marker) > tolerance:
+        if type(start) is not int or start < 1 or abs(start - marker) > tolerance:
             return False
     return marker is not None or bool(line_exempt and prefixes)
 
@@ -207,6 +219,7 @@ def bind_findings_to_runs(
             len(matching_runs) != 1
             or not isinstance(scanner, str)
             or scanner not in deterministic | {"engine", "__discovery__", "__coverage__"}
+            or not finding_location_fields_valid(finding)
             or (scanner == "__discovery__" and not isinstance(finding.get("discovery"), dict))
             or (scanner == "__coverage__" and not isinstance(finding.get("coverageIssues"), list))
             or not isinstance(finding.get("caseId"), str)

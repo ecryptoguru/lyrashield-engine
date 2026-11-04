@@ -33,6 +33,27 @@ def test_marker_matching_does_not_credit_neighboring_case(tmp_path: Path) -> Non
     assert not case_matches(case, finding, tmp_path, {})
 
 
+@pytest.mark.parametrize("line", [True, False, 0, -1, 1.0, "1", [], {}])
+def test_marker_matching_rejects_invalid_line_values(tmp_path: Path, line: object) -> None:
+    (tmp_path / "a.ts").write_text("bad() // CASE:A\n")
+    case = {"id": "A", "vulnerable": "a.ts", "rulePrefixes": ["rule-"]}
+    assert not case_matches(case, {"file": "a.ts", "startLine": line, "id": "rule-1"}, tmp_path, {})
+
+
+@pytest.mark.parametrize("change", [{"file": []}, {"file": {}}, {"id": []}, {"id": 1}])
+def test_malformed_location_fields_are_not_matched(tmp_path: Path, change: dict) -> None:
+    (tmp_path / "a.ts").write_text("bad() // CASE:A\n")
+    case = {"id": "A", "vulnerable": "a.ts", "rulePrefixes": ["rule-"]}
+    finding = {"file": "a.ts", "startLine": 1, "id": "rule-1"}
+    assert case_matches(case, finding, tmp_path, {})
+    assert not case_matches(case, {**finding, **change}, tmp_path, {})
+
+
+def test_absence_control_may_match_without_a_line(tmp_path: Path) -> None:
+    case = {"id": "A", "vulnerable": "a.ts", "rulePrefixes": ["rule-"], "absence": True}
+    assert case_matches(case, {"file": "a.ts", "startLine": None, "id": "rule-1"}, tmp_path, {})
+
+
 def test_overlapping_case_locators_do_not_credit_ambiguous_findings(tmp_path: Path) -> None:
     cases = [
         {
@@ -273,6 +294,14 @@ def test_unknown_detector_cannot_form_a_complete_run_set() -> None:
         {"scanner": None},
         {"scanner": "__discovery__"},
         {"scanner": "__coverage__"},
+        {"startLine": True},
+        {"startLine": False},
+        {"startLine": 0},
+        {"startLine": -1},
+        {"startLine": 1.0},
+        {"startLine": "1"},
+        {"file": ["bad.ts"]},
+        {"id": ["rule"]},
     ],
 )
 def test_finding_must_belong_to_the_recorded_run(tmp_path: Path, changed: dict) -> None:
@@ -372,6 +401,8 @@ def test_finding_must_belong_to_the_recorded_run(tmp_path: Path, changed: dict) 
     invalid = score(tmp_path, tmp_path)
     assert invalid["status"] == "INCOMPLETE"
     assert invalid["detectedCases"] == 0
+    assert invalid["unboundRecords"] == 1
+    assert invalid["recordIntegrityIncomplete"] is True
 
     for records in (sentinels, [finding, finding, *sentinels]):
         path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
