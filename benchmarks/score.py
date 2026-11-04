@@ -8,9 +8,9 @@ Matching: a finding labels a case when all declared locators agree —
   - markerLine: exact CASE marker unless explicit rule identity allows tolerance
   - rulePrefixes: finding.id starts with any listed prefix, when present
 
-Metrics: per-class recall (detected/expected), precision proxy (clean-fixture
-findings = false positives), duplicate rate, run stability (engine: same case
-detected in all runs), runtime, and discovery-bounds receipts.
+Diagnostics: per-class case-match fractions, clean-fixture findings, extra
+matches within a case/run/scanner, run stability, runtime and discovery
+receipts. Recall and duplicate rates require independent adjudication.
 """
 
 from __future__ import annotations
@@ -403,17 +403,18 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         per_class[cls] = {
             "cases": len(cases),
             "detected": hits,
-            "recall": round(hits / len(cases), 4),
+            "caseMatchRate": round(hits / len(cases), 4),
+            "recall": None,
         }
 
     stability = engine_stability(manifest, detected)
 
-    duplicate_count = 0
+    additional_matches = 0
     for finding_list in detected.values():
         per_execution: dict[tuple[object, object], int] = defaultdict(int)
         for finding in finding_list:
             per_execution[(finding.get("scanId"), finding.get("scanner"))] += 1
-        duplicate_count += sum(max(0, count - 1) for count in per_execution.values())
+        additional_matches += sum(max(0, count - 1) for count in per_execution.values())
     failures = [r for r in manifest["runs"] if r.get("returncode") != 0 or r.get("errors")]
     coverage_issues = [f for f in findings if f.get("error") or f.get("coverageIssues")]
     engine_receipts = engine_receipts_summary(manifest["runs"])
@@ -446,18 +447,17 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         "detectors": manifest["detectors"],
         "totalCases": len(corpus["pairs"]),
         "detectedCases": sum(1 for c in corpus["pairs"] if detected[c["id"]]),
-        "recall": round(
+        "caseMatchRate": round(
             sum(1 for c in corpus["pairs"] if detected[c["id"]]) / len(corpus["pairs"]), 4
         ),
+        "recall": None,
         "unmatchedFindings": len(unmatched),
         "ambiguousFindings": len(ambiguous),
         "unboundRecords": len(unbound_findings) if supports_records else None,
         "recordIntegrityIncomplete": incomplete_records if supports_records else None,
         "findingsDigestMatches": findings_digest_valid,
-        "duplicateRate": round(
-            duplicate_count / max(1, sum(len(hits) for hits in detected.values())),
-            4,
-        ),
+        "duplicateRate": None,
+        "additionalMatchedFindings": additional_matches,
         "perClass": per_class,
         "engineStability": stability,
         "totalRuntimeMs": sum(r.get("runtimeMs", 0) for r in manifest["runs"]),
@@ -473,7 +473,9 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         f"- status: {status}",
         f"- detectors: {manifest['detectors']}",
         f"- engine revision: {manifest.get('engineRevision') or 'n/a'}",
-        f"- recall: {summary['recall']} ({summary['detectedCases']}/{summary['totalCases']})",
+        "- case-match rate (diagnostic; includes unsupported cases): "
+        f"{summary['caseMatchRate']} ({summary['detectedCases']}/{summary['totalCases']})",
+        "- recall: unavailable (independent adjudication and supported scope required)",
         "- unmatched vulnerable-fixture findings (not false positives): "
         f"{summary['unmatchedFindings']}",
         f"- findings matching overlapping case locators: {summary['ambiguousFindings']}",
@@ -481,14 +483,16 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         f"- record counts or scanner receipts incomplete: {summary['recordIntegrityIncomplete']}",
         f"- findings digest matches: {summary['findingsDigestMatches']}",
         f"- clean-fixture findings: {summary['cleanFindings']}",
-        f"- duplicate rate: {summary['duplicateRate']}",
+        "- duplicate rate: unavailable (independent adjudication required)",
+        "- additional matches within a case/run/scanner (not classified as duplicates): "
+        f"{summary['additionalMatchedFindings']}",
         f"- engine stability: {stability if stability is not None else 'n/a (single/det)'}",
         "",
-        "| class | detected | cases | recall |",
+        "| class | detected | cases | case-match rate (diagnostic) |",
         "|---|---|---|---|",
     ]
     for cls, row in per_class.items():
-        lines.append(f"| {cls} | {row['detected']} | {row['cases']} | {row['recall']} |")
+        lines.append(f"| {cls} | {row['detected']} | {row['cases']} | {row['caseMatchRate']} |")
     (results_dir / "RESULTS.md").write_text("\n".join(lines) + "\n")
     return summary
 

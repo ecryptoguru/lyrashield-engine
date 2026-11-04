@@ -134,6 +134,22 @@ def test_overlapping_case_locators_do_not_credit_ambiguous_findings(tmp_path: Pa
     assert result["status"] == "COMPLETE"
     assert result["detectedCases"] == 1
     assert result["ambiguousFindings"] == 0
+    assert result["caseMatchRate"] == 0.5
+    assert result["recall"] is None
+    assert result["perClass"]["iac"]["caseMatchRate"] == 0.5
+    assert result["perClass"]["iac"]["recall"] is None
+    assert result["duplicateRate"] is None
+    assert result["additionalMatchedFindings"] == 0
+
+    # Distinct matched findings in the same case/run are not automatically duplicates.
+    records.append({**records[-1], "id": "iac-k8s-hostpath-bad.yaml-other"})
+    next(run for run in runs if run["scanId"] == "B-vulnerable-det")["emitted"] += 1
+    findings.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    manifest["findingsSha256"] = hashlib.sha256(findings.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    result = score(tmp_path, tmp_path)
+    assert result["additionalMatchedFindings"] == 1
+    assert result["duplicateRate"] is None
 
 
 def test_stability_includes_zero_hit_runs() -> None:
@@ -366,7 +382,7 @@ def test_clean_findings_errors_and_repeat_runs_are_separate(tmp_path: Path) -> N
     assert result["detectedCases"] == 1
     assert result["cleanFindings"] == 1
     assert result["unmatchedFindings"] == 0
-    assert result["duplicateRate"] == 0
+    assert result["duplicateRate"] is None
     assert result["status"] == "INCOMPLETE"
 
 
