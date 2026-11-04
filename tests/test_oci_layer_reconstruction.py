@@ -87,11 +87,28 @@ def test_absolute_symlink_is_inert_and_cannot_be_used_as_ancestor_or_hardlink():
     assert set(root.entries) == {"", "link"}
 
 
-@pytest.mark.parametrize("target", ["/../../etc", "//host/path", "/foo/", "/foo\\bar"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/../../etc",
+        "//host/path",
+        "/foo/",
+        "/foo\\bar",
+        "/foo\nbar",
+        "/foo\u0085bar",
+        "/foo\u202ebar",
+    ],
+)
 def test_ambiguous_absolute_symlink_targets_still_reject(target):
     root = VirtualRoot()
+    result = io.BytesIO()
+    with tarfile.open(fileobj=result, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        entry = tarfile.TarInfo("link")
+        entry.type = tarfile.SYMTYPE
+        entry.linkname = target
+        archive.addfile(entry)
     with pytest.raises(ValueError):
-        apply(root, [("link", "symlink", target)])
+        root.apply(result.getvalue())
     assert set(root.entries) == {""}
 
 
@@ -294,6 +311,14 @@ def test_pax_absolute_symlink_target_with_parent_component_still_rejects():
     root = VirtualRoot()
     with pytest.raises(ValueError):
         root.apply(pax_tar(pax_record(b"linkpath", b"/../host"), member_type=tarfile.SYMTYPE))
+    assert set(root.entries) == {""}
+
+
+@pytest.mark.parametrize("target", ["/foo\nbar", "/foo\u0085bar", "/foo\u202ebar"])
+def test_pax_absolute_symlink_target_with_controls_still_rejects(target):
+    root = VirtualRoot()
+    with pytest.raises(ValueError):
+        root.apply(pax_tar(pax_record(b"linkpath", target.encode()), member_type=tarfile.SYMTYPE))
     assert set(root.entries) == {""}
 
 
