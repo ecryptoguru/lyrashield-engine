@@ -67,6 +67,8 @@ class SelectiveLayerReader(RestrictiveTarReader):
         except tarfile.HeaderError as exc:
             raise ValueError("invalid tar header") from exc
         super().begin_header(block)
+        if not header.isdir() and header.name.endswith("/"):
+            raise ValueError("non-directory entry has trailing slash")
         path = normalized_path(header.name, allow_root=header.isdir())
         if path in self.seen or len(self.seen) >= MAX_ENTRIES:
             raise ValueError("duplicate path or layer entry limit exceeded")

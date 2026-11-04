@@ -141,6 +141,17 @@ def test_ambiguous_or_malformed_entries_fail_closed(entries):
         capture.capture_verified_layer(io.BytesIO(data), descriptor, diff, TARGET)
 
 
+@pytest.mark.parametrize("path", [TARGET + "/", "usr/bin/.wh.other/"])
+def test_non_directory_trailing_slash_is_not_normalized_into_an_entry(path):
+    entries = [(path, "file", b"binary" if path.startswith(TARGET) else b"")]
+    if path != TARGET + "/":
+        entries.append((TARGET, "file", b"binary"))
+    data = tar(entries)
+    descriptor, diff = item(data)
+    with pytest.raises(ValueError, match="trailing slash"):
+        capture.capture_verified_layer(io.BytesIO(data), descriptor, diff, TARGET)
+
+
 def test_rejects_truncated_tar_even_if_selected_file_was_captured():
     data = tar([(TARGET, "file", b"binary")])[:1024]
     descriptor, diff = item(data)
