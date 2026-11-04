@@ -145,11 +145,14 @@ def test_catalog_rejects_raw_relative_symlink_controls(root, target):
     assert not list(root.iterdir())
 
 
-def test_catalog_rejects_relative_symlink_target_trailing_slash(root):
-    data = archive([("link", "symlink", "foo/")])
-    with pytest.raises(ValueError):
-        catalog.catalog_layer(io.BytesIO(data), digest(data), root)
-    assert not list(root.iterdir())
+@pytest.mark.parametrize("target", ["foo/", "/", "//host/path", "foo//bar", "foo/./bar", "../"])
+def test_catalog_keeps_opaque_symlink_target_verbatim(root, target):
+    data = archive([("link", "symlink", target)])
+    report = catalog.catalog_layer(io.BytesIO(data), digest(data), root)
+    index = root / report["privateChild"] / "catalog.sqlite3"
+    with sqlite3.connect(f"file:{index}?mode=ro", uri=True) as db:
+        assert db.execute("SELECT kind,target FROM entries").fetchone() == ("symlink", target)
+    assert report["finalImageVerified"] is False
 
 
 def test_catalog_rejects_hardlink_target_trailing_slash(root):

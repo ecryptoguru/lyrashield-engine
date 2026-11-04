@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from scripts import reconstruct_oci_layers as reconstruction
-from scripts.reconstruct_oci_layers import VirtualRoot, reconstruct_verified
+from scripts.reconstruct_oci_layers import VirtualRoot, inert_symlink_target, reconstruct_verified
 
 
 def tar(entries):
@@ -90,8 +90,6 @@ def test_absolute_symlink_is_inert_and_cannot_be_used_as_ancestor_or_hardlink():
 @pytest.mark.parametrize(
     "target",
     [
-        "//host/path",
-        "/foo/",
         "/foo\\bar",
         "/foo\nbar",
         "/foo\u0085bar",
@@ -413,15 +411,59 @@ def test_relative_symlink_target_with_controls_is_rejected_in_raw_and_pax(target
 
 
 @pytest.mark.parametrize("header_format", ["raw", "pax"])
-def test_relative_symlink_target_with_trailing_slash_is_rejected(header_format):
+def test_relative_symlink_target_with_trailing_slash_is_retained_verbatim(header_format):
     if header_format == "pax":
         data = pax_tar(pax_record(b"linkpath", b"foo/"), member_type=tarfile.SYMTYPE)
     else:
         data = tar([("link", "symlink", "foo/")])
     root = VirtualRoot()
+    root.apply(data)
+    path = "placeholder" if header_format == "pax" else "link"
+    assert root.entries[path].target == "foo/"
+
+
+@pytest.mark.parametrize("target", ["/", "//host/path", "foo//bar", "foo/./bar", "../", ".", ".."])
+@pytest.mark.parametrize("header_format", ["raw", "pax"])
+def test_opaque_symlink_text_is_verbatim_and_cannot_be_followed(target, header_format):
+    if header_format == "pax":
+        data = pax_tar(pax_record(b"linkpath", target.encode()), member_type=tarfile.SYMTYPE)
+        path = "placeholder"
+    else:
+        data = tar([("link", "symlink", target)])
+        path = "link"
+    root = VirtualRoot()
+    root.apply(data)
+    assert root.entries[path].target == target
     with pytest.raises(ValueError):
-        root.apply(data)
+        apply(root, [(path + "/child", "file", b"x")])
+    with pytest.raises(ValueError):
+        apply(root, [(path + "/.wh.child", "file", b"")])
+    with pytest.raises(ValueError):
+        apply(root, [("alias", "hardlink", path)])
+    assert set(root.entries) == {"", path}
+
+
+def test_opaque_symlink_cannot_become_ancestor_within_one_layer():
+    root = VirtualRoot()
+    with pytest.raises(ValueError):
+        apply(root, [("link", "symlink", "../"), ("link/child", "file", b"x")])
     assert set(root.entries) == {""}
+
+
+@pytest.mark.parametrize("target", ["dir//file", "dir/./file", "dir/../file", "dir/file/"])
+def test_ambiguous_hardlink_targets_remain_rejected(target):
+    root = VirtualRoot()
+    apply(root, [("dir", "dir", None), ("dir/file", "file", b"old")])
+    with pytest.raises(ValueError):
+        apply(root, [("alias", "hardlink", target)])
+    assert root.entries["dir/file"].content == b"old"
+    assert "alias" not in root.entries
+
+
+@pytest.mark.parametrize("target", ["", "x\x00y", "x\\y", "x\n", "x\u0085", "x\u202e", "x\ud800"])
+def test_opaque_symlink_targets_still_reject_empty_controls_and_backslash(target):
+    with pytest.raises(ValueError):
+        inert_symlink_target(target)
 
 
 def test_pax_path_whiteout_is_applied_to_lower_layer():

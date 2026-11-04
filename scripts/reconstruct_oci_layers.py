@@ -60,22 +60,10 @@ def inert_symlink_target(name):
     """Validate a target as data; never resolve it against the host or image."""
     if not isinstance(name, str) or "\\" in name:
         raise ValueError("unsafe path")
-    if name.endswith("/"):
-        raise ValueError("symlink target ends in slash")
     if any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in name):
         raise ValueError("invalid symlink target character")
     if not name or len(name.encode("utf-8")) > MAX_PATH_LENGTH:
         raise ValueError("invalid path length")
-    if name.startswith("/"):
-        remainder = name[1:]
-        if remainder.startswith("./"):
-            raise ValueError("ambiguous symlink target")
-    else:
-        remainder = name
-        while remainder.startswith("./"):
-            remainder = remainder[2:]
-    if any(part in {"", "."} for part in remainder.split("/")):
-        raise ValueError("ambiguous or traversing path")
     return name
 
 
@@ -173,11 +161,13 @@ class RestrictiveTarReader(StrictTarReader):
                 validate_member_trailing_slash(path, is_directory=header.isdir())
                 normalized_path(path, allow_root=header.isdir())
             if link is not None:
-                if not (header.issym() or header.islnk()) or link.endswith("/"):
+                if not (header.issym() or header.islnk()):
                     raise ValueError("invalid PAX linkpath")
                 if header.issym():
                     inert_symlink_target(link)
                 else:
+                    if link.endswith("/"):
+                        raise ValueError("invalid PAX linkpath")
                     normalized_path(link)
             self.awaiting_pax_member = False
             self.local_pax = None

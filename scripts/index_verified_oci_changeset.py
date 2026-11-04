@@ -111,19 +111,6 @@ def catalog_symlink_target(value):
     except ValueError as error:
         if error.args == ("unsafe path",) and isinstance(value, str) and "\\" in value:
             raise CatalogUnsafePathError("symlink-target", "backslash") from None
-        if error.args == ("ambiguous or traversing path",) and isinstance(value, str):
-            remainder = value[1:] if value.startswith("/") else value
-            while remainder.startswith("./"):
-                remainder = remainder[2:]
-            parts = remainder.split("/")
-            reasons = []
-            if "." in parts:
-                reasons.append("dot")
-            if "" in parts:
-                reasons.append("empty-component")
-            if reasons:
-                reason = reasons[0] if len(reasons) == 1 else "multiple-components"
-                raise CatalogUnsafePathError("symlink-target", reason) from None
         raise
 
 
@@ -174,11 +161,11 @@ def entry_row(entry):
     elif entry.isdir():
         kind = "dir"
     elif entry.issym() or entry.islnk():
-        if entry.linkname.endswith("/"):
-            raise ValueError("link target ends in slash")
         if entry.issym():
             target = catalog_symlink_target(entry.linkname)
         else:
+            if entry.linkname.endswith("/"):
+                raise ValueError("link target ends in slash")
             target = catalog_path(entry.linkname, "hardlink-target")
         kind = "symlink" if entry.issym() else "hardlink"
     else:

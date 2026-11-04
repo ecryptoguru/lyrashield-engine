@@ -166,8 +166,6 @@ def test_unrecognized_or_nonplain_exception_message_remains_generic():
 @pytest.mark.parametrize(
     "target,category",
     [
-        ("/private/./target", "symlink-target-dot"),
-        ("private/", "link-target-trailing-slash"),
         ("private\nvalue", "invalid-symlink-character"),
     ],
 )
@@ -200,7 +198,6 @@ def test_verified_rejection_reports_only_fixed_validation_reason(root, target, c
         ("private/./member", "file", "", "member-file-dot"),
         ("private//member", "file", "", "member-file-empty-component"),
         ("private//../member", "file", "", "member-file-multiple-components"),
-        ("link", "symlink", "private/./target", "symlink-target-dot"),
         ("link", "hardlink", "private/../target", "hardlink-target-dotdot"),
     ],
 )
