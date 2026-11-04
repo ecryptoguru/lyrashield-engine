@@ -56,3 +56,14 @@ the worker has stopped. Unknown errors receive a generic category; archive or
 customer content from exception messages is not emitted. A category from an
 incomplete stream is diagnostic only and does not authenticate the input or
 establish the cause of any prior attempt whose worker error was not retained.
+
+A separate unwired diagnostic, `scripts/verify_oci_rejection_drain.py`, can
+continue consuming the same bounded compressed stream after the catalog rejects
+its prefix. It exposes only an allowlisted worker-error category after the full
+compressed descriptor and uncompressed DiffID match and the fetch process exits
+zero. It does not preserve a catalog or input bytes and never treats rejection
+as acceptance. Once the consumer rejects, the remainder is not parsed as tar,
+so the result does not establish full archive framing or overlay validity.
+A caller must independently authenticate the expected descriptor/DiffID chain
+and use an external process-group wall deadline; the existing trusted-host,
+sampled-reserve, possible residual and blocked-I/O limits apply.
