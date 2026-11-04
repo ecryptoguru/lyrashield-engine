@@ -318,16 +318,62 @@ def engine_receipts_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def ambiguous_case_match(
+    case: dict[str, Any],
+    finding: dict[str, Any],
+    cases: list[dict[str, Any]],
+    corpus_dir: Path,
+    marker_cache: dict[str, int | None],
+) -> bool:
+    return any(
+        sibling["id"] != case["id"]
+        and sibling["vulnerable"] == case["vulnerable"]
+        and case_matches(sibling, finding, corpus_dir, marker_cache)
+        for sibling in cases
+    )
+
+
+def classify_scan_findings(
+    findings: list[dict[str, Any]], cases: list[dict[str, Any]], corpus_dir: Path
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    detected: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    clean, unmatched, ambiguous = [], [], []
+    marker_cache: dict[str, int | None] = {}
+    for finding in findings:
+        if finding.get("variant") == "clean":
+            clean.append(finding)
+            continue
+        matched = False
+        for case in cases:
+            # Each projection contains a whole shared file: credit only the
+            # case/run actually executed, never sibling cases or clean controls.
+            case_id = finding.get("caseId")
+            if case_id is not None and case_id != case["id"]:
+                continue
+            if case_id is None and not str(finding.get("scanId", "")).startswith(case["id"] + "-"):
+                continue
+            if case_matches(case, finding, corpus_dir, marker_cache):
+                if ambiguous_case_match(case, finding, cases, corpus_dir, marker_cache):
+                    ambiguous.append(finding)
+                else:
+                    detected[case["id"]].append(finding)
+                matched = True
+        if not matched:
+            unmatched.append(finding)
+    return detected, clean, unmatched, ambiguous
+
+
 def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
     corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
     findings_bytes = (results_dir / "findings.jsonl").read_bytes()
     findings = load_findings(findings_bytes)
     manifest = json.loads((results_dir / "run-manifest.json").read_text(encoding="utf-8"))
 
-    detected: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    clean_fps: list[dict[str, Any]] = []
-    unmatched: list[dict[str, Any]] = []
-    marker_cache: dict[str, int | None] = {}
     legacy, supports_records, findings_digest_valid = receipt_version_state(
         manifest, findings_bytes
     )
@@ -345,24 +391,9 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         and f.get("scanner") not in ("__discovery__", "__coverage__")
         and not f.get("error")
     ]
-    for finding in scan_findings:
-        if finding.get("variant") == "clean":
-            clean_fps.append(finding)
-            continue
-        matched = False
-        for case in corpus["pairs"]:
-            # Each projection contains a whole shared file: credit only the
-            # case/run actually executed, never sibling cases or clean controls.
-            case_id = finding.get("caseId")
-            if case_id is not None and case_id != case["id"]:
-                continue
-            if case_id is None and not str(finding.get("scanId", "")).startswith(case["id"] + "-"):
-                continue
-            if case_matches(case, finding, corpus_dir, marker_cache):
-                detected[case["id"]].append(finding)
-                matched = True
-        if not matched:
-            unmatched.append(finding)
+    detected, clean_fps, unmatched, ambiguous = classify_scan_findings(
+        scan_findings, corpus["pairs"], corpus_dir
+    )
 
     per_class: dict[str, dict[str, Any]] = {}
     classes = {c["class"] for c in corpus["pairs"]}
@@ -391,6 +422,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         if legacy
         else "INCOMPLETE"
         if failures
+        or ambiguous
         or engine_receipts["invalid"]
         or findings_digest_valid is not True
         or unbound_findings
@@ -418,6 +450,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
             sum(1 for c in corpus["pairs"] if detected[c["id"]]) / len(corpus["pairs"]), 4
         ),
         "unmatchedFindings": len(unmatched),
+        "ambiguousFindings": len(ambiguous),
         "unboundRecords": len(unbound_findings) if supports_records else None,
         "recordIntegrityIncomplete": incomplete_records if supports_records else None,
         "findingsDigestMatches": findings_digest_valid,
@@ -443,6 +476,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         f"- recall: {summary['recall']} ({summary['detectedCases']}/{summary['totalCases']})",
         "- unmatched vulnerable-fixture findings (not false positives): "
         f"{summary['unmatchedFindings']}",
+        f"- findings matching overlapping case locators: {summary['ambiguousFindings']}",
         f"- records not bound to a recorded run: {summary['unboundRecords']}",
         f"- record counts or scanner receipts incomplete: {summary['recordIntegrityIncomplete']}",
         f"- findings digest matches: {summary['findingsDigestMatches']}",
