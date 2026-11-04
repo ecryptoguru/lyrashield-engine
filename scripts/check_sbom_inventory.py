@@ -9,6 +9,7 @@ import argparse
 import json
 import posixpath
 import re
+import signal
 import sys
 import tarfile
 from collections import defaultdict
@@ -18,9 +19,16 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 
 MAX_METADATA_BYTES = 32 * 1024 * 1024
+MAX_TOTAL_METADATA_BYTES = 256 * 1024 * 1024
 MAX_METADATA_FILES = 200_000
 MAX_SBOM_BYTES = 256 * 1024 * 1024
 MAX_LINK_DEPTH = 64
+MAX_ARCHIVE_ENTRIES = 1_000_000
+MAX_ARCHIVE_HEADER_BYTES = 64 * 1024
+MAX_ARCHIVE_PATH_CHARS = 4096
+MAX_IDENTITY_CHARS = 1024
+MAX_PURL_CHARS = 4096
+MAX_PROCESS_SECONDS = 900
 NPM_ROOTS = (
     "home/pentester/.npm-tools/node_modules",
     "usr/share/nodejs",
@@ -51,10 +59,36 @@ def metadata_kind(name):
     return None
 
 
-def npm_scope_or_ancestor(name):
-    return any(
-        name == root or name.startswith(root + "/") or root.startswith(name + "/")
-        for root in NPM_ROOTS
+class BoundedTarInfo(tarfile.TarInfo):
+    """Bound extension parsing before tarfile reads its payload into memory."""
+
+    def _proc_pax(self, archive):
+        if not 0 <= self.size <= MAX_ARCHIVE_HEADER_BYTES:
+            raise ValueError("extended tar header exceeds byte limit")
+        return super()._proc_pax(archive)
+
+    def _proc_gnulong(self, archive):
+        if not 0 <= self.size <= MAX_ARCHIVE_HEADER_BYTES:
+            raise ValueError("extended tar header exceeds byte limit")
+        return super()._proc_gnulong(archive)
+
+    def _proc_sparse(self, _archive):
+        raise ValueError("sparse tar entries are unsupported")
+
+    def _proc_gnusparse_00(self, *_args):
+        raise ValueError("sparse tar entries are unsupported")
+
+    def _proc_gnusparse_01(self, *_args):
+        raise ValueError("sparse tar entries are unsupported")
+
+    def _proc_gnusparse_10(self, *_args):
+        raise ValueError("sparse tar entries are unsupported")
+
+
+def valid_identity(*values):
+    return all(
+        isinstance(value, str) and value.strip() and len(value) <= MAX_IDENTITY_CHARS
+        for value in values
     )
 
 
@@ -85,6 +119,8 @@ def add_spdx_reference(result, name, version, ref):
     purl = ref.get("referenceLocator")
     if not isinstance(purl, str):
         return
+    if len(purl) > MAX_PURL_CHARS:
+        raise ValueError("SPDX purl exceeds length limit")
     parsed = urlsplit(purl)
     if parsed.scheme != "pkg" or parsed.fragment:
         return
@@ -93,7 +129,7 @@ def add_spdx_reference(result, name, version, ref):
         return
     if purl.startswith("pkg:deb/"):
         arch = parse_qs(parsed.query).get("arch", [])
-        if len(arch) == 1 and typed_path.rsplit("/", 1)[-1] == name:
+        if len(arch) == 1 and valid_identity(arch[0]) and typed_path.rsplit("/", 1)[-1] == name:
             result["deb"].add((name, version, arch[0]))
     elif purl.startswith("pkg:pypi/"):
         if normalize_python(typed_path.removeprefix("pypi/")) == normalize_python(name):
@@ -113,6 +149,8 @@ def spdx_inventory(document):
         name, version = package.get("name"), package.get("versionInfo")
         if not isinstance(name, str) or not isinstance(version, str):
             continue
+        if len(name) > MAX_IDENTITY_CHARS or len(version) > MAX_IDENTITY_CHARS:
+            raise ValueError("SPDX package identity exceeds length limit")
         refs = package.get("externalRefs", [])
         if not isinstance(refs, list):
             raise TypeError("invalid SPDX external references")
@@ -135,20 +173,20 @@ def collect_metadata(kind, data):
             if status[2] != "installed":
                 continue
             package, version, arch = msg.get("Package"), msg.get("Version"), msg.get("Architecture")
-            if not all(isinstance(v, str) and v.strip() for v in (package, version, arch)):
+            if not valid_identity(package, version, arch):
                 raise ValueError("missing Debian package identity")
             identities.add((package, version, arch))
     elif kind == "pypi":
         msg = BytesParser().parsebytes(data)
         reject_duplicate_headers(msg, ("Name", "Version"))
         package, version = msg.get("Name"), msg.get("Version")
-        if not all(isinstance(v, str) and v.strip() for v in (package, version)):
+        if not valid_identity(package, version):
             raise ValueError("missing Python package identity")
         identities.add((normalize_python(package), version))
     else:
         item = json.loads(data, object_pairs_hook=unique_json_pairs)
         package, version = item.get("name"), item.get("version")
-        if not all(isinstance(v, str) and v.strip() for v in (package, version)):
+        if not valid_identity(package, version):
             raise ValueError("missing npm package identity")
         identities.add((package, version))
     return identities
@@ -197,26 +235,43 @@ def finish_inventory(inventory, counts, links, parsed_paths, unresolved):
             record_unresolved(unresolved, kind, "no package identities found in scoped inventory")
 
 
+def validate_archive_entry(index, entry):
+    if index > MAX_ARCHIVE_ENTRIES:
+        raise ValueError("archive entry limit exceeded")
+    if len(entry.name) > MAX_ARCHIVE_PATH_CHARS or len(entry.linkname) > MAX_ARCHIVE_PATH_CHARS:
+        raise ValueError("archive path exceeds length limit")
+
+
+def account_metadata_bytes(total, size):
+    total += max(0, size)
+    if total > MAX_TOTAL_METADATA_BYTES:
+        raise ValueError("metadata byte limit exceeded")
+    return total
+
+
 def collect_rootfs(stream):
     inventory = {"deb": set(), "pypi": set(), "npm": set()}
     unresolved, seen, counts = [], set(), defaultdict(int)
     parsed_paths, links = set(), {}
-    with tarfile.open(fileobj=stream, mode="r|*") as archive:
-        for entry in archive:
+    total_metadata_bytes = 0
+    with tarfile.open(fileobj=stream, mode="r|*", tarinfo=BoundedTarInfo) as archive:
+        for index, entry in enumerate(archive, 1):
+            validate_archive_entry(index, entry)
             path = PurePosixPath(entry.name)
             if path.is_absolute() or ".." in path.parts:
                 record_unresolved(unresolved, entry.name, "unsafe archive path")
                 continue
             name = str(path)
             kind = metadata_kind(name)
-            if kind is None and (entry.issym() or entry.islnk()) and npm_scope_or_ancestor(name):
-                record_unresolved(unresolved, name, "unresolved npm scope link")
+            if (entry.issym() or entry.islnk()) and not (kind == "npm" and entry.issym()):
+                record_unresolved(unresolved, name, "unresolved archive link")
                 continue
             if kind is None:
                 continue
             counts[kind] += 1
             if sum(counts.values()) > MAX_METADATA_FILES:
                 raise ValueError("too many package metadata files")
+            total_metadata_bytes = account_metadata_bytes(total_metadata_bytes, entry.size)
             if name in seen:
                 record_unresolved(unresolved, name, "duplicate, non-file or oversized metadata")
                 continue
@@ -251,14 +306,7 @@ def read_sbom(path):
     return raw
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--rootfs", required=True, help="Docker-exported merged filesystem tar, or - for stdin"
-    )
-    parser.add_argument("--sbom", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
+def process(args):
     document = json.loads(read_sbom(args.sbom), object_pairs_hook=unique_json_pairs)
     if not isinstance(document, dict):
         raise TypeError("expected SPDX object")
@@ -287,6 +335,31 @@ def main():
     }
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return 1 if missing or unresolved else 0
+
+
+def deadline_exceeded(_signum, _frame):
+    raise TimeoutError("SBOM inventory processing deadline exceeded")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--rootfs", required=True, help="Docker-exported merged filesystem tar, or - for stdin"
+    )
+    parser.add_argument("--sbom", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    if not hasattr(signal, "setitimer") or not hasattr(signal, "SIGALRM"):
+        raise RuntimeError("processing deadline requires POSIX interval timers")
+    if signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
+        raise RuntimeError("cannot replace an existing processing timer")
+    previous = signal.signal(signal.SIGALRM, deadline_exceeded)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, MAX_PROCESS_SECONDS)
+        return process(args)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 if __name__ == "__main__":

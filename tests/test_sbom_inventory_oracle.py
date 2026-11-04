@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -247,3 +248,178 @@ def test_sbom_read_remains_bounded_if_file_changes_after_stat():
 
     with pytest.raises(ValueError, match="invalid SBOM size"):
         read(GrowingFile())
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "app/.venv/lib/python3.12/site-packages/missing-1.0.dist-info",
+        "app/.venv/lib/python3.12/site-packages",
+        "app/.venv",
+        "unrelated/symlink-that-may-hide-a-python-root",
+    ],
+)
+@pytest.mark.parametrize("link_type", [tarfile.SYMTYPE, tarfile.LNKTYPE])
+def test_python_directory_or_ancestor_links_cannot_be_silently_skipped(tmp_path, path, link_type):
+    write_inputs(tmp_path)
+    with tarfile.open(tmp_path / "rootfs.tar", "a") as archive:
+        link = tarfile.TarInfo(path)
+        link.type = link_type
+        link.linkname = "../../../../opt/missing"
+        archive.addfile(link)
+    result = invoke(tmp_path)
+    assert result.returncode != 0
+    assert any(
+        item["path"] == path
+        for item in json.loads((tmp_path / "result.json").read_text())["unresolved"]
+    )
+
+
+def test_archive_entry_limit_counts_irrelevant_entries(tmp_path):
+    write_inputs(tmp_path)
+    with tarfile.open(tmp_path / "rootfs.tar", "a") as archive:
+        item = tarfile.TarInfo("unrelated-file")
+        item.size = 1
+        archive.addfile(item, io.BytesIO(b"x"))
+    collect = runpy.run_path(str(SCRIPT))["collect_rootfs"]
+    collect.__globals__["MAX_ARCHIVE_ENTRIES"] = 3
+    with (
+        (tmp_path / "rootfs.tar").open("rb") as archive,
+        pytest.raises(ValueError, match="archive entry limit"),
+    ):
+        collect(archive)
+
+
+def test_cumulative_metadata_bytes_are_bounded(tmp_path):
+    write_inputs(tmp_path)
+    collect = runpy.run_path(str(SCRIPT))["collect_rootfs"]
+    with tarfile.open(tmp_path / "rootfs.tar") as archive:
+        sizes = [item.size for item in archive.getmembers()][:2]
+    limit = sum(sizes) - 1
+    assert max(sizes) < limit
+    collect.__globals__["MAX_TOTAL_METADATA_BYTES"] = limit
+    with (
+        (tmp_path / "rootfs.tar").open("rb") as archive,
+        pytest.raises(ValueError, match="metadata byte limit"),
+    ):
+        collect(archive)
+
+
+@pytest.mark.parametrize("kind", ["deb", "pypi", "npm"])
+def test_package_identity_length_is_bounded(kind):
+    collect = runpy.run_path(str(SCRIPT))["collect_metadata"]
+    collect.__globals__["MAX_IDENTITY_CHARS"] = 4
+    payload = {
+        "deb": (
+            b"Package: too-long\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\n\n"
+        ),
+        "pypi": b"Name: too-long\nVersion: 1\n\n",
+        "npm": b'{"name":"too-long","version":"1"}',
+    }
+    with pytest.raises(ValueError, match="identity"):
+        collect(kind, payload[kind])
+
+
+def test_spdx_purl_length_is_bounded():
+    inventory = runpy.run_path(str(SCRIPT))["spdx_inventory"]
+    package = {
+        "name": "libsample",
+        "versionInfo": "1",
+        "externalRefs": [
+            {
+                "referenceType": "purl",
+                "referenceLocator": "pkg:deb/kali/libsample@1?arch=" + "a" * 5000,
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match=r"purl.*length"):
+        inventory({"packages": [package]})
+
+
+def test_oversized_pax_header_fails_before_reading_payload():
+    api = runpy.run_path(str(SCRIPT))
+    collect = api["collect_rootfs"]
+    header = tarfile.TarInfo("extended")
+    header.type = tarfile.XHDTYPE
+    header.size = 1024 * 1024 + 1
+    archive = io.BytesIO(header.tobuf() + b"\0" * 1024)
+    with pytest.raises(ValueError, match="extended tar header"):
+        collect(archive)
+
+
+@pytest.mark.parametrize("method", ["_proc_pax", "_proc_gnulong"])
+def test_negative_extended_header_sizes_fail_before_read(method):
+    tarinfo = runpy.run_path(str(SCRIPT))["BoundedTarInfo"]("extended")
+    tarinfo.size = -1
+    with pytest.raises(ValueError, match="extended tar header"):
+        getattr(tarinfo, method)(None)
+
+
+@pytest.mark.parametrize(
+    "method,args",
+    [
+        ("_proc_sparse", (None,)),
+        ("_proc_gnusparse_00", (None, None)),
+        ("_proc_gnusparse_01", (None, None)),
+        ("_proc_gnusparse_10", (None, None, None)),
+    ],
+)
+def test_sparse_archive_encodings_fail_closed(method, args):
+    tarinfo = runpy.run_path(str(SCRIPT))["BoundedTarInfo"]("sparse")
+    with pytest.raises(ValueError, match="sparse tar"):
+        getattr(tarinfo, method)(*args)
+
+
+def test_overlong_archive_paths_are_rejected(tmp_path):
+    write_inputs(tmp_path)
+    with tarfile.open(tmp_path / "rootfs.tar", "a") as archive:
+        link = tarfile.TarInfo("a" * 4097)
+        link.type = tarfile.SYMTYPE
+        link.linkname = "target"
+        archive.addfile(link)
+    result = invoke(tmp_path)
+    assert result.returncode != 0
+    assert "archive path exceeds length limit" in result.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX SIGALRM")
+def test_processing_timeout_interrupts_a_blocked_input_pipe(tmp_path):
+    (tmp_path / "sbom.json").write_text('{"packages": []}')
+    code = (
+        "import runpy,sys; "
+        "m=runpy.run_path(sys.argv.pop(1)); "
+        "m['main'].__globals__['MAX_PROCESS_SECONDS']=0.2; "
+        "sys.exit(m['main']())"
+    )
+    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and test-owned paths
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(SCRIPT),
+            "--rootfs",
+            "-",
+            "--sbom",
+            str(tmp_path / "sbom.json"),
+            "--output",
+            str(tmp_path / "result.json"),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        process.wait(timeout=5)
+        assert process.returncode != 0
+        assert b"processing deadline" in process.stderr.read()
+        assert not (tmp_path / "result.json").exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        if process.stdin:
+            process.stdin.close()
+        if process.stdout:
+            process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
