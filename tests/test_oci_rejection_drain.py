@@ -152,6 +152,47 @@ def test_mutated_path_error_category_cannot_leak_content():
     assert worker_failure_category(error) == "unsafe-path"
 
 
+def test_unrecognized_or_nonplain_exception_message_remains_generic():
+    class UntrustedText(str):
+        def __hash__(self):
+            raise AssertionError("untrusted message must not be inspected")
+
+    assert worker_failure_category(ValueError("secret-customer-content")) == "catalog-value-error"
+    assert (
+        worker_failure_category(ValueError(UntrustedText("unsafe path"))) == "catalog-value-error"
+    )
+
+
+@pytest.mark.parametrize(
+    "target,category",
+    [
+        ("/private/../target", "ambiguous-or-traversing-path"),
+        ("private/", "link-target-trailing-slash"),
+        ("private\nvalue", "invalid-symlink-character"),
+    ],
+)
+def test_verified_rejection_reports_only_fixed_validation_reason(root, target, category):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        entry = tarfile.TarInfo("link")
+        entry.type = tarfile.SYMTYPE
+        entry.linkname = target
+        archive.addfile(entry)
+    data = output.getvalue()
+    compressed = gzip.compress(data)
+    descriptor = {
+        "mediaType": OCI_GZIP,
+        "digest": "sha256:" + hashlib.sha256(compressed).hexdigest(),
+        "size": len(compressed),
+    }
+    diff = "sha256:" + hashlib.sha256(data).hexdigest()
+    result = drain.diagnose_fetched_layer(Fetch(compressed), descriptor, diff, root)
+    assert result["category"] == category
+    assert "private" not in str(result)
+    assert result["catalogAccepted"] is False and result["releaseQualified"] is False
+    assert not list(root.iterdir())
+
+
 @pytest.mark.parametrize("failure", ["compressed-digest", "diff", "truncated", "fetch-exit"])
 def test_drain_never_returns_category_when_verification_or_fetch_fails(root, monkeypatch, failure):
     compressed, descriptor, diff = inputs()

@@ -75,3 +75,10 @@ includes path or target text and does not relax that policy. PAX validation or
 other parsing errors can still produce a generic category. Even a category
 observed over verified layer bytes describes this implementation's policy, not
 proof that the archive is malicious or incompatible with every OCI runtime.
+
+A finite set of constant parser, link, PAX and tar-framing errors maps to fixed
+non-content-bearing diagnostic reasons; all other value errors remain generic.
+Those labels describe the worker's local policy. Only a completed rejection
+drain tied to an independently authenticated descriptor/DiffID and zero fetch
+exit can associate the observation with verified layer bytes; it does not prove
+an archive defect or recover the cause of an earlier incomplete attempt.
