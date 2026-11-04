@@ -90,43 +90,59 @@ def descriptor(value, allowed_types, maximum):
 
 
 def verify_layer(directory, item, expected_diff, total, on_data=None):
-    """Stream provisional data to the optional callback; trust it only after return."""
+    """Verify a locally stored blob without following a final symlink."""
+    digest, _ = descriptor(item, {OCI_TAR, OCI_GZIP, DOCKER_GZIP}, MAX_LAYER)
+    with blob_file(directory, digest) as stream:
+        return verify_layer_stream(stream, item, expected_diff, total, on_data)
+
+
+def verify_layer_stream(stream, item, expected_diff, total, on_data=None):
+    """Verify the same input stream; callback data stays provisional until return."""
     digest, size = descriptor(item, {OCI_TAR, OCI_GZIP, DOCKER_GZIP}, MAX_LAYER)
+    require(isinstance(expected_diff, str) and DIGEST.fullmatch(expected_diff), "invalid diff ID")
+    require(type(total) is int and 0 <= total <= MAX_TOTAL, "invalid cumulative byte count")
     compressed_hash, diff_hash = hashlib.sha256(), hashlib.sha256()
     decompressor = None if item["mediaType"] == OCI_TAR else zlib.decompressobj(31)
     seen, uncompressed = 0, 0
-    with blob_file(directory, digest) as stream:
-        while True:
-            data = stream.read(CHUNK)
-            if not data:
-                break
-            seen += len(data)
-            require(seen <= size, "layer size mismatch")
-            compressed_hash.update(data)
-            if decompressor is None:
-                diff_hash.update(data)
-                uncompressed += len(data)
-                if on_data is not None:
-                    on_data(data)
-            else:
-                require(not decompressor.eof, "gzip trailing data unsupported")
-                pending = data
-                while pending:
-                    decoded = decompressor.decompress(pending, CHUNK)
-                    pending = decompressor.unconsumed_tail
-                    diff_hash.update(decoded)
-                    uncompressed += len(decoded)
-                    require(
-                        uncompressed <= MAX_LAYER and total + uncompressed <= MAX_TOTAL,
-                        "uncompressed layer byte limit exceeded",
-                    )
-                    require(not decompressor.unused_data, "gzip trailing data unsupported")
-                    if on_data is not None:
-                        on_data(decoded)
+    while True:
+        data = stream.read(CHUNK)
+        require(
+            isinstance(data, bytes) and len(data) <= CHUNK,
+            "layer input must be a bounded binary stream",
+        )
+        if not data:
+            break
+        seen += len(data)
+        require(seen <= size, "layer size mismatch")
+        compressed_hash.update(data)
+        if decompressor is None:
+            diff_hash.update(data)
+            uncompressed += len(data)
             require(
                 uncompressed <= MAX_LAYER and total + uncompressed <= MAX_TOTAL,
                 "uncompressed layer byte limit exceeded",
             )
+            if on_data is not None:
+                on_data(data)
+        else:
+            require(not decompressor.eof, "gzip trailing data unsupported")
+            pending = data
+            while pending:
+                decoded = decompressor.decompress(pending, CHUNK)
+                pending = decompressor.unconsumed_tail
+                diff_hash.update(decoded)
+                uncompressed += len(decoded)
+                require(
+                    uncompressed <= MAX_LAYER and total + uncompressed <= MAX_TOTAL,
+                    "uncompressed layer byte limit exceeded",
+                )
+                require(not decompressor.unused_data, "gzip trailing data unsupported")
+                if on_data is not None:
+                    on_data(decoded)
+        require(
+            uncompressed <= MAX_LAYER and total + uncompressed <= MAX_TOTAL,
+            "uncompressed layer byte limit exceeded",
+        )
     require(seen == size, "layer size mismatch")
     require("sha256:" + compressed_hash.hexdigest() == digest, "layer digest mismatch")
     require(decompressor is None or decompressor.eof, "incomplete gzip stream")
