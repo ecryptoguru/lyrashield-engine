@@ -17,6 +17,7 @@ from benchmarks.score import (
     engine_stability,
     run_set_complete,
     score,
+    source_identity_complete,
 )
 
 
@@ -35,6 +36,24 @@ def test_stability_includes_zero_hit_runs() -> None:
     manifest = {"runs": [{"detector": "engine", "runIndex": i} for i in range(3)]}
     detected = {"A": [{"scanner": "engine", "runIndex": i} for i in range(2)]}
     assert engine_stability(manifest, detected) == 0
+
+
+@pytest.mark.parametrize("revision", [None, "b" * 40])
+def test_engine_revision_must_match_source_identity(revision: str | None) -> None:
+    source = {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+    manifest = {
+        "detectors": "engine",
+        "engineRevision": revision,
+        "sources": {"engine": source, "product": source},
+        "sourcesChangedDuringRun": False,
+    }
+    assert not source_identity_complete(manifest)
+    manifest["engineRevision"] = source["revision"]
+    assert source_identity_complete(manifest)
 
 
 @pytest.mark.parametrize("bad_id", ["", "A-vulnerable-det", None])
@@ -93,6 +112,15 @@ def test_finding_must_belong_to_the_recorded_run(tmp_path: Path, changed: dict) 
         "runs": runs,
         "corpus": "fixture",
         "corpusRevision": "v1",
+        "sourcesChangedDuringRun": False,
+        "sources": {
+            name: {
+                "revision": "a" * 40,
+                "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+                "dirty": False,
+            }
+            for name in ("engine", "product")
+        },
         "corpusSha256": hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest(),
         "fixtureSha256": {
             name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
@@ -276,7 +304,12 @@ def test_runner_records_digest_of_exact_findings_bytes(
         (corpus_dir / filename).write_text("fixture // CASE:A\n")
     monkeypatch.setattr(run, "BENCH_ROOT", tmp_path)
     monkeypatch.setattr(run, "RESULTS_ROOT", tmp_path / "results")
-    monkeypatch.setattr(run, "source_state", lambda _path: {"revision": "test", "dirty": False})
+    source = {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+    monkeypatch.setattr(run, "source_state", lambda _path: source.copy())
     monkeypatch.setattr(sys, "argv", ["run.py", "--corpus", "fixture"])
 
     def execute(_corpus_dir: Path, case: dict, out: io.TextIOBase, variant: str) -> dict:
@@ -318,6 +351,21 @@ def test_runner_records_digest_of_exact_findings_bytes(
         == hashlib.sha256((result_dir / "findings.jsonl").read_bytes()).hexdigest()
     )
     assert score(result_dir, corpus_dir)["status"] == "COMPLETE"
+    for malformed in (
+        {},
+        {"engine": source},
+        {"engine": source, "product": {}},
+        {"engine": {**source, "revision": "unknown"}, "product": source},
+        {"engine": source, "product": {**source, "dirty": None}},
+    ):
+        manifest["sources"] = malformed
+        (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
+        assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
+    manifest["sources"] = {"engine": source, "product": source}
+    del manifest["sourcesChangedDuringRun"]
+    (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
+    manifest["sourcesChangedDuringRun"] = False
     for unknown_version in (4, True, "3"):
         manifest["harnessVersion"] = unknown_version
         (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
