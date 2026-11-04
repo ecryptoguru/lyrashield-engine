@@ -269,6 +269,22 @@ def test_rejects_noncanonical_but_equivalent_root_purl(tmp_path):
     assert not (tmp_path / "predicate.json").exists()
 
 
+def test_rejects_conflicting_root_sha256(tmp_path):
+    _, docs, artifact, _ = setup_evidence(tmp_path)
+    path = tmp_path / "sboms" / docs["amd64"]["name"]
+    document = json.loads(path.read_text())
+    document["packages"][0]["checksums"].append(
+        {"algorithm": "SHA256", "checksumValue": "f" * 64}
+    )
+    raw = json.dumps(document).encode()
+    path.write_bytes(raw)
+    artifact["layers"][0]["digest"] = digest(raw)
+    artifact["layers"][0]["size"] = len(raw)
+    artifact_raw = json.dumps(artifact).encode()
+    (tmp_path / "artifact.json").write_bytes(artifact_raw)
+    assert invoke(tmp_path, digest(artifact_raw)).returncode != 0
+
+
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
 def test_rejects_non_json_numeric_constants(tmp_path, constant):
     _, docs, artifact, _ = setup_evidence(tmp_path)

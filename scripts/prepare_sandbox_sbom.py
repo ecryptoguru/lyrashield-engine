@@ -130,16 +130,13 @@ def describe_document(path, image, arch, native_digest, config_digest):
         "SPDX has no non-root packages",
     )
     checksums, refs = root[0].get("checksums"), root[0].get("externalRefs")
+    require(isinstance(checksums, list), "SPDX root has no checksums")
+    sha256_checksums = [
+        c for c in checksums if isinstance(c, dict) and c.get("algorithm") == "SHA256"
+    ]
     require(
-        isinstance(checksums, list)
-        and sum(
-            1
-            for c in checksums
-            if isinstance(c, dict)
-            and c.get("algorithm") == "SHA256"
-            and c.get("checksumValue") == native_digest[7:]
-        )
-        == 1,
+        len(sha256_checksums) == 1
+        and sha256_checksums[0].get("checksumValue") == native_digest[7:],
         "SPDX root checksum mismatch",
     )
     require(isinstance(refs, list), "SPDX root has no package URL")
