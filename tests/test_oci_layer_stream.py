@@ -3,6 +3,7 @@
 import gzip
 import hashlib
 import io
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -47,14 +48,17 @@ def test_streams_gzip_and_reports_exact_integrity():
     data = gzip.compress(raw, mtime=0)
     result = invoke(data)
     assert result.returncode == 0, result.stderr
-    assert b'"scope": "single_layer_integrity_only"' in result.stdout
-    assert sha(raw).encode() in result.stdout
+    report = json.loads(result.stdout)
+    assert report["scope"] == "single_layer_integrity_only"
+    assert report["diffId"] == sha(raw)
+    assert report["uncompressedSize"] == len(raw)
 
 
 def test_streams_plain_bytes():
     raw = b"known uncompressed layer bytes"
     result = invoke(raw, media=TAR)
     assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["uncompressedSize"] == len(raw)
 
 
 @pytest.mark.parametrize(

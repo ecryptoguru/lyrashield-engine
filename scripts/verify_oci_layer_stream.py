@@ -23,9 +23,10 @@ def main():
     descriptor = {"digest": args.digest, "size": int(args.size), "mediaType": args.media_type}
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(MAX_SECONDS)
-    result, _ = verify_layer_stream(sys.stdin.buffer, descriptor, args.diff_id, 0)
+    result, uncompressed_size = verify_layer_stream(sys.stdin.buffer, descriptor, args.diff_id, 0)
     signal.alarm(0)
     result["scope"] = "single_layer_integrity_only"
+    result["uncompressedSize"] = uncompressed_size
     print(json.dumps(result, sort_keys=True))  # noqa: T201 - machine-readable report
 
 
