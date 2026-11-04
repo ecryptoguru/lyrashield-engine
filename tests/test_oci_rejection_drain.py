@@ -110,7 +110,7 @@ def test_unknown_worker_message_is_never_exposed(root, monkeypatch):
     [
         ("/private-name", "file", "", "member-file-absolute"),
         ("bad\\private-name", "file", "", "member-file-backslash"),
-        ("link", "symlink", "/private-target", "symlink-target-absolute"),
+        ("link", "symlink", "bad\\private-target", "symlink-target-backslash"),
         ("link", "hardlink", "/private-target", "hardlink-target-absolute"),
     ],
 )

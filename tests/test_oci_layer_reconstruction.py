@@ -74,6 +74,34 @@ def test_hardlink_preserves_old_inode_when_target_replaced():
     assert root.entries["b"].content == b"old"
 
 
+def test_absolute_symlink_is_inert_and_cannot_be_used_as_ancestor_or_hardlink():
+    root = VirtualRoot()
+    apply(root, [("link", "symlink", "/etc/passwd")])
+    assert root.entries["link"].target == "/etc/passwd"
+    with pytest.raises(ValueError):
+        apply(root, [("link/child", "file", b"x")])
+    with pytest.raises(ValueError):
+        apply(root, [("alias", "hardlink", "link")])
+    with pytest.raises(ValueError):
+        apply(root, [("link/.wh.child", "file", b"")])
+    assert set(root.entries) == {"", "link"}
+
+
+@pytest.mark.parametrize("target", ["/../../etc", "//host/path", "/foo/", "/foo\\bar"])
+def test_ambiguous_absolute_symlink_targets_still_reject(target):
+    root = VirtualRoot()
+    with pytest.raises(ValueError):
+        apply(root, [("link", "symlink", target)])
+    assert set(root.entries) == {""}
+
+
+def test_absolute_hardlink_target_still_rejects():
+    root = VirtualRoot()
+    with pytest.raises(ValueError):
+        apply(root, [("link", "hardlink", "/etc/passwd")])
+    assert set(root.entries) == {""}
+
+
 def test_self_hardlink_replacement_fails_without_retaining_old_file_as_success():
     root = VirtualRoot()
     apply(root, [("a", "file", b"old")])
@@ -107,7 +135,6 @@ def test_hardlink_with_different_inode_metadata_fails_atomically(attribute, valu
         [("a", "file", b"x"), ("./a", "file", b"y")],
         [("a", "symlink", ".."), ("a/x", "file", b"x")],
         [("a", "hardlink", "missing")],
-        [("a", "symlink", "/etc/passwd")],
         [("a", "fifo", None)],
         [(".wh.", "file", b"")],
         [(".wh..", "file", b"")],
@@ -236,7 +263,7 @@ def pax_tar(payload, *, kind=tarfile.XHDTYPE, member_type=tarfile.REGTYPE, add_m
         if add_member:
             entry = tarfile.TarInfo("placeholder")
             entry.type = member_type
-            if member_type == tarfile.SYMTYPE:
+            if member_type in {tarfile.SYMTYPE, tarfile.LNKTYPE}:
                 entry.linkname = "original"
             else:
                 entry.size = 1
@@ -248,6 +275,26 @@ def test_applies_pax_linkpath_override():
     root = VirtualRoot()
     root.apply(pax_tar(pax_record(b"linkpath", b"safe-target"), member_type=tarfile.SYMTYPE))
     assert root.entries["placeholder"].target == "safe-target"
+
+
+def test_pax_absolute_symlink_target_is_inert():
+    root = VirtualRoot()
+    root.apply(pax_tar(pax_record(b"linkpath", b"/etc/passwd"), member_type=tarfile.SYMTYPE))
+    assert root.entries["placeholder"].target == "/etc/passwd"
+
+
+def test_pax_absolute_hardlink_target_still_rejects():
+    root = VirtualRoot()
+    with pytest.raises(ValueError):
+        root.apply(pax_tar(pax_record(b"linkpath", b"/etc/passwd"), member_type=tarfile.LNKTYPE))
+    assert set(root.entries) == {""}
+
+
+def test_pax_absolute_symlink_target_with_parent_component_still_rejects():
+    root = VirtualRoot()
+    with pytest.raises(ValueError):
+        root.apply(pax_tar(pax_record(b"linkpath", b"/../host"), member_type=tarfile.SYMTYPE))
+    assert set(root.entries) == {""}
 
 
 def test_pax_path_whiteout_is_applied_to_lower_layer():

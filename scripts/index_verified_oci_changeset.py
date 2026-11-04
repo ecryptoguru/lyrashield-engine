@@ -12,7 +12,12 @@ import time
 from pathlib import Path
 
 from scripts.check_sbom_inventory import BoundedTarInfo, iter_uncached_archive
-from scripts.reconstruct_oci_layers import RestrictiveTarReader, metadata, normalized_path
+from scripts.reconstruct_oci_layers import (
+    RestrictiveTarReader,
+    inert_symlink_target,
+    metadata,
+    normalized_path,
+)
 from scripts.spool_verified_oci_layer import free_space, require_no_acl
 from scripts.verify_oci_layer_binding import DIGEST
 
@@ -121,9 +126,12 @@ def entry_row(entry):
     elif entry.issym() or entry.islnk():
         if entry.linkname.endswith("/"):
             raise ValueError("link target ends in slash")
-        target = catalog_path(
-            entry.linkname, "symlink-target" if entry.issym() else "hardlink-target"
-        )
+        if entry.issym() and entry.linkname.startswith("/"):
+            target = inert_symlink_target(entry.linkname)
+        else:
+            target = catalog_path(
+                entry.linkname, "symlink-target" if entry.issym() else "hardlink-target"
+            )
         kind = "symlink" if entry.issym() else "hardlink"
     else:
         raise ValueError("unsupported entry type")

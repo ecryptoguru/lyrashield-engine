@@ -109,6 +109,18 @@ def test_catalog_keeps_cross_layer_link_and_parent_resolution_open(root):
     assert report["releaseQualified"] is False
 
 
+def test_catalog_keeps_absolute_symlink_as_inert_text(root):
+    data = archive([("link", "symlink", "/etc/passwd")])
+    report = catalog.catalog_layer(io.BytesIO(data), digest(data), root)
+    index = root / report["privateChild"] / "catalog.sqlite3"
+    with sqlite3.connect(f"file:{index}?mode=ro", uri=True) as db:
+        assert db.execute("SELECT kind,target FROM entries").fetchone() == (
+            "symlink",
+            "/etc/passwd",
+        )
+    assert report["finalImageVerified"] is False
+
+
 def test_indexes_synthetic_layer_above_in_memory_limit(root):
     size = 129 * 1024 * 1024
     entry = tarfile.TarInfo("large")

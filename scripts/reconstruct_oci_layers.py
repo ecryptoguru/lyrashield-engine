@@ -50,6 +50,19 @@ def normalized_path(name, allow_root=False):
     return name
 
 
+def inert_symlink_target(name):
+    """Validate a target as data; never resolve it against the host or image."""
+    if isinstance(name, str) and name.startswith("/"):
+        if len(name.encode("utf-8")) > MAX_PATH_LENGTH:
+            raise ValueError("invalid path length")
+        remainder = name[1:]
+        if normalized_path(remainder) != remainder:
+            raise ValueError("ambiguous symlink target")
+        return name
+    normalized_path(name)
+    return name
+
+
 def require_parent(tree, path):
     parent = path.rpartition("/")[0]
     if parent not in tree or tree[parent].kind != "dir":
@@ -147,7 +160,10 @@ class RestrictiveTarReader(StrictTarReader):
             if link is not None:
                 if not (header.issym() or header.islnk()) or link.endswith("/"):
                     raise ValueError("invalid PAX linkpath")
-                normalized_path(link)
+                if header.issym():
+                    inert_symlink_target(link)
+                else:
+                    normalized_path(link)
             self.awaiting_pax_member = False
             self.local_pax = None
         super().begin_header(block)
@@ -199,7 +215,7 @@ class VirtualRoot:
                 elif entry.isdir():
                     node = Node("dir", *attrs)
                 elif entry.issym():
-                    normalized_path(entry.linkname)
+                    inert_symlink_target(entry.linkname)
                     path_bytes += len(entry.linkname.encode("utf-8"))
                     node = Node("symlink", *attrs, target=entry.linkname)
                 elif entry.islnk():
