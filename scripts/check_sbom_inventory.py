@@ -7,6 +7,7 @@ The caller must bind the rootfs and document to the same image manifest.
 
 import argparse
 import json
+import os
 import posixpath
 import re
 import signal
@@ -26,6 +27,7 @@ MAX_LINK_DEPTH = 64
 MAX_ARCHIVE_ENTRIES = 1_000_000
 MAX_ARCHIVE_HEADER_BYTES = 64 * 1024
 MAX_ARCHIVE_PATH_CHARS = 4096
+MAX_TOTAL_PATH_CHARS = 64 * 1024 * 1024
 MAX_IDENTITY_CHARS = 1024
 MAX_PURL_CHARS = 4096
 MAX_PROCESS_SECONDS = 900
@@ -235,11 +237,15 @@ def finish_inventory(inventory, counts, links, parsed_paths, unresolved):
             record_unresolved(unresolved, kind, "no package identities found in scoped inventory")
 
 
-def validate_archive_entry(index, entry):
+def validate_archive_entry(index, entry, total_path_chars):
     if index > MAX_ARCHIVE_ENTRIES:
         raise ValueError("archive entry limit exceeded")
     if len(entry.name) > MAX_ARCHIVE_PATH_CHARS or len(entry.linkname) > MAX_ARCHIVE_PATH_CHARS:
         raise ValueError("archive path exceeds length limit")
+    total_path_chars += len(entry.name) + len(entry.linkname)
+    if total_path_chars > MAX_TOTAL_PATH_CHARS:
+        raise ValueError("archive path budget exceeded")
+    return total_path_chars
 
 
 def account_metadata_bytes(total, size):
@@ -249,14 +255,26 @@ def account_metadata_bytes(total, size):
     return total
 
 
+def iter_uncached_archive(archive):
+    # Hardlinks are rejected below; regular-file reads use the TarInfo directly.
+    # Explicit next() plus clearing avoids unbounded TarInfo caching in Python <=3.12.
+    while True:
+        entry = archive.next()
+        archive.members.clear()
+        if entry is None:
+            return
+        yield entry
+
+
 def collect_rootfs(stream):
     inventory = {"deb": set(), "pypi": set(), "npm": set()}
     unresolved, seen, counts = [], set(), defaultdict(int)
     parsed_paths, links = set(), {}
     total_metadata_bytes = 0
+    total_path_chars = 0
     with tarfile.open(fileobj=stream, mode="r|*", tarinfo=BoundedTarInfo) as archive:
-        for index, entry in enumerate(archive, 1):
-            validate_archive_entry(index, entry)
+        for index, entry in enumerate(iter_uncached_archive(archive), 1):
+            total_path_chars = validate_archive_entry(index, entry, total_path_chars)
             path = PurePosixPath(entry.name)
             if path.is_absolute() or ".." in path.parts:
                 record_unresolved(unresolved, entry.name, "unsafe archive path")
@@ -306,7 +324,7 @@ def read_sbom(path):
     return raw
 
 
-def process(args):
+def process(args, output):
     document = json.loads(read_sbom(args.sbom), object_pairs_hook=unique_json_pairs)
     if not isinstance(document, dict):
         raise TypeError("expected SPDX object")
@@ -333,12 +351,22 @@ def process(args):
             "not full SBOM completeness",
         ],
     }
-    args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    output.write(json.dumps(result, indent=2) + "\n")
     return 1 if missing or unresolved else 0
 
 
 def deadline_exceeded(_signum, _frame):
     raise TimeoutError("SBOM inventory processing deadline exceeded")
+
+
+def create_output(path):
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        return os.fdopen(fd, "w", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def main():
@@ -356,7 +384,8 @@ def main():
     previous = signal.signal(signal.SIGALRM, deadline_exceeded)
     try:
         signal.setitimer(signal.ITIMER_REAL, MAX_PROCESS_SECONDS)
-        return process(args)
+        with create_output(args.output) as output:
+            return process(args, output)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)

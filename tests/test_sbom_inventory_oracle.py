@@ -412,7 +412,7 @@ def test_processing_timeout_interrupts_a_blocked_input_pipe(tmp_path):
         process.wait(timeout=5)
         assert process.returncode != 0
         assert b"processing deadline" in process.stderr.read()
-        assert not (tmp_path / "result.json").exists()
+        assert (tmp_path / "result.json").read_bytes() == b""
     finally:
         if process.poll() is None:
             process.kill()
@@ -423,3 +423,72 @@ def test_processing_timeout_interrupts_a_blocked_input_pipe(tmp_path):
             process.stdout.close()
         if process.stderr:
             process.stderr.close()
+
+
+def test_output_path_cannot_reuse_or_overwrite_a_success_receipt(tmp_path):
+    write_inputs(tmp_path)
+    first = invoke(tmp_path)
+    assert first.returncode == 0, first.stderr
+    output = tmp_path / "result.json"
+    original = output.read_bytes()
+    assert output.stat().st_mode & 0o077 == 0
+    with tarfile.open(tmp_path / "rootfs.tar", "a") as archive:
+        link = tarfile.TarInfo("x" * 4097)
+        link.type = tarfile.SYMTYPE
+        link.linkname = "target"
+        archive.addfile(link)
+    second = invoke(tmp_path)
+    assert second.returncode != 0
+    assert "FileExistsError" in second.stderr
+    assert output.read_bytes() == original
+
+
+def test_output_creation_does_not_follow_existing_symlinks(tmp_path):
+    write_inputs(tmp_path)
+    target = tmp_path / "owned-by-user.txt"
+    target.write_text("preserve")
+    (tmp_path / "result.json").symlink_to(target)
+    result = invoke(tmp_path)
+    assert result.returncode != 0
+    assert target.read_text() == "preserve"
+
+
+def test_many_long_archive_paths_exceed_aggregate_budget(tmp_path):
+    write_inputs(tmp_path)
+    with tarfile.open(tmp_path / "rootfs.tar", "a") as archive:
+        for index in range(30):
+            entry = tarfile.TarInfo(f"unused-{index}-" + "a" * 400)
+            entry.size = 1
+            archive.addfile(entry, io.BytesIO(b"x"))
+    collect = runpy.run_path(str(SCRIPT))["collect_rootfs"]
+    collect.__globals__["MAX_TOTAL_PATH_CHARS"] = 4_000
+    with (
+        (tmp_path / "rootfs.tar").open("rb") as archive,
+        pytest.raises(ValueError, match="archive path budget"),
+    ):
+        collect(archive)
+
+
+def test_streaming_does_not_retain_prior_tar_entries(tmp_path, monkeypatch):
+    write_inputs(tmp_path)
+    with tarfile.open(tmp_path / "rootfs.tar", "a") as archive:
+        for index in range(80):
+            entry = tarfile.TarInfo(f"unused-{index}-" + "a" * 500)
+            entry.size = 1
+            archive.addfile(entry, io.BytesIO(b"x"))
+    original = tarfile.TarFile.next
+    cached_sizes = []
+
+    def observed_next(archive):
+        entry = original(archive)
+        cached_sizes.append(len(archive.members))
+        return entry
+
+    monkeypatch.setattr(tarfile.TarFile, "next", observed_next)
+    collect = runpy.run_path(str(SCRIPT))["collect_rootfs"]
+    with (tmp_path / "rootfs.tar").open("rb") as archive:
+        inventory, unresolved = collect(archive)
+    assert not unresolved
+    assert len(inventory["deb"]) == 1
+    assert len(cached_sizes) > 80
+    assert max(cached_sizes) <= 1
