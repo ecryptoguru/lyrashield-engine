@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import quote
 
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -55,7 +55,10 @@ def json_object(raw):
             out[key] = value
         return out
 
-    obj = json.loads(raw, object_pairs_hook=unique_pairs)
+    def reject_constant(value):
+        raise ValueError(f"invalid JSON constant: {value}")
+
+    obj = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant)
     require(isinstance(obj, dict), "expected JSON object")
     return obj
 
@@ -76,6 +79,8 @@ def config_for_manifest(path, expected):
         and isinstance(config.get("digest"), str)
         and DIGEST.fullmatch(config["digest"])
         and config.get("mediaType") == CONFIG_TYPES[image["mediaType"]]
+        and "urls" not in config
+        and "data" not in config
         and type(config.get("size")) is int
         and 0 < config["size"] <= 16 * 1024 * 1024,
         "invalid image config descriptor",
@@ -144,12 +149,13 @@ def describe_document(path, image, arch, native_digest, config_digest):
         if isinstance(r, dict) and r.get("referenceType") == "purl"
     ]
     require(len(purls) == 1 and isinstance(purls[0], str), "missing or ambiguous SPDX package URL")
-    parsed = urlsplit(purls[0])
+    # Match the consumer's encodeURIComponent representation exactly.
+    safe = "-_.!~*'()"
+    expected_purl = (
+        f"pkg:oci/{quote(image, safe=safe)}@{quote(native_digest, safe=safe)}?arch={arch}"
+    )
     require(
-        parsed.scheme == "pkg"
-        and unquote(parsed.path) == f"oci/{image}@{native_digest}"
-        and parse_qs(parsed.query, keep_blank_values=True) == {"arch": [arch]}
-        and not parsed.fragment,
+        purls[0] == expected_purl,
         "SPDX package URL has wrong source or platform",
     )
     return {
@@ -223,11 +229,14 @@ def build_predicate(
         and config.get("mediaType") == "application/vnd.oci.empty.v1+json"
         and config.get("digest") == EMPTY_CONFIG
         and config.get("size") == 2
+        and "urls" not in config
         and config.get("data", "e30=") == "e30=",
         "invalid SBOM artifact config",
     )
     require(
         isinstance(subject, dict)
+        and "urls" not in subject
+        and "data" not in subject
         and all(
             subject.get(key) == index_descriptor[key] for key in ("digest", "mediaType", "size")
         )
@@ -253,6 +262,8 @@ def build_predicate(
             len(matching) == 1
             and matching[0].get("mediaType") == LAYER_TYPE
             and matching[0].get("digest") == item["documentDigest"]
+            and "urls" not in matching[0]
+            and "data" not in matching[0]
             and type(matching[0].get("size")) is int
             and matching[0]["size"] == item["size"],
             f"SBOM artifact layer mismatch: {arch}",

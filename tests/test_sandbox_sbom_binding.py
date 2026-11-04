@@ -170,6 +170,15 @@ def test_predicate_binds_full_documents_and_qualified_manifests(tmp_path):
         }
 
 
+def test_accepts_standard_inline_empty_artifact_config(tmp_path):
+    _, _, artifact, _ = setup_evidence(tmp_path)
+    artifact["config"]["data"] = "e30="
+    raw = json.dumps(artifact).encode()
+    (tmp_path / "artifact.json").write_bytes(raw)
+    result = invoke(tmp_path, digest(raw))
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("manifest_type", "config_type"),
     [
@@ -202,6 +211,75 @@ def test_config_descriptor_is_correct_for_image_manifest(tmp_path, manifest_type
     doc["config"]["size"] = 0
     with pytest.raises(ValueError):
         check()
+
+
+@pytest.mark.parametrize("field", ["urls", "data"])
+def test_rejects_external_or_inline_native_config(tmp_path, field):
+    api = runpy.run_path(str(SCRIPT))
+    manifest = {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {
+            "mediaType": "application/vnd.oci.image.config.v1+json",
+            "digest": "sha256:" + "c" * 64,
+            "size": 123,
+            field: [] if field == "urls" else "",
+        },
+    }
+    raw = json.dumps(manifest).encode()
+    path = tmp_path / "manifest.json"
+    path.write_bytes(raw)
+    with pytest.raises(ValueError):
+        api["config_for_manifest"](path, digest(raw))
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "field"),
+    [
+        ("config", "urls"),
+        ("subject", "urls"),
+        ("subject", "data"),
+        ("layer", "urls"),
+        ("layer", "data"),
+    ],
+)
+def test_rejects_external_or_inline_artifact_descriptors(tmp_path, descriptor, field):
+    _, _, artifact, _ = setup_evidence(tmp_path)
+    target = artifact["layers"][0] if descriptor == "layer" else artifact[descriptor]
+    target[field] = [] if field == "urls" else ""
+    raw = json.dumps(artifact).encode()
+    (tmp_path / "artifact.json").write_bytes(raw)
+    assert invoke(tmp_path, digest(raw)).returncode != 0
+    assert not (tmp_path / "predicate.json").exists()
+
+
+def test_rejects_noncanonical_but_equivalent_root_purl(tmp_path):
+    _, docs, artifact, _ = setup_evidence(tmp_path)
+    path = tmp_path / "sboms" / docs["amd64"]["name"]
+    document = json.loads(path.read_text())
+    ref = document["packages"][0]["externalRefs"][0]
+    ref["referenceLocator"] = ref["referenceLocator"].replace("%2F", "%2f")
+    raw = json.dumps(document).encode()
+    path.write_bytes(raw)
+    artifact["layers"][0]["digest"] = digest(raw)
+    artifact["layers"][0]["size"] = len(raw)
+    artifact_raw = json.dumps(artifact).encode()
+    (tmp_path / "artifact.json").write_bytes(artifact_raw)
+    assert invoke(tmp_path, digest(artifact_raw)).returncode != 0
+    assert not (tmp_path / "predicate.json").exists()
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_rejects_non_json_numeric_constants(tmp_path, constant):
+    _, docs, artifact, _ = setup_evidence(tmp_path)
+    path = tmp_path / "sboms" / docs["amd64"]["name"]
+    raw = docs["amd64"]["raw"][:-1] + (', "extra": ' + constant + "}").encode()
+    path.write_bytes(raw)
+    artifact["layers"][0]["digest"] = digest(raw)
+    artifact["layers"][0]["size"] = len(raw)
+    artifact_raw = json.dumps(artifact).encode()
+    (tmp_path / "artifact.json").write_bytes(artifact_raw)
+    assert invoke(tmp_path, digest(artifact_raw)).returncode != 0
 
 
 @pytest.mark.parametrize(
