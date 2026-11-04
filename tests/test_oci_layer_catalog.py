@@ -149,6 +149,14 @@ def test_catalog_rejects_hardlink_target_trailing_slash(root):
     assert not list(root.iterdir())
 
 
+@pytest.mark.parametrize("name", ["new/", ".wh.foo/"])
+def test_catalog_rejects_nondirectory_member_trailing_slash(root, name):
+    data = archive([(name, "file", b"")])
+    with pytest.raises(ValueError):
+        catalog.catalog_layer(io.BytesIO(data), digest(data), root)
+    assert not list(root.iterdir())
+
+
 def test_indexes_synthetic_layer_above_in_memory_limit(root):
     size = 129 * 1024 * 1024
     entry = tarfile.TarInfo("large")

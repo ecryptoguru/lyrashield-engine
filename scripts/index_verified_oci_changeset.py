@@ -17,6 +17,7 @@ from scripts.reconstruct_oci_layers import (
     inert_symlink_target,
     metadata,
     normalized_path,
+    validate_member_trailing_slash,
 )
 from scripts.spool_verified_oci_layer import free_space, require_no_acl
 from scripts.verify_oci_layer_binding import DIGEST
@@ -102,8 +103,7 @@ class HashingReader:
 
 
 def entry_row(entry):
-    if entry.name.endswith("/") and not entry.isdir():
-        raise ValueError("non-directory path ends in slash")
+    validate_member_trailing_slash(entry.name, is_directory=entry.isdir())
     if entry.isfile():
         entry_role = "member-file"
     elif entry.isdir():

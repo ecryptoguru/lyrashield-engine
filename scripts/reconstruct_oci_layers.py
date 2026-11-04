@@ -50,6 +50,12 @@ def normalized_path(name, allow_root=False):
     return name
 
 
+def validate_member_trailing_slash(name, *, is_directory):
+    """Reject file-like names whose trailing slash requests a directory."""
+    if isinstance(name, str) and name.endswith("/") and not is_directory:
+        raise ValueError("non-directory path ends in slash")
+
+
 def inert_symlink_target(name):
     """Validate a target as data; never resolve it against the host or image."""
     if isinstance(name, str) and name.endswith("/"):
@@ -160,8 +166,7 @@ class RestrictiveTarReader(StrictTarReader):
             path = self.local_pax.get(b"path")
             link = self.local_pax.get(b"linkpath")
             if path is not None:
-                if path.endswith("/") and not header.isdir():
-                    raise ValueError("non-directory PAX path ends in slash")
+                validate_member_trailing_slash(path, is_directory=header.isdir())
                 normalized_path(path, allow_root=header.isdir())
             if link is not None:
                 if not (header.issym() or header.islnk()) or link.endswith("/"):
@@ -200,6 +205,7 @@ class VirtualRoot:
                 self.check_deadline()
                 if len(seen) >= MAX_ENTRIES:
                     raise ValueError("layer entry limit exceeded")
+                validate_member_trailing_slash(entry.name, is_directory=entry.isdir())
                 path = normalized_path(entry.name, allow_root=entry.isdir())
                 if path in seen:
                     raise ValueError("duplicate layer path")

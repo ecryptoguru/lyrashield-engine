@@ -128,6 +128,23 @@ def test_raw_hardlink_target_trailing_slash_does_not_alias_regular_file():
     assert root.entries["foo"].content == b"old"
 
 
+@pytest.mark.parametrize("name", ["new/", ".wh.foo/"])
+def test_raw_nondirectory_member_trailing_slash_is_rejected_atomically(name):
+    root = VirtualRoot()
+    apply(root, [("foo", "file", b"old")])
+    with pytest.raises(ValueError):
+        apply(root, [(name, "file", b"")])
+    assert set(root.entries) == {"", "foo"}
+    assert root.entries["foo"].content == b"old"
+
+
+def test_directory_member_with_trailing_slash_remains_valid():
+    root = VirtualRoot()
+    apply(root, [("directory/", "dir", None), ("directory/file", "file", b"x")])
+    assert root.entries["directory"].kind == "dir"
+    assert root.entries["directory/file"].content == b"x"
+
+
 def test_self_hardlink_replacement_fails_without_retaining_old_file_as_success():
     root = VirtualRoot()
     apply(root, [("a", "file", b"old")])
