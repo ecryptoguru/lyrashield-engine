@@ -14,6 +14,7 @@ from benchmarks import run
 from benchmarks.score import (
     case_matches,
     corpus_matches_receipt,
+    engine_receipt_valid,
     engine_stability,
     run_set_complete,
     score,
@@ -409,6 +410,89 @@ def test_generated_receipts_do_not_invalidate_source_state(tmp_path: Path) -> No
     assert after["trackedDiffSha256"] != before["trackedDiffSha256"]
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        None,
+        {},
+        {"error": "unreadable"},
+        {"schemaVersion": "2.0"},
+        {"runId": "wrong"},
+        {"status": "running"},
+        {"phase": "finalizing"},
+        {"sandboxCapabilities": None},
+        {"sandboxCapabilities": {"statuses": []}},
+        {"sandboxCapabilities": {"schema": "unexpected"}},
+    ],
+)
+def test_engine_score_requires_valid_run_receipts(tmp_path: Path, invalid: object) -> None:
+    case = {"id": "A", "class": "auth", "vulnerable": "bad.ts", "clean": "safe.ts"}
+    corpus = {"name": "test", "revision": "v1", "pairs": [case]}
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    for name in ("bad.ts", "safe.ts"):
+        (tmp_path / name).write_text("example // CASE:A\n")
+    (tmp_path / "findings.jsonl").write_bytes(b"")
+    source = {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+    caps = {
+        "schema": "lyrashield-sandbox-capabilities/1.0",
+        "backend": "docker",
+        "probedAt": "2026-11-04T00:00:00+00:00",
+        "statuses": {"exec": "supported"},
+        "preflightDegradations": [],
+        "preflightFailures": [],
+    }
+    runs = [
+        {
+            "case": "A",
+            "detector": "engine",
+            "variant": variant,
+            "runIndex": 0,
+            "scanId": f"A-{variant}-engine-0",
+            "returncode": 0,
+            "emitted": 0,
+            "runReceipt": {
+                "schemaVersion": "1.1",
+                "runId": f"A-{variant}-engine-0",
+                "status": "completed",
+                "phase": "completed",
+                "sandboxCapabilities": caps,
+            },
+        }
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {
+        "harnessVersion": 3,
+        "detectors": "engine",
+        "runs": runs,
+        "engineRevision": source["revision"],
+        "sources": {"engine": source, "product": source},
+        "sourcesChangedDuringRun": False,
+        "corpus": "test",
+        "corpusRevision": "v1",
+        "corpusSha256": hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest(),
+        "fixtureSha256": {
+            name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+            for name in ("bad.ts", "safe.ts")
+        },
+        "findingsSha256": hashlib.sha256(b"").hexdigest(),
+    }
+    path = tmp_path / "run-manifest.json"
+    path.write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "COMPLETE"
+    runs[0]["runReceipt"] = {**runs[0]["runReceipt"], **invalid} if invalid else invalid
+    path.write_text(json.dumps(manifest))
+    result = score(tmp_path, tmp_path)
+    assert result["status"] == "INCOMPLETE"
+    assert result["engineReceipts"]["invalid"] == 1
+    manifest["harnessVersion"] = 2
+    path.write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "LEGACY_UNVALIDATED"
+
+
 def test_engine_run_receipt_surfaces_run_record_fields(tmp_path: Path) -> None:
     run_dir = tmp_path / "strix_runs" / "scan-1"
     run_dir.mkdir(parents=True)
@@ -416,8 +500,13 @@ def test_engine_run_receipt_surfaces_run_record_fields(tmp_path: Path) -> None:
         json.dumps(
             {
                 "schema_version": "1.1",
+                "run_id": "scan-1",
+                "status": "completed",
+                "phase": "completed",
                 "sandbox_capabilities": {
+                    "schema": "lyrashield-sandbox-capabilities/1.0",
                     "backend": "docker",
+                    "probed_at": "2026-11-04T00:00:00+00:00",
                     "capabilities": {
                         "exec": {"status": "supported"},
                         "mounts": {"status": "unprobed"},
@@ -440,7 +529,11 @@ def test_engine_run_receipt_surfaces_run_record_fields(tmp_path: Path) -> None:
     )
     receipt = run.engine_run_receipt(tmp_path, "scan-1")
     assert receipt["schemaVersion"] == "1.1"
+    assert receipt["runId"] == "scan-1"
+    assert receipt["status"] == receipt["phase"] == "completed"
     caps = receipt["sandboxCapabilities"]
+    assert caps["schema"] == "lyrashield-sandbox-capabilities/1.0"
+    assert caps["probedAt"] == "2026-11-04T00:00:00+00:00"
     assert caps["backend"] == "docker"
     assert caps["statuses"] == {"exec": "supported", "mounts": "unprobed"}
     assert caps["preflightDegradations"] == ["egress_policy_delivery"]
@@ -459,6 +552,81 @@ def test_engine_run_receipt_missing_and_unreadable(tmp_path: Path) -> None:
     (bad / "run.json").write_text("{not json")
     receipt = run.engine_run_receipt(tmp_path, "bad-scan")
     assert "error" in receipt
+    (bad / "run.json").write_bytes(b"\xff")
+    receipt = run.engine_run_receipt(tmp_path, "bad-scan")
+    assert "error" in receipt
+
+
+@pytest.mark.parametrize(
+    "preflight",
+    [
+        None,
+        {},
+        {"degradations": [], "failures": None},
+        {"degradations": [], "failures": [42]},
+        {"degradations": [], "failures": [{"control": "guard"}]},
+    ],
+)
+def test_invalid_preflight_provenance_cannot_qualify_engine_receipt(
+    tmp_path: Path, preflight: object
+) -> None:
+    run_dir = tmp_path / "strix_runs" / "scan-1"
+    run_dir.mkdir(parents=True)
+    record = {
+        "schema_version": "1.1",
+        "run_id": "scan-1",
+        "status": "completed",
+        "phase": "completed",
+        "sandbox_capabilities": {
+            "schema": "lyrashield-sandbox-capabilities/1.0",
+            "backend": "docker",
+            "probed_at": "2026-11-04T00:00:00+00:00",
+            "capabilities": {"exec": {"status": "supported"}},
+            "preflight": {"degradations": [], "failures": []},
+        },
+    }
+    (run_dir / "run.json").write_text(json.dumps(record))
+    receipt = run.engine_run_receipt(tmp_path, "scan-1")
+    assert engine_receipt_valid({"scanId": "scan-1", "runReceipt": receipt})
+    record["sandbox_capabilities"]["preflight"] = preflight
+    (run_dir / "run.json").write_text(json.dumps(record))
+    receipt = run.engine_run_receipt(tmp_path, "scan-1")
+    assert not engine_receipt_valid({"scanId": "scan-1", "runReceipt": receipt})
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema": "other"},
+        {"backend": ""},
+        {"probedAt": "not-a-time"},
+        {"probedAt": "2026-11-04T00:00:00"},
+        {"statuses": {}},
+        {"statuses": {"exec": "unknown"}},
+        {"preflightDegradations": None},
+        {"preflightFailures": ["guard"]},
+    ],
+)
+def test_engine_receipt_rejects_each_invalid_capability_field(change: dict) -> None:
+    caps = {
+        "schema": "lyrashield-sandbox-capabilities/1.0",
+        "backend": "docker",
+        "probedAt": "2026-11-04T00:00:00+00:00",
+        "statuses": {"exec": "supported"},
+        "preflightDegradations": [],
+        "preflightFailures": [],
+    }
+    receipt = {
+        "schemaVersion": "1.1",
+        "runId": "scan-1",
+        "status": "completed",
+        "phase": "completed",
+        "sandboxCapabilities": caps,
+    }
+    run_record = {"scanId": "scan-1", "runReceipt": receipt}
+    assert engine_receipt_valid(run_record)
+    receipt["sandboxCapabilities"] = {**caps, **change}
+    assert not engine_receipt_valid(run_record)
 
 
 def test_scoring_requires_original_corpus_and_fixture_bytes(tmp_path: Path) -> None:

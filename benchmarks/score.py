@@ -21,6 +21,7 @@ import json
 import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -257,6 +258,66 @@ def source_identity_complete(manifest: dict[str, Any]) -> bool:
     )
 
 
+def engine_receipt_valid(run: dict[str, Any]) -> bool:
+    receipt = run.get("runReceipt")
+    if (
+        not isinstance(receipt, dict)
+        or "error" in receipt
+        or receipt.get("schemaVersion") not in ("1.0", "1.1", "1.2")
+        or not isinstance(run.get("scanId"), str)
+        or not run["scanId"].strip()
+        or receipt.get("runId") != run.get("scanId")
+        or receipt.get("status") != "completed"
+        or receipt.get("phase") != "completed"
+    ):
+        return False
+    caps = receipt.get("sandboxCapabilities")
+    if not isinstance(caps, dict):
+        return False
+    statuses = caps.get("statuses")
+    probed_at = caps.get("probedAt")
+    if (
+        caps.get("schema") != "lyrashield-sandbox-capabilities/1.0"
+        or not isinstance(caps.get("backend"), str)
+        or not caps["backend"].strip()
+        or not isinstance(statuses, dict)
+        or not statuses
+        or not all(
+            isinstance(name, str)
+            and bool(name.strip())
+            and status in ("supported", "absent", "unprobed")
+            for name, status in statuses.items()
+        )
+        or not isinstance(probed_at, str)
+        or not isinstance(caps.get("preflightDegradations"), list)
+        or not all(isinstance(item, str) and item for item in caps["preflightDegradations"])
+        or caps.get("preflightFailures") != []
+    ):
+        return False
+    try:
+        return datetime.fromisoformat(probed_at).utcoffset() is not None
+    except ValueError:
+        return False
+
+
+def engine_receipts_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    engine_runs = [run for run in runs if run.get("detector") == "engine"]
+    receipts = [run["runReceipt"] for run in engine_runs if engine_receipt_valid(run)]
+    return {
+        "total": len(engine_runs),
+        "withReceipt": len(receipts),
+        "invalid": len(engine_runs) - len(receipts),
+        "schemaVersions": sorted({receipt["schemaVersion"] for receipt in receipts}),
+        "capabilityStatuses": sorted(
+            {
+                f"{name}={status}"
+                for receipt in receipts
+                for name, status in receipt["sandboxCapabilities"]["statuses"].items()
+            }
+        ),
+    }
+
+
 def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
     corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
     findings_bytes = (results_dir / "findings.jsonl").read_bytes()
@@ -324,11 +385,13 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         duplicate_count += sum(max(0, count - 1) for count in per_execution.values())
     failures = [r for r in manifest["runs"] if r.get("returncode") != 0 or r.get("errors")]
     coverage_issues = [f for f in findings if f.get("error") or f.get("coverageIssues")]
+    engine_receipts = engine_receipts_summary(manifest["runs"])
     status = (
         "LEGACY_UNVALIDATED"
         if legacy
         else "INCOMPLETE"
         if failures
+        or engine_receipts["invalid"]
         or findings_digest_valid is not True
         or unbound_findings
         or incomplete_records
@@ -339,32 +402,6 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         else "COMPLETE"
     )
     clean_runs = [r for r in manifest["runs"] if r.get("variant") == "clean"]
-
-    engine_runs_meta = [r for r in manifest["runs"] if r.get("detector") == "engine"]
-    receipts = [
-        r["runReceipt"]
-        for r in engine_runs_meta
-        if isinstance(r.get("runReceipt"), dict) and not r["runReceipt"].get("error")
-    ]
-    # Comparable receipts: whether every engine run carried the same run.json
-    # provenance fields (schema, probed capability statuses). Presence is
-    # counted, never inferred — a run without a receipt is just absent.
-    engine_receipts = {
-        "total": len(engine_runs_meta),
-        "withReceipt": len(receipts),
-        "schemaVersions": sorted(
-            {str(r.get("schemaVersion")) for r in receipts if r.get("schemaVersion")}
-        ),
-        "capabilityStatuses": sorted(
-            {
-                f"{name}={status}"
-                for r in receipts
-                for name, status in (
-                    (r.get("sandboxCapabilities") or {}).get("statuses") or {}
-                ).items()
-            }
-        ),
-    }
 
     summary = {
         "status": status,
