@@ -121,6 +121,16 @@ def test_catalog_keeps_absolute_symlink_as_inert_text(root):
     assert report["finalImageVerified"] is False
 
 
+@pytest.mark.parametrize("target", ["../outside", "../../outside", "/../outside", "./../outside"])
+def test_catalog_keeps_dotdot_symlink_target_verbatim_as_inert_text(root, target):
+    data = archive([("link", "symlink", target)])
+    report = catalog.catalog_layer(io.BytesIO(data), digest(data), root)
+    index = root / report["privateChild"] / "catalog.sqlite3"
+    with sqlite3.connect(f"file:{index}?mode=ro", uri=True) as db:
+        assert db.execute("SELECT kind,target FROM entries").fetchone() == ("symlink", target)
+    assert report["finalImageVerified"] is False
+
+
 @pytest.mark.parametrize("target", ["foo\nbar", "foo\u0085bar", "foo\u202ebar"])
 def test_catalog_rejects_raw_relative_symlink_controls(root, target):
     output = io.BytesIO()
@@ -191,7 +201,7 @@ def test_invalid_input_cleans_stage_without_touching_other_files(root, mutation)
     elif mutation == "whiteout":
         data = archive([(".wh.old", "file", b"not empty")])
     elif mutation == "link":
-        data = archive([("s", "symlink", "../escape")])
+        data = archive([("s", "symlink", "bad\\target")])
     expected = "sha256:" + "0" * 64 if mutation == "digest" else digest(data)
     sentinel = root / "unrelated"
     sentinel.write_text("keep")

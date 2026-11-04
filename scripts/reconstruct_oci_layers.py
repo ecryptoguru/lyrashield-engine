@@ -58,20 +58,24 @@ def validate_member_trailing_slash(name, *, is_directory):
 
 def inert_symlink_target(name):
     """Validate a target as data; never resolve it against the host or image."""
-    if isinstance(name, str) and name.endswith("/"):
+    if not isinstance(name, str) or "\\" in name:
+        raise ValueError("unsafe path")
+    if name.endswith("/"):
         raise ValueError("symlink target ends in slash")
-    if isinstance(name, str) and any(
-        unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in name
-    ):
+    if any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in name):
         raise ValueError("invalid symlink target character")
-    if isinstance(name, str) and name.startswith("/"):
-        if len(name.encode("utf-8")) > MAX_PATH_LENGTH:
-            raise ValueError("invalid path length")
+    if not name or len(name.encode("utf-8")) > MAX_PATH_LENGTH:
+        raise ValueError("invalid path length")
+    if name.startswith("/"):
         remainder = name[1:]
-        if normalized_path(remainder) != remainder:
+        if remainder.startswith("./"):
             raise ValueError("ambiguous symlink target")
-        return name
-    normalized_path(name)
+    else:
+        remainder = name
+        while remainder.startswith("./"):
+            remainder = remainder[2:]
+    if any(part in {"", "."} for part in remainder.split("/")):
+        raise ValueError("ambiguous or traversing path")
     return name
 
 

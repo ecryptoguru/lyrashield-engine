@@ -90,7 +90,6 @@ def test_absolute_symlink_is_inert_and_cannot_be_used_as_ancestor_or_hardlink():
 @pytest.mark.parametrize(
     "target",
     [
-        "/../../etc",
         "//host/path",
         "/foo/",
         "/foo\\bar",
@@ -341,10 +340,48 @@ def test_pax_hardlink_target_trailing_slash_rejects():
     assert set(root.entries) == {"", "foo"}
 
 
-def test_pax_absolute_symlink_target_with_parent_component_still_rejects():
+def test_pax_absolute_symlink_target_with_parent_component_is_inert():
     root = VirtualRoot()
+    root.apply(pax_tar(pax_record(b"linkpath", b"/../host"), member_type=tarfile.SYMTYPE))
+    assert root.entries["placeholder"].target == "/../host"
+
+
+@pytest.mark.parametrize("target", ["../outside", "../../outside", "/../outside", "/../../outside"])
+def test_dotdot_symlink_is_inert_and_never_used_as_parent_or_hardlink(target):
+    root = VirtualRoot()
+    apply(root, [("link", "symlink", target)])
+    assert root.entries["link"].target == target
     with pytest.raises(ValueError):
-        root.apply(pax_tar(pax_record(b"linkpath", b"/../host"), member_type=tarfile.SYMTYPE))
+        apply(root, [("link/child", "file", b"x")])
+    with pytest.raises(ValueError):
+        apply(root, [("link/.wh.child", "file", b"")])
+    with pytest.raises(ValueError):
+        apply(root, [("alias", "hardlink", "link")])
+    with pytest.raises(ValueError):
+        apply(root, [("alias", "hardlink", "link/child")])
+    assert set(root.entries) == {"", "link"}
+
+
+def test_dotdot_symlink_cannot_replace_nonempty_directory():
+    root = VirtualRoot()
+    apply(root, [("dir", "dir", None), ("dir/child", "file", b"old")])
+    with pytest.raises(ValueError):
+        apply(root, [("dir", "symlink", "../../outside")])
+    assert root.entries["dir"].kind == "dir"
+    assert root.entries["dir/child"].content == b"old"
+
+
+def test_pax_relative_dotdot_symlink_target_is_inert():
+    root = VirtualRoot()
+    root.apply(pax_tar(pax_record(b"linkpath", b"../../outside"), member_type=tarfile.SYMTYPE))
+    assert root.entries["placeholder"].target == "../../outside"
+
+
+def test_oversized_dotdot_symlink_target_is_rejected():
+    root = VirtualRoot()
+    target = b"../" + b"a" * 4096
+    with pytest.raises(ValueError):
+        root.apply(pax_tar(pax_record(b"linkpath", target), member_type=tarfile.SYMTYPE))
     assert set(root.entries) == {""}
 
 

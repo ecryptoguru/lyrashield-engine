@@ -74,6 +74,24 @@ def test_success_requires_verified_stream_and_zero_fetch_exit(root):
     assert result["releaseQualified"] is False
 
 
+def test_verified_stream_keeps_dotdot_symlink_inert(root):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        entry = tarfile.TarInfo("link")
+        entry.type = tarfile.SYMTYPE
+        entry.linkname = "../../outside"
+        archive.addfile(entry)
+    compressed, descriptor, diff = inputs(output.getvalue())
+    result = catalog_fetched_layer(Fetch(compressed), descriptor, diff, root)
+    path = root / result["privateStage"] / result["privateChild"] / "catalog.sqlite3"
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+        assert db.execute("SELECT kind,target FROM entries").fetchone() == (
+            "symlink",
+            "../../outside",
+        )
+    assert result["sourceRetained"] is False and result["finalImageVerified"] is False
+
+
 @pytest.mark.parametrize("failure", ["digest", "diff", "truncated", "fetch-exit", "bad-entry"])
 def test_any_producer_or_catalog_failure_removes_only_own_stage(root, failure):
     data = tar("../escape" if failure == "bad-entry" else "file")

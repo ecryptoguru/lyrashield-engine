@@ -104,6 +104,29 @@ def catalog_path(value, role, *, allow_root=False):
         raise CatalogUnsafePathError(role, reason) from None
 
 
+def catalog_symlink_target(value):
+    """Validate inert text and classify only rules that actually rejected it."""
+    try:
+        return inert_symlink_target(value)
+    except ValueError as error:
+        if error.args == ("unsafe path",) and isinstance(value, str) and "\\" in value:
+            raise CatalogUnsafePathError("symlink-target", "backslash") from None
+        if error.args == ("ambiguous or traversing path",) and isinstance(value, str):
+            remainder = value[1:] if value.startswith("/") else value
+            while remainder.startswith("./"):
+                remainder = remainder[2:]
+            parts = remainder.split("/")
+            reasons = []
+            if "." in parts:
+                reasons.append("dot")
+            if "" in parts:
+                reasons.append("empty-component")
+            if reasons:
+                reason = reasons[0] if len(reasons) == 1 else "multiple-components"
+                raise CatalogUnsafePathError("symlink-target", reason) from None
+        raise
+
+
 class HashingReader:
     def __init__(self, stream, directory, deadline):
         self.stream = stream
@@ -153,19 +176,10 @@ def entry_row(entry):
     elif entry.issym() or entry.islnk():
         if entry.linkname.endswith("/"):
             raise ValueError("link target ends in slash")
-        if entry.issym() and entry.linkname.startswith("/"):
-            try:
-                target = inert_symlink_target(entry.linkname)
-            except ValueError as error:
-                if error.args == ("ambiguous or traversing path",):
-                    catalog_path(entry.linkname[1:], "symlink-target")
-                raise
+        if entry.issym():
+            target = catalog_symlink_target(entry.linkname)
         else:
-            target = catalog_path(
-                entry.linkname, "symlink-target" if entry.issym() else "hardlink-target"
-            )
-            if entry.issym():
-                inert_symlink_target(entry.linkname)
+            target = catalog_path(entry.linkname, "hardlink-target")
         kind = "symlink" if entry.issym() else "hardlink"
     else:
         raise ValueError("unsupported entry type")

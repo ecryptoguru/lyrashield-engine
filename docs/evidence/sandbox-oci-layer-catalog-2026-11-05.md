@@ -14,7 +14,7 @@ before using an extent. A catalog cannot authenticate a later, mutable source.
 
 The prototype validates the restricted in-memory reconstructor's framing and
 local PAX subset, rejects duplicate or unsafe normalized paths and malformed
-whiteout markers, and constrains link syntax. A narrow canonical absolute symlink target is stored as inert image-namespace text; it is never followed on the host or resolved by this catalog. It deliberately permits unresolved
+whiteout markers, and constrains link syntax. Bounded absolute symlink targets and targets containing `..` are stored verbatim as inert image-namespace text; they are never materialized, followed on the host, or resolved by this catalog. A later link-following consumer must enforce independently reviewed image-root confinement. It deliberately permits unresolved
 parents and hardlink targets because earlier layers are not available here.
 It does not apply layer ordering, resolve cross-layer links, validate symlink
 ancestors against a merged tree, establish filesystem metadata parity, inspect
