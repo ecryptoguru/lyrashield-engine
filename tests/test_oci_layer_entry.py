@@ -186,6 +186,53 @@ def test_rejects_pax_headers_instead_of_guessing_names():
         capture.capture_verified_layer(io.BytesIO(data), descriptor, diff, TARGET)
 
 
+@pytest.mark.parametrize("raw_name,effective_name", [(TARGET, "elsewhere"), ("elsewhere", TARGET)])
+@pytest.mark.parametrize("after_selected", [False, True])
+def test_pax_path_override_never_returns_raw_name_capture(raw_name, effective_name, after_selected):
+    result = io.BytesIO()
+    with tarfile.open(fileobj=result, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        if after_selected:
+            selected = tarfile.TarInfo(TARGET)
+            selected.size = 6
+            archive.addfile(selected, io.BytesIO(b"binary"))
+        entry = tarfile.TarInfo(raw_name)
+        entry.pax_headers = {"path": effective_name}
+        entry.size = 5
+        archive.addfile(entry, io.BytesIO(b"other"))
+    data = result.getvalue()
+    descriptor, diff = item(data)
+    with pytest.raises(ValueError, match="PAX"):
+        capture.capture_verified_layer(io.BytesIO(data), descriptor, diff, TARGET)
+
+
+@pytest.mark.parametrize("types", [(tarfile.XGLTYPE,), (tarfile.XHDTYPE, tarfile.XHDTYPE)])
+def test_global_or_stacked_pax_rejects_and_closes_captured_bytes(types, monkeypatch):
+    result = io.BytesIO()
+    with tarfile.open(fileobj=result, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        selected = tarfile.TarInfo(TARGET)
+        selected.size = 6
+        archive.addfile(selected, io.BytesIO(b"binary"))
+        for kind in types:
+            header = tarfile.TarInfo("PaxHeader")
+            header.type = kind
+            header.size = 9
+            archive.addfile(header, io.BytesIO(b"9 path=x\n"))
+    data = result.getvalue()
+    descriptor, diff = item(data)
+    opened = []
+    original = capture.tempfile.TemporaryFile
+
+    def track(*args, **kwargs):
+        result = original(*args, **kwargs)
+        opened.append(result)
+        return result
+
+    monkeypatch.setattr(capture.tempfile, "TemporaryFile", track)
+    with pytest.raises(ValueError, match="PAX"):
+        capture.capture_verified_layer(io.BytesIO(data), descriptor, diff, TARGET)
+    assert len(opened) == 1 and opened[0].closed
+
+
 def test_declared_selected_file_larger_than_limit_is_rejected():
     entry = tarfile.TarInfo(TARGET)
     entry.size = capture.MAX_CAPTURE_BYTES + 1

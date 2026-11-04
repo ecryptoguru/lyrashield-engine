@@ -66,6 +66,10 @@ class SelectiveLayerReader(RestrictiveTarReader):
             header = tarfile.TarInfo.frombuf(bytes(block), "utf-8", "surrogateescape")
         except tarfile.HeaderError as exc:
             raise ValueError("invalid tar header") from exc
+        # This reader selects raw header names; it cannot safely apply PAX
+        # overrides even though the shared reconstruction reader supports them.
+        if header.type in {tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE}:
+            raise ValueError("unsupported PAX extension in selective capture")
         super().begin_header(block)
         if not header.isdir() and header.name.endswith("/"):
             raise ValueError("non-directory entry has trailing slash")

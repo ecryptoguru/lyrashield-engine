@@ -22,7 +22,9 @@ ancestor whiteouts and opaque markers fail closed regardless of order. Unrelated
 valid whiteouts can be present, but this experiment does not apply them. It also
 rejects duplicate paths, non-directory target ancestors, requested or header
 file names with trailing slashes, PAX/GNU extensions, special files, malformed
-whiteouts and unsupported tar encodings. These
+whiteouts and unsupported tar encodings. The selective reader rejects PAX
+even though the separate reconstruction reader supports a restricted subset:
+raw header names alone cannot identify a PAX-overridden entry. These
 deliberate restrictions mean real OCI-valid layers may be rejected; they do
 not establish correct handling of general whiteout or link semantics.
 
