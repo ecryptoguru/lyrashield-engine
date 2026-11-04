@@ -1,0 +1,38 @@
+# Private, single-layer catalog prototype
+
+`scripts/index_verified_oci_changeset.py` builds an **unapplied catalog of one
+uncompressed tar stream**. It reads a seekable stream from offset zero, checks
+its complete framing and SHA-256 DiffID, and only then publishes an SQLite
+catalog in a private task-owned directory. Regular-file records point to byte
+offsets in that same uncompressed stream; contents are not copied or extracted
+onto host paths. Archive paths and link targets are SQL data, never host paths.
+The source remains caller-owned. The catalog records normalized paths, types,
+metadata, link targets and whiteout markers; recording a marker does not apply
+it or resolve a link. The caller must independently authenticate the expected
+DiffID's index/manifest/config binding and must reverify the exact source bytes
+before using an extent. A catalog cannot authenticate a later, mutable source.
+
+The prototype validates the restricted in-memory reconstructor's framing and
+local PAX subset, rejects duplicate or unsafe normalized paths and malformed
+whiteout markers, and constrains link syntax. It deliberately permits unresolved
+parents and hardlink targets because earlier layers are not available here.
+It does not apply layer ordering, resolve cross-layer links, validate symlink
+ancestors against a merged tree, establish filesystem metadata parity, inspect
+packages, or compare an SBOM. No release workflow uses it. An actual overlay
+requires a separate reviewed transactional state machine with those checks and
+bounded lifecycle/recovery before any consumer can use this catalog for an image.
+
+Limits are 4 GiB per uncompressed layer, 100,000 entries, 16 MiB total staged
+path and link-target bytes, 128 MiB SQLite pages, a 900-second processing
+deadline, and a sampled 2 GiB free-space reserve. SQLite and Python caches,
+objects and filesystem allocation add overhead. The timer cannot interrupt all
+blocked I/O, and other processes can consume disk between reserve checks. The
+private root, host, and same-identity processes are trusted; macOS ACL absence
+is checked and other platforms fail closed through the shared spool policy.
+SQLite uses a generated private filename and no journal; handled failures try
+to remove only their own files. Crashes or filesystem errors may leave private
+provisional artifacts and there is no crash recovery or durability claim.
+
+The tests use synthetic layers, including a sparse 129 MiB tar member, and do
+not demonstrate compatibility with the historical layer or production image.
+The existing in-memory layer limit and unconditional promotion hold stay in place.
