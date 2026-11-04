@@ -89,7 +89,8 @@ def descriptor(value, allowed_types, maximum):
     return digest, size
 
 
-def verify_layer(directory, item, expected_diff, total):
+def verify_layer(directory, item, expected_diff, total, on_data=None):
+    """Stream provisional data to the optional callback; trust it only after return."""
     digest, size = descriptor(item, {OCI_TAR, OCI_GZIP, DOCKER_GZIP}, MAX_LAYER)
     compressed_hash, diff_hash = hashlib.sha256(), hashlib.sha256()
     decompressor = None if item["mediaType"] == OCI_TAR else zlib.decompressobj(31)
@@ -105,6 +106,8 @@ def verify_layer(directory, item, expected_diff, total):
             if decompressor is None:
                 diff_hash.update(data)
                 uncompressed += len(data)
+                if on_data is not None:
+                    on_data(data)
             else:
                 require(not decompressor.eof, "gzip trailing data unsupported")
                 pending = data
@@ -118,6 +121,8 @@ def verify_layer(directory, item, expected_diff, total):
                         "uncompressed layer byte limit exceeded",
                     )
                     require(not decompressor.unused_data, "gzip trailing data unsupported")
+                    if on_data is not None:
+                        on_data(decoded)
             require(
                 uncompressed <= MAX_LAYER and total + uncompressed <= MAX_TOTAL,
                 "uncompressed layer byte limit exceeded",
@@ -130,7 +135,8 @@ def verify_layer(directory, item, expected_diff, total):
     return {"digest": digest, "size": size, "diffId": diff_id}, total + uncompressed
 
 
-def verify(directory, manifest_digest, platform):
+def verify(directory, manifest_digest, platform, receiver=None):
+    """Call receiver.finish only after a layer verifies; the whole image may still fail."""
     manifest = metadata_blob(directory, manifest_digest, MAX_MANIFEST)
     require(
         type(manifest.get("schemaVersion")) is int and manifest["schemaVersion"] == 2,
@@ -166,7 +172,13 @@ def verify(directory, manifest_digest, platform):
         require(compressed_total <= MAX_TOTAL, "compressed layer byte limit exceeded")
     results, total = [], 0
     for item, diff_id in zip(layers, diff_ids):  # noqa: B905 - lengths validated above; Python 3.9
-        result, total = verify_layer(directory, item, diff_id, total)
+        if receiver is not None:
+            receiver.begin()
+        result, total = verify_layer(
+            directory, item, diff_id, total, None if receiver is None else receiver.write
+        )
+        if receiver is not None:
+            receiver.finish()
         results.append(result)
     return {
         "scope": "offline_layer_binding_only",
