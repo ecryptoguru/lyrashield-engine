@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -87,7 +88,7 @@ def test_finding_must_belong_to_the_recorded_run(tmp_path: Path, changed: dict) 
         for variant in ("vulnerable", "clean")
     ]
     manifest = {
-        "harnessVersion": 2,
+        "harnessVersion": 3,
         "detectors": "deterministic",
         "runs": runs,
         "corpus": "fixture",
@@ -125,22 +126,48 @@ def test_finding_must_belong_to_the_recorded_run(tmp_path: Path, changed: dict) 
     ]
     path = tmp_path / "findings.jsonl"
     path.write_text("\n".join(json.dumps(record) for record in [finding, *sentinels]) + "\n")
+    manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
     valid = score(tmp_path, tmp_path)
     assert valid["status"] == "COMPLETE"
     assert valid["detectedCases"] == 1
+    assert valid["findingsDigestMatches"] is True
+    del manifest["findingsSha256"]
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+    manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    # The same run identities and record count cannot hide changed finding bytes.
+    changed_content = {**finding, "title": "different"}
+    path.write_text(
+        "\n".join(json.dumps(record) for record in [changed_content, *sentinels]) + "\n"
+    )
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+
+    # A pre-binding receipt remains readable but can no longer qualify as complete.
+    manifest["harnessVersion"] = 2
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "LEGACY_UNVALIDATED"
+    manifest["harnessVersion"] = 3
     path.write_text(
         "\n".join(json.dumps(record) for record in [{**finding, **changed}, *sentinels]) + "\n"
     )
+    manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
     invalid = score(tmp_path, tmp_path)
     assert invalid["status"] == "INCOMPLETE"
     assert invalid["detectedCases"] == 0
 
     for records in (sentinels, [finding, finding, *sentinels]):
         path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+        manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
         assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
     path.write_text(
         "\n".join(json.dumps(record) for record in [finding, *sentinels]) + "\nnot json\n"
     )
+    manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
     assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
 
 
@@ -192,7 +219,16 @@ def test_clean_findings_errors_and_repeat_runs_are_separate(tmp_path: Path) -> N
         }
     )
     (tmp_path / "run-manifest.json").write_text(
-        json.dumps({"harnessVersion": 2, "detectors": "engine", "runs": runs})
+        json.dumps(
+            {
+                "harnessVersion": 3,
+                "detectors": "engine",
+                "runs": runs,
+                "findingsSha256": hashlib.sha256(
+                    (tmp_path / "findings.jsonl").read_bytes()
+                ).hexdigest(),
+            }
+        )
     )
     result = score(tmp_path, tmp_path)
     assert result["detectedCases"] == 1
@@ -226,6 +262,72 @@ def test_deterministic_runner_records_clean_polarity_and_failure(
     assert json.loads(output.getvalue())["variant"] == "clean"
     assert json.loads(output.getvalue())["caseId"] == "A"
     assert not seen[0].exists()
+
+
+def test_runner_records_digest_of_exact_findings_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    corpus_dir = tmp_path / "corpus" / "fixture"
+    corpus_dir.mkdir(parents=True)
+    case = {"id": "A", "class": "auth", "vulnerable": "bad.ts", "clean": "safe.ts"}
+    corpus = {"name": "fixture", "revision": "v1", "schemaVersion": "test", "pairs": [case]}
+    (corpus_dir / "corpus.json").write_text(json.dumps(corpus))
+    for filename in ("bad.ts", "safe.ts"):
+        (corpus_dir / filename).write_text("fixture // CASE:A\n")
+    monkeypatch.setattr(run, "BENCH_ROOT", tmp_path)
+    monkeypatch.setattr(run, "RESULTS_ROOT", tmp_path / "results")
+    monkeypatch.setattr(run, "source_state", lambda _path: {"revision": "test", "dirty": False})
+    monkeypatch.setattr(sys, "argv", ["run.py", "--corpus", "fixture"])
+
+    def execute(_corpus_dir: Path, case: dict, out: io.TextIOBase, variant: str) -> dict:
+        scan_id = f"{case['id']}-{variant}-det"
+        for scanner, payload in (
+            ("__discovery__", {"discovery": {}}),
+            ("__coverage__", {"coverageIssues": []}),
+        ):
+            out.write(
+                json.dumps(
+                    {
+                        "caseId": case["id"],
+                        "variant": variant,
+                        "scanId": scan_id,
+                        "runIndex": 0,
+                        "scanner": scanner,
+                        **payload,
+                    }
+                )
+                + "\n"
+            )
+        return {
+            "case": case["id"],
+            "variant": variant,
+            "scanId": scan_id,
+            "runIndex": 0,
+            "detector": "deterministic",
+            "emitted": 2,
+            "returncode": 0,
+        }
+
+    monkeypatch.setattr(run, "run_deterministic", execute)
+    assert run.main() == 0
+    result_dir = next((tmp_path / "results").iterdir())
+    manifest = json.loads((result_dir / "run-manifest.json").read_text())
+    assert manifest["harnessVersion"] == 3
+    assert (
+        manifest["findingsSha256"]
+        == hashlib.sha256((result_dir / "findings.jsonl").read_bytes()).hexdigest()
+    )
+    assert score(result_dir, corpus_dir)["status"] == "COMPLETE"
+    for unknown_version in (4, True, "3"):
+        manifest["harnessVersion"] = unknown_version
+        (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
+        assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
+    manifest["harnessVersion"] = 3
+    findings_path = result_dir / "findings.jsonl"
+    findings_path.write_bytes(b"\xff\n")
+    manifest["findingsSha256"] = hashlib.sha256(findings_path.read_bytes()).hexdigest()
+    (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
 
 
 def test_generated_receipts_do_not_invalidate_source_state(tmp_path: Path) -> None:

@@ -348,7 +348,8 @@ def main() -> int:
                     )
 
     manifest = {
-        "harnessVersion": 2,
+        "harnessVersion": 3,
+        "findingsSha256": hashlib.sha256(findings_path.read_bytes()).hexdigest(),
         "fixtureSha256": fixture_hashes,
         "sources": sources,
         "sourcesChangedDuringRun": sources
