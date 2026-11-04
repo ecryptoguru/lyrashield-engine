@@ -218,10 +218,11 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail --location --retry 3 --connect-timeout 30 --max-time 180 \
-            https://github.com/anchore/syft/releases/download/v1.42.3/syft_1.42.3_linux_amd64.tar.gz \
+            https://github.com/anchore/syft/releases/download/v1.56.0/syft_1.56.0_linux_amd64.tar.gz \
             --output "$RUNNER_TEMP/syft.tar.gz"
-          printf '%s  %s\n' 0d6be741479eddd2c8644a288990c04f3df0d609bbc1599a005532a9dff63509 "$RUNNER_TEMP/syft.tar.gz" | sha256sum --check --status
+          printf '%s  %s\n' 1c2493cfcf52d3367d6cb25780d9190c111c2219c34c820574c43e8bae15c528 "$RUNNER_TEMP/syft.tar.gz" | sha256sum --check --status
           tar -xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP" syft
+          python3 scripts/check_syft_cataloger.py "$RUNNER_TEMP/syft"
           printf '%s\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
         with:
@@ -329,6 +330,10 @@ jobs:
             --artifact-manifest evidence/retrieved-artifact.json --artifact-digest "$ARTIFACT_DIGEST" \
             --image "$image" --sbom-dir evidence/retrieved --output evidence/retrieved-predicate.json
           cmp evidence/sbom-predicate.json evidence/retrieved-predicate.json
+      - name: Hold promotion pending independent package coverage
+        run: |
+          echo '::error::Independent package coverage for both native images has not been qualified.'
+          exit 1
       - name: Promote the smoke-qualified digest
         env:
           RELEASE_TAG: ${{ github.ref_name }}

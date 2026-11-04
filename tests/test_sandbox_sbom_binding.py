@@ -44,7 +44,7 @@ def setup_evidence(tmp_path):
         sbom = {
             "spdxVersion": "SPDX-2.3",
             "SPDXID": "SPDXRef-DOCUMENT",
-            "creationInfo": {"creators": ["Tool: syft-1.42.3"]},
+            "creationInfo": {"creators": ["Tool: syft-1.56.0"]},
             "relationships": [
                 {
                     "spdxElementId": "SPDXRef-DOCUMENT",
@@ -238,7 +238,7 @@ def test_rejects_incomplete_or_mismatched_sbom_evidence(tmp_path, tamper):
         artifact["layers"][0]["size"] = p.stat().st_size
     elif tamper == "wrong_tool":
         p = tmp_path / "sboms" / docs["amd64"]["name"]
-        p.write_bytes(docs["amd64"]["raw"].replace(b"syft-1.42.3", b"syft-1.42.2"))
+        p.write_bytes(docs["amd64"]["raw"].replace(b"syft-1.56.0", b"syft-1.42.3"))
         artifact["layers"][0]["digest"] = digest(p.read_bytes())
         artifact["layers"][0]["size"] = p.stat().st_size
     elif tamper == "empty_packages":

@@ -158,6 +158,7 @@ def assert_workflow_contract(workflow):
         < pubnames.index("Sign selected runtime and qualified platform binding")
         < pubnames.index("Sign per-platform SBOM binding")
         < pubnames.index("Verify signed sandbox publication")
+        < pubnames.index("Hold promotion pending independent package coverage")
         < pubnames.index("Promote the smoke-qualified digest")
     )
     assert all(
@@ -211,6 +212,23 @@ def test_native_workflow_binds_source_and_cannot_promote_before_qualification():
             ] = "echo unsafe"
         with pytest.raises((AssertionError, ValueError)):
             assert_workflow_contract(altered)
+
+
+def test_missing_independent_coverage_keeps_promotion_held():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/publish-sandbox.yml").read_text())
+    hold = next(
+        step
+        for step in workflow["jobs"]["publish"]["steps"]
+        if step.get("name") == "Hold promotion pending independent package coverage"
+    )
+    assert not hold.get("if") and not hold.get("continue-on-error")
+    result = subprocess.run(  # noqa: S603 - fixed shell and reviewed workflow body
+        ["/bin/bash", "-euo", "pipefail", "-c", hold["run"]],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
 
 
 def run_publisher_step(tmp_path, name, drift=""):

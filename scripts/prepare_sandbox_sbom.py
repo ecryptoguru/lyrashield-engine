@@ -95,7 +95,7 @@ def describe_document(path, image, arch, native_digest, config_digest):
     require(
         isinstance(creation, dict)
         and isinstance(creation.get("creators"), list)
-        and "Tool: syft-1.42.3" in creation["creators"],
+        and "Tool: syft-1.56.0" in creation["creators"],
         "unexpected SBOM generator",
     )
     require(
