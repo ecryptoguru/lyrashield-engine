@@ -135,6 +135,20 @@ def test_catalog_rejects_raw_relative_symlink_controls(root, target):
     assert not list(root.iterdir())
 
 
+def test_catalog_rejects_relative_symlink_target_trailing_slash(root):
+    data = archive([("link", "symlink", "foo/")])
+    with pytest.raises(ValueError):
+        catalog.catalog_layer(io.BytesIO(data), digest(data), root)
+    assert not list(root.iterdir())
+
+
+def test_catalog_rejects_hardlink_target_trailing_slash(root):
+    data = archive([("foo", "file", b"old"), ("alias", "hardlink", "foo/")])
+    with pytest.raises(ValueError):
+        catalog.catalog_layer(io.BytesIO(data), digest(data), root)
+    assert not list(root.iterdir())
+
+
 def test_indexes_synthetic_layer_above_in_memory_limit(root):
     size = 129 * 1024 * 1024
     entry = tarfile.TarInfo("large")

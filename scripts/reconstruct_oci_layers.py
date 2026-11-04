@@ -52,6 +52,8 @@ def normalized_path(name, allow_root=False):
 
 def inert_symlink_target(name):
     """Validate a target as data; never resolve it against the host or image."""
+    if isinstance(name, str) and name.endswith("/"):
+        raise ValueError("symlink target ends in slash")
     if isinstance(name, str) and any(
         unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in name
     ):
@@ -223,6 +225,8 @@ class VirtualRoot:
                     path_bytes += len(entry.linkname.encode("utf-8"))
                     node = Node("symlink", *attrs, target=entry.linkname)
                 elif entry.islnk():
+                    if entry.linkname.endswith("/"):
+                        raise ValueError("hardlink target ends in slash")
                     target = normalized_path(entry.linkname)
                     path_bytes += len(entry.linkname.encode("utf-8"))
                     node = Node("hardlink", *attrs, target=target)

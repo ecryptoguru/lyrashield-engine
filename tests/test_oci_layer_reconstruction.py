@@ -119,6 +119,15 @@ def test_absolute_hardlink_target_still_rejects():
     assert set(root.entries) == {""}
 
 
+def test_raw_hardlink_target_trailing_slash_does_not_alias_regular_file():
+    root = VirtualRoot()
+    apply(root, [("foo", "file", b"old")])
+    with pytest.raises(ValueError):
+        apply(root, [("alias", "hardlink", "foo/")])
+    assert set(root.entries) == {"", "foo"}
+    assert root.entries["foo"].content == b"old"
+
+
 def test_self_hardlink_replacement_fails_without_retaining_old_file_as_success():
     root = VirtualRoot()
     apply(root, [("a", "file", b"old")])
@@ -307,6 +316,14 @@ def test_pax_absolute_hardlink_target_still_rejects():
     assert set(root.entries) == {""}
 
 
+def test_pax_hardlink_target_trailing_slash_rejects():
+    root = VirtualRoot()
+    apply(root, [("foo", "file", b"old")])
+    with pytest.raises(ValueError):
+        root.apply(pax_tar(pax_record(b"linkpath", b"foo/"), member_type=tarfile.LNKTYPE))
+    assert set(root.entries) == {"", "foo"}
+
+
 def test_pax_absolute_symlink_target_with_parent_component_still_rejects():
     root = VirtualRoot()
     with pytest.raises(ValueError):
@@ -335,6 +352,18 @@ def test_relative_symlink_target_with_controls_is_rejected_in_raw_and_pax(target
             entry.linkname = target
             archive.addfile(entry)
         data = output.getvalue()
+    root = VirtualRoot()
+    with pytest.raises(ValueError):
+        root.apply(data)
+    assert set(root.entries) == {""}
+
+
+@pytest.mark.parametrize("header_format", ["raw", "pax"])
+def test_relative_symlink_target_with_trailing_slash_is_rejected(header_format):
+    if header_format == "pax":
+        data = pax_tar(pax_record(b"linkpath", b"foo/"), member_type=tarfile.SYMTYPE)
+    else:
+        data = tar([("link", "symlink", "foo/")])
     root = VirtualRoot()
     with pytest.raises(ValueError):
         root.apply(data)
