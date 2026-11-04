@@ -90,6 +90,17 @@ def catalog_layer(stream, expected_diff, private_root):
         raise ValueError("invalid expected diff ID")
     if not stream.seekable() or stream.tell() != 0:
         raise ValueError("layer stream must be seekable and start at zero")
+    return catalog_forward_layer(stream, expected_diff, private_root)
+
+
+def catalog_forward_layer(stream, expected_diff, private_root):
+    """Catalog a forward-only stream; result remains provisional to its caller.
+
+    If bytes are discarded, extent offsets cannot be used until the complete
+    identical uncompressed stream is obtained and independently reverified.
+    """
+    if not isinstance(expected_diff, str) or not DIGEST.fullmatch(expected_diff):
+        raise ValueError("invalid expected diff ID")
     root = os.open(private_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     child = None
     directory = None

@@ -36,3 +36,16 @@ provisional artifacts and there is no crash recovery or durability claim.
 The tests use synthetic layers, including a sparse 129 MiB tar member, and do
 not demonstrate compatibility with the historical layer or production image.
 The existing in-memory layer limit and unconditional promotion hold stay in place.
+
+A separate streaming experiment, `scripts/index_verified_oci_stream.py`, feeds
+bounded decompressed chunks through a pipe into the catalog without retaining
+the layer tar. The catalog stays under a private provisional directory while
+the compressed descriptor and uncompressed DiffID are checked. Its caller gets
+a success report only after the catalog finishes and the fetch process exits
+zero. An externally supervised process-group wall timeout is required: a blocked
+I/O operation or worker can outlive the function's bounded waits, and a crash or
+stuck worker can leave its task-owned private directory for inspection. The
+caller must never treat a residual catalog or a child exit alone as success.
+Without retained tar bytes, catalog offsets cannot be consumed unless the exact
+uncompressed source is obtained and fully reverified again. This experiment is
+not an overlay or release qualification and is not connected to production.

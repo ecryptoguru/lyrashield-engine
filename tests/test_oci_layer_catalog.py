@@ -79,6 +79,26 @@ def test_pax_path_and_offset_refer_to_same_verified_stream(root):
     assert data[row[1] : row[1] + row[2]] == b"actual-content"
 
 
+def test_forward_only_stream_can_be_cataloged_but_seekable_api_stays_strict(root):
+    data = archive([("file", "file", b"hello")])
+
+    class ForwardOnly:
+        def __init__(self, contents):
+            self.source = io.BytesIO(contents)
+
+        def read(self, size):
+            return self.source.read(size)
+
+        def seekable(self):
+            return False
+
+    with pytest.raises(ValueError, match="seekable"):
+        catalog.catalog_layer(ForwardOnly(data), digest(data), root)
+    report = catalog.catalog_forward_layer(ForwardOnly(data), digest(data), root)
+    assert report["scope"] == "verified-single-layer-catalog-only"
+    assert report["finalImageVerified"] is False
+
+
 def test_catalog_keeps_cross_layer_link_and_parent_resolution_open(root):
     data = archive([("missing/child", "hardlink", "other-layer-target")])
     report = catalog.catalog_layer(io.BytesIO(data), digest(data), root)
