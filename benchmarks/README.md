@@ -12,7 +12,7 @@ Upstream details remain available in the [usestrix/benchmarks repository](https:
 
 ## LyraShield evaluation corpus
 
-The versioned starter corpus lives in [`corpus/v1`](./corpus/v1/README.md). Its deterministic validator runs in the Python test suite. Model-quality measurements remain separate bounded runs with retained receipts.
+The versioned starter corpora live in [`corpus/v1`](./corpus/v1/README.md) and [`corpus/v2`](./corpus/v2/corpus.json). The benchmark runner defaults to v2. See the [corpus inventory](./CORPUS-INVENTORY.md) for their contents, missing fixtures, and evaluation limits. Model-quality measurements remain separate bounded runs with retained receipts.
 
 ## Evaluation requirements
 
