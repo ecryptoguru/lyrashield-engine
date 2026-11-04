@@ -359,7 +359,8 @@ def main() -> int:
                     )
 
     manifest = {
-        "harnessVersion": 3,
+        "harnessVersion": 4,
+        "engineRuns": args.runs if wants_engine else None,
         "findingsSha256": hashlib.sha256(findings_path.read_bytes()).hexdigest(),
         "fixtureSha256": fixture_hashes,
         "sources": sources,

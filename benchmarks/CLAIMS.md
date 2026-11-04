@@ -37,3 +37,12 @@ paired receipts with the corrected harness and require `COMPLETE` scorer
 status before review. The version 3 digest detects findings-file changes
 relative to its manifest; it is not a signature and does not detect coordinated
 edits to both files.
+
+Version 3 did not record how many engine repetitions were requested. A
+complete-looking subset cannot prove the full run set, so re-scoring a v3
+engine or combined receipt yields `INCOMPLETE`. Deterministic-only v3 receipts
+remain readable under their existing checks. Version 4 records `engineRuns`
+and requires every declared iteration for every case and polarity; incomplete
+receipts do not produce an engine stability value. The declared count is not
+authenticated and cannot prove that a coordinated change to the receipt and
+findings did not occur. Existing historical results are not rewritten.

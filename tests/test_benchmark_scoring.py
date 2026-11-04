@@ -195,6 +195,73 @@ def test_complete_run_set_requires_unique_nonempty_scan_ids(bad_id: str | None) 
     assert not run_set_complete(manifest, corpus)
 
 
+def test_declared_engine_repetitions_reject_a_missing_whole_iteration() -> None:
+    corpus = {"pairs": [{"id": "A"}, {"id": "B"}]}
+    runs = [
+        {
+            "case": case["id"],
+            "detector": "engine",
+            "variant": variant,
+            "runIndex": index,
+            "scanId": f"{case['id']}-{variant}-{index}",
+        }
+        for case in corpus["pairs"]
+        for variant in ("vulnerable", "clean")
+        for index in range(3)
+    ]
+    manifest = {"harnessVersion": 4, "detectors": "engine", "engineRuns": 3, "runs": runs}
+    assert run_set_complete(manifest, corpus)
+    manifest["runs"] = [run for run in runs if run["runIndex"] != 2]
+    assert not run_set_complete(manifest, corpus)
+
+
+@pytest.mark.parametrize("count", [None, True, 0, -1, "1", 10**20])
+def test_declared_engine_repetitions_must_be_a_bounded_positive_integer(count: object) -> None:
+    manifest = {
+        "harnessVersion": 4,
+        "detectors": "engine",
+        "engineRuns": count,
+        "runs": [
+            {
+                "case": "A",
+                "detector": "engine",
+                "variant": variant,
+                "runIndex": 0,
+                "scanId": variant,
+            }
+            for variant in ("vulnerable", "clean")
+        ],
+    }
+    assert not run_set_complete(manifest, {"pairs": [{"id": "A"}]})
+
+
+def test_v3_engine_receipts_cannot_prove_requested_repetitions() -> None:
+    manifest = {
+        "harnessVersion": 3,
+        "detectors": "engine",
+        "runs": [
+            {
+                "case": "A",
+                "detector": "engine",
+                "variant": variant,
+                "runIndex": 0,
+                "scanId": variant,
+            }
+            for variant in ("vulnerable", "clean")
+        ],
+    }
+    assert not run_set_complete(manifest, {"pairs": [{"id": "A"}]})
+
+
+def test_unknown_detector_cannot_form_a_complete_run_set() -> None:
+    runs = [
+        {"case": "A", "detector": "unknown", "variant": variant, "runIndex": 0, "scanId": variant}
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {"harnessVersion": 4, "detectors": "unknown", "engineRuns": None, "runs": runs}
+    assert not run_set_complete(manifest, {"pairs": [{"id": "A"}]})
+
+
 @pytest.mark.parametrize(
     "changed",
     [
@@ -384,6 +451,7 @@ def test_clean_findings_errors_and_repeat_runs_are_separate(tmp_path: Path) -> N
     assert result["unmatchedFindings"] == 0
     assert result["duplicateRate"] is None
     assert result["status"] == "INCOMPLETE"
+    assert result["engineStability"] is None
 
 
 def test_deterministic_runner_records_clean_polarity_and_failure(
@@ -465,7 +533,8 @@ def test_runner_records_digest_of_exact_findings_bytes(
     assert run.main() == 0
     result_dir = next((tmp_path / "results").iterdir())
     manifest = json.loads((result_dir / "run-manifest.json").read_text())
-    assert manifest["harnessVersion"] == 3
+    assert manifest["harnessVersion"] == 4
+    assert manifest["engineRuns"] is None
     assert (
         manifest["findingsSha256"]
         == hashlib.sha256((result_dir / "findings.jsonl").read_bytes()).hexdigest()
@@ -486,16 +555,66 @@ def test_runner_records_digest_of_exact_findings_bytes(
     (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
     assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
     manifest["sourcesChangedDuringRun"] = False
-    for unknown_version in (4, True, "3"):
+    for unknown_version in (5, True, "3"):
         manifest["harnessVersion"] = unknown_version
         (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
         assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
-    manifest["harnessVersion"] = 3
+    manifest["harnessVersion"] = 4
     findings_path = result_dir / "findings.jsonl"
     findings_path.write_bytes(b"\xff\n")
     manifest["findingsSha256"] = hashlib.sha256(findings_path.read_bytes()).hexdigest()
     (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
     assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
+
+
+def test_runner_records_requested_engine_repetitions_without_running_an_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    corpus_dir = tmp_path / "corpus" / "fixture"
+    corpus_dir.mkdir(parents=True)
+    case = {"id": "A", "vulnerable": "bad.ts", "clean": "safe.ts"}
+    corpus = {"name": "fixture", "revision": "v1", "schemaVersion": "test", "pairs": [case]}
+    (corpus_dir / "corpus.json").write_text(json.dumps(corpus))
+    for filename in ("bad.ts", "safe.ts"):
+        (corpus_dir / filename).write_text("fixture")
+    monkeypatch.setattr(run, "BENCH_ROOT", tmp_path)
+    monkeypatch.setattr(run, "RESULTS_ROOT", tmp_path / "results")
+    monkeypatch.setattr(run, "source_state", lambda _path: {})
+    monkeypatch.setattr(run, "engine_revision", lambda: "fixture")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run.py",
+            "--corpus",
+            "fixture",
+            "--detectors",
+            "engine",
+            "--runs",
+            "3",
+            "--engine-approve",
+            "test",
+        ],
+    )
+
+    def no_engine(_corpus: Path, case: dict, _out: io.TextIOBase, index: int, variant: str) -> dict:
+        return {
+            "case": case["id"],
+            "detector": "engine",
+            "variant": variant,
+            "runIndex": index,
+            "scanId": f"{variant}-{index}",
+            "emitted": 0,
+            "returncode": 0,
+        }
+
+    monkeypatch.setattr(run, "run_engine", no_engine)
+    assert run.main() == 0
+    result_dir = next((tmp_path / "results").iterdir())
+    manifest = json.loads((result_dir / "run-manifest.json").read_text())
+    assert manifest["harnessVersion"] == 4
+    assert manifest["engineRuns"] == 3
+    assert run_set_complete(manifest, corpus)
 
 
 def test_generated_receipts_do_not_invalidate_source_state(tmp_path: Path) -> None:
@@ -584,7 +703,8 @@ def test_engine_score_requires_valid_run_receipts(tmp_path: Path, invalid: objec
         for variant in ("vulnerable", "clean")
     ]
     manifest = {
-        "harnessVersion": 3,
+        "harnessVersion": 4,
+        "engineRuns": 1,
         "detectors": "engine",
         "runs": runs,
         "engineRevision": source["revision"],
@@ -602,6 +722,14 @@ def test_engine_score_requires_valid_run_receipts(tmp_path: Path, invalid: objec
     path = tmp_path / "run-manifest.json"
     path.write_text(json.dumps(manifest))
     assert score(tmp_path, tmp_path)["status"] == "COMPLETE"
+    manifest["engineRuns"] = 2
+    path.write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+    manifest["engineRuns"] = 1
+    manifest["harnessVersion"] = 3
+    path.write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+    manifest["harnessVersion"] = 4
     runs[0]["runReceipt"] = {**runs[0]["runReceipt"], **invalid} if invalid else invalid
     path.write_text(json.dumps(manifest))
     result = score(tmp_path, tmp_path)
