@@ -8,8 +8,11 @@ DiffID, close the returned handle, and dispose of its own private child director
 No promotion or release decision consumes this prototype.
 
 The private root must already be a trusted, caller-owned directory with mode
-0700. A randomly named child and mode-0600 provisional file are created under
-directory file descriptors; archive member paths are never used as host paths.
+0700. On macOS, the root, created child, and provisional file must each have
+no extended ACL, as verified by descriptor before writing layer bytes. An ACL,
+failed inspection, unsupported filesystem, or any other operating system causes
+rejection. A randomly named child and mode-0600 provisional file are created
+under directory file descriptors; archive member paths are never used as host paths.
 On handled failures, cleanup attempts to remove only this invocation's files and
 child. Publication uses an exclusive hard link after stream verification and
 framing checks. A 4 GiB uncompressed limit, one million headers, a 900 second

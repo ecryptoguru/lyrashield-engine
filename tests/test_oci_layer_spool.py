@@ -4,6 +4,8 @@ import hashlib
 import io
 import os
 import stat
+import subprocess
+import sys
 import tarfile
 import zlib
 
@@ -137,6 +139,57 @@ def test_private_root_must_be_owned_non_symlink_and_private(tmp_path):
     link.symlink_to(root, target_is_directory=True)
     with pytest.raises(OSError):
         spool.spool_verified_layer(io.BytesIO(data), item, diff, link)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS inherited ACL fixture")
+def test_inheritable_acl_rejected_before_private_spool_is_created(private_root):
+    added = subprocess.run(  # noqa: S603 - fixed system binary and test-owned path
+        [
+            "/bin/chmod",
+            "+a",
+            "everyone allow list,search,read,file_inherit,directory_inherit",
+            str(private_root),
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if added.returncode:
+        pytest.skip("filesystem does not support test ACL")
+    data = layer()
+    item, diff = descriptor(data)
+    with pytest.raises(ValueError, match="ACL"):
+        spool.spool_verified_layer(io.BytesIO(data), item, diff, private_root)
+    assert list(private_root.iterdir()) == []
+
+
+def test_acl_inspection_failure_is_not_treated_as_no_acl(private_root, monkeypatch):
+    data = layer()
+    item, diff = descriptor(data)
+    monkeypatch.setattr(spool.sys, "platform", "unsupported")
+    with pytest.raises(ValueError, match="ACL inspection unsupported"):
+        spool.spool_verified_layer(io.BytesIO(data), item, diff, private_root)
+    assert list(private_root.iterdir()) == []
+
+
+@pytest.mark.parametrize("failure_at", [2, 3])
+def test_child_or_file_acl_failure_cleans_provisional_artifacts(
+    private_root, monkeypatch, failure_at
+):
+    data = layer()
+    item, diff = descriptor(data)
+    checks = 0
+
+    def inspect_acl(_fd):
+        nonlocal checks
+        checks += 1
+        if checks == failure_at:
+            raise ValueError("ACL detected")
+
+    monkeypatch.setattr(spool, "require_no_acl", inspect_acl)
+    with pytest.raises(ValueError, match="ACL"):
+        spool.spool_verified_layer(io.BytesIO(data), item, diff, private_root)
+    assert checks == failure_at
+    assert list(private_root.iterdir()) == []
 
 
 @pytest.mark.parametrize("failure", ["write", "publish"])

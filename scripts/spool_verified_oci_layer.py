@@ -3,9 +3,12 @@
 # Keep acquisition, publication and cleanup in one visible transaction.
 # ruff: noqa: INP001, PLR0912, PLR0915, TRY301
 import contextlib
+import ctypes
+import errno
 import os
 import secrets
 import stat
+import sys
 import time
 
 from scripts.check_sbom_inventory import StrictTarReader
@@ -21,6 +24,26 @@ MAX_SECONDS = 900
 def free_space(directory_fd):
     values = os.fstatvfs(directory_fd)
     return values.f_bavail * values.f_frsize
+
+
+def require_no_acl(fd):
+    """Reject ACLs and unsupported ACL inspection; currently only macOS."""
+    if sys.platform != "darwin":
+        raise ValueError("ACL inspection unsupported on this platform")
+    libc = ctypes.CDLL(None, use_errno=True)
+    get_acl = libc.acl_get_fd_np
+    get_acl.argtypes = [ctypes.c_int, ctypes.c_int]
+    get_acl.restype = ctypes.c_void_p
+    free_acl = libc.acl_free
+    free_acl.argtypes = [ctypes.c_void_p]
+    free_acl.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    acl = get_acl(fd, 0x100)  # macOS ACL_TYPE_EXTENDED
+    if acl:
+        free_acl(acl)
+        raise ValueError("ACLs are unsupported on spool directories and files")
+    if ctypes.get_errno() != errno.ENOENT:
+        raise ValueError("ACL absence could not be verified")
 
 
 class BoundedFrames(StrictTarReader):
@@ -68,10 +91,12 @@ def spool_verified_layer(stream, item, expected_diff, private_root):
             raise ValueError("private root ownership or type invalid")
         if stat.S_IMODE(info.st_mode) != 0o700:
             raise ValueError("private root permissions invalid")
+        require_no_acl(root)
         job = "layer-" + secrets.token_hex(16)
         os.mkdir(job, 0o700, dir_fd=root)
         created = True
         directory = os.open(job, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+        require_no_acl(directory)
         staging = os.open(
             "provisional.tar",
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -79,6 +104,7 @@ def spool_verified_layer(stream, item, expected_diff, private_root):
             dir_fd=directory,
         )
         os.fchmod(staging, 0o600)
+        require_no_acl(staging)
         frame = BoundedFrames()
         written = 0
         deadline = time.monotonic() + MAX_SECONDS
