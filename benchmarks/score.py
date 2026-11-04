@@ -29,11 +29,16 @@ LINE_TOLERANCE = 3
 
 
 def load_findings(path: Path) -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("{")
-    ]
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            value = None
+        records.append(value if isinstance(value, dict) else {})
+    return records
 
 
 def derive_marker_line(
@@ -112,6 +117,11 @@ def engine_stability(
 
 
 def run_set_complete(manifest: dict[str, Any], corpus: dict[str, Any]) -> bool:
+    scan_ids = [run.get("scanId") for run in manifest["runs"]]
+    if not all(isinstance(scan_id, str) and scan_id.strip() for scan_id in scan_ids):
+        return False
+    if len(set(scan_ids)) != len(scan_ids):
+        return False
     detectors = (
         {"engine", "deterministic"} if manifest["detectors"] == "all" else {manifest["detectors"]}
     )
@@ -150,6 +160,63 @@ def corpus_matches_receipt(
     )
 
 
+def bind_findings_to_runs(
+    findings: list[dict[str, Any]], runs: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    bound, unbound = [], []
+    counts: dict[str, int] = defaultdict(int)
+    sentinels: dict[tuple[str, str], int] = defaultdict(int)
+    deterministic = {"secrets", "sast", "iac", "agent_config", "ml_supply_chain"}
+    for finding in findings:
+        scanner = finding.get("scanner")
+        detector = "engine" if scanner == "engine" else "deterministic"
+        matching_runs = [
+            run
+            for run in runs
+            if isinstance(run.get("scanId"), str)
+            and run["scanId"]
+            and run["scanId"] == finding.get("scanId")
+        ]
+        if (
+            len(matching_runs) != 1
+            or not isinstance(scanner, str)
+            or scanner not in deterministic | {"engine", "__discovery__", "__coverage__"}
+            or (scanner == "__discovery__" and not isinstance(finding.get("discovery"), dict))
+            or (scanner == "__coverage__" and not isinstance(finding.get("coverageIssues"), list))
+            or not isinstance(finding.get("caseId"), str)
+            or not finding["caseId"]
+            or finding.get("variant") not in ("vulnerable", "clean")
+            or type(finding.get("runIndex")) is not int
+            or matching_runs[0].get("detector") != detector
+            or matching_runs[0].get("case") != finding.get("caseId")
+            or matching_runs[0].get("variant") != finding.get("variant")
+            or matching_runs[0].get("runIndex", 0) != finding.get("runIndex")
+        ):
+            unbound.append(finding)
+        else:
+            bound.append(finding)
+            scan_id = matching_runs[0]["scanId"]
+            counts[scan_id] += 1
+            if scanner in {"__discovery__", "__coverage__"}:
+                sentinels[(scan_id, scanner)] += 1
+    incomplete = any(
+        not isinstance(run.get("scanId"), str)
+        or not run["scanId"]
+        or type(run.get("emitted")) is not int
+        or run["emitted"] < 0
+        or counts.get(run.get("scanId"), 0) != run["emitted"]
+        or (
+            run.get("detector") == "deterministic"
+            and any(
+                sentinels.get((run.get("scanId"), name), 0) != 1
+                for name in ("__discovery__", "__coverage__")
+            )
+        )
+        for run in runs
+    )
+    return bound, unbound, incomplete
+
+
 def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
     corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
     findings = load_findings(results_dir / "findings.jsonl")
@@ -159,6 +226,13 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
     clean_fps: list[dict[str, Any]] = []
     unmatched: list[dict[str, Any]] = []
     marker_cache: dict[str, int | None] = {}
+    legacy = manifest.get("harnessVersion", 1) < 2
+    unbound_findings = []
+    incomplete_records = False
+    if not legacy:
+        findings, unbound_findings, incomplete_records = bind_findings_to_runs(
+            findings, manifest["runs"]
+        )
     discovery_receipts = [f for f in findings if f.get("scanner") == "__discovery__"]
 
     scan_findings = [
@@ -208,12 +282,13 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         duplicate_count += sum(max(0, count - 1) for count in per_execution.values())
     failures = [r for r in manifest["runs"] if r.get("returncode") != 0 or r.get("errors")]
     coverage_issues = [f for f in findings if f.get("error") or f.get("coverageIssues")]
-    legacy = manifest.get("harnessVersion", 1) < 2
     status = (
         "LEGACY_UNVALIDATED"
         if legacy
         else "INCOMPLETE"
         if failures
+        or unbound_findings
+        or incomplete_records
         or coverage_issues
         or not run_set_complete(manifest, corpus)
         or not corpus_matches_receipt(manifest, corpus, corpus_dir)
@@ -264,6 +339,8 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
             sum(1 for c in corpus["pairs"] if detected[c["id"]]) / len(corpus["pairs"]), 4
         ),
         "unmatchedFindings": len(unmatched),
+        "unboundRecords": len(unbound_findings) if not legacy else None,
+        "recordIntegrityIncomplete": incomplete_records if not legacy else None,
         "duplicateRate": round(
             duplicate_count / max(1, sum(len(hits) for hits in detected.values())),
             4,
@@ -286,6 +363,8 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         f"- recall: {summary['recall']} ({summary['detectedCases']}/{summary['totalCases']})",
         "- unmatched vulnerable-fixture findings (not false positives): "
         f"{summary['unmatchedFindings']}",
+        f"- records not bound to a recorded run: {summary['unboundRecords']}",
+        f"- record counts or scanner receipts incomplete: {summary['recordIntegrityIncomplete']}",
         f"- clean-fixture findings: {summary['cleanFindings']}",
         f"- duplicate rate: {summary['duplicateRate']}",
         f"- engine stability: {stability if stability is not None else 'n/a (single/det)'}",

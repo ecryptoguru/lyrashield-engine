@@ -10,7 +10,13 @@ from types import SimpleNamespace
 import pytest
 
 from benchmarks import run
-from benchmarks.score import case_matches, corpus_matches_receipt, engine_stability, score
+from benchmarks.score import (
+    case_matches,
+    corpus_matches_receipt,
+    engine_stability,
+    run_set_complete,
+    score,
+)
 
 
 def test_marker_matching_does_not_credit_neighboring_case(tmp_path: Path) -> None:
@@ -28,6 +34,114 @@ def test_stability_includes_zero_hit_runs() -> None:
     manifest = {"runs": [{"detector": "engine", "runIndex": i} for i in range(3)]}
     detected = {"A": [{"scanner": "engine", "runIndex": i} for i in range(2)]}
     assert engine_stability(manifest, detected) == 0
+
+
+@pytest.mark.parametrize("bad_id", ["", "A-vulnerable-det", None])
+def test_complete_run_set_requires_unique_nonempty_scan_ids(bad_id: str | None) -> None:
+    corpus = {"pairs": [{"id": "A"}]}
+    runs = [
+        {
+            "case": "A",
+            "detector": "deterministic",
+            "variant": variant,
+            "runIndex": 0,
+            "scanId": f"A-{variant}-det",
+        }
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {"detectors": "deterministic", "runs": runs}
+    assert run_set_complete(manifest, corpus)
+    runs[1]["scanId"] = bad_id
+    assert not run_set_complete(manifest, corpus)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"scanId": "another-run"},
+        {"caseId": "other-case"},
+        {"variant": "unknown"},
+        {"runIndex": 9},
+        {"scanner": "engine"},
+        {"scanner": None},
+        {"scanner": "__discovery__"},
+        {"scanner": "__coverage__"},
+    ],
+)
+def test_finding_must_belong_to_the_recorded_run(tmp_path: Path, changed: dict) -> None:
+    case = {"id": "A", "class": "auth", "vulnerable": "bad.ts", "clean": "safe.ts"}
+    corpus = {"name": "fixture", "revision": "v1", "pairs": [case]}
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    (tmp_path / "bad.ts").write_text("bad() // CASE:A\n")
+    (tmp_path / "safe.ts").write_text("safe() // CASE:A\n")
+    runs = [
+        {
+            "case": "A",
+            "detector": "deterministic",
+            "variant": variant,
+            "runIndex": 0,
+            "scanId": f"A-{variant}-det",
+            "returncode": 0,
+            "emitted": 3 if variant == "vulnerable" else 2,
+        }
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {
+        "harnessVersion": 2,
+        "detectors": "deterministic",
+        "runs": runs,
+        "corpus": "fixture",
+        "corpusRevision": "v1",
+        "corpusSha256": hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest(),
+        "fixtureSha256": {
+            name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+            for name in ("bad.ts", "safe.ts")
+        },
+    }
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    finding = {
+        "caseId": "A",
+        "variant": "vulnerable",
+        "scanId": "A-vulnerable-det",
+        "scanner": "sast",
+        "file": "bad.ts",
+        "startLine": 1,
+        "runIndex": 0,
+    }
+    sentinels = [
+        {
+            "caseId": "A",
+            "variant": variant,
+            "scanId": f"A-{variant}-det",
+            "runIndex": 0,
+            "scanner": scanner,
+            **payload,
+        }
+        for variant in ("vulnerable", "clean")
+        for scanner, payload in (
+            ("__discovery__", {"discovery": {}}),
+            ("__coverage__", {"coverageIssues": []}),
+        )
+    ]
+    path = tmp_path / "findings.jsonl"
+    path.write_text("\n".join(json.dumps(record) for record in [finding, *sentinels]) + "\n")
+    valid = score(tmp_path, tmp_path)
+    assert valid["status"] == "COMPLETE"
+    assert valid["detectedCases"] == 1
+    path.write_text(
+        "\n".join(json.dumps(record) for record in [{**finding, **changed}, *sentinels]) + "\n"
+    )
+    invalid = score(tmp_path, tmp_path)
+    assert invalid["status"] == "INCOMPLETE"
+    assert invalid["detectedCases"] == 0
+
+    for records in (sentinels, [finding, finding, *sentinels]):
+        path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+        assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+    path.write_text(
+        "\n".join(json.dumps(record) for record in [finding, *sentinels]) + "\nnot json\n"
+    )
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
 
 
 def test_clean_findings_errors_and_repeat_runs_are_separate(tmp_path: Path) -> None:
@@ -50,14 +164,33 @@ def test_clean_findings_errors_and_repeat_runs_are_separate(tmp_path: Path) -> N
     ]
     records.extend(
         [
-            {**records[0], "variant": "clean"},
+            {**records[0], "variant": "clean", "scanId": "A-clean-engine-0"},
             {"scanner": "sast", "error": "scanner failed"},
             {"level": "info", "message": "scanner startup", "variant": "clean"},
         ]
     )
     (tmp_path / "findings.jsonl").write_text("\n".join(json.dumps(rec) for rec in records))
-    runs = [{"detector": "engine", "runIndex": i, "returncode": 0} for i in range(2)]
-    runs.append({"detector": "engine", "variant": "clean", "returncode": 0})
+    runs = [
+        {
+            "case": "A",
+            "detector": "engine",
+            "variant": "vulnerable",
+            "runIndex": i,
+            "scanId": f"A-engine-{i}",
+            "returncode": 0,
+        }
+        for i in range(2)
+    ]
+    runs.append(
+        {
+            "case": "A",
+            "detector": "engine",
+            "variant": "clean",
+            "runIndex": 0,
+            "scanId": "A-clean-engine-0",
+            "returncode": 0,
+        }
+    )
     (tmp_path / "run-manifest.json").write_text(
         json.dumps({"harnessVersion": 2, "detectors": "engine", "runs": runs})
     )
