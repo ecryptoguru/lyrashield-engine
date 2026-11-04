@@ -28,6 +28,7 @@ MAX_ARCHIVE_ENTRIES = 1_000_000
 MAX_ARCHIVE_HEADER_BYTES = 64 * 1024
 MAX_ARCHIVE_PATH_CHARS = 4096
 MAX_TOTAL_PATH_CHARS = 64 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024 * 1024
 MAX_IDENTITY_CHARS = 1024
 MAX_PURL_CHARS = 4096
 MAX_PROCESS_SECONDS = 900
@@ -85,6 +86,133 @@ class BoundedTarInfo(tarfile.TarInfo):
 
     def _proc_gnusparse_10(self, *_args):
         raise ValueError("sparse tar entries are unsupported")
+
+
+def check_pax_framing(payload):
+    position, keys = 0, set()
+    while position < len(payload):
+        separator = payload.find(b" ", position)
+        if separator < 0 or not payload[position:separator].isdigit():
+            raise ValueError("malformed PAX record")
+        record_size = int(payload[position:separator])
+        end = position + record_size
+        if end > len(payload) or end <= separator + 2:
+            raise ValueError("malformed PAX record length")
+        record = payload[separator + 1 : end]
+        if not record.endswith(b"\n") or b"=" not in record:
+            raise ValueError("malformed PAX record")
+        key, value = record[:-1].split(b"=", 1)
+        if not re.fullmatch(rb"[A-Za-z0-9_.-]+", key) or key in keys:
+            raise ValueError("invalid or duplicate PAX key")
+        if key == b"size" or key.startswith(b"GNU.sparse.") or key == b"SCHILY.realsize":
+            raise ValueError("PAX size and sparse overrides are unsupported")
+        if key == b"SCHILY.filetype" and value == b"sparse":
+            raise ValueError("PAX sparse overrides are unsupported")
+        keys.add(key)
+        position = end
+
+
+class StrictTarReader:
+    """Validate uncompressed tar frames as bytes are read, including the trailer."""
+
+    def __init__(self, source):
+        self.source = source
+        self.partial = bytearray()
+        self.payload_remaining = 0
+        self.pax_payload = None
+        self.zero_blocks = 0
+        self.total_bytes = 0
+
+    def consume_block(self, block):
+        if self.zero_blocks:
+            if any(block):
+                raise ValueError("nonzero data after tar end marker")
+            self.zero_blocks += 1
+            return
+        if self.payload_remaining:
+            size = min(self.payload_remaining, 512)
+            if self.pax_payload is not None:
+                self.pax_payload.extend(block[:size])
+            if size < 512 and any(block[size:]):
+                raise ValueError("nonzero tar payload padding")
+            self.payload_remaining -= size
+            if not self.payload_remaining and self.pax_payload is not None:
+                check_pax_framing(bytes(self.pax_payload))
+                self.pax_payload = None
+            return
+        if not any(block):
+            self.zero_blocks = 1
+            return
+        self.begin_header(block)
+
+    def begin_header(self, block):
+        try:
+            header = tarfile.TarInfo.frombuf(bytes(block), "utf-8", "surrogateescape")
+        except tarfile.HeaderError as exc:
+            raise ValueError("invalid tar header") from exc
+        if header.size < 0:
+            raise ValueError("negative tar payload size")
+        extension_types = {
+            tarfile.XHDTYPE,
+            tarfile.XGLTYPE,
+            tarfile.GNUTYPE_LONGNAME,
+            tarfile.GNUTYPE_LONGLINK,
+        }
+        regular_types = {tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.CONTTYPE}
+        zero_size_types = {
+            tarfile.DIRTYPE,
+            tarfile.LNKTYPE,
+            tarfile.SYMTYPE,
+            tarfile.CHRTYPE,
+            tarfile.BLKTYPE,
+            tarfile.FIFOTYPE,
+        }
+        if header.type not in extension_types | regular_types | zero_size_types:
+            raise ValueError("unsupported tar entry type")
+        if header.type in zero_size_types and header.size:
+            raise ValueError("non-file tar entry has payload")
+        if header.type in extension_types and header.size > MAX_ARCHIVE_HEADER_BYTES:
+            raise ValueError("extended tar header exceeds byte limit")
+        self.payload_remaining = header.size
+        if header.type in {tarfile.XHDTYPE, tarfile.XGLTYPE}:
+            self.pax_payload = bytearray()
+            if not self.payload_remaining:
+                check_pax_framing(bytes(self.pax_payload))
+                self.pax_payload = None
+
+    def feed(self, data):
+        self.total_bytes += len(data)
+        if self.total_bytes > MAX_ARCHIVE_BYTES:
+            raise ValueError("archive byte limit exceeded")
+        view = memoryview(data)
+        position = 0
+        if self.partial:
+            take = min(512 - len(self.partial), len(view))
+            self.partial.extend(view[:take])
+            position += take
+            if len(self.partial) == 512:
+                self.consume_block(self.partial)
+                self.partial.clear()
+        while len(view) - position >= 512:
+            self.consume_block(view[position : position + 512])
+            position += 512
+        if position < len(view):
+            self.partial.extend(view[position:])
+
+    def read(self, size):
+        if size is None or size < 0:
+            raise ValueError("unbounded tar read is unsupported")
+        data = self.source.read(min(size, 64 * 1024))
+        if not isinstance(data, bytes):
+            raise TypeError("tar input must be a binary stream")
+        self.feed(data)
+        return data
+
+    def finish(self):
+        while self.read(64 * 1024):
+            pass
+        if self.partial or self.payload_remaining or self.zero_blocks < 2:
+            raise ValueError("incomplete tar framing or end marker")
 
 
 def valid_identity(*values):
@@ -272,7 +400,8 @@ def collect_rootfs(stream):
     parsed_paths, links = set(), {}
     total_metadata_bytes = 0
     total_path_chars = 0
-    with tarfile.open(fileobj=stream, mode="r|*", tarinfo=BoundedTarInfo) as archive:
+    framed = StrictTarReader(stream)
+    with tarfile.open(fileobj=framed, mode="r|", tarinfo=BoundedTarInfo) as archive:
         for index, entry in enumerate(iter_uncached_archive(archive), 1):
             total_path_chars = validate_archive_entry(index, entry, total_path_chars)
             path = PurePosixPath(entry.name)
@@ -310,6 +439,7 @@ def collect_rootfs(stream):
                 parsed_paths.add(name)
             except (ValueError, UnicodeError, AttributeError, TypeError) as exc:
                 record_unresolved(unresolved, name, type(exc).__name__)
+    framed.finish()
     finish_inventory(inventory, counts, links, parsed_paths, unresolved)
     return inventory, unresolved
 

@@ -1,5 +1,6 @@
 """Independent, explicitly scoped filesystem inventory compared with SPDX."""
 
+import gzip
 import io
 import json
 import os
@@ -492,3 +493,105 @@ def test_streaming_does_not_retain_prior_tar_entries(tmp_path, monkeypatch):
     assert len(inventory["deb"]) == 1
     assert len(cached_sizes) > 80
     assert max(cached_sizes) <= 1
+
+
+def tar_without_end_blocks(path):
+    with tarfile.open(path) as archive:
+        last = archive.getmembers()[-1]
+        end = last.offset_data + ((last.size + 511) // 512) * 512
+    return path.read_bytes()[:end]
+
+
+def hidden_package_frame():
+    raw = b'{"name":"missing-package","version":"1.0"}'
+    item = tarfile.TarInfo("usr/share/nodejs/missing-package/package.json")
+    item.size = len(raw)
+    return item.tobuf(format=tarfile.USTAR_FORMAT) + raw + b"\0" * (-len(raw) % 512)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "invalid_header_hides_package",
+        "missing_end",
+        "single_end_block",
+        "truncated_header",
+        "truncated_payload",
+        "nonzero_after_end",
+        "concatenated_archive",
+        "gzip_archive",
+        "pax_size_override",
+    ],
+)
+def test_tar_framing_is_complete_and_rejects_hidden_entries(tmp_path, kind):
+    write_inputs(tmp_path)
+    path = tmp_path / "rootfs.tar"
+    prefix = tar_without_end_blocks(path)
+    zeros = b"\0" * 512
+    if kind == "invalid_header_hides_package":
+        content = prefix + b"X" * 512 + hidden_package_frame() + zeros * 2
+    elif kind == "missing_end":
+        content = prefix
+    elif kind == "single_end_block":
+        content = prefix + zeros
+    elif kind == "truncated_header":
+        content = prefix + b"x" * 37
+    elif kind == "truncated_payload":
+        frame = tarfile.TarInfo("unused")
+        frame.size = 1024
+        content = prefix + frame.tobuf(format=tarfile.USTAR_FORMAT) + b"x" * 512
+    elif kind == "nonzero_after_end":
+        content = prefix + zeros * 2 + b"x" * 512
+    elif kind == "concatenated_archive":
+        content = prefix + zeros * 2 + hidden_package_frame() + zeros * 2
+    elif kind == "gzip_archive":
+        content = gzip.compress(path.read_bytes())
+    else:
+        pax = b"9 size=1\n"
+        extension = tarfile.TarInfo("extended")
+        extension.type = tarfile.XHDTYPE
+        extension.size = len(pax)
+        content = (
+            prefix
+            + extension.tobuf(format=tarfile.USTAR_FORMAT)
+            + pax
+            + b"\0" * (-len(pax) % 512)
+            + hidden_package_frame()
+            + zeros * 2
+        )
+    path.write_bytes(content)
+    result = invoke(tmp_path)
+    assert result.returncode != 0
+    assert (tmp_path / "result.json").read_bytes() == b""
+
+
+def test_two_exact_end_blocks_are_accepted(tmp_path):
+    write_inputs(tmp_path)
+    path = tmp_path / "rootfs.tar"
+    path.write_bytes(tar_without_end_blocks(path) + b"\0" * 1024)
+    result = invoke(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_tar_frame_validation_handles_short_stream_reads(tmp_path):
+    write_inputs(tmp_path)
+    collect = runpy.run_path(str(SCRIPT))["collect_rootfs"]
+
+    class ShortReader(io.BytesIO):
+        def read(self, size=-1):
+            return super().read(min(size, 7))
+
+    inventory, unresolved = collect(ShortReader((tmp_path / "rootfs.tar").read_bytes()))
+    assert not unresolved
+    assert len(inventory["deb"]) == 1
+
+
+def test_total_tar_bytes_are_bounded(tmp_path):
+    write_inputs(tmp_path)
+    collect = runpy.run_path(str(SCRIPT))["collect_rootfs"]
+    collect.__globals__["MAX_ARCHIVE_BYTES"] = 1024
+    with (
+        (tmp_path / "rootfs.tar").open("rb") as archive,
+        pytest.raises(ValueError, match="archive byte limit"),
+    ):
+        collect(archive)
