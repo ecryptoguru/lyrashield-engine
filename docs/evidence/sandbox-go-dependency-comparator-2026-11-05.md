@@ -25,13 +25,16 @@ These checks do not constitute complete SPDX schema or reference validation.
 
 The optional `--diagnostic` mode lists each valid versioned effective Go
 dependency with a document-level state. `matched` means exactly one matching
-versioned SPDX package entry; `ambiguous` means multiple matches or at least one
-same-name unversioned candidate; `absent-but-unresolved` means no matching
-versioned or recognized unversioned candidate was found. None of these states
+versioned SPDX package entry; `ambiguous` means multiple matches, a same-name
+unversioned Go candidate, or a same-name package with no purl. The latter is
+treated as unresolved even if its version field looks valid because its
+ecosystem is unknown. The `unversioned_candidates` count includes these
+untyped entries. `absent-but-unresolved` means no matching versioned or
+recognized unresolved candidate was found. None of these states
 establishes package coverage, binary ownership or image contents. A matching
-entry may belong to another binary. The diagnostic accepts only the explicit
-`UNKNOWN` unversioned Go purl and `stdlib` forms encountered in the retained
-document; malformed, unsupported or unversioned build identities still fail
+entry may belong to another binary. For Go purls the diagnostic accepts only
+the explicit `UNKNOWN` unversioned and `stdlib` forms encountered in the
+retained document; malformed, unsupported or unversioned build identities still fail
 without partial output. The strict default mode remains unchanged. Diagnostic
 output always says `diagnostic-only`, and any ambiguous or absent state exits
 nonzero; even an all-matched diagnostic does not qualify an artifact.

@@ -157,6 +157,25 @@ def test_unversioned_same_name_without_exact_candidate_is_not_absence():
     assert result[0]["unversioned_candidates"] == 1
 
 
+@pytest.mark.parametrize("version", [None, "UNKNOWN", "NOASSERTION", "v1.2.3"])
+@pytest.mark.parametrize("exact", [True, False])
+def test_untyped_same_name_without_purl_is_ambiguous(version, exact):
+    document = sbom()
+    if not exact:
+        document["packages"].pop(0)
+    untyped = {"SPDXID": "SPDXRef-untyped", "name": "example.test/a"}
+    if version is not None:
+        untyped["versionInfo"] = version
+    document["packages"].append(untyped)
+
+    result = oracle.diagnose_go_dependencies(build_info(), document, "amd64")
+    assert result[0]["state"] == "ambiguous"
+    assert result[0]["candidates"] == int(exact)
+    assert result[0]["unversioned_candidates"] == 1
+    if exact:
+        assert oracle.compare_go_dependencies(build_info(), document, "amd64")["matched_count"] == 2
+
+
 def test_unrelated_unversioned_modules_and_go_stdlib_do_not_hide_exact_matches():
     document = sbom()
     unknown = package("example.test/other", "UNKNOWN", "pkg:golang/example.test/other")

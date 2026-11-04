@@ -117,7 +117,13 @@ def spdx_package_go_identity(package, *, diagnostic=False):
             purls.append(reference)
     if len(purls) > 1:
         raise ValueError("conflicting SPDX purls")
-    if not purls or not purls[0]["referenceLocator"].startswith("pkg:golang/"):
+    if not purls:
+        # An untyped same-name record cannot establish its ecosystem or version.
+        # Count it conservatively even if versionInfo happens to look versioned.
+        if diagnostic and isinstance(name, str) and MODULE.fullmatch(name):
+            return name, None
+        return None
+    if not purls[0]["referenceLocator"].startswith("pkg:golang/"):
         return None
     if diagnostic and (
         version == "UNKNOWN"
