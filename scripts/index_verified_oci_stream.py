@@ -9,7 +9,7 @@ import stat
 import threading
 from pathlib import Path
 
-from scripts.index_verified_oci_changeset import catalog_forward_layer
+from scripts.index_verified_oci_changeset import CatalogUnsafePathError, catalog_forward_layer
 from scripts.spool_verified_oci_layer import require_no_acl, write_all
 from scripts.verify_oci_layer_binding import verify_layer_stream
 
@@ -28,6 +28,8 @@ class CatalogWorkerError(ValueError):
 
 def worker_failure_category(error):
     """Map only known constant messages; never expose archive-derived text."""
+    if isinstance(error, CatalogUnsafePathError):
+        return error.category
     if isinstance(error, UnicodeError):
         return "invalid-utf8"
     if isinstance(error, ValueError):

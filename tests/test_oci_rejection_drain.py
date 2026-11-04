@@ -11,6 +11,7 @@ import zlib
 import pytest
 
 from scripts import verify_oci_rejection_drain as drain
+from scripts.index_verified_oci_changeset import CatalogUnsafePathError, catalog_path
 from scripts.verify_oci_layer_binding import OCI_GZIP
 
 
@@ -101,6 +102,47 @@ def test_unknown_worker_message_is_never_exposed(root, monkeypatch):
     assert result["category"] == "catalog-value-error"
     assert "secret-customer-content" not in str(result)
     assert list(root.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "name,kind,target,category",
+    [
+        ("/private-name", "file", "", "member-file-absolute"),
+        ("bad\\private-name", "file", "", "member-file-backslash"),
+        ("link", "symlink", "/private-target", "symlink-target-absolute"),
+        ("link", "hardlink", "/private-target", "hardlink-target-absolute"),
+    ],
+)
+def test_verified_rejection_subcategory_has_no_archive_content(root, name, kind, target, category):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        entry = tarfile.TarInfo(name)
+        if kind == "symlink":
+            entry.type = tarfile.SYMTYPE
+            entry.linkname = target
+        elif kind == "hardlink":
+            entry.type = tarfile.LNKTYPE
+            entry.linkname = target
+        archive.addfile(entry)
+    data = output.getvalue()
+    compressed = gzip.compress(data)
+    descriptor = {
+        "mediaType": OCI_GZIP,
+        "digest": "sha256:" + hashlib.sha256(compressed).hexdigest(),
+        "size": len(compressed),
+    }
+    diff = "sha256:" + hashlib.sha256(data).hexdigest()
+    result = drain.diagnose_fetched_layer(Fetch(compressed), descriptor, diff, root)
+    assert result["category"] == category
+    assert "private-name" not in str(result) and "private-target" not in str(result)
+    assert list(root.iterdir()) == []
+
+
+def test_multiple_unsafe_characters_are_classified_without_content():
+    with pytest.raises(CatalogUnsafePathError) as caught:
+        catalog_path("/private\\value\x00", "symlink-target")
+    assert caught.value.category == "symlink-target-multiple"
+    assert "private" not in str(caught.value)
 
 
 @pytest.mark.parametrize("failure", ["compressed-digest", "diff", "truncated", "fetch-exit"])

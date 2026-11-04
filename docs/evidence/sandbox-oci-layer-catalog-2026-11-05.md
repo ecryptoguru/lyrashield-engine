@@ -67,3 +67,11 @@ so the result does not establish full archive framing or overlay validity.
 A caller must independently authenticate the expected descriptor/DiffID chain
 and use an external process-group wall deadline; the existing trusted-host,
 sampled-reserve, possible residual and blocked-I/O limits apply.
+
+For rejected catalog entries, the fixed unsafe-path category may additionally
+identify the member kind or link-target role and whether the existing policy
+rejected an absolute path, backslash, NUL, or multiple conditions. It never
+includes path or target text and does not relax that policy. PAX validation or
+other parsing errors can still produce a generic category. Even a category
+observed over verified layer bytes describes this implementation's policy, not
+proof that the archive is malicious or incompatible with every OCI runtime.

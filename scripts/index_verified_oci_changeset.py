@@ -25,6 +25,45 @@ MIN_FREE_BYTES = 2 * 1024**3
 MAX_SECONDS = 900
 
 
+class CatalogUnsafePathError(ValueError):
+    """Fixed path-rule and entry-role category with no archive content."""
+
+    def __init__(self, role, reason):
+        if role not in {
+            "member-file",
+            "member-dir",
+            "member-symlink",
+            "member-hardlink",
+            "member-other",
+            "symlink-target",
+            "hardlink-target",
+        } or reason not in {"absolute", "backslash", "nul", "multiple", "invalid-type"}:
+            raise ValueError("invalid path diagnostic category")
+        self.category = f"{role}-{reason}"
+        super().__init__(self.category)
+
+
+def catalog_path(value, role, *, allow_root=False):
+    """Preserve the path policy while classifying only its fixed unsafe rule."""
+    try:
+        return normalized_path(value, allow_root=allow_root)
+    except ValueError as error:
+        if error.args != ("unsafe path",):
+            raise
+        if not isinstance(value, str):
+            reason = "invalid-type"
+        else:
+            reasons = []
+            if value.startswith("/"):
+                reasons.append("absolute")
+            if "\\" in value:
+                reasons.append("backslash")
+            if "\x00" in value:
+                reasons.append("nul")
+            reason = reasons[0] if len(reasons) == 1 else "multiple"
+        raise CatalogUnsafePathError(role, reason) from None
+
+
 class HashingReader:
     def __init__(self, stream, directory, deadline):
         self.stream = stream
@@ -53,7 +92,17 @@ class HashingReader:
 def entry_row(entry):
     if entry.name.endswith("/") and not entry.isdir():
         raise ValueError("non-directory path ends in slash")
-    path = normalized_path(entry.name, allow_root=entry.isdir())
+    if entry.isfile():
+        entry_role = "member-file"
+    elif entry.isdir():
+        entry_role = "member-dir"
+    elif entry.issym():
+        entry_role = "member-symlink"
+    elif entry.islnk():
+        entry_role = "member-hardlink"
+    else:
+        entry_role = "member-other"
+    path = catalog_path(entry.name, entry_role, allow_root=entry.isdir())
     mode, uid, gid, mtime = metadata(entry)
     target, offset, size = "", None, 0
     if entry.isfile():
@@ -65,7 +114,9 @@ def entry_row(entry):
     elif entry.issym() or entry.islnk():
         if entry.linkname.endswith("/"):
             raise ValueError("link target ends in slash")
-        target = normalized_path(entry.linkname)
+        target = catalog_path(
+            entry.linkname, "symlink-target" if entry.issym() else "hardlink-target"
+        )
         kind = "symlink" if entry.issym() else "hardlink"
     else:
         raise ValueError("unsupported entry type")
