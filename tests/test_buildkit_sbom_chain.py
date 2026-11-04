@@ -50,7 +50,14 @@ def make_fixture(tmp_path):
         "predicate": {
             "spdxVersion": "SPDX-2.3",
             "SPDXID": "SPDXRef-DOCUMENT",
-            "packages": [{"name": "fixture"}],
+            "packages": [
+                {
+                    "name": "fixture",
+                    "SPDXID": "SPDXRef-fixture",
+                    "downloadLocation": "NOASSERTION",
+                    "filesAnalyzed": False,
+                }
+            ],
         },
     }
     return build_fixture(tmp_path, statement)
@@ -248,3 +255,50 @@ def test_bounded_reader_rejects_oversize_before_json_parse(tmp_path):
     path.write_bytes(raw)
     with pytest.raises(ValueError, match="input size limit"):
         module["read_bound"](str(path), digest(raw), 4)
+
+
+@pytest.mark.parametrize("mutation", ["null", "missing_name", "missing_id", "duplicate_id"])
+def test_rejects_invalid_package_shapes_after_rehash(tmp_path, mutation):
+    _, statement = make_fixture(tmp_path)
+    package = statement["predicate"]["packages"][0]
+    if mutation == "null":
+        statement["predicate"]["packages"] = [None]
+    elif mutation == "missing_name":
+        del package["name"]
+    elif mutation == "missing_id":
+        del package["SPDXID"]
+    else:
+        statement["predicate"]["packages"].append(package.copy())
+    anchor, _ = build_fixture(tmp_path, statement)
+    result = invoke(tmp_path, anchor)
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    "field,value", [("variant", "v999"), ("variant", "v8"), ("os.version", "other")]
+)
+def test_rejects_unsupported_native_platform_qualifiers_after_rehash(tmp_path, field, value):
+    _, statement = make_fixture(tmp_path)
+    anchor, _ = build_fixture(
+        tmp_path,
+        statement,
+        index_extra=lambda index: index["manifests"][0]["platform"].update({field: value}),
+    )
+    result = invoke(tmp_path, anchor)
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+def test_accepts_explicit_arm64_v8_and_missing_optional_version(tmp_path):
+    _, statement = make_fixture(tmp_path)
+    statement["subject"][0]["name"] = f"pkg:docker/{IMAGE}@candidate?platform=linux%2Farm64"
+    anchor, _ = build_fixture(
+        tmp_path,
+        statement,
+        index_extra=lambda index: index["manifests"][0]["platform"].update(
+            {"architecture": "arm64", "variant": "v8"}
+        ),
+    )
+    result = invoke(tmp_path, anchor, "arm64")
+    assert result.returncode == 0, result.stderr

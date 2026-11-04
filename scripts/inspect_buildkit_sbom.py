@@ -26,8 +26,10 @@ EMPTY_CONFIG = {
 SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
 IMAGE = re.compile(r"ghcr\.io/[a-z0-9]+(?:[._/-][a-z0-9]+)*\Z")
 TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
+SPDX_ID = re.compile(r"SPDXRef-[A-Za-z0-9.-]+\Z")
 MAX_MANIFEST = 64 * 1024
 MAX_STATEMENT = 64 * 1024 * 1024
+MAX_PACKAGES = 200_000
 
 
 def require(condition, message):
@@ -81,6 +83,37 @@ def descriptor(value, media, limit):
     return value["digest"], size
 
 
+def check_packages(packages):
+    require(
+        isinstance(packages, list) and 0 < len(packages) <= MAX_PACKAGES,
+        "missing SPDX packages or excessive count",
+    )
+    identifiers = set()
+    for package in packages:
+        require(isinstance(package, dict), "invalid SPDX package")
+        for key in ("name", "SPDXID", "downloadLocation"):
+            value = package.get(key)
+            require(
+                isinstance(value, str) and value.strip() and len(value) <= 1024,
+                "invalid SPDX package identity",
+            )
+        identifier = package["SPDXID"]
+        require(
+            SPDX_ID.fullmatch(identifier)
+            and identifier != "SPDXRef-DOCUMENT"
+            and identifier not in identifiers,
+            "invalid or duplicate SPDX package ID",
+        )
+        identifiers.add(identifier)
+        require(type(package.get("filesAnalyzed")) is bool, "invalid filesAnalyzed")
+        if "versionInfo" in package:
+            version = package["versionInfo"]
+            require(
+                isinstance(version, str) and version.strip() and len(version) <= 1024,
+                "invalid SPDX package version",
+            )
+
+
 def inspect(index_path, index_digest, attestation_path, statement_path, image, arch):
     require(isinstance(image, str) and IMAGE.fullmatch(image), "invalid image name")
     require(arch in {"amd64", "arm64"}, "invalid architecture")
@@ -102,6 +135,12 @@ def inspect(index_path, index_digest, attestation_path, statement_path, image, a
         and item["platform"].get("architecture") == arch
     ]
     require(len(native) == 1, "missing or ambiguous native manifest")
+    platform = native[0]["platform"]
+    require(
+        set(platform).issubset({"os", "architecture", "variant"})
+        and ("variant" not in platform or (arch == "arm64" and platform["variant"] == "v8")),
+        "unsupported platform qualifier",
+    )
     native_digest, native_size = descriptor(native[0], MANIFEST, MAX_MANIFEST)
     attestations = [
         item
@@ -170,7 +209,7 @@ def inspect(index_path, index_digest, attestation_path, statement_path, image, a
         "invalid SPDX document",
     )
     packages = doc.get("packages")
-    require(isinstance(packages, list) and len(packages) > 0, "missing SPDX packages")
+    check_packages(packages)
     return {
         "scope": "index_bound_buildkit_sbom_inspection_only",
         "indexDigest": index_digest,
