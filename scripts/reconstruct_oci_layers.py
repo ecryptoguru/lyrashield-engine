@@ -189,6 +189,8 @@ class VirtualRoot:
                 if any(name.startswith(path + "/") for name in tree):
                     raise ValueError("nonempty directory replacement unsupported")
             if node.kind == "hardlink":
+                if node.target == path:
+                    raise ValueError("self hardlink is unsupported")
                 target = tree.get(node.target)
                 if target is None or target.kind != "file":
                     raise ValueError("unresolved or non-file hardlink")

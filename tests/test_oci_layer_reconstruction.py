@@ -74,6 +74,14 @@ def test_hardlink_preserves_old_inode_when_target_replaced():
     assert root.entries["b"].content == b"old"
 
 
+def test_self_hardlink_replacement_fails_without_retaining_old_file_as_success():
+    root = VirtualRoot()
+    apply(root, [("a", "file", b"old")])
+    with pytest.raises(ValueError, match="self hardlink"):
+        apply(root, [("a", "hardlink", "a")])
+    assert root.entries["a"].content == b"old"
+
+
 @pytest.mark.parametrize(
     "entries",
     [
