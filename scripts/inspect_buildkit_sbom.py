@@ -9,7 +9,8 @@ import re
 import signal
 import stat
 import sys
-from urllib.parse import parse_qsl, urlsplit
+import unicodedata
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 
 INDEX = "application/vnd.oci.image.index.v1+json"
@@ -83,6 +84,35 @@ def descriptor(value, media, limit):
     return value["digest"], size
 
 
+def safe_text(value):
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and len(value) <= 1024
+        and all(not unicodedata.category(character).startswith("C") for character in value)
+    )
+
+
+def valid_download_location(value):
+    if value in {"NOASSERTION", "NONE"}:
+        return True
+    if not value.isascii() or any(char.isspace() for char in value):
+        return False
+    if re.search(r"%(?![A-Fa-f0-9]{2})", value):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port  # validates malformed or out-of-range port
+        return (
+            parsed.scheme in {"http", "https", "git", "git+https", "git+ssh", "ssh"}
+            and bool(parsed.hostname)
+            and (port is None or 1 <= port <= 65535)
+            and safe_text(unquote(value, errors="strict"))
+        )
+    except (ValueError, UnicodeError):
+        return False
+
+
 def check_packages(packages):
     require(
         isinstance(packages, list) and 0 < len(packages) <= MAX_PACKAGES,
@@ -93,10 +123,8 @@ def check_packages(packages):
         require(isinstance(package, dict), "invalid SPDX package")
         for key in ("name", "SPDXID", "downloadLocation"):
             value = package.get(key)
-            require(
-                isinstance(value, str) and value.strip() and len(value) <= 1024,
-                "invalid SPDX package identity",
-            )
+            require(safe_text(value), "invalid SPDX package identity")
+        require(valid_download_location(package["downloadLocation"]), "invalid download location")
         identifier = package["SPDXID"]
         require(
             SPDX_ID.fullmatch(identifier)
@@ -108,10 +136,7 @@ def check_packages(packages):
         require(type(package.get("filesAnalyzed")) is bool, "invalid filesAnalyzed")
         if "versionInfo" in package:
             version = package["versionInfo"]
-            require(
-                isinstance(version, str) and version.strip() and len(version) <= 1024,
-                "invalid SPDX package version",
-            )
+            require(safe_text(version), "invalid SPDX package version")
 
 
 def inspect(index_path, index_digest, attestation_path, statement_path, image, arch):

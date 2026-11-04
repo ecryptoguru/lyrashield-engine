@@ -302,3 +302,38 @@ def test_accepts_explicit_arm64_v8_and_missing_optional_version(tmp_path):
     )
     result = invoke(tmp_path, anchor, "arm64")
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("name", "a\u0000b"),
+        ("name", "a\u0085b"),
+        ("versionInfo", "1.0\nother"),
+        ("downloadLocation", "not a URI"),
+        ("downloadLocation", "file:///etc/passwd"),
+        ("downloadLocation", "https://"),
+        ("downloadLocation", "https://example.invalid/%zz"),
+        ("downloadLocation", "https://example.invalid/%00"),
+        ("downloadLocation", "https://example.invalid/with space"),
+    ],
+)
+def test_rejects_unsafe_package_text_after_rehash(tmp_path, key, value):
+    _, statement = make_fixture(tmp_path)
+    statement["predicate"]["packages"][0][key] = value
+    anchor, _ = build_fixture(tmp_path, statement)
+    result = invoke(tmp_path, anchor)
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["NONE", "NOASSERTION", "https://example.invalid/repo", "git+ssh://git@example.invalid/repo"],
+)
+def test_accepts_supported_download_location_forms(tmp_path, location):
+    _, statement = make_fixture(tmp_path)
+    statement["predicate"]["packages"][0]["downloadLocation"] = location
+    anchor, _ = build_fixture(tmp_path, statement)
+    result = invoke(tmp_path, anchor)
+    assert result.returncode == 0, result.stderr
