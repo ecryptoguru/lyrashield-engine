@@ -23,9 +23,12 @@ sign-off. A claim without a row is not publishable.
 
 ## Legacy receipts
 
-All receipts produced before harnessVersion 2 are unvalidated historical runs,
-not detection-quality evidence. They omitted clean controls and exact case/run
-binding; their published recall and duplicate metrics must not be cited.
-The unvalidated drafts were removed from the PR; Git history retains them for
-audit. Generate fresh paired receipts with the corrected harness and require
-COMPLETE scorer status before review.
+Receipts produced before harnessVersion 3 are unvalidated historical runs,
+not detection-quality evidence. Version 2 did not bind the exact findings
+bytes; versions before 2 also omitted clean controls and exact case/run
+binding. Historical `COMPLETE` labels and published recall and duplicate
+metrics must not be cited. Keep historical files for audit; generate fresh
+paired receipts with the corrected harness and require `COMPLETE` scorer
+status before review. The version 3 digest detects findings-file changes
+relative to its manifest; it is not a signature and does not detect coordinated
+edits to both files.

@@ -28,9 +28,13 @@ BENCH_ROOT = Path(__file__).resolve().parent
 LINE_TOLERANCE = 3
 
 
-def load_findings(path: Path) -> list[dict[str, Any]]:
+def load_findings(raw: bytes) -> list[dict[str, Any]]:
     records = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return [{}]
+    for line in lines:
         if not line.strip():
             continue
         try:
@@ -217,19 +221,35 @@ def bind_findings_to_runs(
     return bound, unbound, incomplete
 
 
+def receipt_version_state(
+    manifest: dict[str, Any], findings_bytes: bytes
+) -> tuple[bool, bool, bool | None]:
+    version = manifest.get("harnessVersion", 1)
+    legacy = type(version) is int and version < 3
+    supports_records = type(version) is int and version >= 2
+    digest_valid = (
+        hashlib.sha256(findings_bytes).hexdigest() == manifest.get("findingsSha256")
+        if type(version) is int and version == 3
+        else None
+    )
+    return legacy, supports_records, digest_valid
+
+
 def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
     corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
-    findings = load_findings(results_dir / "findings.jsonl")
+    findings_bytes = (results_dir / "findings.jsonl").read_bytes()
+    findings = load_findings(findings_bytes)
     manifest = json.loads((results_dir / "run-manifest.json").read_text(encoding="utf-8"))
 
     detected: dict[str, list[dict[str, Any]]] = defaultdict(list)
     clean_fps: list[dict[str, Any]] = []
     unmatched: list[dict[str, Any]] = []
     marker_cache: dict[str, int | None] = {}
-    legacy = manifest.get("harnessVersion", 1) < 2
-    unbound_findings = []
-    incomplete_records = False
-    if not legacy:
+    legacy, supports_records, findings_digest_valid = receipt_version_state(
+        manifest, findings_bytes
+    )
+    unbound_findings, incomplete_records = [], False
+    if supports_records:
         findings, unbound_findings, incomplete_records = bind_findings_to_runs(
             findings, manifest["runs"]
         )
@@ -287,6 +307,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         if legacy
         else "INCOMPLETE"
         if failures
+        or findings_digest_valid is not True
         or unbound_findings
         or incomplete_records
         or coverage_issues
@@ -339,8 +360,9 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
             sum(1 for c in corpus["pairs"] if detected[c["id"]]) / len(corpus["pairs"]), 4
         ),
         "unmatchedFindings": len(unmatched),
-        "unboundRecords": len(unbound_findings) if not legacy else None,
-        "recordIntegrityIncomplete": incomplete_records if not legacy else None,
+        "unboundRecords": len(unbound_findings) if supports_records else None,
+        "recordIntegrityIncomplete": incomplete_records if supports_records else None,
+        "findingsDigestMatches": findings_digest_valid,
         "duplicateRate": round(
             duplicate_count / max(1, sum(len(hits) for hits in detected.values())),
             4,
@@ -365,6 +387,7 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         f"{summary['unmatchedFindings']}",
         f"- records not bound to a recorded run: {summary['unboundRecords']}",
         f"- record counts or scanner receipts incomplete: {summary['recordIntegrityIncomplete']}",
+        f"- findings digest matches: {summary['findingsDigestMatches']}",
         f"- clean-fixture findings: {summary['cleanFindings']}",
         f"- duplicate rate: {summary['duplicateRate']}",
         f"- engine stability: {stability if stability is not None else 'n/a (single/det)'}",
