@@ -165,6 +165,29 @@ def test_malformed_or_ambiguous_spdx_never_counts_as_coverage(mutation):
         oracle.compare_go_dependencies(build_info(), document, "amd64")
 
 
+@pytest.mark.parametrize("control", ["\x00", "\n", "\x7f", "\x85"])
+@pytest.mark.parametrize("field", ["referenceCategory", "referenceType", "referenceLocator"])
+def test_control_characters_in_even_unrelated_references_are_rejected(control, field):
+    document = sbom()
+    document["packages"].append(
+        {
+            "SPDXID": "SPDXRef-other-package",
+            "name": "other",
+            "versionInfo": "1",
+            "externalRefs": [
+                {
+                    "referenceCategory": "OTHER",
+                    "referenceType": "other",
+                    "referenceLocator": "example.test/other",
+                }
+            ],
+        }
+    )
+    document["packages"][-1]["externalRefs"][0][field] += control
+    with pytest.raises(ValueError):
+        oracle.compare_go_dependencies(build_info(), document, "amd64")
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -264,7 +287,7 @@ def test_cli_reads_real_linux_go_binary_without_running_it(compiled_go_fixture):
     result = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)  # noqa: S603
     assert result.returncode == 0, result.stderr
     receipt = json.loads(result.stdout)
-    assert receipt["scope"] == "versioned-go-dependencies-only"
+    assert receipt["scope"] == "embedded-versioned-go-dependencies-only"
     assert receipt["dependency_count"] == 1
     assert receipt["binary_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
     assert receipt["spdx_sha256"] == hashlib.sha256(spdx.read_bytes()).hexdigest()

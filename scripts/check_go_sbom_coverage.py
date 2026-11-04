@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from urllib.parse import quote
 
@@ -92,6 +93,7 @@ def spdx_package_go_identity(package):
             not isinstance(reference.get(field), str)
             or not reference[field]
             or len(reference[field]) > 4096
+            or any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in reference[field])
             for field in ("referenceCategory", "referenceType", "referenceLocator")
         ):
             raise ValueError("malformed SPDX reference")
@@ -310,7 +312,7 @@ def main():
         result = compare_go_dependencies(info, document, args.architecture)
         result.update(
             {
-                "scope": "versioned-go-dependencies-only",
+                "scope": "embedded-versioned-go-dependencies-only",
                 "architecture": args.architecture,
                 "binary_sha256": binary_hash,
                 "go_tool_sha256": tool_hash,

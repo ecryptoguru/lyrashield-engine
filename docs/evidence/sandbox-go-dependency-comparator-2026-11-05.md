@@ -14,12 +14,14 @@ supplied SPDX 2.3 document. If a dependency has a versioned module replacement,
 the effective replacement is compared; local or otherwise unversioned
 replacements fail as unresolved. Duplicate declarations, empty dependency
 metadata, missing or mismatched entries, malformed JSON and unsupported target
-information fail closed. Package IDs must be present and unique, references
-must be well formed, and a matching dependency must have exactly one matching
+information fail closed. Package IDs must be present and unique; reference
+fields must be present, bounded and free of control characters; and a matching
+dependency must have exactly one matching
 SPDX package entry. Repeated purls can legitimately describe separate binaries;
 they remain unresolved here because this prototype does not validate SPDX
 binary-to-package relationships. A BuildKit in-toto v1 SPDX envelope is accepted
 as a container only; this tool does **not** verify its signature or subject.
+These checks do not constitute complete SPDX schema or reference validation.
 
 The JSON result records the SHA-256 values of the supplied SPDX bytes, captured
 binary and selected host Go tool. It compares document-level membership only;
