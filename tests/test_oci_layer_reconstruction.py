@@ -82,6 +82,23 @@ def test_self_hardlink_replacement_fails_without_retaining_old_file_as_success()
     assert root.entries["a"].content == b"old"
 
 
+@pytest.mark.parametrize("attribute,value", [("mode", 0o600), ("uid", 1), ("gid", 1), ("mtime", 1)])
+def test_hardlink_with_different_inode_metadata_fails_atomically(attribute, value):
+    root = VirtualRoot()
+    apply(root, [("a", "file", b"old")])
+    result = io.BytesIO()
+    with tarfile.open(fileobj=result, mode="w") as archive:
+        entry = tarfile.TarInfo("b")
+        entry.type = tarfile.LNKTYPE
+        entry.linkname = "a"
+        setattr(entry, attribute, value)
+        archive.addfile(entry)
+    with pytest.raises(ValueError, match="hardlink metadata"):
+        root.apply(result.getvalue())
+    assert set(root.entries) == {"", "a"}
+    assert root.entries["a"].content == b"old"
+
+
 @pytest.mark.parametrize(
     "entries",
     [

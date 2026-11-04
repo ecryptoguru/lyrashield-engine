@@ -194,6 +194,13 @@ class VirtualRoot:
                 target = tree.get(node.target)
                 if target is None or target.kind != "file":
                     raise ValueError("unresolved or non-file hardlink")
+                if (node.mode, node.uid, node.gid, node.mtime) != (
+                    target.mode,
+                    target.uid,
+                    target.gid,
+                    target.mtime,
+                ):
+                    raise ValueError("hardlink metadata differs from target")
                 node = target
             tree[path] = node
             if len(tree) > MAX_ENTRIES:
