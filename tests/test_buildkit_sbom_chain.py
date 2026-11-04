@@ -316,6 +316,14 @@ def test_accepts_explicit_arm64_v8_and_missing_optional_version(tmp_path):
         ("downloadLocation", "https://example.invalid/%zz"),
         ("downloadLocation", "https://example.invalid/%00"),
         ("downloadLocation", "https://example.invalid/with space"),
+        ("downloadLocation", "https://example.invalid/|file"),
+        ("downloadLocation", "https://example.invalid/{file}"),
+        ("downloadLocation", "https://example.invalid/\\evil"),
+        ("downloadLocation", "https://-invalid.example/repo"),
+        ("downloadLocation", "https://bad..example/repo"),
+        ("downloadLocation", "https://example.invalid:99999/repo"),
+        ("downloadLocation", "https://bad@user@example.invalid/repo"),
+        ("downloadLocation", "https://[::1]bad/repo"),
     ],
 )
 def test_rejects_unsafe_package_text_after_rehash(tmp_path, key, value):
@@ -329,7 +337,13 @@ def test_rejects_unsafe_package_text_after_rehash(tmp_path, key, value):
 
 @pytest.mark.parametrize(
     "location",
-    ["NONE", "NOASSERTION", "https://example.invalid/repo", "git+ssh://git@example.invalid/repo"],
+    [
+        "NONE",
+        "NOASSERTION",
+        "https://example.invalid/repo",
+        "git+ssh://git@example.invalid/repo",
+        "https://[::1]:8443/repo",
+    ],
 )
 def test_accepts_supported_download_location_forms(tmp_path, location):
     _, statement = make_fixture(tmp_path)

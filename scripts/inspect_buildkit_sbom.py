@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -31,6 +32,10 @@ SPDX_ID = re.compile(r"SPDXRef-[A-Za-z0-9.-]+\Z")
 MAX_MANIFEST = 64 * 1024
 MAX_STATEMENT = 64 * 1024 * 1024
 MAX_PACKAGES = 200_000
+USERINFO = re.compile(r"[A-Za-z0-9._~!$&'()*+,;=:%-]+\Z")
+URI_PATH = re.compile(r"[A-Za-z0-9._~!$&'()*+,;=:@%/-]*\Z")
+URI_QUERY = re.compile(r"[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*\Z")
+DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 def require(condition, message):
@@ -103,10 +108,30 @@ def valid_download_location(value):
     try:
         parsed = urlsplit(value)
         port = parsed.port  # validates malformed or out-of-range port
+        authority = parsed.netloc
+        if "@" in authority:
+            userinfo, authority = authority.rsplit("@", 1)
+            if not USERINFO.fullmatch(userinfo):
+                return False
+        host = parsed.hostname
+        if not host or authority.endswith(":"):
+            return False
+        if ":" in host:
+            if "%" in host or not re.fullmatch(r"\[[A-Fa-f0-9:.]+\](?::[0-9]{1,5})?", authority):
+                return False
+            ipaddress.IPv6Address(host)
+        else:
+            if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", authority):
+                return False
+            dns = host.removesuffix(".")
+            if len(dns) > 253 or not all(DNS_LABEL.fullmatch(label) for label in dns.split(".")):
+                return False
         return (
             parsed.scheme in {"http", "https", "git", "git+https", "git+ssh", "ssh"}
-            and bool(parsed.hostname)
             and (port is None or 1 <= port <= 65535)
+            and URI_PATH.fullmatch(parsed.path) is not None
+            and URI_QUERY.fullmatch(parsed.query) is not None
+            and URI_QUERY.fullmatch(parsed.fragment) is not None
             and safe_text(unquote(value, errors="strict"))
         )
     except (ValueError, UnicodeError):
