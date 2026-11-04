@@ -156,7 +156,7 @@ jobs:
       id-token: write
       attestations: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -214,13 +214,54 @@ jobs:
           with open("evidence/qualification.json", "w", encoding="utf8") as out:
               json.dump(evidence, out, sort_keys=True, separators=(",", ":"))
           PY
-      - name: Generate an SPDX SBOM for the published digest
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - name: Install checksum-pinned Syft
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --connect-timeout 30 --max-time 180 \
+            https://github.com/anchore/syft/releases/download/v1.42.3/syft_1.42.3_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/syft.tar.gz"
+          printf '%s  %s\n' 0d6be741479eddd2c8644a288990c04f3df0d609bbc1599a005532a9dff63509 "$RUNNER_TEMP/syft.tar.gz" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP" syft
+          printf '%s\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.index.outputs.digest }}
-          output-file: sandbox.spdx.json
-          artifact-name: lyrashield-sandbox-${{ needs.resolve.outputs.revision }}.spdx.json
-          upload-release-assets: false
+          version: 1.3.6
+      - name: Generate per-platform SPDX SBOMs
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          mkdir -p evidence/sboms
+          for arch in amd64 arm64; do
+            child="$(python3 -c 'import json,sys; print(json.load(open("evidence/children.json"))[sys.argv[1]])' "$arch")"
+            [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools inspect "$image@$child" --raw > "evidence/$arch.manifest.json"
+            syft scan "registry:$image@$child" --platform "linux/$arch" \
+              -o "spdx-json=evidence/sboms/sandbox-$arch.spdx.json"
+          done
+      - name: Attach and validate complete SBOM artifact
+        id: sbom
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          (
+            cd evidence/sboms
+            oras attach --artifact-type application/vnd.lyrashield.sandbox-sbom.v1 \
+              --export-manifest ../sbom-artifact.json --format json "$image@$INDEX_DIGEST" \
+              sandbox-amd64.spdx.json:application/spdx+json \
+              sandbox-arm64.spdx.json:application/spdx+json > ../sbom-attach.json
+          )
+          artifact="$(python3 -c 'import json,sys; x=json.load(open("evidence/sbom-attach.json")); assert x["reference"] == sys.argv[1]+"@"+x["digest"]; print(x["digest"])' "$image")"
+          [[ "$artifact" =~ ^sha256:[0-9a-f]{64}$ ]]
+          python3 scripts/prepare_sandbox_sbom.py \
+            --qualification evidence/qualification.json --index-metadata evidence/index-metadata.json \
+            --amd64-manifest evidence/amd64.manifest.json --arm64-manifest evidence/arm64.manifest.json \
+            --artifact-manifest evidence/sbom-artifact.json --artifact-digest "$artifact" \
+            --image "$image" --sbom-dir evidence/sboms --output evidence/sbom-predicate.json
+          printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
       - name: Sign provenance for the immutable image digest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -237,14 +278,57 @@ jobs:
           predicate-path: evidence/qualification.json
           push-to-registry: true
           create-storage-record: false
-      - name: Attest the generated SBOM
+      - name: Sign per-platform SBOM binding
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.index.outputs.digest }}
-          sbom-path: sandbox.spdx.json
+          predicate-type: https://lyrashieldai.com/attestations/sandbox-sbom/v1
+          predicate-path: evidence/sbom-predicate.json
           push-to-registry: true
           create-storage-record: false
+      - name: Verify signed sandbox publication
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+          ARTIFACT_DIGEST: ${{ steps.sbom.outputs.artifact }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          mkdir -p evidence/verified evidence/retrieved
+          for pair in \
+            'provenance https://slsa.dev/provenance/v1' \
+            'qualification https://lyrashieldai.com/attestations/sandbox-qualification/v1' \
+            'sbom https://lyrashieldai.com/attestations/sandbox-sbom/v1'; do
+            read -r name predicate <<< "$pair"
+            verified=false
+            for _ in 1 2 3 4 5; do
+              if gh attestation verify "oci://$image@$INDEX_DIGEST" --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-sandbox.yml" \
+                --signer-digest "$GITHUB_SHA" --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF" \
+                --deny-self-hosted-runners --bundle-from-oci --predicate-type "$predicate" --format json \
+                > "evidence/verified/$name.json"; then
+                verified=true
+                break
+              fi
+              sleep 5
+            done
+            [[ "$verified" == true ]]
+          done
+          python3 scripts/check_sandbox_attestations.py \
+            --repo "$GITHUB_REPOSITORY" --image "$image" --digest "$INDEX_DIGEST" \
+            --revision "$GITHUB_SHA" --ref "$GITHUB_REF" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --provenance evidence/verified/provenance.json \
+            --qualification evidence/verified/qualification.json --sbom evidence/verified/sbom.json \
+            --expected-qualification evidence/qualification.json --expected-sbom evidence/sbom-predicate.json
+          oras manifest fetch "$image@$ARTIFACT_DIGEST" > evidence/retrieved-artifact.json
+          oras pull "$image@$ARTIFACT_DIGEST" --output evidence/retrieved
+          python3 scripts/prepare_sandbox_sbom.py \
+            --qualification evidence/qualification.json --index-metadata evidence/index-metadata.json \
+            --amd64-manifest evidence/amd64.manifest.json --arm64-manifest evidence/arm64.manifest.json \
+            --artifact-manifest evidence/retrieved-artifact.json --artifact-digest "$ARTIFACT_DIGEST" \
+            --image "$image" --sbom-dir evidence/retrieved --output evidence/retrieved-predicate.json
+          cmp evidence/sbom-predicate.json evidence/retrieved-predicate.json
       - name: Promote the smoke-qualified digest
         env:
           RELEASE_TAG: ${{ github.ref_name }}

@@ -83,7 +83,7 @@ def test_published_sandbox_is_smoke_qualified_and_attested() -> None:
     assert "push: true" in content
     assert "provenance: mode=max" in content
     assert "sbom: true" in content
-    assert "sbom-path: sandbox.spdx.json" in content
+    assert "predicate-path: evidence/sbom-predicate.json" in content
     assert "subject-digest: ${{ steps.index.outputs.digest }}" in content
     assert "engineRevision" in content and "workflowRevision" in content
     assert "scripts/verify_sandbox_platform_index.py" in content

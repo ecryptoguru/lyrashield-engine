@@ -153,7 +153,11 @@ def assert_workflow_contract(workflow):
     pubnames = [step.get("name", "") for step in publish["steps"]]
     assert (
         pubnames.index("Assemble and verify qualified platform index")
+        < pubnames.index("Generate per-platform SPDX SBOMs")
+        < pubnames.index("Attach and validate complete SBOM artifact")
         < pubnames.index("Sign selected runtime and qualified platform binding")
+        < pubnames.index("Sign per-platform SBOM binding")
+        < pubnames.index("Verify signed sandbox publication")
         < pubnames.index("Promote the smoke-qualified digest")
     )
     assert all(
@@ -163,6 +167,15 @@ def assert_workflow_contract(workflow):
         step for step in publish["steps"] if step.get("uses", "").startswith("actions/attest@")
     ]
     assert len(attestations) == 3
+    sbom_sign = next(
+        step for step in attestations if step.get("name") == "Sign per-platform SBOM binding"
+    )
+    assert (
+        sbom_sign["with"]["predicate-type"]
+        == "https://lyrashieldai.com/attestations/sandbox-sbom/v1"
+    )
+    assert sbom_sign["with"]["predicate-path"] == "evidence/sbom-predicate.json"
+    assert sbom_sign["with"]["subject-digest"] == "${{ steps.index.outputs.digest }}"
     assert all(step["with"].get("create-storage-record") is False for step in attestations)
     assembly = next(step for step in publish["steps"] if step.get("id") == "index")["run"]
     assert "scripts/verify_sandbox_platform_index.py" in assembly
