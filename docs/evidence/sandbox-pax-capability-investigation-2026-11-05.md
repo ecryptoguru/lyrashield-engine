@@ -232,3 +232,13 @@ identities, duplicates, whiteouts, hardlinks and symlink ancestors. These tests
 do not establish OCI runtime parity, final overlay state, complete package
 coverage or a release qualification. The disk-backed OCI catalog, aggregate
 stream, promotion and release paths retain their existing strict policy.
+
+The full-byte rejection diagnostic also has an explicit Linux-literal path
+option, disabled by default. The caller must first bind that choice to
+independently authenticated Linux platform metadata; the helper does not do so.
+It treats backslashes in member and hardlink names as inert Linux filename
+characters, never as host paths. Symlink-target restrictions remain unchanged.
+The fixed rejection classifier follows the same selected policy, so an
+accepted backslash in a member name cannot mask a later rejected symlink or
+hardlink target. This diagnostic still stops parsing at its first rejection;
+full-byte verification is not tar framing, final-overlay or release evidence.

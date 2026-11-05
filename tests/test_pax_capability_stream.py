@@ -586,3 +586,73 @@ def test_failed_kill_with_live_child_times_out_then_closes_stdout(private_root, 
     finally:
         child.kill()
         child.wait(timeout=5)
+
+
+def test_linux_literal_classifier_does_not_misattribute_symlink_target(private_root):
+    compressed, descriptor, diff = layer(
+        record(b"SCHILY.xattr.security.capability", b"x"),
+        kind=tarfile.SYMTYPE,
+        member_name="member\\literal",
+        linkname="target\\rejected",
+    )
+    result = drain.diagnose_fetched_layer(
+        Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+    )
+    assert (result["role"], result["syntax"]) == ("symlink", "backslash")
+
+
+def test_linux_literal_member_backslash_does_not_mask_absolute_hardlink_target(private_root):
+    compressed, descriptor, diff = layer(
+        record(b"path", b"member\\literal") + record(b"linkpath", b"/target"),
+        kind=tarfile.LNKTYPE,
+    )
+    result = drain.diagnose_fetched_layer(
+        Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+    )
+    assert (result["role"], result["syntax"]) == ("hardlink", "absolute")
+
+
+def test_linux_literal_backslash_alone_does_not_create_a_rejection(private_root):
+    compressed, descriptor, diff = layer(record(b"path", b"member\\literal"))
+    with pytest.raises(ValueError, match="incomplete"):
+        drain.diagnose_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+        )
+
+
+def test_diagnostic_rejects_nonboolean_literal_policy(private_root):
+    compressed, descriptor, diff = layer(record(b"path", b"/private"))
+    with pytest.raises(ValueError, match="incomplete"):
+        drain.diagnose_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=1
+        )
+
+
+def test_linux_literal_classifier_selects_real_absolute_rejection_with_backslash(private_root):
+    compressed, descriptor, diff = layer(record(b"path", b"/member\\literal"))
+    result = drain.diagnose_fetched_layer(
+        Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+    )
+    assert (result["role"], result["syntax"]) == ("member", "absolute")
+
+
+def test_linux_literal_classifier_pax_linkpath_rejects_symlink_target(private_root):
+    payload = record(b"path", b"member\\literal") + record(b"linkpath", b"target\\rejected")
+    compressed, descriptor, diff = layer(payload, kind=tarfile.SYMTYPE)
+    result = drain.diagnose_fetched_layer(
+        Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+    )
+    assert (result["role"], result["syntax"]) == ("symlink", "backslash")
+
+
+def test_linux_literal_rejection_reports_nothing_if_digest_mismatches(private_root):
+    compressed, descriptor, diff = layer(
+        record(b"path", b"member\\literal") + record(b"linkpath", b"/target"),
+        kind=tarfile.LNKTYPE,
+    )
+    descriptor["digest"] = "sha256:" + "0" * 64
+    with pytest.raises(ValueError, match="incomplete") as caught:
+        drain.diagnose_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+        )
+    assert "target" not in str(caught.value)
