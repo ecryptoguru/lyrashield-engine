@@ -78,8 +78,11 @@ def parse_records(payload):
 
 
 class HeaderReader(StrictTarReader):
-    def __init__(self):
+    def __init__(self, *, linux_literal_paths=False):
         super().__init__(None)
+        if type(linux_literal_paths) is not bool:
+            raise ValueError("invalid path policy")
+        self.linux_literal_paths = linux_literal_paths
         self.offset = 0
         self.awaiting_member = False
         self.pending = None
@@ -123,7 +126,11 @@ class HeaderReader(StrictTarReader):
             effective = overrides.get(b"path", entry.name)
             validate_member_trailing_slash(effective, is_directory=entry.isdir())
             try:
-                path = normalized_path(effective, allow_root=entry.isdir())
+                path = normalized_path(
+                    effective,
+                    allow_root=entry.isdir(),
+                    linux_literal_paths=self.linux_literal_paths,
+                )
                 target = overrides.get(b"linkpath", entry.linkname)
                 if b"linkpath" in overrides and not (entry.issym() or entry.islnk()):
                     raise ValueError("invalid PAX linkpath")
@@ -132,7 +139,7 @@ class HeaderReader(StrictTarReader):
                 elif entry.islnk():
                     if target.endswith("/"):
                         raise ValueError("invalid hardlink target")
-                    target = normalized_path(target)
+                    target = normalized_path(target, linux_literal_paths=self.linux_literal_paths)
                 else:
                     target = ""
             except UnicodeError:
@@ -175,7 +182,7 @@ class HeaderReader(StrictTarReader):
             raise ValueError("incomplete tar framing or PAX association")
 
 
-def inspect_layer(stream, expected_diff):
+def inspect_layer(stream, expected_diff, *, linux_literal_paths=False):
     """Return raw observations only after complete framing and a matching DiffID.
 
     The caller must separately authenticate the expected DiffID, compressed
@@ -184,7 +191,7 @@ def inspect_layer(stream, expected_diff):
     """
     if not isinstance(expected_diff, str) or not DIGEST.fullmatch(expected_diff):
         raise ValueError("invalid expected diff ID")
-    reader = HeaderReader()
+    reader = HeaderReader(linux_literal_paths=linux_literal_paths)
     digest = hashlib.sha256()
     total = 0
     deadline = time.monotonic() + MAX_SECONDS

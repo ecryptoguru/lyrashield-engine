@@ -38,6 +38,102 @@ def apply(root, entries):
     root.apply(tar(entries))
 
 
+def test_linux_literal_backslash_keeps_slash_names_and_hardlinks_distinct():
+    root = VirtualRoot(linux_literal_paths=True)
+    apply(
+        root,
+        [
+            ("a", "dir", None),
+            ("a/b", "file", b"slash"),
+            ("a\\b", "file", b"literal"),
+            ("alias", "hardlink", "a\\b"),
+        ],
+    )
+    assert root.entries["a/b"].content == b"slash"
+    assert root.entries["a\\b"].content == b"literal"
+    assert root.entries["alias"] is root.entries["a\\b"]
+
+
+def test_linux_literal_backslash_whiteout_only_targets_literal_name():
+    root = VirtualRoot(linux_literal_paths=True)
+    apply(root, [("a", "dir", None), ("a/b", "file", b"slash"), ("a\\b", "file", b"literal")])
+    apply(root, [(".wh.a\\b", "file", b"")])
+    assert "a\\b" not in root.entries
+    assert root.entries["a/b"].content == b"slash"
+
+
+def test_linux_literal_backslash_whiteouts_respect_literal_directory_and_basename():
+    root = VirtualRoot(linux_literal_paths=True)
+    apply(
+        root, [("p\\q", "dir", None), ("p\\q/a\\b", "file", b"old"), ("x\\.wh.y", "file", b"keep")]
+    )
+    apply(root, [("p\\q/.wh.a\\b", "file", b"")])
+    assert "p\\q/a\\b" not in root.entries
+    assert root.entries["x\\.wh.y"].content == b"keep"
+
+
+def test_linux_literal_backslash_duplicate_and_symlink_ancestor_fail_atomically():
+    root = VirtualRoot(linux_literal_paths=True)
+    apply(root, [("link\\x", "symlink", "/target"), ("prior", "file", b"old")])
+    prior = root.entries.copy()
+    for entries in [
+        [("link\\x/child", "file", b"x")],
+        [("a\\b", "file", b"one"), ("./a\\b", "file", b"two")],
+        [("alias", "hardlink", "link\\x")],
+        [("link\\x/.wh.child", "file", b"")],
+    ]:
+        with pytest.raises(ValueError):
+            apply(root, entries)
+        assert root.entries == prior
+
+
+def test_linux_literal_backslash_is_explicit_opt_in_and_keeps_traversal_guards():
+    with pytest.raises(ValueError):
+        apply(VirtualRoot(), [("a\\b", "file", b"x")])
+    root = VirtualRoot(linux_literal_paths=True)
+    for path in ["/a\\b", "../a\\b", "a\\b/../c", "a\\b//c"]:
+        with pytest.raises(ValueError):
+            apply(root, [(path, "file", b"x")])
+    assert set(root.entries) == {""}
+    with pytest.raises(ValueError):
+        VirtualRoot(linux_literal_paths=1)
+    with pytest.raises(ValueError):
+        apply(root, [("link", "symlink", "a\\b")])
+    with pytest.raises(ValueError):
+        apply(root, [("target", "file", b"x"), ("alias", "hardlink", "../a\\b")])
+    assert set(root.entries) == {""}
+
+
+def test_linux_literal_backslash_pax_member_and_hardlink_preserve_identity():
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        first = tarfile.TarInfo("unused")
+        first.pax_headers = {"path": "a\\b"}
+        first.size = 1
+        archive.addfile(first, io.BytesIO(b"x"))
+        alias = tarfile.TarInfo("alias")
+        alias.type = tarfile.LNKTYPE
+        alias.pax_headers = {"linkpath": "a\\b"}
+        archive.addfile(alias)
+    root = VirtualRoot(linux_literal_paths=True)
+    root.apply(out.getvalue())
+    assert root.entries["a\\b"].content == b"x"
+    assert root.entries["alias"] is root.entries["a\\b"]
+
+
+def test_linux_literal_backslash_raw_and_pax_duplicate_are_rejected_atomically():
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        archive.addfile(tarfile.TarInfo("a\\b"))
+        duplicate = tarfile.TarInfo("unused")
+        duplicate.pax_headers = {"path": "./a\\b"}
+        archive.addfile(duplicate)
+    root = VirtualRoot(linux_literal_paths=True)
+    with pytest.raises(ValueError, match="duplicate"):
+        root.apply(out.getvalue())
+    assert set(root.entries) == {""}
+
+
 def test_whiteouts_only_hide_lower_entries_even_when_after_additions():
     root = VirtualRoot()
     apply(root, [("a", "dir", None), ("a/old", "file", b"old"), ("a/keep", "file", b"old")])

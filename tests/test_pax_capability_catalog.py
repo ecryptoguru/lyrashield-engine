@@ -53,6 +53,26 @@ def test_raw_binary_and_path_override_are_associated_to_following_file():
     assert "effective" not in repr(observation) and "binary" not in repr(observation)
 
 
+@pytest.mark.parametrize("pax", [False, True], ids=["raw", "pax"])
+def test_linux_literal_backslash_capability_member_is_opt_in(pax):
+    payload = record(CAP, VALUE) + (record(b"path", b"dir\\literal") if pax else b"")
+    data = make_tar(payload, name="raw" if pax else "dir\\literal")
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    with pytest.raises(ValueError):
+        catalog.inspect_layer(io.BytesIO(data), digest)
+    (observation,) = catalog.inspect_layer(io.BytesIO(data), digest, linux_literal_paths=True)
+    assert observation.path == "dir\\literal"
+
+
+def test_linux_literal_catalog_keeps_whiteout_policy_and_strict_option_type():
+    data = make_tar(record(CAP, VALUE), name=".wh.a\\b")
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    with pytest.raises(ValueError):
+        catalog.inspect_layer(io.BytesIO(data), digest, linux_literal_paths=True)
+    with pytest.raises(ValueError):
+        catalog.HeaderReader(linux_literal_paths=1)
+
+
 def test_symlink_path_and_linkpath_are_inert_and_preserved():
     payload = (
         record(CAP, VALUE) + record(b"linkpath", b"../target//") + record(b"path", b"dir/link")

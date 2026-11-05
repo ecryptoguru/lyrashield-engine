@@ -215,3 +215,20 @@ or accept the rejected archive. The caller must authenticate the expected
 descriptor and DiffID and enforce a process-group deadline for blocked reads.
 The fixed result contains no path, target, package, count or source payload.
 The helper is unwired and does not reclassify earlier unverified receipts.
+
+## Opt-in Linux literal-path prototype
+
+The in-memory `VirtualRoot` and raw capability `HeaderReader` offer an explicit
+`linux_literal_paths=True` option for synthetic evaluation. It preserves a
+backslash as a literal character in member paths and hardlink targets; it does
+not convert it to a separator. Default callers still reject such paths, and
+symlink targets retain their existing restrictions. The caller must establish
+that the target is Linux before selecting this policy; the option itself does
+not authenticate the platform. This prototype does not apply entries to a
+host filesystem and must not be used as a cross-platform path parser.
+
+Synthetic tests cover raw and PAX paths, literal versus slash-separated
+identities, duplicates, whiteouts, hardlinks and symlink ancestors. These tests
+do not establish OCI runtime parity, final overlay state, complete package
+coverage or a release qualification. The disk-backed OCI catalog, aggregate
+stream, promotion and release paths retain their existing strict policy.

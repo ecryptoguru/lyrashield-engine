@@ -34,8 +34,15 @@ class Node:
     target: str = ""
 
 
-def normalized_path(name, allow_root=False):
-    if not isinstance(name, str) or "\x00" in name or "\\" in name or name.startswith("/"):
+def normalized_path(name, allow_root=False, *, linux_literal_paths=False):
+    if type(linux_literal_paths) is not bool:
+        raise ValueError("invalid path policy")
+    if (
+        not isinstance(name, str)
+        or "\x00" in name
+        or ("\\" in name and not linux_literal_paths)
+        or name.startswith("/")
+    ):
         raise ValueError("unsafe path")
     name.encode("utf-8")
     while name.startswith("./"):
@@ -136,8 +143,11 @@ def parse_local_pax(payload):
 
 
 class RestrictiveTarReader(StrictTarReader):
-    def __init__(self, source):
+    def __init__(self, source, *, linux_literal_paths=False):
         super().__init__(source)
+        if type(linux_literal_paths) is not bool:
+            raise ValueError("invalid path policy")
+        self.linux_literal_paths = linux_literal_paths
         self.awaiting_pax_member = False
         self.local_pax = None
 
@@ -173,7 +183,9 @@ class RestrictiveTarReader(StrictTarReader):
             link = self.local_pax.get(b"linkpath")
             if path is not None:
                 validate_member_trailing_slash(path, is_directory=header.isdir())
-                normalized_path(path, allow_root=header.isdir())
+                normalized_path(
+                    path, allow_root=header.isdir(), linux_literal_paths=self.linux_literal_paths
+                )
             if link is not None:
                 if not (header.issym() or header.islnk()):
                     raise ValueError("invalid PAX linkpath")
@@ -182,7 +194,7 @@ class RestrictiveTarReader(StrictTarReader):
                 else:
                     if link.endswith("/"):
                         raise ValueError("invalid PAX linkpath")
-                    normalized_path(link)
+                    normalized_path(link, linux_literal_paths=self.linux_literal_paths)
             self.awaiting_pax_member = False
             self.local_pax = None
         super().begin_header(block)
@@ -194,7 +206,10 @@ class RestrictiveTarReader(StrictTarReader):
 
 
 class VirtualRoot:
-    def __init__(self, deadline=None):
+    def __init__(self, deadline=None, *, linux_literal_paths=False):
+        if type(linux_literal_paths) is not bool:
+            raise ValueError("invalid path policy")
+        self.linux_literal_paths = linux_literal_paths
         self.entries = {"": Node("dir", 0o755, 0, 0, None)}
         self.deadline = deadline if deadline is not None else time.monotonic() + MAX_PROCESS_SECONDS
 
@@ -206,7 +221,7 @@ class VirtualRoot:
         self.check_deadline()
         if not isinstance(raw, bytes) or len(raw) > MAX_LAYER_BYTES:
             raise ValueError("layer memory limit exceeded")
-        framed = RestrictiveTarReader(io.BytesIO(raw))
+        framed = RestrictiveTarReader(io.BytesIO(raw), linux_literal_paths=self.linux_literal_paths)
         staged, seen, path_bytes, total_file_bytes = [], set(), 0, 0
         with tarfile.open(fileobj=framed, mode="r|", tarinfo=BoundedTarInfo) as archive:
             for entry in iter_uncached_archive(archive):
@@ -214,7 +229,11 @@ class VirtualRoot:
                 if len(seen) >= MAX_ENTRIES:
                     raise ValueError("layer entry limit exceeded")
                 validate_member_trailing_slash(entry.name, is_directory=entry.isdir())
-                path = normalized_path(entry.name, allow_root=entry.isdir())
+                path = normalized_path(
+                    entry.name,
+                    allow_root=entry.isdir(),
+                    linux_literal_paths=self.linux_literal_paths,
+                )
                 if path in seen:
                     raise ValueError("duplicate layer path")
                 seen.add(path)
@@ -241,7 +260,9 @@ class VirtualRoot:
                 elif entry.islnk():
                     if entry.linkname.endswith("/"):
                         raise ValueError("hardlink target ends in slash")
-                    target = normalized_path(entry.linkname)
+                    target = normalized_path(
+                        entry.linkname, linux_literal_paths=self.linux_literal_paths
+                    )
                     path_bytes += len(entry.linkname.encode("utf-8"))
                     node = Node("hardlink", *attrs, target=target)
                 else:
