@@ -24,7 +24,6 @@ from scripts.spool_verified_oci_layer import require_no_acl
 
 IMAGE = "sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c"
 DOCKER = "/usr/local/bin/docker"
-CONTEXT = "desktop-linux"
 KEY = b"SCHILY.xattr.security.capability"
 VALUE = b"\x00\xff\n=\x80binary\x00"
 OWNER = "org.lyrashield.synthetic-pax-probe"
@@ -81,9 +80,13 @@ func main() {{
 """.encode()
 
 
+def local_endpoint():
+    return str(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".docker/run/docker.sock")
+
+
 def invoke(args, *, input_bytes=None, timeout=15):
     return subprocess.run(  # noqa: S603
-        [DOCKER, "--context", CONTEXT, *args],
+        [DOCKER, "--host", "unix://" + local_endpoint(), *args],
         input=input_bytes,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -94,17 +97,9 @@ def invoke(args, *, input_bytes=None, timeout=15):
 
 
 def check_local_context():
-    result = invoke(["context", "inspect", CONTEXT])
-    if result.returncode:
-        raise RuntimeError("Docker context unavailable")
-    context = json.loads(result.stdout)
-    expected = str(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".docker/run/docker.sock")
-    if (
-        len(context) != 1
-        or context[0]["Endpoints"]["docker"]["Host"] != "unix://" + expected
-        or not stat.S_ISSOCK(Path(expected).stat(follow_symlinks=False).st_mode)
-        or Path(expected).stat(follow_symlinks=False).st_uid != os.getuid()
-    ):
+    endpoint = Path(local_endpoint())
+    info = endpoint.stat(follow_symlinks=False)
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
         raise RuntimeError("Docker endpoint is not the expected local socket")
 
 
@@ -205,19 +200,20 @@ def run(receipt_dir):
         "umask 077; cat > /tmp/main.go; exec /usr/local/go/bin/go run /tmp/main.go",
     ]
     container_id = None
+    create_unconfirmed = False
     try:
         try:
+            create_unconfirmed = True
             created = invoke(create)
-        except subprocess.TimeoutExpired:
+            candidate = created.stdout.decode("ascii").strip()
+            if created.returncode or not re.fullmatch(r"[0-9a-f]{64}", candidate):
+                raise ValueError("unconfirmed create")  # noqa: TRY301
+            container_id = candidate
+            create_unconfirmed = False
+        except (subprocess.TimeoutExpired, OSError, UnicodeError, ValueError):
             raise RuntimeError(
                 "container creation outcome unresolved; inspect saved identity"
             ) from None
-        if created.returncode:
-            raise RuntimeError("container creation failed")
-        container_id = created.stdout.decode("ascii").strip()
-        if not re.fullmatch(r"[0-9a-f]{64}", container_id):
-            container_id = None
-            raise RuntimeError("invalid created container ID")
         info = inspect_owned(container_id, token)
         if info is None or info["Image"] != IMAGE:
             raise RuntimeError("container identity verification failed")
@@ -225,6 +221,10 @@ def run(receipt_dir):
         config = info["Config"]
         if (
             host["NetworkMode"] != "none"
+            or host.get("PidMode") not in ("", "private")
+            or host.get("IpcMode") not in ("", "private", "shareable", "none")
+            or host.get("UTSMode") not in ("", "private")
+            or host.get("UsernsMode") not in ("", "private")
             or not host["ReadonlyRootfs"]
             or host.get("Privileged")
             or host.get("Binds")
@@ -248,12 +248,20 @@ def run(receipt_dir):
             raise RuntimeError("synthetic Linux parser comparison failed")
         return "synthetic Linux Go parser observations matched"
     finally:
-        info = inspect_owned(container_id or name, token)
-        if info is not None:
-            owned_id = info["Id"]
-            removed = invoke(["rm", "--force", owned_id])
-            if removed.returncode or inspect_owned(owned_id, token) is not None:
-                raise RuntimeError("task-owned container cleanup failed")
+        try:
+            info = inspect_owned(container_id or name, token)
+            if info is not None:
+                owned_id = info["Id"]
+                removed = invoke(["rm", "--force", owned_id])
+                if removed.returncode or inspect_owned(owned_id, token) is not None:
+                    raise RuntimeError("task-owned container cleanup failed")  # noqa: TRY301
+        except Exception:
+            if create_unconfirmed:
+                raise RuntimeError(
+                    "container creation outcome unresolved; "
+                    "inspect saved identity and reconcile cleanup"
+                ) from None
+            raise
 
 
 if __name__ == "__main__":

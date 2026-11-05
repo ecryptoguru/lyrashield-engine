@@ -38,6 +38,10 @@ class Engine:
                         "Config": {"Labels": {probe.OWNER: label}, "User": "65534:65534"},
                         "HostConfig": {
                             "NetworkMode": "none",
+                            "PidMode": "",
+                            "IpcMode": "private",
+                            "UTSMode": "",
+                            "UsernsMode": "",
                             "ReadonlyRootfs": True,
                             "Privileged": False,
                             "Binds": None,
@@ -177,13 +181,23 @@ def test_false_no_new_privileges_rejected(monkeypatch):
     assert not any(call[0][0] == "start" for call in engine.calls)
 
 
-def test_remote_context_rejected_before_container_creation(monkeypatch):
-    def remote(args, **_kwargs):
-        return subprocess.CompletedProcess(
-            args, 0, json.dumps([{"Endpoints": {"docker": {"Host": "tcp://remote:2375"}}}]).encode()
-        )
+def test_docker_calls_pin_local_socket_and_scrub_overrides(monkeypatch):
+    calls = []
+    monkeypatch.setenv("DOCKER_HOST", "tcp://remote:2375")
+    monkeypatch.setenv("DOCKER_CONTEXT", "foreign")
+    monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
+    monkeypatch.setattr(probe, "local_endpoint", lambda: "/safe/docker.sock")
+    monkeypatch.setattr(
+        probe.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    probe.invoke(["image", "inspect", probe.IMAGE])
+    args, kwargs = calls[0]
+    assert args[0][:3] == [probe.DOCKER, "--host", "unix:///safe/docker.sock"]
+    assert not {"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY"} & kwargs["env"].keys()
 
-    monkeypatch.setattr(probe, "invoke", remote)
+
+def test_non_socket_endpoint_rejected(monkeypatch):
+    monkeypatch.setattr(probe, "local_endpoint", lambda: __file__)
     with pytest.raises(RuntimeError, match="local socket"):
         probe.check_local_context()
 
@@ -200,3 +214,76 @@ def test_identity_is_persisted_before_creation(tmp_path, monkeypatch):
     }
     with pytest.raises(FileExistsError):
         probe.persist_identity(tmp_path, "different", "token")
+
+
+@pytest.mark.parametrize("result", [(1, b""), (0, b"malformed"), (0, b"\xff")])
+def test_unconfirmed_create_is_unresolved_and_identity_retained(monkeypatch, result):
+    engine = Engine()
+    identities = []
+
+    def unconfirmed(args, **kwargs):
+        if args[0] == "create":
+            return subprocess.CompletedProcess(args, *result)
+        return engine(args, **kwargs)
+
+    monkeypatch.setattr(probe, "invoke", unconfirmed)
+    monkeypatch.setattr(probe, "check_local_context", lambda: None)
+    monkeypatch.setattr(probe, "persist_identity", lambda *values: identities.append(values))
+    with pytest.raises(RuntimeError, match="outcome unresolved"):
+        probe.run("receipt")
+    assert len(identities) == 1
+
+
+def test_host_pid_namespace_is_rejected_before_start(monkeypatch):
+    engine = Engine()
+
+    def host_pid(args, **kwargs):
+        result = engine(args, **kwargs)
+        if args[0] == "inspect" and result.returncode == 0:
+            info = json.loads(result.stdout)
+            info[0]["HostConfig"]["PidMode"] = "host"
+            result.stdout = json.dumps(info).encode()
+        return result
+
+    monkeypatch.setattr(probe, "invoke", host_pid)
+    monkeypatch.setattr(probe, "check_local_context", lambda: None)
+    monkeypatch.setattr(probe, "persist_identity", lambda *_: None)
+    with pytest.raises(RuntimeError, match="isolation"):
+        probe.run("test-receipt")
+    assert not any(call[0][0] == "start" for call in engine.calls)
+
+
+def test_unconfirmed_create_preserves_unresolved_diagnosis_when_inspection_fails(monkeypatch):
+    def unavailable(args, **_kwargs):
+        if args[0] == "image":
+            data = [{"Id": probe.IMAGE, "Os": "linux", "Architecture": "arm64", "Config": {}}]
+            return subprocess.CompletedProcess(args, 0, json.dumps(data).encode())
+        if args[0] == "create":
+            raise subprocess.TimeoutExpired("docker create", 15)
+        raise RuntimeError("daemon unavailable")
+
+    monkeypatch.setattr(probe, "invoke", unavailable)
+    monkeypatch.setattr(probe, "check_local_context", lambda: None)
+    monkeypatch.setattr(probe, "persist_identity", lambda *_: None)
+    with pytest.raises(RuntimeError, match="outcome unresolved"):
+        probe.run("receipt")
+
+
+@pytest.mark.parametrize("field", ["IpcMode", "UTSMode", "UsernsMode"])
+def test_host_namespace_is_rejected_before_start(monkeypatch, field):
+    engine = Engine()
+
+    def host_namespace(args, **kwargs):
+        result = engine(args, **kwargs)
+        if args[0] == "inspect" and result.returncode == 0:
+            info = json.loads(result.stdout)
+            info[0]["HostConfig"][field] = "host"
+            result.stdout = json.dumps(info).encode()
+        return result
+
+    monkeypatch.setattr(probe, "invoke", host_namespace)
+    monkeypatch.setattr(probe, "check_local_context", lambda: None)
+    monkeypatch.setattr(probe, "persist_identity", lambda *_: None)
+    with pytest.raises(RuntimeError, match="isolation"):
+        probe.run("test-receipt")
+    assert not any(call[0][0] == "start" for call in engine.calls)

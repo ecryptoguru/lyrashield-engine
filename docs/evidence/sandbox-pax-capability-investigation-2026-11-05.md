@@ -99,15 +99,18 @@ An unwired harness, `scripts/probe_linux_pax_differential.py`, is prepared to
 compare fixed synthetic records with the cached Linux/arm64 Go `archive/tar`
 reader. It never requests a download or extracts an archive; it does not call
 `setxattr`, create capability metadata, use real image bytes, or inspect host
-files. It requires a particular cached image digest and Docker Desktop context,
+files. It requires a particular cached image digest and the local Docker Desktop Unix socket,
 and creates a labelled task-owned container with no network, no bind mounts,
 non-root identity, read-only root, dropped capabilities and bounded resources.
-Go compiles a fixed, synthetic-only program in a container tmpfs. The harness
-checks the local Unix socket and isolation before starting, and uses the
+The inspected PID, IPC, UTS and user namespace modes reject host/shared-container
+settings; Docker default/private settings are accepted (IPC also permits
+Docker `shareable` or `none`). Go compiles a fixed, synthetic-only program in
+a container tmpfs. The harness
+checks the local Unix socket, pins it on every Docker command, and verifies isolation before starting, and uses the
 verified immutable container ID for starting and removal. Before creation it
 records a unique name and ownership label in an owner-only receipt directory.
-Mock tests cover failure, timeout, foreign ownership and rejected isolation. A
-creation timeout is explicitly unresolved even if the name is initially absent:
+Mock tests cover failure, timeout, foreign ownership and rejected isolation. Any
+unconfirmed creation outcome is explicitly unresolved even if the name is initially absent:
 the daemon could create it later. A daemon failure, interrupted client or host
 crash may leave the task-owned container behind; inspect the retained identity
 and reconcile such a case before reporting cleanup.
