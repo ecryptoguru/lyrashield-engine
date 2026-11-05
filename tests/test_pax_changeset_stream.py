@@ -2,6 +2,7 @@
 
 import gzip
 import hashlib
+import inspect as inspect_module
 import io
 import subprocess
 import sys
@@ -149,6 +150,39 @@ def test_record_count_and_record_byte_budgets_fail_closed(private_root, monkeypa
     monkeypatch.setattr(verify, "MAX_CHANGESET_RECORD_BYTES", 1, raising=False)
     with pytest.raises(ValueError):
         inspect(Fetch(compressed), descriptor, diff, private_root)
+
+
+def test_caller_uncompressed_budget_is_enforced_during_verified_stream(private_root):
+    assert (
+        "max_uncompressed_bytes"
+        in inspect_module.signature(verify.inspect_fetched_changeset).parameters
+    )
+    compressed, descriptor, diff = synthetic_layer()
+    fetch = Fetch(compressed)
+    with pytest.raises(ValueError, match="incomplete"):
+        inspect(fetch, descriptor, diff, private_root, max_uncompressed_bytes=512)
+    assert fetch.stdout.closed
+
+
+@pytest.mark.parametrize("budget", [True, 0, -1, 1.0, verify.MAX_LAYER_BYTES + 1])
+def test_caller_uncompressed_budget_requires_a_bounded_positive_integer(private_root, budget):
+    compressed, descriptor, diff = synthetic_layer()
+    fetch = Fetch(compressed)
+    with pytest.raises(ValueError, match="incomplete"):
+        inspect(fetch, descriptor, diff, private_root, max_uncompressed_bytes=budget)
+    assert fetch.stdout.closed
+
+
+@pytest.mark.parametrize("deadline", [0, True, float("nan"), float("inf"), "later"])
+def test_caller_deadline_must_be_finite_and_not_expired(private_root, deadline):
+    assert (
+        "absolute_deadline" in inspect_module.signature(verify.inspect_fetched_changeset).parameters
+    )
+    compressed, descriptor, diff = synthetic_layer()
+    fetch = Fetch(compressed)
+    with pytest.raises(ValueError, match="incomplete"):
+        inspect(fetch, descriptor, diff, private_root, absolute_deadline=deadline)
+    assert fetch.stdout.closed
 
 
 def test_matching_bytes_do_not_make_malformed_tar_framing_valid(private_root):

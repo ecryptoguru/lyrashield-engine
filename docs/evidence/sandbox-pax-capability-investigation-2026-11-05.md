@@ -343,3 +343,31 @@ a confined and resource-bounded final image view, qualified Linux extractor
 and xattr/hardlink/whiteout differential tests, file-content reverification,
 and independent complete package-family/SPDX comparisons. This prototype is
 not image or SBOM completeness evidence; the release promotion hold remains.
+
+## Unwired ordered streaming model
+
+`scripts/stream_oci_metadata_overlay.py` is a local-only orchestration
+prototype for controlled synthetic fetch processes. The caller must first
+authenticate the expected native manifest digest and platform against the
+signed index and provenance; the helper **does not authenticate its source**.
+It validates bounded manifest/config bytes and their digest/size and platform
+bindings, then preserves the manifest's exact ordered descriptor/DiffID pairs,
+including repeated occurrences. Each layer is fetched separately and must pass
+the existing compressed descriptor, DiffID, restricted framing, fetch exit
+and cleanup checks before its records are transactionally applied. Any failure
+suppresses the entire model. The fetch factory receives only an immutable
+minimal descriptor and must clean up a process itself if creation fails.
+
+The manifest's total compressed size is bounded before any fetch; a remaining
+cumulative decoded-byte budget and an overall monotonic deadline are enforced
+inside each layer stream as well as at application boundaries. A blocked read,
+process escape, stderr flood or long library call still requires external
+supervision. Object and allocator overhead, dictionary copies, decoder memory,
+metadata inputs, swap and core dumps are not covered by byte counters. The
+caller must independently impose RSS, CPU, FD, wall-time and process-group
+limits and safely drain or discard stderr. The private records and any exception
+context/locals are sensitive and must never be logged, serialized, published,
+followed or materialized. The result explicitly reports
+`source_authenticated=False`, `runtime_equivalent=False` and
+`release_qualified=False`; it cannot qualify runtime xattrs, final-image package
+coverage, either platform's SBOM, or release promotion.

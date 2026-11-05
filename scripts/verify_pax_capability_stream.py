@@ -1,6 +1,7 @@
 """Unwired aggregate-only streamed PAX capability header observation."""
 
 # ruff: noqa: INP001, BLE001, TRY301  # Sanitize all failures before returning data.
+import math
 import os
 import stat
 import time
@@ -212,7 +213,16 @@ def inspect_fetched_layer(
         cleanup_fetch(fetch, root)
 
 
-def inspect_fetched_changeset(fetch, item, diff_id, private_root, *, linux_literal_paths=False):
+def inspect_fetched_changeset(
+    fetch,
+    item,
+    diff_id,
+    private_root,
+    *,
+    linux_literal_paths=False,
+    max_uncompressed_bytes=MAX_LAYER_BYTES,
+    absolute_deadline=None,
+):
     """Return sensitive inert members after all stream and cleanup checks.
 
     This is a single-layer input to a future overlay, never a qualified image.
@@ -240,8 +250,24 @@ def inspect_fetched_changeset(fetch, item, diff_id, private_root, *, linux_liter
             or not 0 < item["size"] <= MAX_COMPRESSED_BYTES
         ):
             raise ValueError("compressed byte limit exceeded")
+        if (
+            type(max_uncompressed_bytes) is not int
+            or not 0 < max_uncompressed_bytes <= MAX_LAYER_BYTES
+        ):
+            raise ValueError("invalid uncompressed byte budget")
         reader = ChangesetReader(linux_literal_paths=linux_literal_paths)
-        deadline = time.monotonic() + MAX_SECONDS
+        now = time.monotonic()
+        if absolute_deadline is not None and (
+            type(absolute_deadline) not in (int, float)
+            or not math.isfinite(absolute_deadline)
+            or absolute_deadline <= now
+        ):
+            raise ValueError("invalid or expired deadline")
+        deadline = (
+            min(now + MAX_SECONDS, absolute_deadline)
+            if absolute_deadline is not None
+            else now + MAX_SECONDS
+        )
         count, tracked, retained = 0, 0, 0
 
         def consume(data):
@@ -251,7 +277,7 @@ def inspect_fetched_changeset(fetch, item, diff_id, private_root, *, linux_liter
             if free_space(root) < MIN_FREE_BYTES + 1024 * 1024:
                 raise ValueError("temporary storage reserve insufficient")
             count += len(data)
-            if count > MAX_LAYER_BYTES:
+            if count > max_uncompressed_bytes:
                 raise ValueError("uncompressed byte limit exceeded")
             reader.feed(data)
             if len(reader.members) > MAX_CHANGESET_RECORDS:
