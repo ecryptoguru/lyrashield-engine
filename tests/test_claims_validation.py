@@ -8,8 +8,11 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from benchmarks.corpus.v3.validate import validate as validate_v3
-from benchmarks.evaluation_v3 import corpus_contract_hashes
+from benchmarks.evaluation_v3 import corpus_contract_hashes, score_v3
+from benchmarks.report_signature import sign_payload
 from benchmarks.validate_claims import _runtime_errors, validate_ledger
 from tests import test_evaluation_v3 as evaluation_fixture
 
@@ -58,6 +61,13 @@ def _valid_claim(repo_root: Path, corpus_dir: Path) -> dict[str, Any]:
         corpus_dir=corpus_dir,
     )
     assert manifest["corpusContractsSha256"] == corpus_contract_hashes(corpus_dir, corpus)
+    score_v3(result_dir, corpus_dir, corpus)
+    signature_path = result_dir / "results.sig.json"
+    signature = sign_payload(
+        (result_dir / "results.json").read_bytes(),
+        Ed25519PrivateKey.generate(),
+    )
+    signature_path.write_text(json.dumps(signature), encoding="utf-8")
     receipt = result_dir / "run-manifest.json"
     return {
         "id": "claim-fixture-precision",
@@ -85,6 +95,8 @@ def _valid_claim(repo_root: Path, corpus_dir: Path) -> dict[str, Any]:
             "founder": "fixture-founder",
             "date": "2026-11-05T00:00:00+00:00",
         },
+        "reportSignaturePath": signature_path.relative_to(repo_root).as_posix(),
+        "reportSignatureSha256": hashlib.sha256(signature_path.read_bytes()).hexdigest(),
         "evaluationScope": "development",
         "heldOutChecksum": None,
     }

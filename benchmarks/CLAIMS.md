@@ -8,7 +8,14 @@ uv run python benchmarks/validate_claims.py --ledger benchmarks/claims.json --re
 ```
 
 The ledger starts empty. An empty ledger means no claim has been approved; it
-does not imply a zero failure rate.
+does not imply a zero failure rate. Sign a report before ledger review:
+
+```sh
+uv run python -m benchmarks.report_signature sign \
+  --payload benchmarks/results/<name>/results.json \
+  --private-key /secure/path/report-signing-key.pem \
+  --output benchmarks/results/<name>/results.sig.json
+```
 
 ## Required claim binding
 
@@ -24,6 +31,8 @@ A claim must carry all of the following exact values:
   claims, with complete case and polarity coverage;
 - observed numerator and denominator; the claimed value must match
   `results.json`, and the metric must be `REPORTABLE`;
+- an Ed25519 signature over retained `results.json`, plus the signature file's
+  exact SHA-256;
 - explicit limitations and development-or-held-out evaluation scope;
 - founder approval with a timezone-bearing date;
 - verified held-out label checksum when the scope is `held_out`.

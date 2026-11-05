@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.evaluation_v3 import score_v3
+from benchmarks.report_signature import verify_file
 from benchmarks.score import source_identity_complete
 
 
@@ -32,6 +33,8 @@ REQUIRED_FIELDS = {
     "receipts",
     "limitations",
     "founderSignoff",
+    "reportSignaturePath",
+    "reportSignatureSha256",
     "evaluationScope",
     "heldOutChecksum",
 }
@@ -183,6 +186,20 @@ def _metric_errors(
     return errors
 
 
+def _signature_errors(claim: dict[str, Any], repo_root: Path, results_dir: Path) -> list[str]:
+    claim_id = claim["id"]
+    signature_path = _resolve(repo_root, str(claim["reportSignaturePath"]))
+    payload_path = results_dir / "results.json"
+    if signature_path is None or not signature_path.is_file():
+        return [f"{claim_id}: report signature is outside the repository or missing"]
+    errors: list[str] = []
+    if claim["reportSignatureSha256"] != _sha256(signature_path):
+        errors.append(f"{claim_id}: report signature checksum does not match")
+    if not payload_path.is_file() or not verify_file(payload_path, signature_path):
+        errors.append(f"{claim_id}: report signature does not verify results.json")
+    return errors
+
+
 def _claim_errors(claim: dict[str, Any], repo_root: Path) -> list[str]:
     missing = REQUIRED_FIELDS - set(claim)
     if missing:
@@ -214,6 +231,7 @@ def _claim_errors(claim: dict[str, Any], repo_root: Path) -> list[str]:
     )
     errors.extend(_receipt_errors(claim, repo_root, engine_required=engine_required))
     errors.extend(_governance_errors(claim, corpus_dir))
+    errors.extend(_signature_errors(claim, repo_root, results_dir))
     errors.extend(_metric_errors(claim, corpus_dir, results_dir))
     return errors
 
