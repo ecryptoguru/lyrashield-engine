@@ -28,6 +28,13 @@ from typing import Any
 
 BENCH_ROOT = Path(__file__).resolve().parent
 LINE_TOLERANCE = 3
+PROFILE_DETECTORS = {
+    "deterministic_core": "deterministic",
+    "offline_sca": "deterministic",
+    "url_api": "engine",
+    "local_engine_cli": "engine",
+    "product_integration": "engine",
+}
 
 
 def load_findings(raw: bytes) -> list[dict[str, Any]]:
@@ -276,6 +283,11 @@ def source_identity_complete(manifest: dict[str, Any]) -> bool:
         manifest.get("detectors") not in ("engine", "all")
         or manifest.get("engineRevision") == sources["engine"]["revision"]
     )
+
+
+def path_profile_evidence_valid(manifest: dict[str, Any]) -> bool:
+    """Require the detector evidence to come from the claimed evaluation path."""
+    return manifest.get("detectors") == PROFILE_DETECTORS.get(manifest.get("pathProfile"))
 
 
 def engine_receipt_valid(run: dict[str, Any]) -> bool:

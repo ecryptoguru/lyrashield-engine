@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from benchmarks import run as benchmark_run
 from benchmarks.evaluation_v3 import (
     corpus_contract_hashes,
     score_v3,
@@ -114,6 +119,7 @@ def _result_fixture(
         "detectors": "deterministic",
         "engineRevision": None,
         "pathProfile": "deterministic_core",
+        "scannerContractVersion": "fixture/3",
         "selectedCaseIds": [case["id"] for case in selected_cases],
         "sources": {"engine": _source(), "product": _source()},
         "sourcesChangedDuringRun": False,
@@ -179,3 +185,91 @@ def test_wilson_interval_uses_the_raw_denominator() -> None:
     assert interval["upper"] == 0.943318
     assert wilson_interval(0, 0) is None
     assert wilson_interval(11, 10) is None
+
+
+def test_ambiguous_scenarios_remain_in_the_category_ledger(tmp_path: Path) -> None:
+    benchmarks = tmp_path / "benchmarks"
+    corpus_dir = benchmarks / "corpus" / "v3"
+    shutil.copytree(CORPUS_DIR, corpus_dir)
+    shutil.copytree(CORPUS_DIR.parent / "v2", benchmarks / "corpus" / "v2")
+    shutil.copytree(CORPUS_DIR.parents[1] / "profiles", benchmarks / "profiles")
+    corpus_path = corpus_dir / "corpus.json"
+    corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+    corpus["scenarios"].append(
+        {
+            "id": "AMBIGUOUS-FIXTURE-01",
+            "profile": "deterministic_core",
+            "expectedCategory": "ambiguous",
+            "status": "NOT_MEASURED",
+        }
+    )
+    corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+    result_dir, _manifest = _result_fixture(tmp_path, [], corpus_dir=corpus_dir)
+
+    summary = score_v3(result_dir, corpus_dir, corpus)
+
+    assert summary["counts"]["ambiguous"] == 1
+    assert any(
+        item.get("id") == "AMBIGUOUS-FIXTURE-01" for item in summary["categories"]["ambiguous"]
+    )
+
+
+def test_scoring_rejects_detector_evidence_from_another_path_profile(tmp_path: Path) -> None:
+    corpus = json.loads((CORPUS_DIR / "corpus.json").read_text(encoding="utf-8"))
+    result_dir, manifest = _result_fixture(tmp_path, [])
+    manifest["pathProfile"] = "local_engine_cli"
+    (result_dir / "run-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    summary = score_v3(result_dir, CORPUS_DIR, corpus)
+
+    assert summary["status"] == "INCOMPLETE"
+    assert any(
+        item.get("category") == "path_profile_detector_mismatch"
+        for item in summary["categories"]["incomplete"]
+    )
+
+
+def test_runner_rejects_a_path_profile_with_incompatible_detectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmarks/run.py",
+            "--corpus",
+            "v3",
+            "--detectors",
+            "deterministic",
+            "--path-profile",
+            "local_engine_cli",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        benchmark_run.main()
+
+    assert exc_info.value.code == 2
+
+
+def test_runner_rejects_a_profile_without_a_dedicated_harness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmarks/run.py",
+            "--corpus",
+            "v3",
+            "--detectors",
+            "deterministic",
+            "--path-profile",
+            "offline_sca",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        benchmark_run.main()
+
+    assert exc_info.value.code == 2

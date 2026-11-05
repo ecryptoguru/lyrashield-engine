@@ -29,12 +29,15 @@ from typing import Any, TextIO
 
 from benchmarks.corpus.v3.validate import validate as validate_corpus_v3
 from benchmarks.evaluation_v3 import corpus_contract_hashes
+from benchmarks.score import PROFILE_DETECTORS
 
 
 BENCH_ROOT = Path(__file__).resolve().parent
 RESULTS_ROOT = BENCH_ROOT / "results"
 DETERMINISTIC_RUNNER = BENCH_ROOT / "run_deterministics.ts"
+DETERMINISTIC_SCANNER_CONTRACT_VERSION = "lyrashield-deterministic/3.0.0"
 PROFILE_PATH = BENCH_ROOT / "profiles" / "v1" / "paths.json"
+RUNNABLE_V3_PROFILES = {"deterministic_core", "local_engine_cli"}
 
 # Sibling product repo — where the deterministic scanner sources live.
 PRODUCT_REPO = Path(
@@ -71,6 +74,20 @@ def load_corpus(corpus_dir: Path) -> dict[str, Any]:
 def load_profiles() -> dict[str, dict[str, Any]]:
     record = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
     return {profile["id"]: profile for profile in record["profiles"]}
+
+
+def _require_runnable_v3_profile(
+    parser: argparse.ArgumentParser,
+    corpus: dict[str, Any],
+    profile_id: str,
+    detectors: str,
+) -> None:
+    if corpus.get("schemaVersion") != "lyrashield-evaluation-corpus/3.0.0":
+        return
+    if profile_id not in RUNNABLE_V3_PROFILES:
+        parser.error(f"path profile {profile_id} requires a dedicated evaluation harness")
+    if detectors != PROFILE_DETECTORS[profile_id]:
+        parser.error(f"path profile {profile_id} requires {PROFILE_DETECTORS[profile_id]} evidence")
 
 
 def cases_for_profile(corpus: dict[str, Any], profile_id: str) -> list[dict[str, Any]]:
@@ -394,6 +411,7 @@ def main() -> int:
     profiles = load_profiles()
     if profile_id not in profiles:
         parser.error(f"unknown path profile: {profile_id}")
+    _require_runnable_v3_profile(parser, corpus, profile_id, args.detectors)
     route = (
         model_route(args.model_provider, args.model, args.model_route_receipt)
         if wants_engine
@@ -441,6 +459,9 @@ def main() -> int:
         "corpusRevision": corpus["revision"],
         "schemaVersion": corpus["schemaVersion"],
         "detectors": args.detectors,
+        "scannerContractVersion": DETERMINISTIC_SCANNER_CONTRACT_VERSION
+        if args.detectors in ("deterministic", "all")
+        else None,
         "pathProfile": profile_id,
         "selectedCaseIds": [case["id"] for case in selected_cases],
         "modelRoute": route,

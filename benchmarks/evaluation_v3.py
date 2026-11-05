@@ -16,6 +16,7 @@ from benchmarks.score import (
     engine_receipt_valid,
     engine_stability,
     load_findings,
+    path_profile_evidence_valid,
     receipt_version_state,
     run_set_complete,
     source_identity_complete,
@@ -379,6 +380,8 @@ def score_v3(  # noqa: PLR0912, PLR0915 - the category ledger is intentionally e
 
     if not source_identity_complete(manifest):
         incomplete.append({"category": "source_identity_incomplete"})
+    if not path_profile_evidence_valid(manifest):
+        incomplete.append({"category": "path_profile_detector_mismatch"})
     if findings_digest_valid is not True:
         incomplete.append({"category": "findings_digest_mismatch"})
     if not corpus_matches_receipt(manifest, corpus, corpus_dir):
@@ -480,7 +483,7 @@ def score_v3(  # noqa: PLR0912, PLR0915 - the category ledger is intentionally e
             "truePositive": true_positives + adjudicated_true_positives,
             "falsePositive": false_positives + adjudicated_false_positives,
             "falseNegative": false_negatives,
-            "ambiguous": ambiguous + adjudicated_ambiguous,
+            "ambiguous": ambiguous + adjudicated_ambiguous + ambiguous_scenarios,
             "unreachable": adjudicated_unreachable + unreachable_scenarios,
             "unclassifiedExtra": unclassified,
             "duplicate": duplicates,

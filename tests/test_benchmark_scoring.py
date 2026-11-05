@@ -535,6 +535,7 @@ def test_runner_records_digest_of_exact_findings_bytes(
     manifest = json.loads((result_dir / "run-manifest.json").read_text())
     assert manifest["harnessVersion"] == 4
     assert manifest["engineRuns"] is None
+    assert manifest["scannerContractVersion"] == "lyrashield-deterministic/3.0.0"
     assert (
         manifest["findingsSha256"]
         == hashlib.sha256((result_dir / "findings.jsonl").read_bytes()).hexdigest()
