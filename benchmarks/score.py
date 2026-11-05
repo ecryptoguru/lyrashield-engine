@@ -523,7 +523,15 @@ def main() -> int:
     parser.add_argument("--corpus", default="v2")
     parser.add_argument("--results", required=True)
     args = parser.parse_args()
-    summary = score(Path(args.results), BENCH_ROOT / "corpus" / args.corpus)
+    results_dir = Path(args.results)
+    corpus_dir = BENCH_ROOT / "corpus" / args.corpus
+    corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
+    if corpus.get("schemaVersion") == "lyrashield-evaluation-corpus/3.0.0":
+        from benchmarks.evaluation_v3 import score_v3  # noqa: PLC0415 - avoids helper import cycle
+
+        summary = score_v3(results_dir, corpus_dir, corpus)
+    else:
+        summary = score(results_dir, corpus_dir)
     print(json.dumps(summary, indent=2))
     return 0 if summary["status"] == "COMPLETE" else 1
 

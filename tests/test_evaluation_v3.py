@@ -1,0 +1,181 @@
+"""Evaluation v3 category, denominator, uncertainty, and claim-gate regressions."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+from benchmarks.evaluation_v3 import (
+    corpus_contract_hashes,
+    score_v3,
+    wilson_interval,
+)
+
+
+CORPUS_DIR = Path(__file__).resolve().parents[1] / "benchmarks" / "corpus" / "v3"
+
+
+def _source() -> dict[str, Any]:
+    return {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+
+
+def _finding(case: dict[str, Any], variant: str, *, extra: bool = False) -> dict[str, Any]:
+    filename = Path(case[variant]).name
+    marker = case.get("markerLine", 2)
+    return {
+        "caseId": case["id"],
+        "variant": variant,
+        "scanId": f"{case['id']}-{variant}-det",
+        "runIndex": 0,
+        "scanner": "sast",
+        "id": "sast-fixture",
+        "file": filename,
+        "startLine": int(marker) + (2 if extra else 0),
+        "title": "fixture finding",
+        "cwe": "CWE-1",
+    }
+
+
+def _result_fixture(
+    tmp_path: Path,
+    extra_records: list[dict[str, Any]],
+    *,
+    corpus_dir: Path = CORPUS_DIR,
+) -> tuple[Path, dict[str, Any]]:
+    corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
+    selected_cases = [
+        case for case in corpus["pairs"] if "deterministic_core" in case["supportedProfiles"]
+    ]
+    records_by_scan: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for case in selected_cases:
+        for variant in ("vulnerable", "clean"):
+            scan_id = f"{case['id']}-{variant}-det"
+            records_by_scan[scan_id].extend(
+                [
+                    {
+                        "caseId": case["id"],
+                        "variant": variant,
+                        "scanId": scan_id,
+                        "runIndex": 0,
+                        "scanner": "__discovery__",
+                        "discovery": {},
+                    },
+                    {
+                        "caseId": case["id"],
+                        "variant": variant,
+                        "scanId": scan_id,
+                        "runIndex": 0,
+                        "scanner": "__coverage__",
+                        "coverageIssues": [],
+                    },
+                ]
+            )
+    for record in extra_records:
+        records_by_scan[record["scanId"]].append(record)
+
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    findings = [
+        record
+        for case in selected_cases
+        for variant in ("vulnerable", "clean")
+        for record in records_by_scan[f"{case['id']}-{variant}-det"]
+    ]
+    findings_path = result_dir / "findings.jsonl"
+    findings_path.write_text(
+        "\n".join(json.dumps(record, sort_keys=True) for record in findings) + "\n",
+        encoding="utf-8",
+    )
+    runs = [
+        {
+            "case": case["id"],
+            "detector": "deterministic",
+            "variant": variant,
+            "runIndex": 0,
+            "scanId": f"{case['id']}-{variant}-det",
+            "returncode": 0,
+            "errors": [],
+            "emitted": len(records_by_scan[f"{case['id']}-{variant}-det"]),
+            "runtimeMs": 1,
+        }
+        for case in selected_cases
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {
+        "harnessVersion": 4,
+        "engineRuns": None,
+        "detectors": "deterministic",
+        "engineRevision": None,
+        "pathProfile": "deterministic_core",
+        "selectedCaseIds": [case["id"] for case in selected_cases],
+        "sources": {"engine": _source(), "product": _source()},
+        "sourcesChangedDuringRun": False,
+        "corpus": corpus["name"],
+        "corpusRevision": corpus["revision"],
+        "corpusSha256": hashlib.sha256((corpus_dir / "corpus.json").read_bytes()).hexdigest(),
+        "corpusContractsSha256": corpus_contract_hashes(corpus_dir, corpus),
+        "fixtureSha256": {
+            path: hashlib.sha256((corpus_dir / path).read_bytes()).hexdigest()
+            for path in {
+                case[variant] for case in corpus["pairs"] for variant in ("vulnerable", "clean")
+            }
+        },
+        "findingsSha256": hashlib.sha256(findings_path.read_bytes()).hexdigest(),
+        "runs": runs,
+    }
+    (result_dir / "run-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return result_dir, manifest
+
+
+def test_v3_scoring_is_one_to_one_and_preserves_unclassified_extras(tmp_path: Path) -> None:
+    corpus = json.loads((CORPUS_DIR / "corpus.json").read_text(encoding="utf-8"))
+    case = next(item for item in corpus["pairs"] if item["id"] == "SECRET-01")
+    true_positive = _finding(case, "vulnerable")
+    clean_false_positive = _finding(case, "clean")
+    extra = _finding(case, "vulnerable", extra=True)
+    result_dir, manifest = _result_fixture(
+        tmp_path, [true_positive, dict(true_positive), extra, clean_false_positive]
+    )
+
+    summary = score_v3(result_dir, CORPUS_DIR, corpus)
+
+    assert summary["status"] == "COMPLETE"
+    assert summary["claimStatus"] == "NOT_REPORTABLE"
+    assert summary["counts"] == {
+        "truePositive": 1,
+        "falsePositive": 1,
+        "falseNegative": 24,
+        "ambiguous": 0,
+        "unreachable": 0,
+        "unclassifiedExtra": 1,
+        "duplicate": 1,
+        "incomplete": 0,
+    }
+    assert summary["precision"]["status"] == "NOT_REPORTABLE"
+    assert summary["precision"]["raw"] == {"numerator": 1, "denominator": 2}
+    assert summary["precision"]["wilson95"] is None
+    assert summary["recall"]["raw"] == {"numerator": 1, "denominator": 25}
+    assert any("remain unclassified" in reason for reason in summary["precision"]["reasons"])
+    assert (result_dir / "results.json").is_file()
+    assert "NOT_REPORTABLE" in (result_dir / "RESULTS.md").read_text(encoding="utf-8")
+
+    manifest["corpusContractsSha256"]["adjudications"] = "0" * 64
+    (result_dir / "run-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert score_v3(result_dir, CORPUS_DIR, corpus)["status"] == "INCOMPLETE"
+
+
+def test_wilson_interval_uses_the_raw_denominator() -> None:
+    interval = wilson_interval(8, 10)
+    assert interval is not None
+    assert interval["confidence"] == 0.95
+    assert interval["lower"] == 0.490162
+    assert interval["upper"] == 0.943318
+    assert wilson_interval(0, 0) is None
+    assert wilson_interval(11, 10) is None
