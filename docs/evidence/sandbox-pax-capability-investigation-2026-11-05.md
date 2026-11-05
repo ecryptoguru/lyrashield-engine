@@ -103,11 +103,14 @@ files. It requires a particular cached image digest and Docker Desktop context,
 and creates a labelled task-owned container with no network, no bind mounts,
 non-root identity, read-only root, dropped capabilities and bounded resources.
 Go compiles a fixed, synthetic-only program in a container tmpfs. The harness
-checks isolation before starting and verifies ownership before removing its
-container. Mock tests cover failure, timeout and foreign ownership. A daemon
-failure, interrupted client or host crash may leave the named container behind;
-such a case needs explicit task-owned residue inspection and cannot be reported
-as successful cleanup.
+checks the local Unix socket and isolation before starting, and uses the
+verified immutable container ID for starting and removal. Before creation it
+records a unique name and ownership label in an owner-only receipt directory.
+Mock tests cover failure, timeout, foreign ownership and rejected isolation. A
+creation timeout is explicitly unresolved even if the name is initially absent:
+the daemon could create it later. A daemon failure, interrupted client or host
+crash may leave the task-owned container behind; inspect the retained identity
+and reconcile such a case before reporting cleanup.
 
 This compares parser observations in Linux userspace, including duplicate record
 behavior. It does not exercise OCI layer application, Linux capability

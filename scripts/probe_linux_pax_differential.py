@@ -9,11 +9,17 @@ import base64
 import hashlib
 import io
 import json
+import os
+import pwd
+import re
+import stat
 import subprocess
 import tarfile
 import uuid
+from pathlib import Path
 
 from scripts.probe_pax_capability import inspect_layer
+from scripts.spool_verified_oci_layer import require_no_acl
 
 
 IMAGE = "sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c"
@@ -83,26 +89,82 @@ def invoke(args, *, input_bytes=None, timeout=15):
         stderr=subprocess.DEVNULL,
         timeout=timeout,
         check=False,
+        env={"HOME": pwd.getpwuid(os.getuid()).pw_dir, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
     )
 
 
-def inspect_owned(name, token):
-    result = invoke(["inspect", "--type", "container", name])
+def check_local_context():
+    result = invoke(["context", "inspect", CONTEXT])
     if result.returncode:
-        listing = invoke(["ps", "--all", "--filter", f"name=^/{name}$", "--format", "{{.Names}}"])
-        if listing.returncode or listing.stdout.strip():
+        raise RuntimeError("Docker context unavailable")
+    context = json.loads(result.stdout)
+    expected = str(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".docker/run/docker.sock")
+    if (
+        len(context) != 1
+        or context[0]["Endpoints"]["docker"]["Host"] != "unix://" + expected
+        or not stat.S_ISSOCK(Path(expected).stat(follow_symlinks=False).st_mode)
+        or Path(expected).stat(follow_symlinks=False).st_uid != os.getuid()
+    ):
+        raise RuntimeError("Docker endpoint is not the expected local socket")
+
+
+def inspect_owned(identifier, token):
+    result = invoke(["inspect", "--type", "container", identifier])
+    if result.returncode:
+        listing = invoke(["ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}}"])
+        if listing.returncode:
             raise RuntimeError("container state unavailable")
+        for line in listing.stdout.decode("utf-8").splitlines():
+            fields = line.split(" ", 1)
+            if identifier in fields:
+                raise RuntimeError("container state unavailable")
         return None
     data = json.loads(result.stdout)
-    if len(data) != 1 or data[0]["Config"].get("Labels", {}).get(OWNER) != token:
+    if (
+        len(data) != 1
+        or not re.fullmatch(r"[0-9a-f]{64}", data[0].get("Id", ""))
+        or data[0]["Config"].get("Labels", {}).get(OWNER) != token
+    ):
         raise RuntimeError("container ownership verification failed")
+    if re.fullmatch(r"[0-9a-f]{64}", identifier) and identifier != data[0]["Id"]:
+        raise RuntimeError("container identity verification failed")
     return data[0]
 
 
-def run():
+def persist_identity(receipt_dir, name, token):
+    """Durably retain exact ownership identity before asking the daemon to create."""
+    root = os.open(receipt_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        state = os.fstat(root)
+        if state.st_uid != os.getuid() or not stat.S_ISDIR(state.st_mode) or state.st_mode & 0o077:
+            raise ValueError("receipt directory must be owner-only")
+        require_no_acl(root)
+        fd = os.open(
+            "container-identity.json",
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=root,
+        )
+        try:
+            require_no_acl(fd)
+            data = json.dumps({"containerName": name, "label": OWNER, "token": token}).encode()
+            with os.fdopen(fd, "wb", closefd=False) as out:
+                out.write(data)
+                out.flush()
+                os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.fsync(root)
+    finally:
+        os.close(root)
+
+
+def run(receipt_dir):
     program = source()
     token = uuid.uuid4().hex
     name = "codex-pax-synthetic-" + token
+    persist_identity(receipt_dir, name, token)
+    check_local_context()
     image = invoke(["image", "inspect", IMAGE])
     if image.returncode:
         raise RuntimeError("required cached image unavailable")
@@ -142,11 +204,21 @@ def run():
         "-c",
         "umask 077; cat > /tmp/main.go; exec /usr/local/go/bin/go run /tmp/main.go",
     ]
+    container_id = None
     try:
-        created = invoke(create)
+        try:
+            created = invoke(create)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                "container creation outcome unresolved; inspect saved identity"
+            ) from None
         if created.returncode:
             raise RuntimeError("container creation failed")
-        info = inspect_owned(name, token)
+        container_id = created.stdout.decode("ascii").strip()
+        if not re.fullmatch(r"[0-9a-f]{64}", container_id):
+            container_id = None
+            raise RuntimeError("invalid created container ID")
+        info = inspect_owned(container_id, token)
         if info is None or info["Image"] != IMAGE:
             raise RuntimeError("container identity verification failed")
         host = info["HostConfig"]
@@ -166,22 +238,27 @@ def run():
             or info.get("Mounts")
             or config["User"] != "65534:65534"
             or "ALL" not in host.get("CapDrop", [])
-            or not any("no-new-privileges" in x for x in host.get("SecurityOpt", []))
+            or host.get("SecurityOpt") not in (["no-new-privileges"], ["no-new-privileges:true"])
         ):
             raise RuntimeError("container isolation verification failed")
         outcome = invoke(
-            ["start", "--attach", "--interactive", name], input_bytes=program, timeout=90
+            ["start", "--attach", "--interactive", container_id], input_bytes=program, timeout=90
         )
         if outcome.returncode or outcome.stdout != b"SYNTHETIC_MATCH":
             raise RuntimeError("synthetic Linux parser comparison failed")
         return "synthetic Linux Go parser observations matched"
     finally:
-        info = inspect_owned(name, token)
+        info = inspect_owned(container_id or name, token)
         if info is not None:
-            removed = invoke(["rm", "--force", name])
-            if removed.returncode or inspect_owned(name, token) is not None:
+            owned_id = info["Id"]
+            removed = invoke(["rm", "--force", owned_id])
+            if removed.returncode or inspect_owned(owned_id, token) is not None:
                 raise RuntimeError("task-owned container cleanup failed")
 
 
 if __name__ == "__main__":
-    print(run())
+    import sys
+
+    if len(sys.argv) != 2:
+        raise SystemExit("provide an owner-only receipt directory")
+    print(run(sys.argv[1]))
