@@ -164,3 +164,24 @@ apply xattrs or extract archive entries. It is not wired into the existing OCI
 catalog, stream verifier, image promotion or release flow, and its synthetic
 fixtures do not establish Linux xattr interpretation, OCI runtime parity,
 complete overlay semantics, image authenticity or SBOM completeness.
+
+## Unwired aggregate-only capability stream
+
+`scripts/verify_pax_capability_stream.py` feeds the bounded raw-header reader
+synchronously from the compressed descriptor and DiffID verifier. The input
+bytes and capability records stay in memory; the helper does not create an
+archive spool, database, extracted file or host xattr. It returns fixed counts
+of regular-file and symlink capability headers only after the verifier accepts
+the complete compressed stream and DiffID, the tar reader accepts complete
+framing, and the fetch exits successfully. It requires an owner-only ACL-free
+private directory for a continuously checked free-space reserve. Unsupported
+records, validation failures, fetch failures and cleanup errors produce an
+incomplete result without counts or archive-derived error text.
+
+This helper does not authenticate the caller-supplied descriptor or DiffID;
+the caller must establish those bindings and supervise the fetch process group
+with a wall deadline because blocked input cannot be interrupted by the local
+deadline. Counts describe this restricted parser's headers in one layer and do
+not establish a final filesystem, capability interpretation, OCI runtime
+semantics, image qualification or SBOM completeness. It remains unwired from
+promotion and release paths.
