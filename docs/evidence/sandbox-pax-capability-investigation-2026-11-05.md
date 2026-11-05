@@ -281,3 +281,24 @@ reverified bytes. This prototype does not assemble a final image or qualify an
 SBOM. Its caller must authenticate the expected DiffID and platform separately,
 verify the compressed descriptor and fetch exit, and use an external supervisor
 for blocked I/O. The release publication hold remains in place.
+
+`inspect_fetched_changeset` adds an unwired compressed-stream boundary for the
+same sensitive records. It feeds the bounded changeset parser while hashing the
+exact fetched compressed bytes and decompressed DiffID; records are returned
+only after descriptor digest/size, DiffID, restricted framing, successful fetch
+exit and cleanup all pass. Record count and retained raw path/target/PAX/value
+bytes have explicit limits, in addition to the parser's existing entry and PAX
+budgets. Checks occur after each bounded decoded chunk, so transient parser
+allocations can exceed the record-byte threshold by that chunk's accepted
+headers, and object/allocator/decompressor overhead is outside the byte
+accounting. The caller must independently impose memory/RSS, CPU, descriptor,
+wall-time and process-group limits and safely drain or discard fetch stderr.
+
+The expected descriptor, DiffID, layer ordering and platform must be tied to
+independently authenticated image metadata. Records contain uncompressed stream
+offsets, not readable file contents; a discarded layer must be fetched again
+and completely reverified before any later extent is used. The result's normal
+representation omits its records, but Python introspection, exception context
+and traceback locals can still expose sensitive information. Never serialize,
+publish or log records or exception internals, and never treat the result as an
+image overlay, installed xattr state, package inventory or release proof.
