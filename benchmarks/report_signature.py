@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
@@ -55,7 +56,7 @@ def verify_payload(payload: bytes, envelope: dict[str, Any]) -> bool:
     try:
         public_key = Ed25519PublicKey.from_public_bytes(_unb64(envelope["publicKey"]))
         public_key.verify(_unb64(envelope["signature"]), payload)
-    except (ValueError, TypeError):
+    except (InvalidSignature, ValueError, TypeError):
         return False
     return True
 

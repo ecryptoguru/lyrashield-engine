@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import TYPE_CHECKING
 
@@ -33,3 +34,11 @@ def test_report_signature_rejects_changed_payload_and_envelope(tmp_path: Path) -
     )
     assert private_pem
     assert tmp_path.is_dir()
+
+
+def test_report_signature_rejects_a_well_formed_wrong_signature() -> None:
+    payload = b'{"status":"COMPLETE"}'
+    envelope = sign_payload(payload, Ed25519PrivateKey.generate())
+    envelope["signature"] = base64.b64encode(b"\0" * 64).decode("ascii")
+
+    assert verify_payload(payload, envelope) is False
