@@ -104,12 +104,16 @@ class UnverifiedPrefixRejectionError(ValueError):
         return MEMBER_LINK_ROLES.get(self.member_link_reason, "unknown")
 
 
-def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=False):
+def inspect_fetched_layer(
+    fetch, item, diff_id, private_root, *, diagnostic=False, linux_literal_paths=False
+):
     """Return only aggregate counts after complete same-stream verification.
 
     The caller must authenticate the descriptor and DiffID and supervise the
-    fetch process group with an external deadline. This is not a final image,
-    inode, OCI runtime, capability validity, SBOM or release qualification.
+    fetch process group with an external deadline. Linux platform identity must
+    be authenticated before selecting literal-path semantics. This is not a
+    final image, inode, OCI runtime, capability validity, SBOM or release
+    qualification.
     No input bytes or metadata are written, extracted or applied.
     """
     root = None
@@ -131,7 +135,7 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=Fals
             or not 0 < item["size"] <= MAX_COMPRESSED_BYTES
         ):
             raise ValueError("compressed byte limit exceeded")
-        reader = HeaderReader()
+        reader = HeaderReader(linux_literal_paths=linux_literal_paths)
         deadline = time.monotonic() + MAX_SECONDS
         count = 0
 
@@ -165,6 +169,7 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=Fals
             raise ValueError("unsupported observation kind")
         return {
             "scope": "verified-single-layer-pax-header-aggregate-only",
+            **({"pathPolicy": "linux-literal"} if linux_literal_paths else {}),
             "descriptorDigest": descriptor["digest"],
             "compressedBytes": descriptor["size"],
             "diffId": diff_id,

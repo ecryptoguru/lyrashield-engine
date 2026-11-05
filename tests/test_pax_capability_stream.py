@@ -301,6 +301,83 @@ def private_root(tmp_path, monkeypatch):
     return root
 
 
+@pytest.mark.parametrize("pax", [False, True], ids=["raw-member", "pax-member"])
+@pytest.mark.parametrize("kind", [tarfile.REGTYPE, tarfile.SYMTYPE], ids=["file", "symlink"])
+def test_linux_literal_verified_capability_counts_are_explicitly_opt_in(private_root, pax, kind):
+    payload = record(b"SCHILY.xattr.security.capability", b"PRIVATE-VALUE")
+    if pax:
+        payload += record(b"path", b"a\\private")
+    compressed, descriptor, diff = layer(
+        payload, kind=kind, member_name="raw" if pax else "a\\private"
+    )
+    with pytest.raises(ValueError, match="incomplete"):
+        verify.inspect_fetched_layer(Fetch(compressed), descriptor, diff, private_root)
+    result = verify.inspect_fetched_layer(
+        Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+    )
+    assert result["capabilityHeaders"] == 1
+    assert result["fileHeaders"] == (kind == tarfile.REGTYPE)
+    assert result["symlinkHeaders"] == (kind == tarfile.SYMTYPE)
+    assert result["pathPolicy"] == "linux-literal"
+    assert result["finalImageVerified"] is False and result["releaseQualified"] is False
+    assert "private" not in str(result).lower()
+
+
+@pytest.mark.parametrize(
+    "failure", ["digest", "diffid", "truncated", "framing", "fetch", "cleanup", "option"]
+)
+def test_linux_literal_verified_counts_are_suppressed_on_failure(private_root, failure):
+    class BadCleanup(Fetch):
+        def poll(self):
+            raise RuntimeError("PRIVATE-CLEANUP")
+
+    payload = record(b"SCHILY.xattr.security.capability", b"PRIVATE-VALUE")
+    compressed, descriptor, diff = layer(payload, member_name="a\\private")
+    if failure == "digest":
+        descriptor["digest"] = "sha256:" + "0" * 64
+    if failure == "diffid":
+        diff = "sha256:" + "0" * 64
+    if failure == "truncated":
+        compressed = compressed[:-5]
+    if failure == "framing":
+        raw = gzip.decompress(compressed)[:-1] + b"x"
+        compressed = gzip.compress(raw)
+        descriptor["size"] = len(compressed)
+        descriptor["digest"] = "sha256:" + hashlib.sha256(compressed).hexdigest()
+        diff = "sha256:" + hashlib.sha256(raw).hexdigest()
+    fetch = (
+        BadCleanup(compressed) if failure == "cleanup" else Fetch(compressed, failure == "fetch")
+    )
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            fetch,
+            descriptor,
+            diff,
+            private_root,
+            linux_literal_paths=1 if failure == "option" else True,
+        )
+    assert "private" not in str(caught.value).lower()
+    assert not hasattr(caught.value, "category")
+    assert fetch.stdout.closed
+
+
+@pytest.mark.parametrize("violation", ["traversal", "symlink-target"])
+def test_linux_literal_verified_counts_keep_other_path_guards(private_root, violation):
+    payload = record(b"SCHILY.xattr.security.capability", b"x")
+    if violation == "traversal":
+        compressed, descriptor, diff = layer(payload, member_name="a\\b/../private")
+    else:
+        compressed, descriptor, diff = layer(
+            payload, kind=tarfile.SYMTYPE, member_name="a\\b", linkname="private\\target"
+        )
+    with pytest.raises(ValueError, match="incomplete") as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+        )
+    assert not hasattr(caught.value, "category")
+    assert "private" not in str(caught.value).lower()
+
+
 @pytest.mark.parametrize(
     "kind, expected", [(tarfile.REGTYPE, "file"), (tarfile.SYMTYPE, "symlink")]
 )
@@ -313,6 +390,7 @@ def test_only_aggregate_counts_follow_verified_complete_stream(private_root, kin
     assert result["capabilityHeaders"] == 1
     assert result["fileHeaders"] == (expected == "file")
     assert result["symlinkHeaders"] == (expected == "symlink")
+    assert "pathPolicy" not in result
     assert result["finalImageVerified"] is False and result["releaseQualified"] is False
     assert "PRIVATE" not in str(result) and "private-member" not in str(result)
     assert not list(private_root.iterdir())

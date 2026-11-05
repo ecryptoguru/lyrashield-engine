@@ -177,6 +177,10 @@ framing, and the fetch exits successfully. It requires an owner-only ACL-free
 private directory for a continuously checked free-space reserve. Unsupported
 records, validation failures, fetch failures and cleanup errors produce an
 incomplete result without counts or archive-derived error text.
+The helper also permits an explicit `linux_literal_paths=True` option, which
+adds a `linux-literal` path-policy marker to successful aggregate results. The
+caller must authenticate the Linux platform before opting in; the marker is not
+proof of that authentication. The default remains the strict path policy.
 
 An opt-in local diagnostic can attach a fixed, allowlisted parser-rejection
 category to an incomplete result. It is explicitly marked as an unverified
@@ -240,8 +244,9 @@ host filesystem and must not be used as a cross-platform path parser.
 Synthetic tests cover raw and PAX paths, literal versus slash-separated
 identities, duplicates, whiteouts, hardlinks and symlink ancestors. These tests
 do not establish OCI runtime parity, final overlay state, complete package
-coverage or a release qualification. The disk-backed OCI catalog, aggregate
-stream, promotion and release paths retain their existing strict policy.
+coverage or a release qualification. The disk-backed OCI catalog and all
+promotion and release paths retain their existing strict policy; the aggregate
+stream remains strict unless a caller explicitly selects the Linux option.
 
 The full-byte rejection diagnostic also has an explicit Linux-literal path
 option, disabled by default. The caller must first bind that choice to
