@@ -123,7 +123,9 @@ remaining task-owned container. The receipt, identity and scoped observation
 note are in private evidence directory `linux-pax-differential-uepa1z5r` under
 `sbom-registry-evidence-20261105`; the parent receipt SHA-256 is
 `1c519552e1c86c957c66d34a6dafd0effcb768fdc7eb31f6180c5fa185ff7133`. The
-original stdout was hashed and discarded, then the fixed success line was
+source head was `4745fbfd90d125d2bddced9c32924e8fa0469f5c`, and the harness
+SHA-256 was `ca850f242d60c3457fb4598205f4a091754aee85a7ce0e2539b3036335f3997a`.
+The original stdout was hashed and discarded, then the fixed success line was
 reconstructed and checked against that hash. Individual Docker inspection
 transcripts were not retained, so the result is local process-receipt evidence,
 not an independent attestation.
