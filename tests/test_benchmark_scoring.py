@@ -162,6 +162,18 @@ def test_overlapping_case_locators_do_not_credit_ambiguous_findings(tmp_path: Pa
     assert result["duplicateRate"] is None
     assert result["additionalMatchedFindings"] == 0
 
+    # JSON booleans and floats compare equal to integer zero in Python, but
+    # they are not process exit codes and cannot prove a successful run.
+    for invalid_returncode in (False, 0.0, None, "0"):
+        runs[0]["returncode"] = invalid_returncode
+        (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+        malformed = score(tmp_path, tmp_path)
+        assert malformed["status"] == "INCOMPLETE"
+        assert malformed["failedRuns"] == 1
+    runs[0]["returncode"] = 0
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "COMPLETE"
+
     # Distinct matched findings in the same case/run are not automatically duplicates.
     records.append({**records[-1], "id": "iac-k8s-hostpath-bad.yaml-other"})
     next(run for run in runs if run["scanId"] == "B-vulnerable-det")["emitted"] += 1

@@ -448,7 +448,11 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         for finding in finding_list:
             per_execution[(finding.get("scanId"), finding.get("scanner"))] += 1
         additional_matches += sum(max(0, count - 1) for count in per_execution.values())
-    failures = [r for r in manifest["runs"] if r.get("returncode") != 0 or r.get("errors")]
+    failures = [
+        r
+        for r in manifest["runs"]
+        if type(r.get("returncode")) is not int or r["returncode"] != 0 or r.get("errors")
+    ]
     coverage_issues = [f for f in findings if f.get("error") or f.get("coverageIssues")]
     engine_receipts = engine_receipts_summary(manifest["runs"])
     status = (

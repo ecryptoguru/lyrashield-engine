@@ -16,6 +16,8 @@ The versioned starter corpora live in [`corpus/v1`](./corpus/v1/README.md) and [
 
 When scoring bound records, malformed non-null finding file, rule ID, or line fields invalidate the receipt instead of earning case-match credit. Missing locations remain unmatched; a corpus-declared absence control can still match without a line. Existing historical receipts are not rewritten.
 
+A successful run must record an integer zero process return code. Missing or non-integer values make the result incomplete; this validation does not authenticate a manifest or detect intentional manifest-only edits.
+
 ## Evaluation requirements
 
 Before changing orchestration for claimed quality gains—or publishing any result claim—build a private, versioned corpus that records:
