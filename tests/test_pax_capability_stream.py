@@ -133,3 +133,59 @@ def test_no_counts_if_cleanup_fails_after_complete_stream(private_root):
     with pytest.raises(ValueError, match="cleanup incomplete") as caught:
         verify.inspect_fetched_layer(BadCleanup(compressed), descriptor, diff, private_root)
     assert "PRIVATE" not in str(caught.value)
+
+
+def test_process_exiting_between_poll_and_kill_still_reaps_and_closes(private_root):
+    class RaceFetch(Fetch):
+        def poll(self):
+            return None
+
+        def kill(self):
+            raise ProcessLookupError("already exited")
+
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    fetch = RaceFetch(compressed)
+    result = verify.inspect_fetched_layer(fetch, descriptor, diff, private_root)
+    assert result["capabilityHeaders"] == 1 and fetch.stdout.closed
+
+
+@pytest.mark.parametrize("failure", ["poll", "kill", "wait", "close"])
+def test_all_cleanup_steps_are_attempted_when_one_fails(private_root, failure):
+    class FaultFetch(Fetch):
+        def __init__(self, data):
+            super().__init__(data)
+            self.attempts = []
+
+        def poll(self):
+            self.attempts.append("poll")
+            if failure == "poll":
+                raise RuntimeError("private")
+            return None if failure == "kill" else 0
+
+        def kill(self):
+            self.attempts.append("kill")
+            if failure == "kill":
+                raise RuntimeError("private")
+
+        def wait(self, timeout=None):
+            self.attempts.append("wait" if timeout is None else "verified-wait")
+            if failure == "wait" and timeout is None:
+                raise RuntimeError("private")
+            return 0
+
+    class FaultStream(io.BytesIO):
+        def close(self):
+            fetch.attempts.append("close")
+            super().close()
+            if failure == "close":
+                raise RuntimeError("private")
+
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    fetch = FaultFetch(compressed)
+    fetch.stdout = FaultStream(compressed)
+    with pytest.raises(ValueError, match="cleanup incomplete") as caught:
+        verify.inspect_fetched_layer(fetch, descriptor, diff, private_root)
+    assert "private" not in str(caught.value)
+    assert "wait" in fetch.attempts and "close" in fetch.attempts
+    if failure in {"poll", "kill"}:
+        assert "kill" in fetch.attempts

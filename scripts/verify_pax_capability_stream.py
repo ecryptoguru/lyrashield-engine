@@ -81,14 +81,37 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root):
     except Exception:
         raise ValueError("capability stream incomplete") from None
     finally:
+        cleanup_fetch(fetch, root)
+
+
+def cleanup_fetch(fetch, root):
+    """Attempt every cleanup step and fail closed on unresolved errors."""
+    cleanup_failed = False
+    try:
+        running = fetch.poll() is None
+    except Exception:
+        cleanup_failed = True
+        running = True
+    if running:
         try:
-            if fetch.poll() is None:
-                fetch.kill()
-            fetch.wait()
-            if fetch.stdout is not None:
-                fetch.stdout.close()
+            fetch.kill()
+        except ProcessLookupError:
+            pass  # A process that exited between poll and kill is already stopped.
         except Exception:
-            raise ValueError("capability stream cleanup incomplete") from None
-        finally:
-            if root is not None:
-                os.close(root)
+            cleanup_failed = True
+    try:
+        fetch.wait()
+    except Exception:
+        cleanup_failed = True
+    try:
+        if fetch.stdout is not None:
+            fetch.stdout.close()
+    except Exception:
+        cleanup_failed = True
+    if root is not None:
+        try:
+            os.close(root)
+        except Exception:
+            cleanup_failed = True
+    if cleanup_failed:
+        raise ValueError("capability stream cleanup incomplete") from None
