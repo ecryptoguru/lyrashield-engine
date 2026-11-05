@@ -87,10 +87,10 @@ class MetadataRoot:
         if time.monotonic() > self.deadline:
             raise TimeoutError("metadata overlay deadline exceeded")
 
-    def check_extent(self, member, last_offset, layer_size):
+    def check_extent(self, member, previous_end, layer_size):
         if (
             type(member.member_header_offset) is not int
-            or member.member_header_offset <= last_offset
+            or member.member_header_offset < previous_end
             or member.member_header_offset % 512
             or member.member_header_offset + 512 > layer_size
         ):
@@ -101,12 +101,32 @@ class MetadataRoot:
             if (
                 type(member.data_offset) is not int
                 or member.data_offset != member.member_header_offset + 512
-                or member.data_offset + member.size > layer_size
+                or member.data_offset + ((member.size + 511) // 512) * 512 > layer_size
                 or member.target != ""
             ):
                 raise ValueError("invalid file extent")
         elif member.data_offset is not None or member.size:
             raise ValueError("invalid non-file extent")
+        if member.pax_header_offset is not None:
+            if (
+                type(member.pax_header_offset) is not int
+                or member.pax_header_offset < previous_end
+                or member.pax_header_offset % 512
+                or member.pax_header_offset + 1024 > member.member_header_offset
+            ):
+                raise ValueError("invalid PAX offset")
+            if member.pax_payload is not None:
+                if type(member.pax_payload) is not bytes:
+                    raise ValueError("invalid capability association")
+                payload_blocks = (len(member.pax_payload) + 511) // 512
+                if (
+                    member.pax_header_offset + (payload_blocks + 1) * 512
+                    != member.member_header_offset
+                ):
+                    raise ValueError("invalid PAX extent")
+        if member.kind == "file":
+            return member.data_offset + ((member.size + 511) // 512) * 512
+        return member.member_header_offset + 512
 
     def check_target(self, member, path):
         if member.kind == "hardlink":
@@ -134,7 +154,7 @@ class MetadataRoot:
         elif path.rpartition("/")[2].startswith(".wh."):
             raise ValueError("unclassified whiteout marker")
 
-    def check_capability(self, member, path):  # noqa: PLR0912 - explicit validation
+    def check_capability(self, member, path):
         for value in (member.mode, member.uid, member.gid, member.mtime):
             if type(value) is not int or value < 0:
                 raise ValueError("invalid member metadata")
@@ -165,13 +185,6 @@ class MetadataRoot:
                 member.kind != "symlink" or overrides[b"linkpath"] != member.target
             ):
                 raise ValueError("invalid capability link association")
-        if member.pax_header_offset is not None and (
-            type(member.pax_header_offset) is not int
-            or member.pax_header_offset < 0
-            or member.pax_header_offset >= member.member_header_offset
-            or member.pax_header_offset % 512
-        ):
-            raise ValueError("invalid PAX offset")
         if cap is not None and member.pax_header_offset is None:
             raise ValueError("missing capability PAX header")
 
@@ -182,7 +195,7 @@ class MetadataRoot:
             raise ValueError("invalid layer size")
         if not isinstance(members, (tuple, list)) or len(members) > MAX_CHANGESET_RECORDS:
             raise ValueError("invalid changeset")
-        seen, last_offset, retained = set(), -1, 0
+        seen, previous_end, retained = set(), 0, 0
         for member in members:
             self.check_deadline()
             if type(member) is not LayerMember:
@@ -197,8 +210,7 @@ class MetadataRoot:
             if path != member.path or path in seen:
                 raise ValueError("duplicate or noncanonical member")
             seen.add(path)
-            self.check_extent(member, last_offset, layer_size)
-            last_offset = member.member_header_offset
+            previous_end = self.check_extent(member, previous_end, layer_size)
             self.check_target(member, path)
             self.check_capability(member, path)
             retained += len(path.encode()) + len(member.target.encode())

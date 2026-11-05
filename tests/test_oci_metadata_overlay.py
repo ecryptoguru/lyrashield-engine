@@ -235,6 +235,27 @@ def test_invalid_capability_header_association_fails_atomically():
         assert model.entries == before and model.next_layer == 0
 
 
+def test_member_and_pax_headers_cannot_overlap_prior_file_payload():
+    raw = layer([("a", "file", b"x" * 1024, None), ("b", "file", b"y", CAP_VALUE)])
+    first, second = changes(raw)
+    model = api().MetadataRoot()
+    before = model.entries.copy()
+    for tampered in [
+        replace(
+            second,
+            member_header_offset=512,
+            data_offset=1024,
+            pax_header_offset=None,
+            pax_payload=None,
+            capability_value=None,
+        ),
+        replace(second, pax_header_offset=512),
+    ]:
+        with pytest.raises(ValueError):
+            model.apply([first, tampered], 0, len(raw))
+        assert model.entries == before and model.next_layer == 0
+
+
 @pytest.mark.parametrize("alteration", ["offset", "size", "duplicate", "order"])
 def test_tampered_changeset_is_rejected_atomically(alteration):
     raw = layer([("a", "file", b"a", None), ("b", "file", b"b", None)])
