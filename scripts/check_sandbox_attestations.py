@@ -13,6 +13,7 @@ from pathlib import Path
 
 QUAL_TYPE = "https://lyrashieldai.com/attestations/sandbox-qualification/v1"
 SBOM_TYPE = "https://lyrashieldai.com/attestations/sandbox-sbom/v1"
+COVERAGE_TYPE = "https://lyrashieldai.com/attestations/sandbox-sbom-coverage/v1"
 PROV_TYPE = "https://slsa.dev/provenance/v1"
 
 
@@ -76,6 +77,9 @@ def main():
         parser.add_argument("--" + name, required=True)
     for name in ("provenance", "qualification", "sbom", "expected-qualification", "expected-sbom"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--coverage", type=Path)
+    parser.add_argument("--expected-coverage", type=Path)
+    parser.add_argument("--phase", required=True, choices=("publication", "coverage"))
     args = parser.parse_args()
     require(bool(re.fullmatch(r"sha256:[0-9a-f]{64}", args.digest)), "invalid subject digest")
     require(bool(re.fullmatch(r"[0-9a-f]{40}", args.revision)), "invalid revision")
@@ -87,11 +91,20 @@ def main():
     invocation = (
         f"https://github.com/{args.repo}/actions/runs/{args.run_id}/attempts/{args.run_attempt}"
     )
-    for path, predicate_type, expected_path in (
+    attestations = [
         (args.provenance, PROV_TYPE, None),
         (args.qualification, QUAL_TYPE, args.expected_qualification),
         (args.sbom, SBOM_TYPE, args.expected_sbom),
-    ):
+    ]
+    if args.phase == "coverage":
+        require(
+            args.coverage is not None and args.expected_coverage is not None,
+            "coverage phase requires coverage and expected coverage",
+        )
+        attestations.append((args.coverage, COVERAGE_TYPE, args.expected_coverage))
+    elif args.coverage is not None or args.expected_coverage is not None:
+        raise ValueError("publication phase does not accept coverage predicates")
+    for path, predicate_type, expected_path in attestations:
         expected = read_json(expected_path) if expected_path else None
         if expected is not None:
             require(

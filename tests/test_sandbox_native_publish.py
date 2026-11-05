@@ -158,6 +158,12 @@ def assert_workflow_contract(workflow):
         < pubnames.index("Sign selected runtime and qualified platform binding")
         < pubnames.index("Sign per-platform SBOM binding")
         < pubnames.index("Verify signed sandbox publication")
+        < pubnames.index("Install checksum-pinned Go metadata inspector")
+        < pubnames.index("Qualify bounded SBOM coverage on both native images")
+        < pubnames.index("Assemble bounded SBOM coverage predicate")
+        < pubnames.index("Sign bounded SBOM coverage qualification")
+        < pubnames.index("Verify signed sandbox publication coverage")
+        < pubnames.index("Upload bounded SBOM coverage evidence")
         < pubnames.index("Hold promotion pending independent package coverage")
         < pubnames.index("Promote the smoke-qualified digest")
     )
@@ -167,7 +173,7 @@ def assert_workflow_contract(workflow):
     attestations = [
         step for step in publish["steps"] if step.get("uses", "").startswith("actions/attest@")
     ]
-    assert len(attestations) == 3
+    assert len(attestations) == 4
     sbom_sign = next(
         step for step in attestations if step.get("name") == "Sign per-platform SBOM binding"
     )
@@ -177,12 +183,34 @@ def assert_workflow_contract(workflow):
     )
     assert sbom_sign["with"]["predicate-path"] == "evidence/sbom-predicate.json"
     assert sbom_sign["with"]["subject-digest"] == "${{ steps.index.outputs.digest }}"
+    coverage_sign = next(
+        step
+        for step in attestations
+        if step.get("name") == "Sign bounded SBOM coverage qualification"
+    )
+    assert (
+        coverage_sign["with"]["predicate-type"]
+        == "https://lyrashieldai.com/attestations/sandbox-sbom-coverage/v1"
+    )
+    assert coverage_sign["with"]["predicate-path"] == "evidence/coverage/coverage-predicate.json"
+    assert coverage_sign["with"]["subject-digest"] == "${{ steps.index.outputs.digest }}"
     assert all(step["with"].get("create-storage-record") is False for step in attestations)
     assembly = next(step for step in publish["steps"] if step.get("id") == "index")["run"]
     assert "scripts/verify_sandbox_platform_index.py" in assembly
     assert '"engineRevision"' in assembly and '"workflowRevision"' in assembly
     assert '"engineCiRun"' in assembly and '"engineCiAttempt"' in assembly
     assert '"platformIndexes"' in assembly and '"platformManifests"' in assembly
+    publication_verify = next(
+        step for step in publish["steps"] if step.get("name") == "Verify signed sandbox publication"
+    )["run"]
+    assert "--phase publication" in publication_verify
+    assert "--coverage" not in publication_verify
+    coverage_verify = next(
+        step
+        for step in publish["steps"]
+        if step.get("name") == "Verify signed sandbox publication coverage"
+    )["run"]
+    assert "--phase coverage" in coverage_verify
 
 
 def test_native_workflow_binds_source_and_cannot_promote_before_qualification():
@@ -229,6 +257,57 @@ def test_missing_independent_coverage_keeps_promotion_held():
         check=False,
     )
     assert result.returncode != 0
+
+
+def test_coverage_qualification_uses_created_containers_and_bounded_exports_before_hold():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/publish-sandbox.yml").read_text())
+    steps = workflow["jobs"]["publish"]["steps"]
+    install = next(
+        step
+        for step in steps
+        if step.get("name") == "Install checksum-pinned Go metadata inspector"
+    )
+    assert "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40" in install["run"]
+    assert "go1.27.3" in install["run"]
+    qualify = next(
+        step
+        for step in steps
+        if step.get("name") == "Qualify bounded SBOM coverage on both native images"
+    )
+    assert "for arch in amd64 arm64" in qualify["run"]
+    assert "docker create" in qualify["run"]
+    assert "docker run" not in qualify["run"]
+    assert "timeout 900" in qualify["run"]
+    assert "8589934593" in qualify["run"]
+    assert "docker export" in qualify["run"]
+    assert "scripts/check_sandbox_sbom_coverage.py" in qualify["run"]
+    assert "platformManifests" in qualify["run"]
+    assert "--container-id" in qualify["run"]
+    assert "--expected-rootfs-digest" in qualify["run"]
+    assert "--spdx" in qualify["run"]
+    assemble = next(
+        step for step in steps if step.get("name") == "Assemble bounded SBOM coverage predicate"
+    )
+    assert assemble["run"].count("aggregate") == 1
+    assert "--applications" in assemble["run"]
+    assert "--expected-go-tool-digest" in assemble["run"]
+    assert "--docker-server" in assemble["run"]
+    coverage_verify = next(
+        step for step in steps if step.get("name") == "Verify signed sandbox publication coverage"
+    )
+    assert "sandbox-sbom-coverage/v1" in coverage_verify["run"]
+    assert "--coverage" in coverage_verify["run"]
+    assert "--expected-coverage" in coverage_verify["run"]
+    upload = next(
+        step for step in steps if step.get("name") == "Upload bounded SBOM coverage evidence"
+    )
+    assert upload["uses"].startswith("actions/upload-artifact@")
+    assert upload["with"]["path"] == "evidence/coverage"
+    assert upload["with"]["if-no-files-found"] == "error"
+    names = [step.get("name") for step in steps]
+    assert names.index("Upload bounded SBOM coverage evidence") < names.index(
+        "Hold promotion pending independent package coverage"
+    )
 
 
 def run_publisher_step(tmp_path, name, drift=""):
