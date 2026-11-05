@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from benchmarks.corpus.v3.validate import validate as validate_v3
@@ -290,3 +291,30 @@ def test_founder_signoff_requires_a_named_founder(tmp_path: Path) -> None:
 
     assert result["valid"] is False
     assert any("founder signoff is not approved" in error for error in result["errors"])
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("metric", ["precision"], "metric must be precision or recall"),
+        ("profileId", ["deterministic_core"], "invalid profileId"),
+        ("evaluationScope", ["development"], "invalid evaluationScope"),
+    ],
+)
+def test_malformed_claim_fields_fail_closed(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    repo_root = tmp_path / "repo"
+    corpus_dir = _independent_development_corpus(repo_root)
+    claim = _valid_claim(repo_root, corpus_dir)
+    claim[field] = value
+    ledger_path = repo_root / "claims.json"
+    ledger_path.write_text(
+        json.dumps({"schemaVersion": "lyrashield-claims-ledger/1.0.0", "claims": [claim]}),
+        encoding="utf-8",
+    )
+
+    result = validate_ledger(ledger_path, repo_root=repo_root)
+
+    assert result["valid"] is False
+    assert any(message in error for error in result["errors"])

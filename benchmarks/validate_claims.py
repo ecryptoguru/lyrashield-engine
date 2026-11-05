@@ -13,7 +13,7 @@ from typing import Any
 
 from benchmarks.evaluation_v3 import score_v3
 from benchmarks.report_signature import verify_file
-from benchmarks.score import source_identity_complete
+from benchmarks.score import PROFILE_DETECTORS, source_identity_complete
 
 
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -80,9 +80,9 @@ def _identity_errors(
 def _runtime_errors(claim: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
     claim_id = claim["id"]
     errors: list[str] = []
-    engine_required = (
-        manifest.get("detectors") in {"engine", "all"} or claim["profileId"] in ENGINE_PROFILES
-    )
+    profile_id = claim.get("profileId")
+    profile_is_engine = isinstance(profile_id, str) and profile_id in ENGINE_PROFILES
+    engine_required = manifest.get("detectors") in {"engine", "all"} or profile_is_engine
     if engine_required:
         engine_runs = manifest.get("engineRuns")
         if type(engine_runs) is not int or engine_runs < 3:
@@ -107,13 +107,19 @@ def _runtime_errors(claim: dict[str, Any], manifest: dict[str, Any]) -> list[str
             errors.append(
                 f"{claim_id}: deterministic claims must explicitly set executableSha256 to null"
             )
-    if claim["profileId"] in {"deterministic_core", "offline_sca"} and (
-        not isinstance(claim["scannerContractVersion"], str)
-        or not claim["scannerContractVersion"].strip()
+    if (
+        isinstance(profile_id, str)
+        and profile_id in {"deterministic_core", "offline_sca"}
+        and (
+            not isinstance(claim["scannerContractVersion"], str)
+            or not claim["scannerContractVersion"].strip()
+        )
     ):
         errors.append(f"{claim_id}: scannerContractVersion is required")
-    elif claim["profileId"] in {"deterministic_core", "offline_sca"} and (
-        claim["scannerContractVersion"] != manifest.get("scannerContractVersion")
+    elif (
+        isinstance(profile_id, str)
+        and profile_id in {"deterministic_core", "offline_sca"}
+        and (claim["scannerContractVersion"] != manifest.get("scannerContractVersion"))
     ):
         errors.append(f"{claim_id}: scannerContractVersion does not match the retained run")
     return errors
@@ -222,7 +228,7 @@ def _metric_errors(
     if result["status"] != "COMPLETE":
         errors.append(f"{claim_id}: scorer status is {result['status']}, not COMPLETE")
     metric_name = claim.get("metric")
-    if metric_name not in {"precision", "recall"}:
+    if not isinstance(metric_name, str) or metric_name not in {"precision", "recall"}:
         errors.append(f"{claim_id}: metric must be precision or recall")
         return errors
     metric = result[metric_name]
@@ -268,10 +274,19 @@ def _claim_errors(claim: dict[str, Any], repo_root: Path) -> list[str]:
         errors.append("claim id must be non-empty")
     if not isinstance(claim["statement"], str) or not claim["statement"].strip():
         errors.append(f"{claim_id}: statement is empty")
-    if claim["metric"] not in {"precision", "recall"}:
+    if not isinstance(claim["metric"], str) or claim["metric"] not in {"precision", "recall"}:
         errors.append(f"{claim_id}: metric must be precision or recall")
-    if claim["evaluationScope"] not in {"development", "held_out"}:
+    if not isinstance(claim["evaluationScope"], str) or claim["evaluationScope"] not in {
+        "development",
+        "held_out",
+    }:
         errors.append(f"{claim_id}: invalid evaluationScope")
+    if (
+        not isinstance(claim["profileId"], str)
+        or not claim["profileId"].strip()
+        or claim["profileId"] not in PROFILE_DETECTORS
+    ):
+        errors.append(f"{claim_id}: invalid profileId")
 
     corpus_dir = _resolve(repo_root, str(claim["corpusPath"]))
     results_dir = _resolve(repo_root, str(claim["resultsPath"]))
@@ -283,8 +298,9 @@ def _claim_errors(claim: dict[str, Any], repo_root: Path) -> list[str]:
     manifest = json.loads((results_dir / "run-manifest.json").read_text(encoding="utf-8"))
     errors.extend(_identity_errors(claim, corpus_dir, manifest))
     errors.extend(_runtime_errors(claim, manifest))
-    engine_required = (
-        manifest.get("detectors") in {"engine", "all"} or claim["profileId"] in ENGINE_PROFILES
+    profile_id = claim.get("profileId")
+    engine_required = manifest.get("detectors") in {"engine", "all"} or (
+        isinstance(profile_id, str) and profile_id in ENGINE_PROFILES
     )
     errors.extend(_receipt_errors(claim, repo_root, engine_required=engine_required))
     errors.extend(_required_artifact_errors(claim, repo_root, results_dir))
