@@ -92,3 +92,26 @@ This is a raw record observation, not a faithful final filesystem model, OCI
 runtime differential, capability validity check, SBOM coverage check, or
 release qualifier. The existing catalog and reconstructor continue rejecting
 this PAX key.
+
+## Optional isolated Linux parser comparison
+
+An unwired harness, `scripts/probe_linux_pax_differential.py`, is prepared to
+compare fixed synthetic records with the cached Linux/arm64 Go `archive/tar`
+reader. It never requests a download or extracts an archive; it does not call
+`setxattr`, create capability metadata, use real image bytes, or inspect host
+files. It requires a particular cached image digest and Docker Desktop context,
+and creates a labelled task-owned container with no network, no bind mounts,
+non-root identity, read-only root, dropped capabilities and bounded resources.
+Go compiles a fixed, synthetic-only program in a container tmpfs. The harness
+checks isolation before starting and verifies ownership before removing its
+container. Mock tests cover failure, timeout and foreign ownership. A daemon
+failure, interrupted client or host crash may leave the named container behind;
+such a case needs explicit task-owned residue inspection and cannot be reported
+as successful cleanup.
+
+This compares parser observations in Linux userspace, including duplicate record
+behavior. It does not exercise OCI layer application, Linux capability
+interpretation or enforcement, hardlink/whiteout semantics, or runtime parity.
+It does not change catalog rejection, release gates or SBOM qualification. It
+must receive independent safety review before any container run. No such run
+is claimed by this document.
