@@ -302,3 +302,44 @@ representation omits its records, but Python introspection, exception context
 and traceback locals can still expose sensitive information. Never serialize,
 publish or log records or exception internals, and never treat the result as an
 image overlay, installed xattr state, package inventory or release proof.
+
+## Bounded metadata-only overlay model
+
+`scripts/model_oci_metadata_overlay.py` is an unwired, offline synthetic model.
+`model_verified_image` verifies a caller-supplied native manifest and config
+against locally stored blobs, preserves the manifest's ordered layer sequence,
+and feeds each layer to the bounded changeset reader while verifying the layer's
+compressed descriptor and DiffID. A layer is applied transactionally only after
+its stream and framing verify; no model is returned if any later layer fails.
+The caller must independently authenticate the manifest and platform: this
+helper does not verify the signed index, provenance, registry fetch, or fetch
+process exit. Offline blob files are inputs, and no image file is extracted or
+materialized on the host.
+
+The model records file extents and synthetic inode identity rather than file
+contents. Explicit and opaque whiteouts affect lower-layer entries before
+same-layer additions; hardlinks share model inode identity; symlink targets stay
+inert. It rejects unresolved parents and hardlinks, nonempty directory
+replacement, conflicting hardlink metadata, duplicate paths and replacement of
+a file with another live hardlink because actual extractor behavior is not yet
+qualified. A capability PAX header is retained only as opaque header evidence;
+**every capability state is `unknown`**, including a file with no such header.
+The model does not apply xattrs or infer installed capability state. The model's
+identity and replacement behavior are not claims about a real OCI runtime.
+
+Entry count, retained path/header bytes, work and decoded layer sizes are
+bounded, and the prototype checks a monotonic deadline between operations.
+Object/allocator overhead, temporary dictionary copies, decoder allocations,
+metadata input files and blocked OS calls are not covered by those counters.
+The caller must impose independent RSS/CPU/FD/wall-time and process limits.
+The returned in-memory mapping is read-only but contains sensitive names,
+targets and capability bytes: never serialize, log, follow or materialize it.
+Even suppressed exceptions can retain sensitive context and traceback locals.
+A synthetic compressed layer with a 129 MiB file is covered by a local test;
+that is not evidence for the actual historical layer or the target runtime.
+
+Remaining work includes independently authenticating both native image chains,
+a confined and resource-bounded final image view, qualified Linux extractor
+and xattr/hardlink/whiteout differential tests, file-content reverification,
+and independent complete package-family/SPDX comparisons. This prototype is
+not image or SBOM completeness evidence; the release promotion hold remains.
