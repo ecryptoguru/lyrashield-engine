@@ -190,6 +190,11 @@ Known parser messages can be grouped into fixed member/link policy, PAX value
 or encoding, parser limit and tar framing labels; unknown messages fall back to
 `parser-rejected`. A caller that publishes these labels must independently
 allowlist them and keep the result explicitly unverified and incomplete.
+The member/link category also exposes a fixed, allowlisted reason and a role
+only as specifically as the parser error permits; ambiguous cases report
+`unknown` or `member-or-hardlink`. These fields likewise cannot identify the
+path, prove a layer's authenticity or reclassify an older receipt. Callers must
+independently allowlist the fields before publishing them.
 
 This helper does not authenticate the caller-supplied descriptor or DiffID;
 the caller must establish those bindings and supervise the fetch process group

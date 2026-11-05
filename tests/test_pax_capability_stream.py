@@ -21,17 +21,19 @@ def record(key, value):
     return str(size).encode() + b" " + body
 
 
-def layer(payload, *, kind=tarfile.REGTYPE):
+def layer(
+    payload, *, kind=tarfile.REGTYPE, linkname="private-target", member_name="private-member-name"
+):
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         pax = tarfile.TarInfo("pax")
         pax.type = tarfile.XHDTYPE
         pax.size = len(payload)
         archive.addfile(pax, io.BytesIO(payload))
-        member = tarfile.TarInfo("private-member-name")
+        member = tarfile.TarInfo(member_name)
         member.type = kind
-        if kind == tarfile.SYMTYPE:
-            member.linkname = "private-target"
+        if kind in {tarfile.SYMTYPE, tarfile.LNKTYPE}:
+            member.linkname = linkname
         archive.addfile(member)
     raw = output.getvalue()
     compressed = gzip.compress(raw)
@@ -144,6 +146,84 @@ def test_mutated_prefix_reason_cannot_expose_archive_text():
 
 
 @pytest.mark.parametrize(
+    "payload, kind, linkname, reason, role",
+    [
+        (record(b"path", b"/private"), tarfile.REGTYPE, "x", "unsafe-path", "unknown"),
+        (record(b"path", b"x" * 4097), tarfile.REGTYPE, "x", "path-length", "unknown"),
+        (
+            record(b"path", b"../private"),
+            tarfile.REGTYPE,
+            "x",
+            "ambiguous-path-components",
+            "member-or-hardlink",
+        ),
+        (record(b"path", b"private/"), tarfile.REGTYPE, "x", "member-trailing-slash", "member"),
+        (record(b"linkpath", b"private"), tarfile.REGTYPE, "x", "linkpath-on-non-link", "member"),
+        (
+            record(b"linkpath", b"private/"),
+            tarfile.LNKTYPE,
+            "x",
+            "hardlink-target-trailing-slash",
+            "hardlink",
+        ),
+        (
+            record(b"SCHILY.xattr.security.capability", b"x"),
+            tarfile.SYMTYPE,
+            "private\x01",
+            "symlink-target-character",
+            "symlink",
+        ),
+    ],
+    ids=[
+        "unsafe",
+        "length",
+        "components",
+        "member-slash",
+        "linkpath",
+        "hardlink-slash",
+        "symlink-control",
+    ],
+)
+def test_member_link_fixed_detail_from_real_parser(
+    private_root, payload, kind, linkname, reason, role
+):
+    compressed, descriptor, diff = layer(payload, kind=kind, linkname=linkname)
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert caught.value.category == "member-link-policy"
+    assert caught.value.member_link_reason == reason
+    assert caught.value.member_link_role == role
+    assert caught.value.byte_verified is False
+    assert "private" not in str(caught.value)
+
+
+def test_member_link_detail_mutation_fails_closed():
+    error = verify.UnverifiedPrefixRejectionError("member-link-policy", "unsafe-path")
+    error._member_link_reason = "PRIVATE-VALUE"
+    assert error.member_link_reason == "unavailable"
+    assert error.member_link_role == "unknown"
+    error = verify.UnverifiedPrefixRejectionError("parser-rejected", "unsafe-path")
+    assert error.member_link_reason == "unavailable"
+    assert error.member_link_role == "unknown"
+
+
+def test_member_link_encoding_reason_is_role_ambiguous(private_root):
+    compressed, descriptor, diff = layer(
+        record(b"SCHILY.xattr.security.capability", b"x"), member_name="private-\udcff"
+    )
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert caught.value.category == "member-link-policy"
+    assert caught.value.member_link_reason == "member-or-link-encoding"
+    assert caught.value.member_link_role == "unknown"
+    assert caught.value.byte_verified is False
+
+
+@pytest.mark.parametrize(
     "payload, category",
     [
         (record(b"path", b"../private"), "member-link-policy"),
@@ -192,6 +272,8 @@ def test_unrecognized_parser_error_never_exposes_dynamic_data(private_root, monk
             Fetch(compressed), descriptor, diff, private_root, diagnostic=True
         )
     assert caught.value.category == "parser-rejected"
+    assert caught.value.member_link_reason == "unavailable"
+    assert caught.value.member_link_role == "unknown"
     assert caught.value.byte_verified is False
     assert "PRIVATE" not in str(caught.value)
 

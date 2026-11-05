@@ -49,13 +49,35 @@ PREFIX_REASONS = {
 }
 PREFIX_CATEGORIES = frozenset(PREFIX_REASONS.values()) | {"parser-rejected"}
 
+MEMBER_LINK_REASONS = {
+    "unsafe path": "unsafe-path",
+    "invalid path length": "path-length",
+    "ambiguous or traversing path": "ambiguous-path-components",
+    "non-directory path ends in slash": "member-trailing-slash",
+    "invalid PAX linkpath": "linkpath-on-non-link",
+    "invalid hardlink target": "hardlink-target-trailing-slash",
+    "invalid symlink target character": "symlink-target-character",
+    "invalid member encoding": "member-or-link-encoding",
+}
+MEMBER_LINK_ROLES = {
+    "unsafe-path": "unknown",
+    "path-length": "unknown",
+    "ambiguous-path-components": "member-or-hardlink",
+    "member-trailing-slash": "member",
+    "linkpath-on-non-link": "member",
+    "hardlink-target-trailing-slash": "hardlink",
+    "symlink-target-character": "symlink",
+    "member-or-link-encoding": "unknown",
+}
+
 
 class UnverifiedPrefixRejectionError(ValueError):
     """A fixed local parser reason, never an authenticated layer observation."""
 
-    def __init__(self, category):
+    def __init__(self, category, member_link_reason="unavailable"):
         super().__init__("capability stream incomplete")
         self._category = category
+        self._member_link_reason = member_link_reason
 
     @property
     def category(self):
@@ -70,6 +92,17 @@ class UnverifiedPrefixRejectionError(ValueError):
     def byte_verified(self):
         return False
 
+    @property
+    def member_link_reason(self):
+        reason = self._member_link_reason
+        if self.category != "member-link-policy" or type(reason) is not str:
+            return "unavailable"
+        return reason if reason in MEMBER_LINK_ROLES else "unavailable"
+
+    @property
+    def member_link_role(self):
+        return MEMBER_LINK_ROLES.get(self.member_link_reason, "unknown")
+
 
 def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=False):
     """Return only aggregate counts after complete same-stream verification.
@@ -81,6 +114,7 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=Fals
     """
     root = None
     prefix_reason = None
+    member_link_reason = "unavailable"
     try:
         root = os.open(private_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         state = os.fstat(root)
@@ -102,7 +136,7 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=Fals
         count = 0
 
         def consume(data):
-            nonlocal count, prefix_reason
+            nonlocal count, prefix_reason, member_link_reason
             if time.monotonic() > deadline:
                 raise TimeoutError("stream deadline exceeded")
             if free_space(root) < MIN_FREE_BYTES + 1024 * 1024:
@@ -116,6 +150,7 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=Fals
                 if diagnostic is True:
                     message = error.args[0] if error.args and type(error.args[0]) is str else ""
                     prefix_reason = PREFIX_REASONS.get(message, "parser-rejected")
+                    member_link_reason = MEMBER_LINK_REASONS.get(message, "unavailable")
                 raise
 
         descriptor, size = verify_layer_stream(fetch.stdout, item, diff_id, 0, on_data=consume)
@@ -143,7 +178,7 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=Fals
         }
     except Exception:
         if diagnostic is True and prefix_reason is not None:
-            raise UnverifiedPrefixRejectionError(prefix_reason) from None
+            raise UnverifiedPrefixRejectionError(prefix_reason, member_link_reason) from None
         raise ValueError("capability stream incomplete") from None
     finally:
         cleanup_fetch(fetch, root)
