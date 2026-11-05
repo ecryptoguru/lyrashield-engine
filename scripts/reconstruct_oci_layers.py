@@ -89,6 +89,14 @@ def metadata(entry):
     return entry.mode, entry.uid, entry.gid, entry.mtime
 
 
+class PaxKeyRejectionError(ValueError):
+    """Fixed reason for an unchanged unsupported-or-duplicate key rejection."""
+
+    def __init__(self, reason):
+        super().__init__("unsupported or duplicate PAX key")
+        self.reason = reason
+
+
 def parse_local_pax(payload):
     """Accept only canonical, nonempty UTF-8 path and linkpath overrides."""
     offset, fields = 0, {}
@@ -108,7 +116,13 @@ def parse_local_pax(payload):
             raise ValueError("malformed PAX record")
         key, value = record[:-1].split(b"=", 1)
         if key not in {b"path", b"linkpath"} or key in fields:
-            raise ValueError("unsupported or duplicate PAX key")
+            if key in fields:
+                reason = "pax-duplicate-supported-key"
+            elif key == b"SCHILY.xattr.security.capability":
+                reason = "pax-unsupported-capability-key"
+            else:
+                reason = "pax-unsupported-other-key"
+            raise PaxKeyRejectionError(reason)
         if not value or any(byte < 32 or byte == 127 for byte in value):
             raise ValueError("invalid PAX path value")
         decoded = value.decode("utf-8", "strict")

@@ -13,6 +13,7 @@ import pytest
 from scripts import verify_oci_rejection_drain as drain
 from scripts.index_verified_oci_changeset import CatalogUnsafePathError, catalog_path
 from scripts.index_verified_oci_stream import worker_failure_category
+from scripts.reconstruct_oci_layers import parse_local_pax
 from scripts.verify_oci_layer_binding import OCI_GZIP
 
 
@@ -290,3 +291,85 @@ def test_invalid_root_stops_real_fetch_process(tmp_path):
         drain.diagnose_fetched_layer(process, descriptor, diff, tmp_path / "missing")
     assert process.poll() is not None
     assert process.stdout.closed
+
+
+def pax_record(key, value):
+    body = key + b"=" + value + b"\n"
+    length = len(body) + 2
+    while len(str(length)) + 1 + len(body) != length:
+        length = len(str(length)) + 1 + len(body)
+    return str(length).encode() + b" " + body
+
+
+def synthetic_pax_layer(payload):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        extension = tarfile.TarInfo("synthetic-pax")
+        extension.type = tarfile.XHDTYPE
+        extension.size = len(payload)
+        archive.addfile(extension, io.BytesIO(payload))
+        archive.addfile(tarfile.TarInfo("synthetic-file"))
+    return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "payload,category",
+    [
+        (pax_record(b"path", b"one") + pax_record(b"path", b"two"), "pax-duplicate-supported-key"),
+        (
+            pax_record(b"SCHILY.xattr.security.capability", b"secret-value"),
+            "pax-unsupported-capability-key",
+        ),
+        (pax_record(b"private-key", b"secret-value"), "pax-unsupported-other-key"),
+    ],
+)
+def test_authenticated_pax_rejection_reason_is_fixed_and_private(root, payload, category):
+    data = synthetic_pax_layer(payload)
+    compressed = gzip.compress(data)
+    descriptor = {
+        "mediaType": OCI_GZIP,
+        "digest": "sha256:" + hashlib.sha256(compressed).hexdigest(),
+        "size": len(compressed),
+    }
+    diff = "sha256:" + hashlib.sha256(data).hexdigest()
+    result = drain.diagnose_fetched_layer(Fetch(compressed), descriptor, diff, root)
+    assert result["category"] == category
+    assert "secret-value" not in str(result) and "private-key" not in str(result)
+    assert result["catalogAccepted"] is False and result["releaseQualified"] is False
+    assert not list(root.iterdir())
+
+
+def test_unverified_catalog_report_retains_generic_pax_reason():
+    with pytest.raises(ValueError) as caught:
+        parse_local_pax(pax_record(b"SCHILY.xattr.security.capability", b"secret"))
+    assert worker_failure_category(caught.value) == "unsupported-pax-key"
+
+
+def test_mutated_authenticated_pax_reason_remains_generic():
+    with pytest.raises(ValueError) as caught:
+        parse_local_pax(pax_record(b"SCHILY.xattr.security.capability", b"secret"))
+    caught.value.reason = "secret-value"
+    assert drain.authenticated_worker_failure_category(caught.value) == "unsupported-pax-key"
+    del caught.value.reason
+    assert drain.authenticated_worker_failure_category(caught.value) == "unsupported-pax-key"
+
+
+@pytest.mark.parametrize("failure", ["descriptor", "diffid", "fetch"])
+def test_specific_pax_reason_never_returned_on_failed_authentication(root, failure):
+    data = synthetic_pax_layer(pax_record(b"SCHILY.xattr.security.capability", b"secret"))
+    compressed = gzip.compress(data)
+    descriptor = {
+        "mediaType": OCI_GZIP,
+        "digest": "sha256:" + hashlib.sha256(compressed).hexdigest(),
+        "size": len(compressed),
+    }
+    diff = "sha256:" + hashlib.sha256(data).hexdigest()
+    if failure == "descriptor":
+        descriptor["digest"] = "sha256:" + "0" * 64
+    if failure == "diffid":
+        diff = "sha256:" + "0" * 64
+    fetch = Fetch(compressed, status=1 if failure == "fetch" else 0)
+    with pytest.raises(ValueError) as caught:
+        drain.diagnose_fetched_layer(fetch, descriptor, diff, root)
+    assert "pax-unsupported-capability-key" not in str(caught.value)
+    assert not list(root.iterdir())

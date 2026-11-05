@@ -11,6 +11,7 @@ from pathlib import Path
 
 from scripts.index_verified_oci_changeset import catalog_forward_layer
 from scripts.index_verified_oci_stream import worker_failure_category
+from scripts.reconstruct_oci_layers import PaxKeyRejectionError
 from scripts.spool_verified_oci_layer import free_space, require_no_acl, write_all
 from scripts.verify_oci_layer_binding import verify_layer_stream
 
@@ -23,13 +24,28 @@ JOIN_SECONDS = 60
 FETCH_EXIT_SECONDS = 10
 
 
+def authenticated_worker_failure_category(error):
+    """Expose only fixed PAX reasons after the caller verifies the whole stream."""
+    if isinstance(error, PaxKeyRejectionError):
+        reason = getattr(error, "reason", None)
+        if type(reason) is str and reason in {
+            "pax-duplicate-supported-key",
+            "pax-unsupported-capability-key",
+            "pax-unsupported-other-key",
+        }:
+            return reason
+    return worker_failure_category(error)
+
+
 def diagnose_fetched_layer(fetch, item, diff_id, private_root):
     """Authenticate stream bytes before exposing a fixed rejected-worker category.
 
     The supplied fetch belongs to this function. The caller must authenticate
     descriptor and DiffID and supervise the process group with a wall deadline.
-    A successful diagnostic is a catalog rejection, not archive validation,
-    reconstructed filesystem, package completeness or release qualification.
+    PAX reasons identify only the first local rejection; unsupported keys are
+    rejected immediately, so their later duplicates cannot be classified. A
+    successful diagnostic is not archive validation, reconstructed filesystem,
+    package completeness or release qualification.
     """
     root = directory = None
     stage = None
@@ -107,7 +123,7 @@ def diagnose_fetched_layer(fetch, item, diff_id, private_root):
             raise ValueError("drain size mismatch")
         return {
             "scope": "authenticated-single-layer-rejection-diagnostic-only",
-            "category": worker_failure_category(result["error"]),
+            "category": authenticated_worker_failure_category(result["error"]),
             "descriptorDigest": layer["digest"],
             "compressedBytes": layer["size"],
             "diffId": diff_id,
