@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,10 @@ def _validate_adjudications(root: Path, corpus: dict[str, Any]) -> dict[str, Any
     if status == "INDEPENDENTLY_REVIEWED":
         assert len(reviewers) >= required
         assert isinstance(review["reviewedAt"], str) and review["reviewedAt"]
+        reviewed_at = datetime.fromisoformat(review["reviewedAt"])
+        assert reviewed_at.utcoffset() is not None
+        finding_hashes = [decision.get("findingSha256") for decision in decisions]
+        assert len(finding_hashes) == len(set(finding_hashes))
         for decision in decisions:
             assert decision["outcome"] in OUTCOMES
             assert isinstance(decision.get("findingSha256"), str)
@@ -98,6 +103,12 @@ def _validate_held_out(root: Path, corpus: dict[str, Any]) -> dict[str, Any]:
         assert record["limitations"]
     else:
         assert all(isinstance(value, str) and HEX_SHA256.fullmatch(value) for value in values)
+    if record["status"] == "VERIFIED":
+        verification = record.get("verification")
+        assert isinstance(verification, dict)
+        assert isinstance(verification.get("reviewerId"), str) and verification["reviewerId"]
+        assert isinstance(verification.get("reviewedAt"), str) and verification["reviewedAt"]
+        assert datetime.fromisoformat(verification["reviewedAt"]).utcoffset() is not None
     return record
 
 
@@ -134,7 +145,11 @@ def validate(root: Path = ROOT) -> None:
     assert corpus["schemaVersion"] == "lyrashield-evaluation-corpus/3.0.0"
     assert corpus["revision"] == "v3"
     assert corpus["extends"] == "v2"
-    assert corpus["provenance"]["independentReviewStatus"] == "NOT_INDEPENDENTLY_REVIEWED"
+    assert corpus["provenance"]["independentReviewStatus"] in {
+        "NOT_INDEPENDENTLY_REVIEWED",
+        "IN_PROGRESS",
+        "INDEPENDENTLY_REVIEWED",
+    }
     pairs = corpus["pairs"]
     scenarios = corpus["scenarios"]
     assert pairs and scenarios
@@ -194,7 +209,8 @@ def validate(root: Path = ROOT) -> None:
         assert contract["sha256"] == _sha256(path.resolve()), f"{name} checksum drift"
         assert contract["schemaVersion"] == _load(path.resolve())["schemaVersion"]
 
-    _validate_adjudications(root, corpus)
+    adjudications = _validate_adjudications(root, corpus)
+    assert corpus["provenance"]["independentReviewStatus"] == adjudications["review"]["status"]
     _validate_held_out(root, corpus)
     _validate_advisories(root)
 

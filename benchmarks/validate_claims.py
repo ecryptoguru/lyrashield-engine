@@ -18,10 +18,12 @@ from benchmarks.score import source_identity_complete
 
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 ENGINE_PROFILES = {"url_api", "local_engine_cli", "product_integration"}
+REQUIRED_RESULT_RECEIPTS = ("results.json", "RESULTS.md", "findings.jsonl", "run-manifest.json")
 REQUIRED_FIELDS = {
     "id",
     "statement",
     "metric",
+    "claimedValue",
     "profileId",
     "corpusPath",
     "resultsPath",
@@ -110,6 +112,10 @@ def _runtime_errors(claim: dict[str, Any], manifest: dict[str, Any]) -> list[str
         or not claim["scannerContractVersion"].strip()
     ):
         errors.append(f"{claim_id}: scannerContractVersion is required")
+    elif claim["profileId"] in {"deterministic_core", "offline_sca"} and (
+        claim["scannerContractVersion"] != manifest.get("scannerContractVersion")
+    ):
+        errors.append(f"{claim_id}: scannerContractVersion does not match the retained run")
     return errors
 
 
@@ -119,7 +125,15 @@ def _receipt_errors(claim: dict[str, Any], repo_root: Path, *, engine_required: 
     receipts = claim["receipts"]
     if not isinstance(receipts, list) or not receipts:
         return [f"{claim_id}: at least one retained receipt is required"]
+    seen: set[tuple[str, object]] = set()
     for receipt in receipts:
+        if not isinstance(receipt, dict):
+            errors.append(f"{claim_id}: retained receipt entry must be an object")
+            continue
+        key = (str(receipt.get("path", "")), receipt.get("sha256"))
+        if key in seen:
+            errors.append(f"{claim_id}: retained receipts must be distinct")
+        seen.add(key)
         path = _resolve(repo_root, str(receipt.get("path", "")))
         if path is None or not path.is_file():
             errors.append(f"{claim_id}: receipt is outside the repository or missing")
@@ -129,6 +143,27 @@ def _receipt_errors(claim: dict[str, Any], repo_root: Path, *, engine_required: 
     minimum_receipts = 3 if engine_required else 1
     if len(receipts) < minimum_receipts:
         errors.append(f"{claim_id}: {minimum_receipts} retained receipt(s) required for this scope")
+    return errors
+
+
+def _required_artifact_errors(
+    claim: dict[str, Any], repo_root: Path, results_dir: Path
+) -> list[str]:
+    claim_id = claim["id"]
+    receipts = claim["receipts"]
+    if not isinstance(receipts, list):
+        return []
+    provided = {
+        str(path): receipt.get("sha256")
+        for receipt in receipts
+        if isinstance(receipt, dict)
+        if (path := _resolve(repo_root, str(receipt.get("path", "")))) is not None
+    }
+    errors = []
+    for name in REQUIRED_RESULT_RECEIPTS:
+        path = results_dir / name
+        if not path.is_file() or provided.get(str(path.resolve())) != _sha256(path):
+            errors.append(f"{claim_id}: required retained receipt {name} is missing or mismatched")
     return errors
 
 
@@ -143,7 +178,11 @@ def _governance_errors(claim: dict[str, Any], corpus_dir: Path) -> list[str]:
     if not isinstance(signoff, dict):
         errors.append(f"{claim_id}: founder signoff is missing")
     else:
-        if signoff.get("status") != "APPROVED" or not isinstance(signoff.get("founder"), str):
+        if (
+            signoff.get("status") != "APPROVED"
+            or not isinstance(signoff.get("founder"), str)
+            or not signoff["founder"].strip()
+        ):
             errors.append(f"{claim_id}: founder signoff is not approved")
         try:
             signed_at = datetime.fromisoformat(str(signoff.get("date")))
@@ -161,6 +200,13 @@ def _governance_errors(claim: dict[str, Any], corpus_dir: Path) -> list[str]:
             errors.append(f"{claim_id}: held-out label checksum does not match")
     elif claim["heldOutChecksum"] is not None:
         errors.append(f"{claim_id}: development claims must set heldOutChecksum to null")
+    corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
+    profile_contract = (corpus.get("contracts") or {}).get("pathProfiles") or {}
+    profile_path = (corpus_dir / str(profile_contract.get("path", ""))).resolve()
+    profiles = json.loads(profile_path.read_text(encoding="utf-8")).get("profiles") or []
+    profile = next((item for item in profiles if item.get("id") == claim.get("profileId")), None)
+    if not isinstance(profile, dict) or profile.get("status") != "MEASURED":
+        errors.append(f"{claim_id}: path profile is NOT_MEASURED")
     return errors
 
 
@@ -175,7 +221,11 @@ def _metric_errors(
     result = score_v3(results_dir, corpus_dir, corpus, write_results=False)
     if result["status"] != "COMPLETE":
         errors.append(f"{claim_id}: scorer status is {result['status']}, not COMPLETE")
-    metric = result[claim["metric"]]
+    metric_name = claim.get("metric")
+    if metric_name not in {"precision", "recall"}:
+        errors.append(f"{claim_id}: metric must be precision or recall")
+        return errors
+    metric = result[metric_name]
     if metric["status"] != "REPORTABLE":
         reasons = "; ".join(metric["reasons"]) or "no reason recorded"
         errors.append(f"{claim_id}: {claim['metric']} is NOT_REPORTABLE: {reasons}")
@@ -183,6 +233,13 @@ def _metric_errors(
     raw = metric["raw"]
     if claim.get("numerator") != raw["numerator"] or claim.get("denominator") != raw["denominator"]:
         errors.append(f"{claim_id}: claimed raw numerator/denominator do not match")
+    claimed_value = claim.get("claimedValue")
+    if (
+        not isinstance(claimed_value, (int, float))
+        or isinstance(claimed_value, bool)
+        or claimed_value != metric["value"]
+    ):
+        errors.append(f"{claim_id}: claimed value does not match the recomputed metric")
     return errors
 
 
@@ -230,6 +287,7 @@ def _claim_errors(claim: dict[str, Any], repo_root: Path) -> list[str]:
         manifest.get("detectors") in {"engine", "all"} or claim["profileId"] in ENGINE_PROFILES
     )
     errors.extend(_receipt_errors(claim, repo_root, engine_required=engine_required))
+    errors.extend(_required_artifact_errors(claim, repo_root, results_dir))
     errors.extend(_governance_errors(claim, corpus_dir))
     errors.extend(_signature_errors(claim, repo_root, results_dir))
     errors.extend(_metric_errors(claim, corpus_dir, results_dir))
