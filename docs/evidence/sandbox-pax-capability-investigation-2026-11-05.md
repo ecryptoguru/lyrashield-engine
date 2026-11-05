@@ -136,3 +136,31 @@ This compares Linux userspace parser observations only. It does not exercise
 OCI layer application, Linux capability interpretation or enforcement,
 hardlink/whiteout semantics, or runtime parity. It does not change catalog
 rejection, release gates or SBOM qualification.
+
+## Unwired raw capability header catalog
+
+`scripts/catalog_pax_capability_headers.py` is a separate in-memory prototype
+for one uncompressed layer. For each supported local capability record it
+preserves the complete exact PAX payload and capability value bytes, associates
+them with the immediately following regular-file or symlink header, and stores
+the PAX and member header offsets plus effective PAX `path` and symlink
+`linkpath` as inert text. Values and names may be sensitive and are omitted
+from object representations; callers must not log returned fields. It accepts
+only `path`, `linkpath` and `SCHILY.xattr.security.capability` local records,
+rejects duplicates and unknown keys, and rejects capability records on
+hardlinks, directories and whiteouts. It supports other allowed ordinary member
+types only as raw archive observations; it does not infer inode aliases or
+propagate attributes through hardlinks, whiteouts, layer replacement or symlink
+resolution. In particular, a missing observation is not proof of absent final
+filesystem metadata.
+
+The catalog limits each PAX payload to 16 KiB, each capability value to 4 KiB,
+retained PAX payloads to 4 MiB, observations to 1,024, entries to 100,000,
+aggregate path and target text to 16 MiB, and uncompressed input to 4 GiB. It
+checks complete tar framing and the caller-supplied DiffID before returning; a
+caller must separately authenticate the descriptor and DiffID, producer exit,
+and enforce a wall timeout for blocking input. The prototype does not write or
+apply xattrs or extract archive entries. It is not wired into the existing OCI
+catalog, stream verifier, image promotion or release flow, and its synthetic
+fixtures do not establish Linux xattr interpretation, OCI runtime parity,
+complete overlay semantics, image authenticity or SBOM completeness.
