@@ -1,0 +1,10 @@
+{
+  "_readme": ["Synthetic package coordinates only; no network resolution."],
+  "content-hash": "fixture-clean",
+  "packages": [
+    {
+      "name": "example/legacy-router",
+      "version": "2.4.1"
+    }
+  ]
+}

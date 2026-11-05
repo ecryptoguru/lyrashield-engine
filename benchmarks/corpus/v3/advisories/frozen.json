@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "lyrashield-frozen-advisories/1.0.0",
+  "snapshotDate": "2026-11-05",
+  "source": "Synthetic offline advisory used only to evaluate exact package/version matching.",
+  "networkRequired": false,
+  "advisories": [
+    {
+      "id": "LYRA-FIXTURE-2026-001",
+      "package": "example/legacy-router",
+      "ecosystem": "packagist",
+      "affected": "<2.4.1",
+      "fixed": "2.4.1",
+      "severity": "high"
+    }
+  ]
+}

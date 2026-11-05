@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "lyrashield-evaluation-paths/1.0.0",
+  "profiles": [
+    {
+      "id": "deterministic_core",
+      "label": "Deterministic product scanners",
+      "status": "NOT_MEASURED",
+      "inputs": ["materialized local source"],
+      "requiredBindings": ["engine revision", "product revision", "scanner contract version", "corpus checksum", "findings checksum"],
+      "forbiddenEvidence": ["live URL response", "engine model route", "provider receipt"]
+    },
+    {
+      "id": "offline_sca",
+      "label": "Offline SCA with frozen advisory data",
+      "status": "NOT_MEASURED",
+      "inputs": ["Composer/npm lock fixtures", "frozen advisory snapshot"],
+      "requiredBindings": ["engine revision", "product revision", "corpus checksum", "advisory snapshot checksum", "findings checksum"],
+      "forbiddenEvidence": ["online advisory refresh", "live package registry", "paid provider call"]
+    },
+    {
+      "id": "url_api",
+      "label": "Authorized URL/API scan",
+      "status": "NOT_MEASURED",
+      "inputs": ["authorized local or isolated HTTP target"],
+      "requiredBindings": ["engine revision", "model route", "scope grant", "target identity", "three engine runs", "run receipts"],
+      "forbiddenEvidence": ["production target", "unverified domain", "synthetic fixture response"]
+    },
+    {
+      "id": "local_engine_cli",
+      "label": "Local engine CLI",
+      "status": "NOT_MEASURED",
+      "inputs": ["local source or authorized local URL"],
+      "requiredBindings": ["executable checksum", "engine revision", "model/provider route", "corpus checksum", "three engine runs", "run receipts"],
+      "forbiddenEvidence": ["PATH ambiguity", "unretained raw run artifacts", "dirty source"]
+    },
+    {
+      "id": "product_integration",
+      "label": "Worker and product integration",
+      "status": "NOT_MEASURED",
+      "inputs": ["pinned product client", "pinned engine artifact"],
+      "requiredBindings": ["product revision", "engine revision", "artifact identity", "model route", "authority and workspace identity", "run receipts"],
+      "forbiddenEvidence": ["production access", "unqualified deployment", "synthetic worker response"]
+    }
+  ]
+}
