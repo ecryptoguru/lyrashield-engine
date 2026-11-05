@@ -93,31 +93,42 @@ runtime differential, capability validity check, SBOM coverage check, or
 release qualifier. The existing catalog and reconstructor continue rejecting
 this PAX key.
 
-## Optional isolated Linux parser comparison
+## Isolated Linux parser comparison
 
-An unwired harness, `scripts/probe_linux_pax_differential.py`, is prepared to
-compare fixed synthetic records with the cached Linux/arm64 Go `archive/tar`
-reader. It never requests a download or extracts an archive; it does not call
-`setxattr`, create capability metadata, use real image bytes, or inspect host
-files. It requires a particular cached image digest and the local Docker Desktop Unix socket,
-and creates a labelled task-owned container with no network, no bind mounts,
+The unwired `scripts/probe_linux_pax_differential.py` harness compares fixed
+synthetic records with a cached Linux/arm64 Go `archive/tar` reader. It never
+requests a download or extracts an archive; it does not call `setxattr`, create
+capability metadata, use real image bytes, or inspect host files. It requires a
+particular cached image digest and the local Docker Desktop Unix socket, and
+creates a labelled task-owned container with no network, no bind mounts, a
 non-root identity, read-only root, dropped capabilities and bounded resources.
-The inspected PID, IPC, UTS and user namespace modes reject host/shared-container
-settings; Docker default/private settings are accepted (IPC also permits
-Docker `shareable` or `none`). Go compiles a fixed, synthetic-only program in
-a container tmpfs. The harness
-checks the local Unix socket, pins it on every Docker command, and verifies isolation before starting, and uses the
-verified immutable container ID for starting and removal. Before creation it
-records a unique name and ownership label in an owner-only receipt directory.
-Mock tests cover failure, timeout, foreign ownership and rejected isolation. Any
-unconfirmed creation outcome is explicitly unresolved even if the name is initially absent:
-the daemon could create it later. A daemon failure, interrupted client or host
-crash may leave the task-owned container behind; inspect the retained identity
-and reconcile such a case before reporting cleanup.
+The inspected PID, IPC, UTS and user namespace modes reject host and shared
+container settings. Docker default or private settings are accepted; IPC also
+permits Docker `shareable` or `none`. Go compiles a fixed synthetic program in
+a container tmpfs. The harness pins the local Unix socket on every Docker
+command, verifies isolation before starting, and uses the verified immutable
+container ID for starting and removal. Before creation it records a unique
+name and ownership label in an owner-only receipt directory. Unconfirmed
+creation outcomes remain unresolved even when the name is initially absent,
+because the daemon could create it later. Daemon failure, client interruption
+or host crash may leave a container that requires reconciliation against that
+identity.
 
-This compares parser observations in Linux userspace, including duplicate record
-behavior. It does not exercise OCI layer application, Linux capability
-interpretation or enforcement, hardlink/whiteout semantics, or runtime parity.
-It does not change catalog rejection, release gates or SBOM qualification. It
-must receive independent safety review before any container run. No such run
-is claimed by this document.
+After independent safety review, one local run reported success on the fixed
+synthetic cases: Go `archive/tar` associated a binary PAX value with its
+following regular member and retained the last value for a duplicate key. The
+separate restrictive probe rejected the duplicate. The parent receipt records
+exit zero, no timeout and empty stderr; independent read-only listings found no
+remaining task-owned container. The receipt, identity and scoped observation
+note are in private evidence directory `linux-pax-differential-uepa1z5r` under
+`sbom-registry-evidence-20261105`; the parent receipt SHA-256 is
+`1c519552e1c86c957c66d34a6dafd0effcb768fdc7eb31f6180c5fa185ff7133`. The
+original stdout was hashed and discarded, then the fixed success line was
+reconstructed and checked against that hash. Individual Docker inspection
+transcripts were not retained, so the result is local process-receipt evidence,
+not an independent attestation.
+
+This compares Linux userspace parser observations only. It does not exercise
+OCI layer application, Linux capability interpretation or enforcement,
+hardlink/whiteout semantics, or runtime parity. It does not change catalog
+rejection, release gates or SBOM qualification.
