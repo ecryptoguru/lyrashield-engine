@@ -257,3 +257,27 @@ The fixed rejection classifier follows the same selected policy, so an
 accepted backslash in a member name cannot mask a later rejected symlink or
 hardlink target. This diagnostic still stops parsing at its first rejection;
 full-byte verification is not tar framing, final-overlay or release evidence.
+
+## Inert per-member changeset prototype
+
+`inspect_layer_changeset` is an unwired, in-memory single-layer prototype. It
+returns ordered metadata for **all** supported members only after complete
+restricted tar framing and a matching caller-supplied DiffID. Records include
+member path and link target, header/data offsets for files, basic tar metadata,
+validated whiteout markers, and exact local capability PAX bytes where present.
+It rejects duplicate normalized paths, malformed whiteouts, unsupported entry
+or PAX types, and the existing per-entry, path, payload and time limits. For
+PAX headers without a capability value it does not retain the original payload.
+The added ordered member records have up to `MAX_ENTRIES` entries and retain
+additional copies of bounded path and target data; Python object overhead is
+not included in the existing byte limits.
+
+These records are sensitive inert data and must not be logged, followed as host
+paths, materialized, or treated as installed capabilities. Capability absence in
+a header does not establish final inode xattrs. A later overlay model must
+resolve hardlink identity, layer ordering, whiteouts, replacements, ancestors,
+capability metadata, and runtime behavior, and bind file extents to the same
+reverified bytes. This prototype does not assemble a final image or qualify an
+SBOM. Its caller must authenticate the expected DiffID and platform separately,
+verify the compressed descriptor and fetch exit, and use an external supervisor
+for blocked I/O. The release publication hold remains in place.

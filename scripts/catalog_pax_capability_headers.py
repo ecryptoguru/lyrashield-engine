@@ -9,11 +9,13 @@ import hashlib
 import tarfile
 import time
 from dataclasses import dataclass, field
+from typing import Optional
 
 from scripts.check_sbom_inventory import StrictTarReader
 from scripts.probe_pax_capability import MAX_LAYER_BYTES, MAX_SECONDS
 from scripts.reconstruct_oci_layers import (
     inert_symlink_target,
+    metadata,
     normalized_path,
     parse_local_pax,
     validate_member_trailing_slash,
@@ -39,6 +41,25 @@ class HeaderObservation:
     member_header_offset: int
     pax_payload: bytes = field(repr=False)
     value: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
+class LayerMember:
+    """One inert archive member; no entry has been applied to a filesystem."""
+
+    path: str = field(repr=False)
+    kind: str
+    target: str = field(repr=False)
+    member_header_offset: int
+    data_offset: Optional[int]  # noqa: UP045 - Python 3.9 support
+    size: int
+    mode: int
+    uid: int
+    gid: int
+    mtime: int
+    pax_header_offset: Optional[int]  # noqa: UP045 - Python 3.9 support
+    pax_payload: Optional[bytes] = field(repr=False)  # noqa: UP045 - Python 3.9 support
+    capability_value: Optional[bytes] = field(repr=False)  # noqa: UP045 - Python 3.9 support
 
 
 def parse_records(payload):
@@ -182,16 +203,75 @@ class HeaderReader(StrictTarReader):
             raise ValueError("incomplete tar framing or PAX association")
 
 
-def inspect_layer(stream, expected_diff, *, linux_literal_paths=False):
-    """Return raw observations only after complete framing and a matching DiffID.
+class ChangesetReader(HeaderReader):
+    """Collect supported member headers as inert, provisional metadata."""
 
-    The caller must separately authenticate the expected DiffID, compressed
-    descriptor and producer exit and enforce a wall timeout for blocked reads.
-    Paths, targets, values and raw payloads may be sensitive; do not log them.
-    """
+    def __init__(self, *, linux_literal_paths=False):
+        super().__init__(linux_literal_paths=linux_literal_paths)
+        self.members = []
+
+    def begin_header(self, block):
+        try:
+            entry = tarfile.TarInfo.frombuf(bytes(block), "utf-8", "surrogateescape")
+        except tarfile.HeaderError:
+            raise ValueError("invalid tar header") from None
+        if entry.type == tarfile.XHDTYPE:
+            super().begin_header(block)
+            return
+
+        offsets = self.pax_offset, self.offset
+        pending = self.pending if self.awaiting_member else None
+        overrides, value, payload = pending if pending is not None else ({}, None, None)
+        super().begin_header(block)
+        path = normalized_path(
+            overrides.get(b"path", entry.name),
+            allow_root=entry.isdir(),
+            linux_literal_paths=self.linux_literal_paths,
+        )
+        target = overrides.get(b"linkpath", entry.linkname)
+        if entry.issym():
+            kind, target = "symlink", inert_symlink_target(target)
+        elif entry.islnk():
+            kind = "hardlink"
+            target = normalized_path(target, linux_literal_paths=self.linux_literal_paths)
+        elif entry.isdir():
+            kind, target = "dir", ""
+        else:
+            kind, target = "file", ""
+        parent, _, base = path.rpartition("/")
+        if base.startswith(".wh."):
+            if kind != "file" or entry.size or base == ".wh.":
+                raise ValueError("invalid whiteout")
+            if base == ".wh..wh..opq":
+                kind, target = "opaque", parent
+            else:
+                name = base[4:]
+                if name in {".", ".."} or name.startswith(".wh."):
+                    raise ValueError("invalid whiteout target")
+                kind, target = "whiteout", f"{parent}/{name}" if parent else name
+        mode, uid, gid, mtime = metadata(entry)
+        self.members.append(
+            LayerMember(
+                path,
+                kind,
+                target,
+                offsets[1],
+                offsets[1] + 512 if kind == "file" else None,
+                entry.size,
+                mode,
+                uid,
+                gid,
+                mtime,
+                offsets[0],
+                payload if value is not None else None,
+                value,
+            )
+        )
+
+
+def _read_verified(stream, expected_diff, reader):
     if not isinstance(expected_diff, str) or not DIGEST.fullmatch(expected_diff):
         raise ValueError("invalid expected diff ID")
-    reader = HeaderReader(linux_literal_paths=linux_literal_paths)
     digest = hashlib.sha256()
     total = 0
     deadline = time.monotonic() + MAX_SECONDS
@@ -211,4 +291,28 @@ def inspect_layer(stream, expected_diff, *, linux_literal_paths=False):
     reader.complete()
     if "sha256:" + digest.hexdigest() != expected_diff:
         raise ValueError("layer diff ID mismatch")
+
+
+def inspect_layer(stream, expected_diff, *, linux_literal_paths=False):
+    """Return raw observations only after complete framing and a matching DiffID.
+
+    The caller must separately authenticate the expected DiffID, compressed
+    descriptor and producer exit and enforce a wall timeout for blocked reads.
+    Paths, targets, values and raw payloads may be sensitive; do not log them.
+    """
+    reader = HeaderReader(linux_literal_paths=linux_literal_paths)
+    _read_verified(stream, expected_diff, reader)
     return tuple(reader.observations)
+
+
+def inspect_layer_changeset(stream, expected_diff, *, linux_literal_paths=False):
+    """Return inert layer members only after framing and a matching DiffID.
+
+    This is not a final image, capability interpretation or release proof.
+    The caller must authenticate the expected DiffID and compressed descriptor,
+    check the producer exit, and supervise blocking I/O. Paths, targets and raw
+    capability records are sensitive. Do not log or materialize them.
+    """
+    reader = ChangesetReader(linux_literal_paths=linux_literal_paths)
+    _read_verified(stream, expected_diff, reader)
+    return tuple(reader.members)
