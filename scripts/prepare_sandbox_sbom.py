@@ -58,7 +58,7 @@ def json_object(raw):
     def reject_constant(value):
         raise ValueError(f"invalid JSON constant: {value}")
 
-    obj = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant)
+    obj = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_pairs, parse_constant=reject_constant)
     require(isinstance(obj, dict), "expected JSON object")
     return obj
 

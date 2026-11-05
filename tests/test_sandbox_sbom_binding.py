@@ -366,6 +366,7 @@ def test_rejects_incomplete_or_mismatched_sbom_evidence(tmp_path, tamper):
         (65536, False, False, True),
         (65536, False, True, True),
         (65536, True, False, True),
+        (65536, True, True, True),
         (65537, False, False, False),
         (65537, True, False, False),
     ],
@@ -395,3 +396,48 @@ def test_native_manifest_digest_size_limit_matches_consumer(
     else:
         with pytest.raises(ValueError):
             api["config_for_manifest"](path, digest(manifest))
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-32"])
+@pytest.mark.parametrize("source", ["manifest", "artifact", "sbom"])
+def test_rejects_non_utf8_or_bom_evidence_even_with_matching_digest(tmp_path, encoding, source):
+    _, docs, artifact, artifact_digest = setup_evidence(tmp_path)
+    if source == "manifest":
+        path = tmp_path / "amd64.manifest"
+        raw = path.read_text().encode(encoding)
+        path.write_bytes(raw)
+        api = runpy.run_path(str(SCRIPT))
+        with pytest.raises((ValueError, UnicodeError)):
+            api["config_for_manifest"](path, digest(raw))
+        return
+    if source == "artifact":
+        raw = json.dumps(artifact).encode(encoding)
+        (tmp_path / "artifact.json").write_bytes(raw)
+        artifact_digest = digest(raw)
+    else:
+        path = tmp_path / "sboms" / docs["amd64"]["name"]
+        raw = path.read_text().encode(encoding)
+        path.write_bytes(raw)
+        artifact["layers"][0]["digest"] = digest(raw)
+        artifact["layers"][0]["size"] = len(raw)
+        artifact_raw = json.dumps(artifact).encode()
+        (tmp_path / "artifact.json").write_bytes(artifact_raw)
+        artifact_digest = digest(artifact_raw)
+    result = invoke(tmp_path, artifact_digest)
+    assert result.returncode != 0
+    assert not (tmp_path / "predicate.json").exists()
+
+
+def test_accepts_non_ascii_utf8_sbom(tmp_path):
+    _, docs, artifact, _ = setup_evidence(tmp_path)
+    path = tmp_path / "sboms" / docs["amd64"]["name"]
+    doc = json.loads(path.read_bytes())
+    doc["packages"][1]["name"] = "exemple-caf\u00e9"
+    raw = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+    path.write_bytes(raw)
+    artifact["layers"][0]["digest"] = digest(raw)
+    artifact["layers"][0]["size"] = len(raw)
+    artifact_raw = json.dumps(artifact).encode()
+    (tmp_path / "artifact.json").write_bytes(artifact_raw)
+    result = invoke(tmp_path, digest(artifact_raw))
+    assert result.returncode == 0, result.stderr
