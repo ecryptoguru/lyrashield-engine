@@ -76,12 +76,13 @@ def run_probe(spec: dict[str, Any], *, timeout: int) -> dict[str, Any]:
             "status": "ERROR",
             "error": f"git worktree add failed: {(add.stderr or add.stdout).strip()}",
         }
+    result: dict[str, Any]
     try:
         source = worktree / spec["sourcePath"]
         original_hash = _hash(source)
         baseline = _run_test(worktree, spec["test"], timeout)
         if baseline["returncode"] != 0:
-            return {
+            result = {
                 "id": spec["id"],
                 "gate": spec["gate"],
                 "status": "ERROR",
@@ -89,39 +90,47 @@ def run_probe(spec: dict[str, Any], *, timeout: int) -> dict[str, Any]:
                 "originalSha256": original_hash,
                 "baseline": baseline,
             }
-        apply_replacement(source, spec["old"], spec["new"])
-        mutated_hash = _hash(source)
-        killed = _run_test(worktree, spec["test"], timeout)
-        combined_output = killed["stdoutTail"] + killed["stderrTail"]
-        detected = killed["returncode"] != 0 and spec["expectedFailureText"] in combined_output
-        restore = _git(["checkout", "--", spec["sourcePath"]], cwd=worktree)
-        restored_hash = _hash(source)
-        restored = _run_test(worktree, spec["test"], timeout)
-        restored_valid = (
-            restore.returncode == 0
-            and restored_hash == original_hash
-            and mutated_hash != original_hash
-            and restored["returncode"] == 0
-        )
-        return {
-            "id": spec["id"],
-            "gate": spec["gate"],
-            "requirement": spec["requirement"],
-            "status": "PASS" if detected and restored_valid else "FAIL",
-            "sourcePath": spec["sourcePath"],
-            "originalSha256": original_hash,
-            "mutatedSha256": mutated_hash,
-            "restoredSha256": restored_hash,
-            "baseline": baseline,
-            "killed": killed,
-            "restored": restored,
+        else:
+            apply_replacement(source, spec["old"], spec["new"])
+            mutated_hash = _hash(source)
+            killed = _run_test(worktree, spec["test"], timeout)
+            combined_output = killed["stdoutTail"] + killed["stderrTail"]
+            detected = killed["returncode"] != 0 and spec["expectedFailureText"] in combined_output
+            restore = _git(["checkout", "--", spec["sourcePath"]], cwd=worktree)
+            restored_hash = _hash(source)
+            restored = _run_test(worktree, spec["test"], timeout)
+            restored_valid = (
+                restore.returncode == 0
+                and restored_hash == original_hash
+                and mutated_hash != original_hash
+                and restored["returncode"] == 0
+            )
+            result = {
+                "id": spec["id"],
+                "gate": spec["gate"],
+                "requirement": spec["requirement"],
+                "status": "PASS" if detected and restored_valid else "FAIL",
+                "sourcePath": spec["sourcePath"],
+                "originalSha256": original_hash,
+                "mutatedSha256": mutated_hash,
+                "restoredSha256": restored_hash,
+                "baseline": baseline,
+                "killed": killed,
+                "restored": restored,
+            }
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        result = {
+            "id": spec.get("id"),
+            "gate": spec.get("gate"),
+            "status": "ERROR",
+            "error": f"{type(exc).__name__}: {exc}",
         }
     finally:
         cleanup_error = _cleanup_worktree(temp_root, worktree)
         if cleanup_error:
-            spec_result = locals().get("result")
-            if isinstance(spec_result, dict):
-                spec_result["cleanupError"] = cleanup_error
+            result["cleanupError"] = cleanup_error
+            result["status"] = "FAIL"
+    return result
 
 
 def run_probes(*, only: set[str] | None = None, timeout: int = 300) -> dict[str, Any]:

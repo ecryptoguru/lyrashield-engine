@@ -66,8 +66,8 @@
       "gate": "billing_cap_replay",
       "requirement": "A finite provider request keeps the configured hard output cap and cannot replay.",
       "sourcePath": "lyrashield/policy/physical_requests.py",
-      "old": "    maximum = settings.max_tokens",
-      "new": "    maximum = 256",
+      "old": "        self.sent = True",
+      "new": "        self.sent = False",
       "test": [
         "tests/test_physical_budget_boundaries.py::test_litellm_422_cannot_replay_without_output_cap"
       ],

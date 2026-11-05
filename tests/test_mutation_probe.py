@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 
+from benchmarks import mutation_probe
 from benchmarks.mutation_probe import SPEC_PATH, apply_replacement
 
 
@@ -36,3 +39,45 @@ def test_replacement_requires_exactly_one_match(tmp_path) -> None:
     source.write_text("duplicate = 1\nduplicate = 1\n", encoding="utf-8")
     with pytest.raises(ValueError, match="found 2"):
         apply_replacement(source, "duplicate = 1", "duplicate = 2")
+
+
+def test_mutation_probe_reports_cleanup_failure_after_a_killed_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = "safe = True\n"
+
+    def fake_git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ["worktree", "add"]:
+            worktree = Path(args[3])
+            worktree.mkdir(parents=True)
+            (worktree / "source.py").write_text(original, encoding="utf-8")
+        elif args[:1] == ["checkout"]:
+            (cwd / "source.py").write_text(original, encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(mutation_probe, "_git", fake_git)
+    monkeypatch.setattr(
+        mutation_probe,
+        "_run_test",
+        lambda *_args, **_kwargs: {"returncode": 0, "stdoutTail": "", "stderrTail": ""},
+    )
+    monkeypatch.setattr(
+        mutation_probe, "_cleanup_worktree", lambda *_args: "simulated cleanup failure"
+    )
+
+    result = mutation_probe.run_probe(
+        {
+            "id": "fixture",
+            "gate": "cleanup_unknown",
+            "sourcePath": "source.py",
+            "old": "safe = True",
+            "new": "safe = False",
+            "test": ["tests/test_fixture.py::test_fixture"],
+            "expectedFailureText": "test_fixture",
+            "requirement": "fixture",
+        },
+        timeout=1,
+    )
+
+    assert result["status"] == "FAIL"
+    assert result["cleanupError"] == "simulated cleanup failure"
