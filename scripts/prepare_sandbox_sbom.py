@@ -65,13 +65,15 @@ def json_object(raw):
     return obj
 
 
-def config_for_manifest(path, expected):
-    raw = read_bounded(path, 65537)
+def normalized_manifest(raw, expected):
     if sha256(raw) != expected and raw.endswith(b"\n"):
         raw = raw[:-1]
     require(len(raw) <= 65536, "native manifest exceeds consumer size limit")
     require(sha256(raw) == expected, "native manifest bytes differ from qualified digest")
-    image = json_object(raw)
+    return json_object(raw)
+
+
+def config_descriptor_for_manifest(image):
     config = image.get("config")
     require(
         image.get("schemaVersion") == 2 and image.get("mediaType") in IMAGE_MANIFESTS,
@@ -88,11 +90,16 @@ def config_for_manifest(path, expected):
         and 0 < config["size"] <= 16 * 1024 * 1024,
         "invalid image config descriptor",
     )
+    return config
+
+
+def config_for_manifest(path, expected):
+    image = normalized_manifest(read_bounded(path, 65537), expected)
+    config = config_descriptor_for_manifest(image)
     return config["digest"]
 
 
-def describe_document(path, image, arch, native_digest, config_digest):
-    raw = read_bounded(path, MAX_SBOM_BYTES)
+def describe_document_bytes(raw, filename, image, arch, native_digest, config_digest):
     document = json_object(raw)
     relationships, packages = document.get("relationships"), document.get("packages")
     require(
@@ -163,8 +170,14 @@ def describe_document(path, image, arch, native_digest, config_digest):
         "configDigest": config_digest,
         "documentDigest": sha256(raw),
         "size": len(raw),
-        "filename": path.name,
+        "filename": filename,
     }
+
+
+def describe_document(path, image, arch, native_digest, config_digest):
+    return describe_document_bytes(
+        read_bounded(path, MAX_SBOM_BYTES), path.name, image, arch, native_digest, config_digest
+    )
 
 
 def build_predicate(

@@ -5,7 +5,10 @@ This does not establish full SBOM completeness or authenticate either input.
 The caller must bind the rootfs and document to the same image manifest.
 """
 
+# ruff: noqa: PLR0912, PLR0915
+
 import argparse
+import hashlib
 import json
 import os
 import posixpath
@@ -13,6 +16,7 @@ import re
 import signal
 import sys
 import tarfile
+from bisect import bisect_left
 from collections import defaultdict
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
@@ -24,6 +28,9 @@ MAX_TOTAL_METADATA_BYTES = 256 * 1024 * 1024
 MAX_METADATA_FILES = 200_000
 MAX_SBOM_BYTES = 256 * 1024 * 1024
 MAX_LINK_DEPTH = 64
+MAX_GUARDED_LINKS = 100_000
+LINK_POLICY = {"id": "sandbox-bounded-package-link-policy", "version": 2}
+IGNORED_LINK_POLICY = "metadata-safe-aliases-v2"
 MAX_ARCHIVE_ENTRIES = 1_000_000
 MAX_ARCHIVE_HEADER_BYTES = 64 * 1024
 MAX_ARCHIVE_PATH_CHARS = 4096
@@ -32,10 +39,21 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024 * 1024
 MAX_IDENTITY_CHARS = 1024
 MAX_PURL_CHARS = 4096
 MAX_PROCESS_SECONDS = 900
+MAX_GO_BINARY_BYTES = 512 * 1024 * 1024
+MAX_TOTAL_GO_BINARY_BYTES = 2 * 1024 * 1024 * 1024
 NPM_ROOTS = (
     "home/pentester/.npm-tools/node_modules",
     "usr/share/nodejs",
     "usr/local/lib/node_modules",
+)
+PYTHON_ROOT = re.compile(
+    r"(?:(?:usr/lib|usr/local/lib)/python[^/]+/dist-packages|"
+    r"app/\.venv/lib/python[^/]+/site-packages)(?=/|\Z)"
+)
+PYTHON_ANCESTOR = re.compile(
+    r"(?:(?:app|app/\.venv|app/\.venv/lib|app/\.venv/lib/python[^/]+)|"
+    r"(?:usr|usr/lib|usr/lib/python[^/]+|usr/local|usr/local/lib|"
+    r"usr/local/lib/python[^/]+))\Z"
 )
 
 
@@ -46,7 +64,11 @@ def normalize_python(name):
 def metadata_kind(name):
     if name == "var/lib/dpkg/status":
         return "deb"
-    if re.search(r"(?:^|/)(?:site-packages|dist-packages)/[^/]+\.dist-info/METADATA$", name):
+    if re.fullmatch(
+        r"(?:(?:usr/lib|usr/local/lib)/python[^/]+/dist-packages|"
+        r"app/\.venv/lib/python[^/]+/site-packages)/[^/]+\.dist-info/METADATA",
+        name,
+    ):
         return "pypi"
     for root in NPM_ROOTS:
         prefix = root + "/"
@@ -60,6 +82,151 @@ def metadata_kind(name):
             ) or (len(parts) == 3 and parts[0].startswith("@") and parts[-1] == "package.json"):
                 return "npm"
     return None
+
+
+def python_root(name):
+    match = PYTHON_ROOT.match(name)
+    return match.group(0) if match else None
+
+
+def scope_inside(name):
+    if name == "var/lib/dpkg/status":
+        return "deb", name
+    for root in NPM_ROOTS:
+        if name == root or name.startswith(root + "/"):
+            return "npm", root
+    root = python_root(name)
+    if root is not None:
+        return "pypi", root
+    return None
+
+
+def guarded_scope(name, capture_names=()):
+    inside = scope_inside(name)
+    if inside is not None:
+        return inside
+    fixed_roots = (*NPM_ROOTS, "var/lib/dpkg/status")
+    for root in fixed_roots:
+        if root.startswith(name + "/"):
+            return ("deb" if root == "var/lib/dpkg/status" else "npm", root)
+    if PYTHON_ANCESTOR.fullmatch(name):
+        return "pypi", name
+    for root in capture_names:
+        if root == name or root.startswith(name + "/"):
+            return "go", root
+    return None
+
+
+def normalized_link_target(name, linkname):
+    if not isinstance(linkname, str) or not linkname:
+        return None
+    target = posixpath.normpath(
+        linkname[1:]
+        if linkname.startswith("/")
+        else posixpath.join(posixpath.dirname(name), linkname)
+    )
+    if target in {".", ".."} or target.startswith(("../", "/")):
+        return None
+    return target
+
+
+def metadata_probe(name):
+    return name.endswith("/package.json") or (
+        name.endswith(".dist-info/METADATA") and "/.dist-info/METADATA" in "/" + name
+    )
+
+
+def paths_below(sorted_paths, target):
+    prefix = target + "/"
+    start = bisect_left(sorted_paths, prefix)
+    for path in sorted_paths[start:]:
+        if not path.startswith(prefix):
+            return
+        yield path
+
+
+def resolve_link(name, all_symlinks):
+    chain = {name}
+    current = all_symlinks[name]
+    while current in all_symlinks and current not in chain and len(chain) < MAX_LINK_DEPTH:
+        chain.add(current)
+        current = all_symlinks[current]
+    return current, chain
+
+
+def directory_alias_is_metadata_safe(
+    name,
+    target,
+    *,
+    entry_types,
+    parsed_paths,
+    metadata_paths,
+    symlink_paths,
+    capture_names,
+):
+    if entry_types.get(target) != "directory":
+        return False
+    for nested_link in paths_below(symlink_paths, target):
+        if guarded_scope(nested_link, capture_names) is None:
+            return False
+    for physical_path in paths_below(metadata_paths, target):
+        alias = name + physical_path[len(target) :]
+        alias_kind = metadata_kind(alias)
+        if alias_kind is None:
+            continue
+        if (
+            metadata_kind(physical_path) != alias_kind
+            or entry_types.get(physical_path) != "regular"
+            or physical_path not in parsed_paths
+        ):
+            return False
+    return True
+
+
+def resolve_guarded_links(
+    links,
+    entry_types,
+    parsed_paths,
+    unresolved,
+    *,
+    all_symlinks,
+    metadata_paths,
+    capture_names,
+):
+    ignored = 0
+    if len(links) > MAX_GUARDED_LINKS:
+        raise ValueError("guarded link limit exceeded")
+    sorted_symlinks = sorted(all_symlinks)
+    sorted_metadata = sorted(metadata_paths)
+    for name, (_target, scope) in links.items():
+        current, chain = resolve_link(name, all_symlinks)
+        kind = metadata_kind(name)
+        valid_target = entry_types.get(current) in {"regular", "directory"} and current not in chain
+        if not valid_target:
+            record_unresolved(unresolved, name, "missing or cyclic archive link")
+            continue
+        if kind is not None:
+            if (
+                scope_inside(current) != scope
+                or entry_types.get(current) != "regular"
+                or metadata_kind(current) != kind
+                or current not in parsed_paths
+            ):
+                record_unresolved(unresolved, name, "unresolved metadata link")
+            continue
+        if entry_types.get(current) == "directory" and not directory_alias_is_metadata_safe(
+            name,
+            current,
+            entry_types=entry_types,
+            parsed_paths=parsed_paths,
+            metadata_paths=sorted_metadata,
+            symlink_paths=sorted_symlinks,
+            capture_names=capture_names,
+        ):
+            record_unresolved(unresolved, name, "directory link can expose unscanned metadata")
+            continue
+        ignored += 1
+    return ignored
 
 
 class BoundedTarInfo(tarfile.TarInfo):
@@ -383,6 +550,53 @@ def account_metadata_bytes(total, size):
     return total
 
 
+def normalize_capture_paths(paths):
+    result = []
+    seen = set()
+    for value in paths:
+        if not isinstance(value, str) or not value.startswith("/"):
+            raise ValueError("capture path must be an absolute archive path")
+        name = value[1:]
+        path = PurePosixPath(name)
+        if path.is_absolute() or not name or ".." in path.parts or str(path) != name:
+            raise ValueError("unsafe capture path")
+        if name in seen:
+            raise ValueError("duplicate capture path")
+        seen.add(name)
+        result.append((value, name))
+    return result
+
+
+def create_capture_file(capture_dir, index):
+    target = Path(capture_dir) / f"go-{index:02d}.bin"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(target, flags, 0o600)
+    return target, os.fdopen(fd, "w+b")
+
+
+def capture_archive_file(archive, entry, local_path, output):
+    digest = hashlib.sha256()
+    size = 0
+    source = archive.extractfile(entry)
+    if source is None:
+        raise ValueError("capture entry has no payload")
+    while chunk := source.read(min(1024 * 1024, MAX_GO_BINARY_BYTES + 1 - size)):
+        size += len(chunk)
+        if size > MAX_GO_BINARY_BYTES:
+            raise ValueError("Go binary exceeds individual byte limit")
+        digest.update(chunk)
+        output.write(chunk)
+    if size != entry.size:
+        raise ValueError("Go binary size differs from archive header")
+    output.flush()
+    return {
+        "path": "/" + entry.name,
+        "sha256": digest.hexdigest(),
+        "size": size,
+        "localPath": str(local_path),
+    }
+
+
 def iter_uncached_archive(archive):
     # Hardlinks are rejected below; regular-file reads use the TarInfo directly.
     # Explicit next() plus clearing avoids unbounded TarInfo caching in Python <=3.12.
@@ -394,10 +608,19 @@ def iter_uncached_archive(archive):
         yield entry
 
 
-def collect_rootfs(stream):
+def scan_rootfs(stream, capture_paths=(), capture_dir=None):
     inventory = {"deb": set(), "pypi": set(), "npm": set()}
     unresolved, seen, counts = [], set(), defaultdict(int)
-    parsed_paths, links = set(), {}
+    parsed_paths, links, entry_types = set(), {}, {}
+    all_symlinks, metadata_paths = {}, set()
+    ignored_links = 0
+    captures, seen_captures = [], set()
+    normalized_captures = normalize_capture_paths(capture_paths)
+    required_captures = {name: display for display, name in normalized_captures}
+    capture_indexes = {name: index for index, (_, name) in enumerate(normalized_captures)}
+    if required_captures and capture_dir is None:
+        raise ValueError("capture directory is required for Go binary capture")
+    total_go_bytes = 0
     total_metadata_bytes = 0
     total_path_chars = 0
     framed = StrictTarReader(stream)
@@ -409,11 +632,69 @@ def collect_rootfs(stream):
                 record_unresolved(unresolved, entry.name, "unsafe archive path")
                 continue
             name = str(path)
+            entry_type = (
+                "regular"
+                if entry.isfile()
+                else "directory"
+                if entry.isdir()
+                else "symlink"
+                if entry.issym()
+                else "hardlink"
+                if entry.islnk()
+                else "other"
+            )
+            if name in entry_types:
+                entry_types[name] = "duplicate"
+            else:
+                entry_types[name] = entry_type
+            if metadata_probe(name):
+                metadata_paths.add(name)
+                if len(metadata_paths) > MAX_METADATA_FILES:
+                    raise ValueError("too many package metadata candidates")
+            if entry.issym():
+                target = normalized_link_target(name, entry.linkname)
+                if target is not None:
+                    all_symlinks[name] = target
+                    if len(all_symlinks) > MAX_GUARDED_LINKS:
+                        raise ValueError("archive symlink limit exceeded")
+            if name in required_captures:
+                if name in seen_captures:
+                    record_unresolved(unresolved, "/" + name, "duplicate Go binary entry")
+                    continue
+                seen_captures.add(name)
+                if not entry.isfile() or entry.size < 0 or entry.size > MAX_GO_BINARY_BYTES:
+                    record_unresolved(
+                        unresolved, "/" + name, "Go binary is not one bounded regular file"
+                    )
+                    continue
+                total_go_bytes += entry.size
+                if total_go_bytes > MAX_TOTAL_GO_BINARY_BYTES:
+                    raise ValueError("Go binary capture byte limit exceeded")
+                local_path, output = create_capture_file(capture_dir, capture_indexes[name])
+                with output:
+                    try:
+                        capture = capture_archive_file(archive, entry, local_path, output)
+                    except (OSError, ValueError, TypeError) as error:
+                        local_path.unlink(missing_ok=True)
+                        record_unresolved(unresolved, "/" + name, type(error).__name__)
+                        continue
+                captures.append(capture)
             kind = metadata_kind(name)
-            if (entry.issym() or entry.islnk()) and not (kind == "npm" and entry.issym()):
-                record_unresolved(unresolved, name, "unresolved archive link")
-                continue
             if kind is None:
+                if entry.issym() or entry.islnk():
+                    scope = guarded_scope(name, required_captures)
+                    if scope is None:
+                        ignored_links += 1
+                    elif entry.islnk() or scope_inside(name) is None or name == scope[1]:
+                        record_unresolved(unresolved, name, "link at a guarded inventory boundary")
+                    else:
+                        target = normalized_link_target(name, entry.linkname)
+                        if target is None:
+                            record_unresolved(
+                                unresolved, name, "unsafe or out-of-scope archive link"
+                            )
+                        else:
+                            links[name] = (target, scope)
                 continue
             counts[kind] += 1
             if sum(counts.values()) > MAX_METADATA_FILES:
@@ -423,8 +704,19 @@ def collect_rootfs(stream):
                 record_unresolved(unresolved, name, "duplicate, non-file or oversized metadata")
                 continue
             seen.add(name)
-            if entry.issym() and kind == "npm":
-                record_npm_metadata_link(name, entry.linkname, links, unresolved)
+            if entry.issym():
+                scope = guarded_scope(name, required_captures)
+                if scope is None or name == scope[1] or scope_inside(name) is None:
+                    record_unresolved(unresolved, name, "link at a guarded inventory boundary")
+                else:
+                    target = normalized_link_target(name, entry.linkname)
+                    if target is None:
+                        record_unresolved(unresolved, name, "unsafe or out-of-scope metadata link")
+                    else:
+                        links[name] = (target, scope)
+                continue
+            if entry.islnk():
+                record_unresolved(unresolved, name, "hardlink in guarded metadata scope")
                 continue
             if not entry.isfile() or entry.size < 0 or entry.size > MAX_METADATA_BYTES:
                 record_unresolved(unresolved, name, "duplicate, non-file or oversized metadata")
@@ -438,10 +730,34 @@ def collect_rootfs(stream):
                 inventory[kind].update(collect_metadata(kind, data))
                 parsed_paths.add(name)
             except (ValueError, UnicodeError, AttributeError, TypeError) as exc:
-                record_unresolved(unresolved, name, type(exc).__name__)
+                detail = re.sub(r"[\x00-\x1f]+", "?", str(exc))[:256] if exc.args else ""
+                record_unresolved(unresolved, name, detail or type(exc).__name__)
     framed.finish()
-    finish_inventory(inventory, counts, links, parsed_paths, unresolved)
-    return inventory, unresolved
+    finish_inventory(inventory, counts, {}, parsed_paths, unresolved)
+    ignored_links += resolve_guarded_links(
+        links,
+        entry_types,
+        parsed_paths,
+        unresolved,
+        all_symlinks=all_symlinks,
+        metadata_paths=metadata_paths,
+        capture_names=required_captures,
+    )
+    for name, display_path in required_captures.items():
+        if name not in seen_captures:
+            record_unresolved(unresolved, display_path, "required Go binary is missing")
+    return {
+        "inventory": inventory,
+        "unresolved": unresolved,
+        "counts": {kind: counts[kind] for kind in inventory},
+        "captures": captures,
+        "ignoredLinks": ignored_links,
+    }
+
+
+def collect_rootfs(stream):
+    result = scan_rootfs(stream)
+    return result["inventory"], result["unresolved"]
 
 
 def read_sbom(path):

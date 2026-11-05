@@ -257,7 +257,6 @@ def test_sbom_read_remains_bounded_if_file_changes_after_stat():
         "app/.venv/lib/python3.12/site-packages/missing-1.0.dist-info",
         "app/.venv/lib/python3.12/site-packages",
         "app/.venv",
-        "unrelated/symlink-that-may-hide-a-python-root",
     ],
 )
 @pytest.mark.parametrize("link_type", [tarfile.SYMTYPE, tarfile.LNKTYPE])
