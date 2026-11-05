@@ -143,6 +143,73 @@ def test_mutated_prefix_reason_cannot_expose_archive_text():
     assert error.byte_verified is False
 
 
+@pytest.mark.parametrize(
+    "payload, category",
+    [
+        (record(b"path", b"../private"), "member-link-policy"),
+        (record(b"path", b"private\x01value"), "pax-value-or-encoding"),
+        (record(b"SCHILY.xattr.security.capability", b"x" * 4097), "parser-limit"),
+    ],
+    ids=["path-traversal", "pax-control", "oversized-capability"],
+)
+def test_new_prefix_categories_use_real_parser(private_root, payload, category):
+    compressed, descriptor, diff = layer(payload)
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert caught.value.category == category
+    assert caught.value.byte_verified is False
+    assert "private" not in str(caught.value)
+
+
+def test_new_prefix_category_for_bad_tar_framing(private_root):
+    compressed, _, _ = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    raw = gzip.decompress(compressed)[:-1] + b"x"
+    compressed = gzip.compress(raw)
+    descriptor = {
+        "mediaType": OCI_GZIP,
+        "digest": "sha256:" + hashlib.sha256(compressed).hexdigest(),
+        "size": len(compressed),
+    }
+    diff = "sha256:" + hashlib.sha256(raw).hexdigest()
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert caught.value.category == "tar-framing"
+    assert caught.value.byte_verified is False
+
+
+def test_unrecognized_parser_error_never_exposes_dynamic_data(private_root, monkeypatch):
+    def reject(_self, _data):
+        raise ValueError("PRIVATE-DYNAMIC-DETAIL")
+
+    monkeypatch.setattr(verify.HeaderReader, "feed", reject)
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert caught.value.category == "parser-rejected"
+    assert caught.value.byte_verified is False
+    assert "PRIVATE" not in str(caught.value)
+
+
+def test_cleanup_failure_suppresses_new_prefix_category(private_root):
+    class BadCleanup(Fetch):
+        def poll(self):
+            raise RuntimeError("PRIVATE-CLEANUP")
+
+    compressed, descriptor, diff = layer(record(b"path", b"../private"))
+    with pytest.raises(ValueError, match="cleanup incomplete") as caught:
+        verify.inspect_fetched_layer(
+            BadCleanup(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert not hasattr(caught.value, "category")
+    assert "PRIVATE" not in str(caught.value)
+
+
 def test_forged_fetch_exception_never_becomes_a_parser_reason(private_root):
     class ForgedStream(io.BytesIO):
         def read(self, *_args):

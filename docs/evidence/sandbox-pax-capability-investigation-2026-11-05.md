@@ -186,6 +186,10 @@ It returns no archive paths, values or counts; cleanup failure suppresses the
 category. A caller must emit only the fixed fields and must not inspect or
 serialize exception contexts or traceback locals, which can retain input data.
 It cannot recover the cause of an earlier incomplete attempt.
+Known parser messages can be grouped into fixed member/link policy, PAX value
+or encoding, parser limit and tar framing labels; unknown messages fall back to
+`parser-rejected`. A caller that publishes these labels must independently
+allowlist them and keep the result explicitly unverified and incomplete.
 
 This helper does not authenticate the caller-supplied descriptor or DiffID;
 the caller must establish those bindings and supervise the fetch process group
