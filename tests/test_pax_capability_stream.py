@@ -186,6 +186,112 @@ def test_verified_rejection_drain_honors_reserve_during_remaining_stream(private
         drain.diagnose_fetched_layer(Fetch(raw), descriptor, digest, private_root)
 
 
+@pytest.mark.parametrize("literal", [False, True], ids=["strict", "linux-literal"])
+def test_full_byte_outcome_for_accepted_parser(private_root, literal):
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    result = drain.diagnose_parser_outcome(
+        Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=literal
+    )
+    assert result == {
+        "scope": "verified-layer-bytes-single-parser-outcome-only",
+        "status": "parser-accepted",
+        "category": "none",
+        "bytesVerified": True,
+        "tarFramingVerified": True,
+        "finalImageVerified": False,
+        "releaseQualified": False,
+    }
+    assert "private" not in str(result)
+
+
+def test_full_byte_outcome_for_nonunsafe_parser_rejection(private_root):
+    compressed, descriptor, diff = layer(record(b"PRIVATE-KEY", b"PRIVATE-VALUE"))
+    result = drain.diagnose_parser_outcome(Fetch(compressed), descriptor, diff, private_root)
+    assert result["status"] == "parser-rejected"
+    assert result["category"] == "unsupported-pax-key"
+    assert result["bytesVerified"] is True
+    assert result["tarFramingVerified"] is False
+    assert result["releaseQualified"] is False
+    assert "PRIVATE" not in str(result)
+
+
+def test_full_byte_outcome_linux_literal_policy_is_explicit(private_root):
+    compressed, descriptor, diff = layer(record(b"path", b"a\\private"))
+    strict = drain.diagnose_parser_outcome(Fetch(compressed), descriptor, diff, private_root)
+    literal = drain.diagnose_parser_outcome(
+        Fetch(compressed), descriptor, diff, private_root, linux_literal_paths=True
+    )
+    assert strict["status"] == "parser-rejected"
+    assert strict["category"] == "member-link-policy"
+    assert strict["tarFramingVerified"] is False
+    assert literal["status"] == "parser-accepted"
+    assert literal["tarFramingVerified"] is True
+    assert "private" not in str(strict) and "private" not in str(literal)
+
+
+def test_full_byte_outcome_unknown_and_mutated_mapping_are_redacted(private_root, monkeypatch):
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+
+    def reject(_self, _data):
+        raise ValueError("PRIVATE-DYNAMIC")
+
+    monkeypatch.setattr(drain.HeaderReader, "feed", reject)
+    monkeypatch.setitem(drain.PREFIX_REASONS, "PRIVATE-DYNAMIC", "PRIVATE-OUTPUT")
+    result = drain.diagnose_parser_outcome(Fetch(compressed), descriptor, diff, private_root)
+    assert result["status"] == "parser-rejected"
+    assert result["category"] == "parser-rejected"
+    assert result["bytesVerified"] is True
+    assert "PRIVATE" not in str(result)
+
+
+def test_full_byte_outcome_for_eof_framing_failure(private_root):
+    compressed, _, _ = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    raw = gzip.decompress(compressed)[:1536]
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    descriptor = {"mediaType": OCI_TAR, "digest": digest, "size": len(raw)}
+    result = drain.diagnose_parser_outcome(Fetch(raw), descriptor, digest, private_root)
+    assert result["status"] == "parser-rejected"
+    assert result["category"] == "incomplete-tar-framing"
+    assert result["bytesVerified"] is True
+    assert result["tarFramingVerified"] is False
+
+
+@pytest.mark.parametrize("failure", ["digest", "diffid", "truncated", "producer", "cleanup"])
+def test_full_byte_outcome_is_suppressed_on_verifier_producer_or_cleanup_failure(
+    private_root, failure
+):
+    class BadCleanup(Fetch):
+        def poll(self):
+            raise RuntimeError("PRIVATE-CLEANUP")
+
+    compressed, descriptor, diff = layer(record(b"PRIVATE-KEY", b"PRIVATE-VALUE"))
+    if failure == "digest":
+        descriptor["digest"] = "sha256:" + "0" * 64
+    if failure == "diffid":
+        diff = "sha256:" + "0" * 64
+    if failure == "truncated":
+        compressed = compressed[:-5]
+    fetch = (
+        BadCleanup(compressed) if failure == "cleanup" else Fetch(compressed, failure == "producer")
+    )
+    with pytest.raises(ValueError) as caught:
+        drain.diagnose_parser_outcome(fetch, descriptor, diff, private_root)
+    assert "private" not in str(caught.value).lower()
+    assert not hasattr(caught.value, "category")
+
+
+def test_full_byte_outcome_accepted_parser_is_suppressed_on_cleanup_failure(private_root):
+    class BadCleanup(Fetch):
+        def poll(self):
+            raise RuntimeError("PRIVATE-CLEANUP")
+
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    with pytest.raises(ValueError, match="cleanup incomplete") as caught:
+        drain.diagnose_parser_outcome(BadCleanup(compressed), descriptor, diff, private_root)
+    assert not hasattr(caught.value, "category")
+    assert "PRIVATE" not in str(caught.value)
+
+
 @pytest.fixture
 def private_root(tmp_path, monkeypatch):
     root = tmp_path / "private"

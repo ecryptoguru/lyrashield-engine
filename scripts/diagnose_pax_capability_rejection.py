@@ -5,7 +5,7 @@ fetch process group with a wall deadline, including blocked reads. This never
 accepts an archive or qualifies an image, SBOM, overlay, or release.
 """
 
-# ruff: noqa: BLE001, INP001, TRY301
+# ruff: noqa: BLE001, INP001, TRY300, TRY301
 import os
 import stat
 import tarfile
@@ -19,6 +19,8 @@ from scripts.verify_pax_capability_stream import (
     FETCH_EXIT_SECONDS,
     MAX_COMPRESSED_BYTES,
     MIN_FREE_BYTES,
+    PREFIX_CATEGORIES,
+    PREFIX_REASONS,
     cleanup_fetch,
 )
 
@@ -139,6 +141,88 @@ def diagnose_fetched_layer(fetch, item, diff_id, private_root, *, linux_literal_
             "syntax": detail[1],
             "bytesVerified": True,
             "tarFramingVerified": False,
+            "finalImageVerified": False,
+            "releaseQualified": False,
+        }
+    except Exception:
+        raise ValueError("diagnostic incomplete") from None
+    finally:
+        cleanup_fetch(fetch, root)
+
+
+def diagnose_parser_outcome(fetch, item, diff_id, private_root, *, linux_literal_paths=False):
+    """Return a fixed scoped parser outcome only after complete byte checks.
+
+    After a feed rejection the parser stops; the verifier still drains and
+    hashes the same stream, but remaining tar framing is explicitly unknown.
+    A successful parser outcome is restricted to this parser and one layer.
+    The caller must authenticate the descriptor, DiffID and Linux target, and
+    supervise blocked input with a process-group deadline. No payload is saved.
+    """
+    root = None
+    try:
+        root = os.open(private_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        state = os.fstat(root)
+        if (
+            not stat.S_ISDIR(state.st_mode)
+            or state.st_uid != os.geteuid()
+            or stat.S_IMODE(state.st_mode) != 0o700
+        ):
+            raise ValueError("private root invalid")
+        require_no_acl(root)
+        if (
+            not isinstance(item, dict)
+            or type(item.get("size")) is not int
+            or not 0 < item["size"] <= MAX_COMPRESSED_BYTES
+        ):
+            raise ValueError("compressed byte limit exceeded")
+        reader = HeaderReader(linux_literal_paths=linux_literal_paths)
+        category = None
+        deadline = time.monotonic() + MAX_SECONDS
+        count = 0
+
+        def consume(data):
+            nonlocal count, category, reader
+            if time.monotonic() > deadline:
+                raise TimeoutError("stream deadline exceeded")
+            if free_space(root) < MIN_FREE_BYTES + 1024 * 1024:
+                raise ValueError("temporary storage reserve insufficient")
+            count += len(data)
+            if count > MAX_LAYER_BYTES:
+                raise ValueError("uncompressed byte limit exceeded")
+            if reader is not None:
+                try:
+                    reader.feed(data)
+                except ValueError as error:
+                    message = error.args[0] if error.args and type(error.args[0]) is str else ""
+                    candidate = PREFIX_REASONS.get(message, "parser-rejected")
+                    category = (
+                        candidate
+                        if type(candidate) is str and candidate in PREFIX_CATEGORIES
+                        else "parser-rejected"
+                    )
+                    reader = None
+
+        _, size = verify_layer_stream(fetch.stdout, item, diff_id, 0, on_data=consume)
+        if fetch.wait(timeout=FETCH_EXIT_SECONDS) != 0 or count != size:
+            raise ValueError("diagnostic incomplete")
+        if time.monotonic() > deadline:
+            raise TimeoutError("stream deadline exceeded")
+        if reader is not None:
+            try:
+                reader.complete()
+            except ValueError as error:
+                category = (
+                    "incomplete-tar-framing"
+                    if error.args == ("incomplete tar framing or PAX association",)
+                    else "parser-rejected"
+                )
+        return {
+            "scope": "verified-layer-bytes-single-parser-outcome-only",
+            "status": "parser-accepted" if category is None else "parser-rejected",
+            "category": "none" if category is None else category,
+            "bytesVerified": True,
+            "tarFramingVerified": category is None,
             "finalImageVerified": False,
             "releaseQualified": False,
         }

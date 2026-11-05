@@ -216,6 +216,16 @@ descriptor and DiffID and enforce a process-group deadline for blocked reads.
 The fixed result contains no path, target, package, count or source payload.
 The helper is unwired and does not reclassify earlier unverified receipts.
 
+An additional unwired full-drain outcome helper can report a fixed first
+parser-rejection category, an EOF framing rejection, or acceptance by this
+restricted parser. It returns only after descriptor bytes, DiffID and fetch
+exit pass and cleanup succeeds. After a feed rejection it stops parsing and
+does not claim remaining tar framing; an accepted outcome requires complete
+framing. It retains no archive names, values, counts or payloads in its
+result. Caller authentication of the descriptor, DiffID and selected Linux
+platform, plus external blocked-read supervision, remain required. These
+outcomes do not establish final image state, SBOM coverage or release readiness.
+
 ## Opt-in Linux literal-path prototype
 
 The in-memory `VirtualRoot` and raw capability `HeaderReader` offer an explicit
