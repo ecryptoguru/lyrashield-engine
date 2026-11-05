@@ -8,18 +8,22 @@
       "sourcePath": "lyrashield/tools/proxy/tools.py",
       "old": "        if _is_match_all_pattern(pattern):",
       "new": "        if False and _is_match_all_pattern(pattern):",
-      "test": ["tests/test_proxy_client.py::test_validate_scope_allowlist_rejects_match_all"],
+      "test": [
+        "tests/test_proxy_client.py::test_validate_scope_allowlist_rejects_match_all"
+      ],
       "expectedFailureText": "test_validate_scope_allowlist_rejects_match_all"
     },
     {
-      "id": "workspace-out-of-tree-link",
+      "id": "workspace-resume-path",
       "gate": "workspace_scope",
-      "requirement": "Staging must not copy a symlink target outside the workspace.",
-      "sourcePath": "lyrashield/runtime/local_dir_staging.py",
-      "old": "            if not _is_within(target, root):\n                logger.warning(\"staging: dropping out-of-tree symlink %s -> %s\", entry_path, target)\n                continue",
-      "new": "            if False:\n                logger.warning(\"staging: dropping out-of-tree symlink %s -> %s\", entry_path, target)\n                continue",
-      "test": ["tests/test_local_dir_staging.py::test_out_of_tree_symlink_is_dropped"],
-      "expectedFailureText": "test_out_of_tree_symlink_is_dropped"
+      "requirement": "A hand-edited resume record cannot place a workspace file outside the workspace.",
+      "sourcePath": "strix/interface/cli_args.py",
+      "old": "        except ValueError as error:\n            raise ResumeError(f\"--resume {args.resume}: invalid workspace file: {error}\") from error",
+      "new": "        except ValueError:\n            args.workspace_files = []",
+      "test": [
+        "tests/test_cli_target_list_strix.py::test_resume_rejects_an_edited_workspace_file_path"
+      ],
+      "expectedFailureText": "test_resume_rejects_an_edited_workspace_file_path"
     },
     {
       "id": "gate-root-provenance",
@@ -28,7 +32,9 @@
       "sourcePath": "lyrashield/interface/main.py",
       "old": "        if item.agent is not root:\n            continue",
       "new": "        if False:\n            continue",
-      "test": ["tests/test_finish_gate_provenance.py::test_finish_tool_provenance_rejects_ambiguous_or_foreign_items[different_agent]"],
+      "test": [
+        "tests/test_finish_gate_provenance.py::test_finish_tool_provenance_rejects_ambiguous_or_foreign_items[different_agent]"
+      ],
       "expectedFailureText": "test_finish_tool_provenance_rejects_ambiguous_or_foreign_items"
     },
     {
@@ -38,7 +44,9 @@
       "sourcePath": "lyrashield/artifacts/evidence.py",
       "old": "        if expected:\n            return host == expected.lower().rstrip(\".\")",
       "new": "        if expected:\n            return True",
-      "test": ["tests/test_pending_http_evidence.py::test_foreign_host_remains_pending"],
+      "test": [
+        "tests/test_pending_http_evidence.py::test_foreign_host_remains_pending"
+      ],
       "expectedFailureText": "test_foreign_host_remains_pending"
     },
     {
@@ -48,7 +56,9 @@
       "sourcePath": "lyrashield/runtime/session_manager.py",
       "old": "            _record_cleanup_receipt(scan_id, CLEANUP_FAILED, last_error=str(exc))\n            return CLEANUP_FAILED",
       "new": "            _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)\n            return CLEANUP_REMOVED",
-      "test": ["tests/test_session_cleanup.py::test_cleanup_reports_sandbox_delete_failure"],
+      "test": [
+        "tests/test_session_cleanup.py::test_cleanup_reports_sandbox_delete_failure"
+      ],
       "expectedFailureText": "test_cleanup_reports_sandbox_delete_failure"
     },
     {
@@ -58,7 +68,9 @@
       "sourcePath": "lyrashield/policy/physical_requests.py",
       "old": "        if self.sent:\n            raise PhysicalBudgetAdapterError(\n                \"Finite budget blocked an unreserved provider compatibility replay.\"\n            )",
       "new": "        if False and self.sent:\n            raise PhysicalBudgetAdapterError(\n                \"Finite budget blocked an unreserved provider compatibility replay.\"\n            )",
-      "test": ["tests/test_physical_budget_boundaries.py::test_litellm_422_cannot_replay_without_output_cap"],
+      "test": [
+        "tests/test_physical_budget_boundaries.py::test_litellm_422_cannot_replay_without_output_cap"
+      ],
       "expectedFailureText": "test_litellm_422_cannot_replay_without_output_cap"
     },
     {
@@ -68,7 +80,9 @@
       "sourcePath": "lyrashield/triage/service.py",
       "old": "            \"inputChecksum\": checksum(input_artifact.model_dump(mode=\"json\", by_alias=True)),",
       "new": "            \"inputChecksum\": \"constant\",",
-      "test": ["tests/test_ai_security_triage.py::test_cache_key_includes_all_prompt_context"],
+      "test": [
+        "tests/test_ai_security_triage.py::test_cache_key_includes_all_prompt_context"
+      ],
       "expectedFailureText": "test_cache_key_includes_all_prompt_context"
     },
     {
@@ -78,7 +92,9 @@
       "sourcePath": "benchmarks/report_signature.py",
       "old": "    if payload_digest != envelope[\"payloadSha256\"]:",
       "new": "    if False:",
-      "test": ["tests/test_report_signature.py::test_report_signature_rejects_changed_payload_and_envelope"],
+      "test": [
+        "tests/test_report_signature.py::test_report_signature_rejects_changed_payload_and_envelope"
+      ],
       "expectedFailureText": "test_report_signature_rejects_changed_payload_and_envelope"
     },
     {
@@ -88,7 +104,9 @@
       "sourcePath": "strix/telemetry/_common.py",
       "old": "    props = {\"exception_type\": _exception_name(exc)}",
       "new": "    props = {\"exception_type\": _exception_name(exc), \"message\": str(exc)}",
-      "test": ["tests/test_telemetry_errors.py::test_error_event_carries_phase_and_class_but_no_message"],
+      "test": [
+        "tests/test_telemetry_errors.py::test_error_event_carries_phase_and_class_but_no_message"
+      ],
       "expectedFailureText": "test_error_event_carries_phase_and_class_but_no_message"
     }
   ]
