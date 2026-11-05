@@ -15,6 +15,7 @@ import pytest
 from benchmarks import run as benchmark_run
 from benchmarks.evaluation_v3 import (
     corpus_contract_hashes,
+    finding_fingerprint,
     score_v3,
     wilson_interval,
 )
@@ -273,3 +274,74 @@ def test_runner_rejects_a_profile_without_a_dedicated_harness(
         benchmark_run.main()
 
     assert exc_info.value.code == 2
+
+
+def test_adjudicated_unreachable_finding_blocks_reporting_and_stays_visible(
+    tmp_path: Path,
+) -> None:
+    benchmarks = tmp_path / "benchmarks"
+    corpus_dir = benchmarks / "corpus" / "v3"
+    shutil.copytree(CORPUS_DIR, corpus_dir)
+    shutil.copytree(CORPUS_DIR.parent / "v2", benchmarks / "corpus" / "v2")
+    shutil.copytree(CORPUS_DIR.parents[1] / "profiles", benchmarks / "profiles")
+    corpus_path = corpus_dir / "corpus.json"
+    corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+    corpus["provenance"]["independentReviewStatus"] = "INDEPENDENTLY_REVIEWED"
+    profile_path = benchmarks / "profiles" / "v1" / "paths.json"
+    profiles = json.loads(profile_path.read_text(encoding="utf-8"))
+    for profile in profiles["profiles"]:
+        if profile["id"] == "deterministic_core":
+            profile["status"] = "MEASURED"
+    profile_path.write_text(json.dumps(profiles), encoding="utf-8")
+    corpus["contracts"]["pathProfiles"]["sha256"] = hashlib.sha256(
+        profile_path.read_bytes()
+    ).hexdigest()
+    case = next(item for item in corpus["pairs"] if item["id"] == "SECRET-01")
+    extra = _finding(case, "vulnerable", extra=True)
+    adjudications_path = corpus_dir / "adjudications.json"
+    adjudications = json.loads(adjudications_path.read_text(encoding="utf-8"))
+    adjudications["review"].update(
+        {
+            "status": "INDEPENDENTLY_REVIEWED",
+            "reviewers": [{"id": "reviewer-a"}, {"id": "reviewer-b"}],
+            "reviewedAt": "2026-11-05T00:00:00+00:00",
+        }
+    )
+    adjudications["decisions"] = [
+        {
+            "findingSha256": finding_fingerprint(extra),
+            "outcome": "unreachable",
+            "reviewerIds": ["reviewer-a", "reviewer-b"],
+            "rationale": "The projection cannot be reached.",
+        }
+    ]
+    adjudications_path.write_text(json.dumps(adjudications), encoding="utf-8")
+    corpus["contracts"]["adjudications"]["sha256"] = hashlib.sha256(
+        adjudications_path.read_bytes()
+    ).hexdigest()
+    corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+    result_dir, _manifest = _result_fixture(tmp_path, [extra], corpus_dir=corpus_dir)
+
+    summary = score_v3(result_dir, corpus_dir, corpus)
+
+    assert summary["status"] == "COMPLETE"
+    assert summary["claimStatus"] == "NOT_REPORTABLE"
+    assert summary["counts"]["unreachable"] == 1
+    assert any(
+        item.get("findingSha256") == finding_fingerprint(extra)
+        for item in summary["categories"]["unreachable"]
+    )
+    assert any("unreachable" in reason.lower() for reason in summary["precision"]["reasons"])
+
+
+def test_not_measured_path_profile_blocks_reportable_metrics(tmp_path: Path) -> None:
+    corpus = json.loads((CORPUS_DIR / "corpus.json").read_text(encoding="utf-8"))
+    result_dir, _manifest = _result_fixture(tmp_path, [])
+
+    summary = score_v3(result_dir, CORPUS_DIR, corpus)
+
+    assert summary["claimStatus"] == "NOT_REPORTABLE"
+    assert any(
+        "Path profile deterministic_core is NOT_MEASURED" in reason
+        for reason in summary["precision"]["reasons"]
+    )

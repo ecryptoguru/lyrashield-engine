@@ -404,12 +404,19 @@ def score_v3(  # noqa: PLR0912, PLR0915 - the category ledger is intentionally e
     false_positive_count = len(false_positives) + len(adjudicated_false_positives)
     false_negative_count = len(false_negatives)
     ambiguous_count = len(ambiguous) + len(adjudicated_ambiguous) + len(ambiguous_scenarios)
-    unreachable_count = len(unreachable_scenarios)
+    unreachable_count = len(adjudicated_unreachable) + len(unreachable_scenarios)
     incomplete_count = len(incomplete) + len(adjudicated_incomplete) + len(incomplete_scenarios)
     duplicate_count = len(duplicates)
     unclassified_count = len(unclassified)
 
     independent_review = review["status"] == "INDEPENDENTLY_REVIEWED"
+    profile_contract = (corpus.get("contracts") or {}).get("pathProfiles") or {}
+    profile_path = (corpus_dir / str(profile_contract.get("path", ""))).resolve()
+    profile_records = json.loads(profile_path.read_text(encoding="utf-8")).get("profiles") or []
+    profile_status = next(
+        (profile.get("status") for profile in profile_records if profile.get("id") == profile_id),
+        None,
+    )
     common_reasons = [
         reason
         for reason in (
@@ -422,8 +429,14 @@ def score_v3(  # noqa: PLR0912, PLR0915 - the category ledger is intentionally e
             f"{ambiguous_count} finding(s) or scenario(s) remain ambiguous."
             if ambiguous_count
             else "",
+            f"{unreachable_count} finding(s) or scenario(s) remain unreachable."
+            if unreachable_count
+            else "",
             f"{incomplete_count} finding(s), run(s), or contract(s) are incomplete."
             if incomplete_count
+            else "",
+            f"Path profile {profile_id} is {profile_status or 'UNKNOWN'}; quality is not measured."
+            if profile_status != "MEASURED"
             else "",
         )
         if reason
@@ -465,6 +478,7 @@ def score_v3(  # noqa: PLR0912, PLR0915 - the category ledger is intentionally e
         "corpusSha256": hashlib.sha256((corpus_dir / "corpus.json").read_bytes()).hexdigest(),
         "corpusContractsSha256": corpus_contract_hashes(corpus_dir, corpus),
         "pathProfile": manifest.get("pathProfile"),
+        "pathProfileStatus": profile_status,
         "adjudicationStatus": review["status"],
         "heldOutStatus": json.loads((corpus_dir / "held-out.json").read_text(encoding="utf-8"))[
             "status"
@@ -515,6 +529,7 @@ def _write_results_markdown(results_dir: Path, summary: dict[str, Any]) -> None:
         f"- harness status: {summary['status']}",
         f"- claim status: {summary['claimStatus']}",
         f"- path profile: {summary['pathProfile']}",
+        f"- path profile status: {summary['pathProfileStatus']}",
         f"- adjudication: {summary['adjudicationStatus']}",
         f"- held-out contract: {summary['heldOutStatus']}",
         "",
