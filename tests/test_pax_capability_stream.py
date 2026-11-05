@@ -3,6 +3,8 @@
 import gzip
 import hashlib
 import io
+import subprocess
+import sys
 import tarfile
 
 import pytest
@@ -155,6 +157,7 @@ def test_all_cleanup_steps_are_attempted_when_one_fails(private_root, failure):
         def __init__(self, data):
             super().__init__(data)
             self.attempts = []
+            self.wait_calls = 0
 
         def poll(self):
             self.attempts.append("poll")
@@ -167,9 +170,10 @@ def test_all_cleanup_steps_are_attempted_when_one_fails(private_root, failure):
             if failure == "kill":
                 raise RuntimeError("private")
 
-        def wait(self, timeout=None):
-            self.attempts.append("wait" if timeout is None else "verified-wait")
-            if failure == "wait" and timeout is None:
+        def wait(self, timeout=None):  # noqa: ARG002 - matches subprocess protocol
+            self.wait_calls += 1
+            self.attempts.append("wait" if self.wait_calls > 1 else "verified-wait")
+            if failure == "wait" and self.wait_calls > 1:
                 raise RuntimeError("private")
             return 0
 
@@ -189,3 +193,33 @@ def test_all_cleanup_steps_are_attempted_when_one_fails(private_root, failure):
     assert "wait" in fetch.attempts and "close" in fetch.attempts
     if failure in {"poll", "kill"}:
         assert "kill" in fetch.attempts
+
+
+def test_failed_kill_with_live_child_times_out_then_closes_stdout(private_root, monkeypatch):
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], stdout=subprocess.PIPE
+    )
+
+    class KillFails:
+        def __init__(self, process):
+            self.process = process
+            self.stdout = process.stdout
+
+        def poll(self):
+            return self.process.poll()
+
+        def kill(self):
+            raise PermissionError("synthetic kill failure")
+
+        def wait(self, timeout=None):
+            return self.process.wait(timeout=timeout)
+
+    monkeypatch.setattr(verify, "FETCH_EXIT_SECONDS", 0.05)
+    fetch = KillFails(child)
+    try:
+        with pytest.raises(ValueError, match="cleanup incomplete"):
+            verify.inspect_fetched_layer(fetch, {}, "bad", private_root)
+        assert child.poll() is None and fetch.stdout.closed
+    finally:
+        child.kill()
+        child.wait(timeout=5)

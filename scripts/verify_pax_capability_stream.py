@@ -100,7 +100,7 @@ def cleanup_fetch(fetch, root):
         except Exception:
             cleanup_failed = True
     try:
-        fetch.wait()
+        fetch.wait(timeout=FETCH_EXIT_SECONDS)
     except Exception:
         cleanup_failed = True
     try:
