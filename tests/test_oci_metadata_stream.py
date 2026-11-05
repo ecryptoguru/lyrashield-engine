@@ -281,6 +281,25 @@ def test_late_malformed_framing_suppresses_first_layer_and_stops_fetches(private
     assert all(fetch.stdout.closed for fetch in factory.fetches)
 
 
+def test_factory_exception_after_first_layer_suppresses_model_and_stops(private_root):
+    raw = layer([("file", "file", b"safe", None)])
+    manifest, config, blobs = fixture([raw, raw, raw])
+    calls, started = [], []
+
+    def fetch(ordinal, _descriptor):
+        calls.append(ordinal)
+        if ordinal == 1:
+            raise RuntimeError("sensitive-factory-error")
+        handle = Fetch(blobs[ordinal])
+        started.append(handle)
+        return handle
+
+    with pytest.raises(ValueError, match="incomplete") as caught:
+        run(manifest, config, fetch, private_root)
+    assert "sensitive-factory-error" not in str(caught.value)
+    assert calls == [0, 1] and started[0].stdout.closed
+
+
 def test_local_subprocess_fetches_are_closed_and_waited(private_root):
     raw = layer([("file", "file", b"safe-fixture", None)])
     manifest, config, blobs = fixture([raw, raw])
