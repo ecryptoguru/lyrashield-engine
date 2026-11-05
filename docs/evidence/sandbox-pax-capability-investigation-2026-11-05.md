@@ -178,6 +178,13 @@ private directory for a continuously checked free-space reserve. Unsupported
 records, validation failures, fetch failures and cleanup errors produce an
 incomplete result without counts or archive-derived error text.
 
+An opt-in local diagnostic can attach a fixed, allowlisted parser-rejection
+category to an incomplete result. It is explicitly marked as an unverified
+prefix observation: the compressed descriptor, DiffID, remaining tar framing
+and fetch exit may not have been checked, and later failures may also exist.
+It returns no archive paths, values or counts; cleanup failure suppresses the
+category. It cannot recover the cause of an earlier incomplete attempt.
+
 This helper does not authenticate the caller-supplied descriptor or DiffID;
 the caller must establish those bindings and supervise the fetch process group
 with a wall deadline because blocked input cannot be interrupted by the local

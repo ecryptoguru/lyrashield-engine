@@ -15,7 +15,41 @@ MIN_FREE_BYTES = 2 * 1024**3
 FETCH_EXIT_SECONDS = 10
 
 
-def inspect_fetched_layer(fetch, item, diff_id, private_root):
+PREFIX_REASONS = {
+    "unsupported or duplicate PAX key": "unsupported-pax-key",
+    "unsupported tar entry type": "unsupported-tar-entry",
+    "unsupported capability member type": "unsupported-capability-member",
+    "invalid tar header": "invalid-tar-header",
+    "duplicate path or entry limit exceeded": "duplicate-path-or-entry-limit",
+    "invalid PAX record length": "invalid-pax-record",
+    "malformed PAX record": "invalid-pax-record",
+    "stacked or invalid PAX header": "invalid-pax-header",
+}
+PREFIX_CATEGORIES = frozenset(PREFIX_REASONS.values()) | {"parser-rejected"}
+
+
+class UnverifiedPrefixRejectionError(ValueError):
+    """A fixed local parser reason, never an authenticated layer observation."""
+
+    def __init__(self, category):
+        super().__init__("capability stream incomplete")
+        self._category = category
+
+    @property
+    def category(self):
+        category = self._category
+        return (
+            category
+            if type(category) is str and category in PREFIX_CATEGORIES
+            else "parser-rejected"
+        )
+
+    @property
+    def byte_verified(self):
+        return False
+
+
+def inspect_fetched_layer(fetch, item, diff_id, private_root, *, diagnostic=False):
     """Return only aggregate counts after complete same-stream verification.
 
     The caller must authenticate the descriptor and DiffID and supervise the
@@ -24,6 +58,7 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root):
     No input bytes or metadata are written, extracted or applied.
     """
     root = None
+    prefix_reason = None
     try:
         root = os.open(private_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         state = os.fstat(root)
@@ -45,7 +80,7 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root):
         count = 0
 
         def consume(data):
-            nonlocal count
+            nonlocal count, prefix_reason
             if time.monotonic() > deadline:
                 raise TimeoutError("stream deadline exceeded")
             if free_space(root) < MIN_FREE_BYTES + 1024 * 1024:
@@ -53,7 +88,13 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root):
             count += len(data)
             if count > MAX_LAYER_BYTES:
                 raise ValueError("uncompressed byte limit exceeded")
-            reader.feed(data)
+            try:
+                reader.feed(data)
+            except ValueError as error:
+                if diagnostic is True:
+                    message = error.args[0] if error.args and type(error.args[0]) is str else ""
+                    prefix_reason = PREFIX_REASONS.get(message, "parser-rejected")
+                raise
 
         descriptor, size = verify_layer_stream(fetch.stdout, item, diff_id, 0, on_data=consume)
         reader.complete()
@@ -79,6 +120,8 @@ def inspect_fetched_layer(fetch, item, diff_id, private_root):
             "releaseQualified": False,
         }
     except Exception:
+        if diagnostic is True and prefix_reason is not None:
+            raise UnverifiedPrefixRejectionError(prefix_reason) from None
         raise ValueError("capability stream incomplete") from None
     finally:
         cleanup_fetch(fetch, root)

@@ -108,6 +108,95 @@ def test_unsupported_pax_stops_as_incomplete_without_exposing_content(private_ro
     assert not list(private_root.iterdir())
 
 
+def test_optional_prefix_reason_is_unverified_and_never_contains_archive_text(private_root):
+    compressed, descriptor, diff = layer(record(b"PRIVATE-KEY", b"PRIVATE-VALUE"))
+    # A wrong descriptor reinforces that the parser stops before byte authentication.
+    descriptor["digest"] = "sha256:" + "0" * 64
+    fetch = Fetch(compressed)
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(fetch, descriptor, diff, private_root, diagnostic=True)
+    assert caught.value.category == "unsupported-pax-key"
+    assert caught.value.byte_verified is False
+    assert "PRIVATE" not in str(caught.value)
+    assert fetch.stdout.closed
+    assert not list(private_root.iterdir())
+
+
+def test_cleanup_failure_suppresses_optional_prefix_reason(private_root):
+    class BadCleanup(Fetch):
+        def poll(self):
+            raise RuntimeError("PRIVATE-CLEANUP-CONTENT")
+
+    compressed, descriptor, diff = layer(record(b"PRIVATE-KEY", b"PRIVATE-VALUE"))
+    with pytest.raises(ValueError, match="cleanup incomplete") as caught:
+        verify.inspect_fetched_layer(
+            BadCleanup(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert not hasattr(caught.value, "category")
+    assert "PRIVATE" not in str(caught.value)
+
+
+def test_mutated_prefix_reason_cannot_expose_archive_text():
+    error = verify.UnverifiedPrefixRejectionError("unsupported-pax-key")
+    error._category = "PRIVATE-VALUE"
+    assert error.category == "parser-rejected"
+    assert error.byte_verified is False
+
+
+def test_forged_fetch_exception_never_becomes_a_parser_reason(private_root):
+    class ForgedStream(io.BytesIO):
+        def read(self, *_args):
+            raise verify.UnverifiedPrefixRejectionError("unsupported-pax-key")
+
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    fetch = Fetch(compressed)
+    fetch.stdout = ForgedStream(compressed)
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(fetch, descriptor, diff, private_root, diagnostic=True)
+    assert not hasattr(caught.value, "category")
+    assert fetch.stdout.closed
+
+
+def test_default_rejection_and_producer_failure_do_not_expose_prefix_reason(private_root):
+    compressed, descriptor, diff = layer(record(b"PRIVATE-KEY", b"PRIVATE-VALUE"))
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(Fetch(compressed), descriptor, diff, private_root)
+    assert str(caught.value) == "capability stream incomplete"
+    assert not hasattr(caught.value, "category")
+
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed, 1), descriptor, diff, private_root, diagnostic=True
+        )
+    assert str(caught.value) == "capability stream incomplete"
+    assert not hasattr(caught.value, "category")
+
+
+def test_optional_prefix_reason_classifies_unsupported_member_without_path(private_root):
+    compressed, descriptor, diff = layer(
+        record(b"SCHILY.xattr.security.capability", b"private"), kind=tarfile.FIFOTYPE
+    )
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert caught.value.category == "unsupported-tar-entry"
+    assert caught.value.byte_verified is False
+    assert "private" not in str(caught.value)
+
+
+def test_optional_prefix_reason_is_not_given_for_digest_failure(private_root):
+    compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
+    descriptor["digest"] = "sha256:" + "0" * 64
+    with pytest.raises(ValueError) as caught:
+        verify.inspect_fetched_layer(
+            Fetch(compressed), descriptor, diff, private_root, diagnostic=True
+        )
+    assert str(caught.value) == "capability stream incomplete"
+    assert not hasattr(caught.value, "category")
+
+
 def test_space_reserve_is_checked_and_no_counts_are_returned(private_root, monkeypatch):
     compressed, descriptor, diff = layer(record(b"SCHILY.xattr.security.capability", b"x"))
     monkeypatch.setattr(verify, "free_space", lambda _fd: 0)
