@@ -98,8 +98,10 @@ this PAX key.
 The unwired `scripts/probe_linux_pax_differential.py` harness compares fixed
 synthetic records with a cached Linux/arm64 Go `archive/tar` reader. It never
 requests a download or extracts an archive; it does not call `setxattr`, create
-capability metadata, use real image bytes, or inspect host files. It requires a
-particular cached image digest and the local Docker Desktop Unix socket, and
+capability metadata, use real image bytes, or mount or inspect host filesystem
+contents as experiment input. It checks the local socket and receipt path, and
+Docker reads local configuration. The harness requires a particular cached image
+digest and the local Docker Desktop Unix socket, and
 creates a labelled task-owned container with no network, no bind mounts, a
 non-root identity, read-only root, dropped capabilities and bounded resources.
 The inspected PID, IPC, UTS and user namespace modes reject host and shared
