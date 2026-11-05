@@ -42,5 +42,7 @@ uv run python -m benchmarks.mutation_probe --list
 Path profiles are separate records in
 [`profiles/v1/paths.json`](./profiles/v1/paths.json). `url_api`, `offline_sca`,
 `local_engine_cli`, and `product_integration` remain `NOT_MEASURED` until their
-own exact runs and receipts exist. A deterministic-core run cannot stand in for
-those paths.
+own exact runs and receipts exist. The current runner only executes
+`deterministic_core` and `local_engine_cli`; it rejects the other v3 profiles
+until dedicated harnesses and their required bindings exist. A
+deterministic-core run cannot stand in for another path.

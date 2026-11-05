@@ -22,6 +22,11 @@ held-out evaluation happened. Claims validation fails closed until a held-out
 contract supplies verified manifest, fixture and label checksums when a claim
 requires that scope.
 
+A `VERIFIED` held-out contract must also record `verification.reviewerId` and a
+timezone-bearing `verification.reviewedAt`; checksums alone cannot establish
+that an independent reviewer checked the retained bytes. Corpus provenance and
+the adjudication review status must match.
+
 `advisories/frozen.json` is synthetic offline SCA data. It is not a live
 advisory feed and cannot support a live vulnerability claim.
 

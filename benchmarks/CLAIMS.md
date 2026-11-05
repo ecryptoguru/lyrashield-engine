@@ -24,18 +24,25 @@ A claim must carry all of the following exact values:
 
 - the product source revision and engine revision recorded by the clean run;
 - corpus path, corpus checksum, and path profile;
-- executable checksum and scanner contract for executable-based profiles;
+- a `MEASURED` path profile, with the exact scanner contract recorded by the
+  run for deterministic profiles;
+- executable checksum for executable-based profiles;
 - provider, model, and retained route-receipt checksum for engine profiles;
-- retained receipt paths and SHA-256 values for every cited artifact;
+- retained, distinct receipt paths and SHA-256 values for
+  `results.json`, `RESULTS.md`, `findings.jsonl`, and `run-manifest.json`;
 - three declared engine runs for URL/API, local CLI, and product-integration
   claims, with complete case and polarity coverage;
-- observed numerator and denominator; the claimed value must match
-  `results.json`, and the metric must be `REPORTABLE`;
+- observed numerator, denominator, and claimed value; the claimed value must
+  match `results.json`, and the metric must be `REPORTABLE`;
 - an Ed25519 signature over retained `results.json`, plus the signature file's
   exact SHA-256;
 - explicit limitations and development-or-held-out evaluation scope;
 - founder approval with a timezone-bearing date;
 - verified held-out label checksum when the scope is `held_out`.
+
+An unreachable finding or scenario, an unmeasured path, ambiguity, an
+unclassified finding, or incomplete evidence keeps the metric
+`NOT_REPORTABLE`, even when the harness itself is `COMPLETE`.
 
 The scorer returns `NOT_REPORTABLE` without independently adjudicated labels,
 while any vulnerable-fixture finding remains unclassified, or while ambiguity
