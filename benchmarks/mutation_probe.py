@@ -24,6 +24,13 @@ def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _worktree_path(worktree: Path, relative_path: str) -> Path:
+    path = (worktree / relative_path).resolve()
+    if not path.is_relative_to(worktree.resolve()):
+        raise ValueError(f"mutation path must stay inside the isolated worktree: {relative_path}")
+    return path
+
+
 def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
 
@@ -78,7 +85,7 @@ def run_probe(spec: dict[str, Any], *, timeout: int) -> dict[str, Any]:
         }
     result: dict[str, Any]
     try:
-        source = worktree / spec["sourcePath"]
+        source = _worktree_path(worktree, spec["sourcePath"])
         original_hash = _hash(source)
         baseline = _run_test(worktree, spec["test"], timeout)
         if baseline["returncode"] != 0:

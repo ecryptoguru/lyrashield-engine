@@ -81,3 +81,39 @@ def test_mutation_probe_reports_cleanup_failure_after_a_killed_mutation(
 
     assert result["status"] == "FAIL"
     assert result["cleanupError"] == "simulated cleanup failure"
+
+
+def test_mutation_probe_rejects_source_paths_outside_the_isolated_worktree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_git(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ["worktree", "add"]:
+            worktree = Path(args[3])
+            worktree.mkdir(parents=True)
+            (worktree.parent / "outside.py").write_text("safe = True\n", encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(mutation_probe, "_git", fake_git)
+    monkeypatch.setattr(
+        mutation_probe,
+        "_run_test",
+        lambda *_args, **_kwargs: {"returncode": 0, "stdoutTail": "", "stderrTail": ""},
+    )
+    monkeypatch.setattr(mutation_probe, "_cleanup_worktree", lambda *_args: None)
+
+    result = mutation_probe.run_probe(
+        {
+            "id": "outside",
+            "gate": "workspace_scope",
+            "sourcePath": "../outside.py",
+            "old": "safe = True",
+            "new": "safe = False",
+            "test": ["tests/test_fixture.py::test_fixture"],
+            "expectedFailureText": "test_fixture",
+            "requirement": "fixture",
+        },
+        timeout=1,
+    )
+
+    assert result["status"] == "ERROR"
+    assert "inside the isolated worktree" in result["error"]

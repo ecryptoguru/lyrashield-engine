@@ -14,8 +14,8 @@ For each probe, the harness creates a detached disposable Git worktree. It
 requires the selected test to pass in the unmodified copy, applies exactly one
 source replacement, requires the same test to fail for that probe, restores
 the source, verifies the restored SHA-256 equals the baseline hash, and reruns
-the test successfully. The source checkout is never edited and must be clean
-before the run begins.
+the test successfully. Mutation paths must resolve inside that isolated copy.
+The source checkout is never edited and must be clean before the run begins.
 
 The committed probe manifest contains the exact source text, replacement, test
 node, and expected failing test identity. Probe output retains the command,
@@ -23,6 +23,9 @@ baseline and mutated output tails, all three hashes, runtime, and cleanup state.
 A mutation is evidence of regression-test sensitivity only. It does not prove
 deployment behavior, live tenant isolation, cryptographic key custody, or that
 all equivalent bypasses are covered.
+
+A failed disposable-worktree cleanup makes the probe evidence `FAIL`; it cannot
+be omitted after an otherwise successful mutation.
 
 The report-signature probe exercises Ed25519 verification over retained
 `results.json` bytes. The analytics probe verifies that exception type is sent
