@@ -9,8 +9,9 @@ import tarfile
 
 import pytest
 
+from scripts import diagnose_pax_capability_rejection as drain
 from scripts import verify_pax_capability_stream as verify
-from scripts.verify_oci_layer_binding import OCI_GZIP
+from scripts.verify_oci_layer_binding import OCI_GZIP, OCI_TAR
 
 
 def record(key, value):
@@ -62,11 +63,135 @@ class Fetch:
         self.status = -9
 
 
+@pytest.mark.parametrize(
+    "payload, kind, linkname, role, syntax",
+    [
+        (record(b"path", b"/private"), tarfile.REGTYPE, "x", "member", "absolute"),
+        (record(b"path", b"private\\x"), tarfile.REGTYPE, "x", "member", "backslash"),
+        (record(b"linkpath", b"/private"), tarfile.LNKTYPE, "x", "hardlink", "absolute"),
+        (record(b"linkpath", b"private\\x"), tarfile.LNKTYPE, "x", "hardlink", "backslash"),
+        (
+            record(b"SCHILY.xattr.security.capability", b"x"),
+            tarfile.SYMTYPE,
+            "private\\x",
+            "symlink",
+            "backslash",
+        ),
+    ],
+    ids=[
+        "member-absolute",
+        "member-backslash",
+        "hardlink-absolute",
+        "hardlink-backslash",
+        "symlink-backslash",
+    ],
+)
+def test_verified_rejection_drain_role_and_syntax(
+    private_root, payload, kind, linkname, role, syntax
+):
+    compressed, descriptor, diff = layer(payload, kind=kind, linkname=linkname)
+    result = drain.diagnose_fetched_layer(Fetch(compressed), descriptor, diff, private_root)
+    assert result == {
+        "scope": "verified-layer-bytes-rejected-parser-prefix-only",
+        "status": "rejected",
+        "reason": "unsafe-path",
+        "role": role,
+        "syntax": syntax,
+        "bytesVerified": True,
+        "tarFramingVerified": False,
+        "finalImageVerified": False,
+        "releaseQualified": False,
+    }
+    assert "private" not in str(result)
+    assert not list(private_root.iterdir())
+
+
+@pytest.mark.parametrize("failure", ["digest", "diffid", "truncated", "producer", "cleanup"])
+def test_verified_rejection_drain_never_returns_reason_on_failure(private_root, failure):
+    class BadCleanup(Fetch):
+        def poll(self):
+            raise RuntimeError("PRIVATE-CLEANUP")
+
+    compressed, descriptor, diff = layer(record(b"path", b"/private"))
+    if failure == "digest":
+        descriptor["digest"] = "sha256:" + "0" * 64
+    if failure == "diffid":
+        diff = "sha256:" + "0" * 64
+    if failure == "truncated":
+        compressed = compressed[:-5]
+    fetch = (
+        BadCleanup(compressed) if failure == "cleanup" else Fetch(compressed, failure == "producer")
+    )
+    with pytest.raises(ValueError) as caught:
+        drain.diagnose_fetched_layer(fetch, descriptor, diff, private_root)
+    assert "private" not in str(caught.value).lower()
+    assert not hasattr(caught.value, "category")
+
+
+def test_verified_rejection_drain_has_no_success_for_valid_or_other_rejection(private_root):
+    for payload in [
+        record(b"SCHILY.xattr.security.capability", b"x"),
+        record(b"PRIVATE-KEY", b"x"),
+    ]:
+        compressed, descriptor, diff = layer(payload)
+        with pytest.raises(ValueError, match="incomplete"):
+            drain.diagnose_fetched_layer(Fetch(compressed), descriptor, diff, private_root)
+
+
+def test_verified_rejection_drain_does_not_claim_remaining_tar_framing(private_root):
+    compressed, _, _ = layer(record(b"path", b"/private"))
+    raw = gzip.decompress(compressed)[:-1] + b"x"
+    compressed = gzip.compress(raw)
+    descriptor = {
+        "mediaType": OCI_GZIP,
+        "digest": "sha256:" + hashlib.sha256(compressed).hexdigest(),
+        "size": len(compressed),
+    }
+    diff = "sha256:" + hashlib.sha256(raw).hexdigest()
+    result = drain.diagnose_fetched_layer(Fetch(compressed), descriptor, diff, private_root)
+    assert result["status"] == "rejected"
+    assert result["bytesVerified"] is True
+    assert result["tarFramingVerified"] is False
+
+
+def test_verified_rejection_drain_matches_member_before_hardlink_precedence(private_root):
+    payload = record(b"path", b"/private") + record(b"linkpath", b"/target")
+    compressed, descriptor, diff = layer(payload, kind=tarfile.LNKTYPE)
+    result = drain.diagnose_fetched_layer(Fetch(compressed), descriptor, diff, private_root)
+    assert result["role"] == "member"
+    assert result["syntax"] == "absolute"
+
+
+def test_verified_rejection_drain_accepts_short_reads(private_root):
+    class ShortReader(io.BytesIO):
+        def read(self, size=-1):
+            return super().read(min(size, 37))
+
+    compressed, descriptor, diff = layer(record(b"path", b"/private"))
+    fetch = Fetch(compressed)
+    fetch.stdout = ShortReader(compressed)
+    result = drain.diagnose_fetched_layer(fetch, descriptor, diff, private_root)
+    assert result["bytesVerified"] is True
+    assert fetch.stdout.closed
+
+
+def test_verified_rejection_drain_honors_reserve_during_remaining_stream(private_root, monkeypatch):
+    compressed, _, _ = layer(record(b"path", b"/private"))
+    raw = gzip.decompress(compressed) + bytes(1024 * 1024)
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    descriptor = {"mediaType": OCI_TAR, "digest": digest, "size": len(raw)}
+    samples = iter([10 * 1024**3, 0])
+    monkeypatch.setattr(drain, "free_space", lambda _fd: next(samples))
+    with pytest.raises(ValueError, match="incomplete"):
+        drain.diagnose_fetched_layer(Fetch(raw), descriptor, digest, private_root)
+
+
 @pytest.fixture
 def private_root(tmp_path, monkeypatch):
     root = tmp_path / "private"
     root.mkdir(mode=0o700)
     monkeypatch.setattr(verify, "free_space", lambda _fd: 10 * 1024**3)
+    monkeypatch.setattr(drain, "free_space", lambda _fd: 10 * 1024**3)
     return root
 
 

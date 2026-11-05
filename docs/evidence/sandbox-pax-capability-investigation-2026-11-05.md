@@ -203,3 +203,15 @@ deadline. Counts describe this restricted parser's headers in one layer and do
 not establish a final filesystem, capability interpretation, OCI runtime
 semantics, image qualification or SBOM completeness. It remains unwired from
 promotion and release paths.
+
+## Unwired full-byte rejection diagnostic
+
+`scripts/diagnose_pax_capability_rejection.py` can report a fixed role and
+syntax for a parser's first `unsafe path` rejection. It stops parsing at that
+point, drains the same bounded stream without storing it, and reports only
+after the compressed descriptor, DiffID, fetch exit and cleanup succeed. It
+does not validate remaining tar framing, establish image or SBOM completeness,
+or accept the rejected archive. The caller must authenticate the expected
+descriptor and DiffID and enforce a process-group deadline for blocked reads.
+The fixed result contains no path, target, package, count or source payload.
+The helper is unwired and does not reclassify earlier unverified receipts.
