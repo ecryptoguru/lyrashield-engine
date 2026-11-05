@@ -131,9 +131,7 @@ def normalized_link_target(name, linkname):
 
 
 def metadata_probe(name):
-    return name.endswith("/package.json") or (
-        name.endswith(".dist-info/METADATA") and "/.dist-info/METADATA" in "/" + name
-    )
+    return name.rsplit("/", 1)[-1] in {"package.json", "METADATA"}
 
 
 def paths_below(sorted_paths, target):

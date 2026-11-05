@@ -201,6 +201,27 @@ def test_directory_link_that_aliases_unscanned_package_metadata_fails_closed():
     }
 
 
+def test_python_directory_link_that_aliases_unscanned_metadata_fails_closed():
+    raw = archive_bytes(
+        extra=[
+            {"name": "opt/example", "type": tarfile.DIRTYPE},
+            {
+                "name": "opt/example/METADATA",
+                "data": b"Name: hidden\nVersion: 1.0\n",
+            },
+            {
+                "name": "app/.venv/lib/python3.14/site-packages/alias.dist-info",
+                "type": tarfile.SYMTYPE,
+                "linkname": "../../../../../opt/example",
+            },
+        ]
+    )
+    result = scan(raw)
+    assert "app/.venv/lib/python3.14/site-packages/alias.dist-info" in {
+        item["path"] for item in result["unresolved"]
+    }
+
+
 def test_directory_link_to_already_parsed_metadata_is_ignored():
     raw = archive_bytes(
         extra=[
