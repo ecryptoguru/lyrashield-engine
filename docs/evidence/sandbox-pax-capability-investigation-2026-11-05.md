@@ -7,6 +7,16 @@ that key in a parser prefix, but did not verify the full stream and did not
 establish that this key caused its rejection or identify its entry. No actual
 capability value was retained. The release hold remains in place.
 
+A later, separately retained full-byte rejection drain reported matching the
+compressed descriptor and uncompressed DiffID with fetch exit zero. In its
+parser prefix it observed one `SCHILY.xattr.security.capability` key, along
+with other allowed key names; the worker reported only the broader fixed reason
+`unsupported-pax-key`. The receipt does not bind that key to the rejected
+record, disclose its value, or enumerate later PAX headers. The source bytes
+were discarded; the linkage is a local process receipt, not an independent
+replay. Remaining tar framing, final overlay and release qualification remain
+unverified.
+
 The [OCI image layer specification](https://github.com/opencontainers/image-spec/blob/main/layer.md) lists extended attributes among supported
 file attributes. The locally installed Go 1.26.5 [`archive/tar` parser](https://go.dev/src/archive/tar/strconv.go) and [tests](https://go.dev/src/archive/tar/strconv_test.go)
 represent `SCHILY.xattr.*` values as PAX record values and explicitly tests a
