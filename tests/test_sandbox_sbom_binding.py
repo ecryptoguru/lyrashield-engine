@@ -358,3 +358,40 @@ def test_rejects_incomplete_or_mismatched_sbom_evidence(tmp_path, tamper):
         artifact_digest = digest(raw)
     assert invoke(tmp_path, artifact_digest).returncode != 0
     assert not (tmp_path / "predicate.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("manifest_size", "in_manifest_lf", "external_lf", "accepted"),
+    [
+        (65536, False, False, True),
+        (65536, False, True, True),
+        (65536, True, False, True),
+        (65537, False, False, False),
+        (65537, True, False, False),
+    ],
+)
+def test_native_manifest_digest_size_limit_matches_consumer(
+    tmp_path, manifest_size, in_manifest_lf, external_lf, accepted
+):
+    api = runpy.run_path(str(SCRIPT))
+    manifest = json.dumps(
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": "sha256:" + "c" * 64,
+                "size": 123,
+            },
+        }
+    ).encode()
+    manifest += b" " * (manifest_size - len(manifest) - int(in_manifest_lf))
+    if in_manifest_lf:
+        manifest += b"\n"
+    path = tmp_path / "manifest.json"
+    path.write_bytes(manifest + (b"\n" if external_lf else b""))
+    if accepted:
+        assert api["config_for_manifest"](path, digest(manifest)) == "sha256:" + "c" * 64
+    else:
+        with pytest.raises(ValueError):
+            api["config_for_manifest"](path, digest(manifest))

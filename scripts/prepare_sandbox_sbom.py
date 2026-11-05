@@ -67,6 +67,7 @@ def config_for_manifest(path, expected):
     raw = read_bounded(path, 65537)
     if sha256(raw) != expected and raw.endswith(b"\n"):
         raw = raw[:-1]
+    require(len(raw) <= 65536, "native manifest exceeds consumer size limit")
     require(sha256(raw) == expected, "native manifest bytes differ from qualified digest")
     image = json_object(raw)
     config = image.get("config")
