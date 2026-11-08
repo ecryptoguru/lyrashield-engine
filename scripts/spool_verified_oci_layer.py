@@ -27,23 +27,39 @@ def free_space(directory_fd):
 
 
 def require_no_acl(fd):
-    """Reject ACLs and unsupported ACL inspection; currently only macOS."""
-    if sys.platform != "darwin":
-        raise ValueError("ACL inspection unsupported on this platform")
-    libc = ctypes.CDLL(None, use_errno=True)
-    get_acl = libc.acl_get_fd_np
-    get_acl.argtypes = [ctypes.c_int, ctypes.c_int]
-    get_acl.restype = ctypes.c_void_p
-    free_acl = libc.acl_free
-    free_acl.argtypes = [ctypes.c_void_p]
-    free_acl.restype = ctypes.c_int
-    ctypes.set_errno(0)
-    acl = get_acl(fd, 0x100)  # macOS ACL_TYPE_EXTENDED
-    if acl:
-        free_acl(acl)
-        raise ValueError("ACLs are unsupported on spool directories and files")
-    if ctypes.get_errno() != errno.ENOENT:
-        raise ValueError("ACL absence could not be verified")
+    """Reject ACLs and unsupported ACL inspection."""
+    if sys.platform == "darwin":
+        libc = ctypes.CDLL(None, use_errno=True)
+        get_acl = libc.acl_get_fd_np
+        get_acl.argtypes = [ctypes.c_int, ctypes.c_int]
+        get_acl.restype = ctypes.c_void_p
+        free_acl = libc.acl_free
+        free_acl.argtypes = [ctypes.c_void_p]
+        free_acl.restype = ctypes.c_int
+        ctypes.set_errno(0)
+        acl = get_acl(fd, 0x100)  # macOS ACL_TYPE_EXTENDED
+        if acl:
+            free_acl(acl)
+            raise ValueError("ACLs are unsupported on spool directories and files")
+        if ctypes.get_errno() != errno.ENOENT:
+            raise ValueError("ACL absence could not be verified")
+        return
+    if sys.platform.startswith("linux"):
+        # POSIX ACLs exist only as these extended attributes; an absent
+        # attribute is the ordinary no-ACL state.
+        for attribute in ("system.posix_acl_access", "system.posix_acl_default"):
+            try:
+                value = os.getxattr(fd, attribute)
+            except OSError as error:
+                if error.errno == errno.ENODATA:
+                    continue
+                if error.errno in {errno.ENOTSUP, errno.EOPNOTSUPP}:
+                    raise ValueError("ACL inspection unsupported on this platform") from None
+                raise ValueError("ACL absence could not be verified") from None
+            if value:
+                raise ValueError("ACLs are unsupported on spool directories and files")
+        return
+    raise ValueError("ACL inspection unsupported on this platform")
 
 
 class BoundedFrames(StrictTarReader):
