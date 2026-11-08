@@ -339,7 +339,10 @@ jobs:
             https://go.dev/dl/go1.27.3.linux-amd64.tar.gz --output "$go_archive"
           printf '%s  %s\n' 65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40 "$go_archive" | sha256sum --check --status
           mkdir -p "$RUNNER_TEMP/go-metadata"
-          tar -xzf "$go_archive" -C "$RUNNER_TEMP/go-metadata" go/bin/go
+          # The trimmed go binary locates GOROOT relative to itself, so the
+          # whole toolchain tree is required; extracting go/bin/go alone
+          # fails with "cannot find GOROOT directory".
+          tar -xzf "$go_archive" -C "$RUNNER_TEMP/go-metadata"
           go_tool="$RUNNER_TEMP/go-metadata/go/bin/go"
           test "$("$go_tool" version)" = 'go version go1.27.3 linux/amd64'
           go_tool_sha256="$(sha256sum "$go_tool" | cut -d' ' -f1)"
