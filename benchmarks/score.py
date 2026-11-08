@@ -8,9 +8,9 @@ Matching: a finding labels a case when all declared locators agree —
   - markerLine: exact CASE marker unless explicit rule identity allows tolerance
   - rulePrefixes: finding.id starts with any listed prefix, when present
 
-Metrics: per-class recall (detected/expected), precision proxy (clean-fixture
-findings = false positives), duplicate rate, run stability (engine: same case
-detected in all runs), runtime, and discovery-bounds receipts.
+Diagnostics: per-class case-match fractions, clean-fixture findings, extra
+matches within a case/run/scanner, run stability, runtime and discovery
+receipts. Recall and duplicate rates require independent adjudication.
 """
 
 from __future__ import annotations
@@ -18,8 +18,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,12 +30,21 @@ BENCH_ROOT = Path(__file__).resolve().parent
 LINE_TOLERANCE = 3
 
 
-def load_findings(path: Path) -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("{")
-    ]
+def load_findings(raw: bytes) -> list[dict[str, Any]]:
+    records = []
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return [{}]
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            value = None
+        records.append(value if isinstance(value, dict) else {})
+    return records
 
 
 def derive_marker_line(
@@ -57,12 +68,24 @@ def derive_marker_line(
     return cache[case_id]
 
 
+def finding_location_fields_valid(finding: dict[str, Any]) -> bool:
+    """Missing locations stay unmatched; malformed location fields invalidate records."""
+    file_name, rule_id, line = (finding.get(key) for key in ("file", "id", "startLine"))
+    return (
+        (file_name is None or isinstance(file_name, str))
+        and (rule_id is None or isinstance(rule_id, str))
+        and (line is None or (type(line) is int and line > 0))
+    )
+
+
 def case_matches(
     case: dict[str, Any],
     finding: dict[str, Any],
     corpus_dir: Path,
     marker_cache: dict[str, int | None],
 ) -> bool:
+    if not finding_location_fields_valid(finding):
+        return False
     file_name = case.get("matchFile") or Path(case["vulnerable"]).name
     finding_file = finding.get("file") or ""
     if Path(finding_file).name != Path(file_name).name:
@@ -77,7 +100,7 @@ def case_matches(
     if marker is not None and not line_exempt:
         start = finding.get("startLine")
         tolerance = LINE_TOLERANCE if prefixes else 0
-        if not isinstance(start, int) or abs(start - marker) > tolerance:
+        if type(start) is not int or start < 1 or abs(start - marker) > tolerance:
             return False
     return marker is not None or bool(line_exempt and prefixes)
 
@@ -112,10 +135,35 @@ def engine_stability(
 
 
 def run_set_complete(manifest: dict[str, Any], corpus: dict[str, Any]) -> bool:
+    if manifest.get("detectors") not in ("engine", "deterministic", "all"):
+        return False
+    scan_ids = [run.get("scanId") for run in manifest["runs"]]
+    if not all(isinstance(scan_id, str) and scan_id.strip() for scan_id in scan_ids):
+        return False
+    if len(set(scan_ids)) != len(scan_ids):
+        return False
     detectors = (
         {"engine", "deterministic"} if manifest["detectors"] == "all" else {manifest["detectors"]}
     )
-    indices = {r.get("runIndex", 0) for r in manifest["runs"] if r["detector"] == "engine"} or {0}
+    version = manifest.get("harnessVersion", 1)
+    if type(version) is int and version == 4:
+        count = manifest.get("engineRuns")
+        if "engine" in detectors:
+            if type(count) is not int or count < 1 or count > len(manifest["runs"]):
+                return False
+            indices = set(range(count))
+        else:
+            if count is not None:
+                return False
+            indices = {0}
+        if any(type(run.get("runIndex")) is not int for run in manifest["runs"]):
+            return False
+    else:
+        # Earlier manifests did not record the requested engine repeat count.
+        # A consistent-looking subset cannot prove the requested run set.
+        if "engine" in detectors:
+            return False
+        indices = {0}
     expected = {
         (case["id"], detector, variant, index)
         for case in corpus["pairs"]
@@ -150,15 +198,223 @@ def corpus_matches_receipt(
     )
 
 
+def bind_findings_to_runs(
+    findings: list[dict[str, Any]], runs: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    bound, unbound = [], []
+    counts: dict[str, int] = defaultdict(int)
+    sentinels: dict[tuple[str, str], int] = defaultdict(int)
+    deterministic = {"secrets", "sast", "iac", "agent_config", "ml_supply_chain"}
+    for finding in findings:
+        scanner = finding.get("scanner")
+        detector = "engine" if scanner == "engine" else "deterministic"
+        matching_runs = [
+            run
+            for run in runs
+            if isinstance(run.get("scanId"), str)
+            and run["scanId"]
+            and run["scanId"] == finding.get("scanId")
+        ]
+        if (
+            len(matching_runs) != 1
+            or not isinstance(scanner, str)
+            or scanner not in deterministic | {"engine", "__discovery__", "__coverage__"}
+            or not finding_location_fields_valid(finding)
+            or (scanner == "__discovery__" and not isinstance(finding.get("discovery"), dict))
+            or (scanner == "__coverage__" and not isinstance(finding.get("coverageIssues"), list))
+            or not isinstance(finding.get("caseId"), str)
+            or not finding["caseId"]
+            or finding.get("variant") not in ("vulnerable", "clean")
+            or type(finding.get("runIndex")) is not int
+            or matching_runs[0].get("detector") != detector
+            or matching_runs[0].get("case") != finding.get("caseId")
+            or matching_runs[0].get("variant") != finding.get("variant")
+            or matching_runs[0].get("runIndex", 0) != finding.get("runIndex")
+        ):
+            unbound.append(finding)
+        else:
+            bound.append(finding)
+            scan_id = matching_runs[0]["scanId"]
+            counts[scan_id] += 1
+            if scanner in {"__discovery__", "__coverage__"}:
+                sentinels[(scan_id, scanner)] += 1
+    incomplete = any(
+        not isinstance(run.get("scanId"), str)
+        or not run["scanId"]
+        or type(run.get("emitted")) is not int
+        or run["emitted"] < 0
+        or counts.get(run.get("scanId"), 0) != run["emitted"]
+        or (
+            run.get("detector") == "deterministic"
+            and any(
+                sentinels.get((run.get("scanId"), name), 0) != 1
+                for name in ("__discovery__", "__coverage__")
+            )
+        )
+        for run in runs
+    )
+    return bound, unbound, incomplete
+
+
+def receipt_version_state(
+    manifest: dict[str, Any], findings_bytes: bytes
+) -> tuple[bool, bool, bool | None]:
+    version = manifest.get("harnessVersion", 1)
+    legacy = type(version) is int and version < 3
+    supports_records = type(version) is int and version >= 2
+    digest_valid = (
+        hashlib.sha256(findings_bytes).hexdigest() == manifest.get("findingsSha256")
+        if type(version) is int and version in (3, 4)
+        else None
+    )
+    return legacy, supports_records, digest_valid
+
+
+def source_identity_complete(manifest: dict[str, Any]) -> bool:
+    sources = manifest.get("sources")
+    if manifest.get("sourcesChangedDuringRun") is not False or not isinstance(sources, dict):
+        return False
+    clean_diff = hashlib.sha256(b"").hexdigest()
+    for name in ("engine", "product"):
+        source = sources.get(name)
+        if (
+            not isinstance(source, dict)
+            or not isinstance(source.get("revision"), str)
+            or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", source["revision"])
+            or source.get("dirty") is not False
+            or source.get("trackedDiffSha256") != clean_diff
+        ):
+            return False
+    return (
+        manifest.get("detectors") not in ("engine", "all")
+        or manifest.get("engineRevision") == sources["engine"]["revision"]
+    )
+
+
+def engine_receipt_valid(run: dict[str, Any]) -> bool:
+    receipt = run.get("runReceipt")
+    if (
+        not isinstance(receipt, dict)
+        or "error" in receipt
+        or receipt.get("schemaVersion") not in ("1.0", "1.1", "1.2")
+        or not isinstance(run.get("scanId"), str)
+        or not run["scanId"].strip()
+        or receipt.get("runId") != run.get("scanId")
+        or receipt.get("status") != "completed"
+        or receipt.get("phase") != "completed"
+    ):
+        return False
+    caps = receipt.get("sandboxCapabilities")
+    if not isinstance(caps, dict):
+        return False
+    statuses = caps.get("statuses")
+    probed_at = caps.get("probedAt")
+    if (
+        caps.get("schema") != "lyrashield-sandbox-capabilities/1.0"
+        or not isinstance(caps.get("backend"), str)
+        or not caps["backend"].strip()
+        or not isinstance(statuses, dict)
+        or not statuses
+        or not all(
+            isinstance(name, str)
+            and bool(name.strip())
+            and status in ("supported", "absent", "unprobed")
+            for name, status in statuses.items()
+        )
+        or not isinstance(probed_at, str)
+        or not isinstance(caps.get("preflightDegradations"), list)
+        or not all(isinstance(item, str) and item for item in caps["preflightDegradations"])
+        or caps.get("preflightFailures") != []
+    ):
+        return False
+    try:
+        return datetime.fromisoformat(probed_at).utcoffset() is not None
+    except ValueError:
+        return False
+
+
+def engine_receipts_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    engine_runs = [run for run in runs if run.get("detector") == "engine"]
+    receipts = [run["runReceipt"] for run in engine_runs if engine_receipt_valid(run)]
+    return {
+        "total": len(engine_runs),
+        "withReceipt": len(receipts),
+        "invalid": len(engine_runs) - len(receipts),
+        "schemaVersions": sorted({receipt["schemaVersion"] for receipt in receipts}),
+        "capabilityStatuses": sorted(
+            {
+                f"{name}={status}"
+                for receipt in receipts
+                for name, status in receipt["sandboxCapabilities"]["statuses"].items()
+            }
+        ),
+    }
+
+
+def ambiguous_case_match(
+    case: dict[str, Any],
+    finding: dict[str, Any],
+    cases: list[dict[str, Any]],
+    corpus_dir: Path,
+    marker_cache: dict[str, int | None],
+) -> bool:
+    return any(
+        sibling["id"] != case["id"]
+        and sibling["vulnerable"] == case["vulnerable"]
+        and case_matches(sibling, finding, corpus_dir, marker_cache)
+        for sibling in cases
+    )
+
+
+def classify_scan_findings(
+    findings: list[dict[str, Any]], cases: list[dict[str, Any]], corpus_dir: Path
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    detected: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    clean, unmatched, ambiguous = [], [], []
+    marker_cache: dict[str, int | None] = {}
+    for finding in findings:
+        if finding.get("variant") == "clean":
+            clean.append(finding)
+            continue
+        matched = False
+        for case in cases:
+            # Each projection contains a whole shared file: credit only the
+            # case/run actually executed, never sibling cases or clean controls.
+            case_id = finding.get("caseId")
+            if case_id is not None and case_id != case["id"]:
+                continue
+            if case_id is None and not str(finding.get("scanId", "")).startswith(case["id"] + "-"):
+                continue
+            if case_matches(case, finding, corpus_dir, marker_cache):
+                if ambiguous_case_match(case, finding, cases, corpus_dir, marker_cache):
+                    ambiguous.append(finding)
+                else:
+                    detected[case["id"]].append(finding)
+                matched = True
+        if not matched:
+            unmatched.append(finding)
+    return detected, clean, unmatched, ambiguous
+
+
 def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
     corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
-    findings = load_findings(results_dir / "findings.jsonl")
+    findings_bytes = (results_dir / "findings.jsonl").read_bytes()
+    findings = load_findings(findings_bytes)
     manifest = json.loads((results_dir / "run-manifest.json").read_text(encoding="utf-8"))
 
-    detected: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    clean_fps: list[dict[str, Any]] = []
-    unmatched: list[dict[str, Any]] = []
-    marker_cache: dict[str, int | None] = {}
+    legacy, supports_records, findings_digest_valid = receipt_version_state(
+        manifest, findings_bytes
+    )
+    unbound_findings, incomplete_records = [], False
+    if supports_records:
+        findings, unbound_findings, incomplete_records = bind_findings_to_runs(
+            findings, manifest["runs"]
+        )
     discovery_receipts = [f for f in findings if f.get("scanner") == "__discovery__"]
 
     scan_findings = [
@@ -168,24 +424,9 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         and f.get("scanner") not in ("__discovery__", "__coverage__")
         and not f.get("error")
     ]
-    for finding in scan_findings:
-        if finding.get("variant") == "clean":
-            clean_fps.append(finding)
-            continue
-        matched = False
-        for case in corpus["pairs"]:
-            # Each projection contains a whole shared file: credit only the
-            # case/run actually executed, never sibling cases or clean controls.
-            case_id = finding.get("caseId")
-            if case_id is not None and case_id != case["id"]:
-                continue
-            if case_id is None and not str(finding.get("scanId", "")).startswith(case["id"] + "-"):
-                continue
-            if case_matches(case, finding, corpus_dir, marker_cache):
-                detected[case["id"]].append(finding)
-                matched = True
-        if not matched:
-            unmatched.append(finding)
+    detected, clean_fps, unmatched, ambiguous = classify_scan_findings(
+        scan_findings, corpus["pairs"], corpus_dir
+    )
 
     per_class: dict[str, dict[str, Any]] = {}
     classes = {c["class"] for c in corpus["pairs"]}
@@ -195,59 +436,43 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         per_class[cls] = {
             "cases": len(cases),
             "detected": hits,
-            "recall": round(hits / len(cases), 4),
+            "caseMatchRate": round(hits / len(cases), 4),
+            "recall": None,
         }
 
-    stability = engine_stability(manifest, detected)
+    complete_run_set = run_set_complete(manifest, corpus)
 
-    duplicate_count = 0
+    additional_matches = 0
     for finding_list in detected.values():
         per_execution: dict[tuple[object, object], int] = defaultdict(int)
         for finding in finding_list:
             per_execution[(finding.get("scanId"), finding.get("scanner"))] += 1
-        duplicate_count += sum(max(0, count - 1) for count in per_execution.values())
-    failures = [r for r in manifest["runs"] if r.get("returncode") != 0 or r.get("errors")]
+        additional_matches += sum(max(0, count - 1) for count in per_execution.values())
+    failures = [
+        r
+        for r in manifest["runs"]
+        if type(r.get("returncode")) is not int or r["returncode"] != 0 or r.get("errors")
+    ]
     coverage_issues = [f for f in findings if f.get("error") or f.get("coverageIssues")]
-    legacy = manifest.get("harnessVersion", 1) < 2
+    engine_receipts = engine_receipts_summary(manifest["runs"])
     status = (
         "LEGACY_UNVALIDATED"
         if legacy
         else "INCOMPLETE"
         if failures
+        or ambiguous
+        or engine_receipts["invalid"]
+        or findings_digest_valid is not True
+        or unbound_findings
+        or incomplete_records
         or coverage_issues
-        or not run_set_complete(manifest, corpus)
+        or not complete_run_set
         or not corpus_matches_receipt(manifest, corpus, corpus_dir)
-        or manifest.get("sourcesChangedDuringRun")
-        or any(source.get("dirty") for source in manifest.get("sources", {}).values())
+        or not source_identity_complete(manifest)
         else "COMPLETE"
     )
+    stability = engine_stability(manifest, detected) if status == "COMPLETE" else None
     clean_runs = [r for r in manifest["runs"] if r.get("variant") == "clean"]
-
-    engine_runs_meta = [r for r in manifest["runs"] if r.get("detector") == "engine"]
-    receipts = [
-        r["runReceipt"]
-        for r in engine_runs_meta
-        if isinstance(r.get("runReceipt"), dict) and not r["runReceipt"].get("error")
-    ]
-    # Comparable receipts: whether every engine run carried the same run.json
-    # provenance fields (schema, probed capability statuses). Presence is
-    # counted, never inferred — a run without a receipt is just absent.
-    engine_receipts = {
-        "total": len(engine_runs_meta),
-        "withReceipt": len(receipts),
-        "schemaVersions": sorted(
-            {str(r.get("schemaVersion")) for r in receipts if r.get("schemaVersion")}
-        ),
-        "capabilityStatuses": sorted(
-            {
-                f"{name}={status}"
-                for r in receipts
-                for name, status in (
-                    (r.get("sandboxCapabilities") or {}).get("statuses") or {}
-                ).items()
-            }
-        ),
-    }
 
     summary = {
         "status": status,
@@ -260,14 +485,17 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         "detectors": manifest["detectors"],
         "totalCases": len(corpus["pairs"]),
         "detectedCases": sum(1 for c in corpus["pairs"] if detected[c["id"]]),
-        "recall": round(
+        "caseMatchRate": round(
             sum(1 for c in corpus["pairs"] if detected[c["id"]]) / len(corpus["pairs"]), 4
         ),
+        "recall": None,
         "unmatchedFindings": len(unmatched),
-        "duplicateRate": round(
-            duplicate_count / max(1, sum(len(hits) for hits in detected.values())),
-            4,
-        ),
+        "ambiguousFindings": len(ambiguous),
+        "unboundRecords": len(unbound_findings) if supports_records else None,
+        "recordIntegrityIncomplete": incomplete_records if supports_records else None,
+        "findingsDigestMatches": findings_digest_valid,
+        "duplicateRate": None,
+        "additionalMatchedFindings": additional_matches,
         "perClass": per_class,
         "engineStability": stability,
         "totalRuntimeMs": sum(r.get("runtimeMs", 0) for r in manifest["runs"]),
@@ -283,18 +511,26 @@ def score(results_dir: Path, corpus_dir: Path) -> dict[str, Any]:
         f"- status: {status}",
         f"- detectors: {manifest['detectors']}",
         f"- engine revision: {manifest.get('engineRevision') or 'n/a'}",
-        f"- recall: {summary['recall']} ({summary['detectedCases']}/{summary['totalCases']})",
+        "- case-match rate (diagnostic; includes unsupported cases): "
+        f"{summary['caseMatchRate']} ({summary['detectedCases']}/{summary['totalCases']})",
+        "- recall: unavailable (independent adjudication and supported scope required)",
         "- unmatched vulnerable-fixture findings (not false positives): "
         f"{summary['unmatchedFindings']}",
+        f"- findings matching overlapping case locators: {summary['ambiguousFindings']}",
+        f"- records not bound to a recorded run: {summary['unboundRecords']}",
+        f"- record counts or scanner receipts incomplete: {summary['recordIntegrityIncomplete']}",
+        f"- findings digest matches: {summary['findingsDigestMatches']}",
         f"- clean-fixture findings: {summary['cleanFindings']}",
-        f"- duplicate rate: {summary['duplicateRate']}",
-        f"- engine stability: {stability if stability is not None else 'n/a (single/det)'}",
+        "- duplicate rate: unavailable (independent adjudication required)",
+        "- additional matches within a case/run/scanner (not classified as duplicates): "
+        f"{summary['additionalMatchedFindings']}",
+        f"- engine stability (diagnostic): {stability if stability is not None else 'unavailable'}",
         "",
-        "| class | detected | cases | recall |",
+        "| class | detected | cases | case-match rate (diagnostic) |",
         "|---|---|---|---|",
     ]
     for cls, row in per_class.items():
-        lines.append(f"| {cls} | {row['detected']} | {row['cases']} | {row['recall']} |")
+        lines.append(f"| {cls} | {row['detected']} | {row['cases']} | {row['caseMatchRate']} |")
     (results_dir / "RESULTS.md").write_text("\n".join(lines) + "\n")
     return summary
 

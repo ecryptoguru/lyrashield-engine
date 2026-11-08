@@ -4,13 +4,22 @@ import hashlib
 import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from benchmarks import run
-from benchmarks.score import case_matches, corpus_matches_receipt, engine_stability, score
+from benchmarks.score import (
+    case_matches,
+    corpus_matches_receipt,
+    engine_receipt_valid,
+    engine_stability,
+    run_set_complete,
+    score,
+    source_identity_complete,
+)
 
 
 def test_marker_matching_does_not_credit_neighboring_case(tmp_path: Path) -> None:
@@ -24,10 +33,400 @@ def test_marker_matching_does_not_credit_neighboring_case(tmp_path: Path) -> Non
     assert not case_matches(case, finding, tmp_path, {})
 
 
+@pytest.mark.parametrize("line", [True, False, 0, -1, 1.0, "1", [], {}])
+def test_marker_matching_rejects_invalid_line_values(tmp_path: Path, line: object) -> None:
+    (tmp_path / "a.ts").write_text("bad() // CASE:A\n")
+    case = {"id": "A", "vulnerable": "a.ts", "rulePrefixes": ["rule-"]}
+    assert not case_matches(case, {"file": "a.ts", "startLine": line, "id": "rule-1"}, tmp_path, {})
+
+
+@pytest.mark.parametrize("change", [{"file": []}, {"file": {}}, {"id": []}, {"id": 1}])
+def test_malformed_location_fields_are_not_matched(tmp_path: Path, change: dict) -> None:
+    (tmp_path / "a.ts").write_text("bad() // CASE:A\n")
+    case = {"id": "A", "vulnerable": "a.ts", "rulePrefixes": ["rule-"]}
+    finding = {"file": "a.ts", "startLine": 1, "id": "rule-1"}
+    assert case_matches(case, finding, tmp_path, {})
+    assert not case_matches(case, {**finding, **change}, tmp_path, {})
+
+
+def test_absence_control_may_match_without_a_line(tmp_path: Path) -> None:
+    case = {"id": "A", "vulnerable": "a.ts", "rulePrefixes": ["rule-"], "absence": True}
+    assert case_matches(case, {"file": "a.ts", "startLine": None, "id": "rule-1"}, tmp_path, {})
+
+
+def test_overlapping_case_locators_do_not_credit_ambiguous_findings(tmp_path: Path) -> None:
+    cases = [
+        {
+            "id": "A",
+            "class": "iac",
+            "vulnerable": "bad.yaml",
+            "clean": "safe.yaml",
+            "markerLine": 1,
+            "rulePrefixes": ["iac-compose-privileged", "iac-k8s"],
+        },
+        {
+            "id": "B",
+            "class": "iac",
+            "vulnerable": "bad.yaml",
+            "clean": "safe.yaml",
+            "markerLine": 4,
+            "rulePrefixes": ["iac-k8s-hostpath"],
+        },
+    ]
+    corpus = {"name": "test", "revision": "v1", "pairs": cases}
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    (tmp_path / "bad.yaml").write_text("privileged: true\n\n\nhostPath: /etc\n")
+    (tmp_path / "safe.yaml").write_text("safe: true\n")
+    source = {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+    runs, records = [], []
+    for case in cases:
+        for variant in ("vulnerable", "clean"):
+            case_id = case["id"]
+            scan_id = f"{case_id}-{variant}-det"
+            runs.append(
+                {
+                    "case": case_id,
+                    "detector": "deterministic",
+                    "variant": variant,
+                    "runIndex": 0,
+                    "scanId": scan_id,
+                    "returncode": 0,
+                    "emitted": 3 if case_id == "B" and variant == "vulnerable" else 2,
+                }
+            )
+            for scanner, data in (
+                ("__coverage__", {"coverageIssues": []}),
+                ("__discovery__", {"discovery": {}}),
+            ):
+                records.append(
+                    {
+                        "caseId": case_id,
+                        "variant": variant,
+                        "runIndex": 0,
+                        "scanId": scan_id,
+                        "scanner": scanner,
+                        **data,
+                    }
+                )
+    records.append(
+        {
+            "caseId": "B",
+            "variant": "vulnerable",
+            "runIndex": 0,
+            "scanId": "B-vulnerable-det",
+            "scanner": "iac",
+            "id": "iac-k8s-hostpath-bad.yaml-4",
+            "file": "bad.yaml",
+            "startLine": 4,
+        }
+    )
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    manifest = {
+        "harnessVersion": 3,
+        "detectors": "deterministic",
+        "runs": runs,
+        "corpus": "test",
+        "corpusRevision": "v1",
+        "corpusSha256": hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest(),
+        "fixtureSha256": {
+            name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+            for name in ("bad.yaml", "safe.yaml")
+        },
+        "findingsSha256": hashlib.sha256(findings.read_bytes()).hexdigest(),
+        "sources": {"engine": source, "product": source},
+        "sourcesChangedDuringRun": False,
+    }
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    result = score(tmp_path, tmp_path)
+    assert result["status"] == "INCOMPLETE"
+    assert result["detectedCases"] == 0
+    assert result["ambiguousFindings"] == 1
+    # A narrowed locator restores credit to the correct case.
+    cases[0]["rulePrefixes"] = ["iac-compose-privileged"]
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    manifest["corpusSha256"] = hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    result = score(tmp_path, tmp_path)
+    assert result["status"] == "COMPLETE"
+    assert result["detectedCases"] == 1
+    assert result["ambiguousFindings"] == 0
+    assert result["caseMatchRate"] == 0.5
+    assert result["recall"] is None
+    assert result["perClass"]["iac"]["caseMatchRate"] == 0.5
+    assert result["perClass"]["iac"]["recall"] is None
+    assert result["duplicateRate"] is None
+    assert result["additionalMatchedFindings"] == 0
+
+    # JSON booleans and floats compare equal to integer zero in Python, but
+    # they are not process exit codes and cannot prove a successful run.
+    for invalid_returncode in (False, 0.0, None, "0"):
+        runs[0]["returncode"] = invalid_returncode
+        (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+        malformed = score(tmp_path, tmp_path)
+        assert malformed["status"] == "INCOMPLETE"
+        assert malformed["failedRuns"] == 1
+    runs[0]["returncode"] = 0
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "COMPLETE"
+
+    # Distinct matched findings in the same case/run are not automatically duplicates.
+    records.append({**records[-1], "id": "iac-k8s-hostpath-bad.yaml-other"})
+    next(run for run in runs if run["scanId"] == "B-vulnerable-det")["emitted"] += 1
+    findings.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    manifest["findingsSha256"] = hashlib.sha256(findings.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    result = score(tmp_path, tmp_path)
+    assert result["additionalMatchedFindings"] == 1
+    assert result["duplicateRate"] is None
+
+
 def test_stability_includes_zero_hit_runs() -> None:
     manifest = {"runs": [{"detector": "engine", "runIndex": i} for i in range(3)]}
     detected = {"A": [{"scanner": "engine", "runIndex": i} for i in range(2)]}
     assert engine_stability(manifest, detected) == 0
+
+
+@pytest.mark.parametrize("revision", [None, "b" * 40])
+def test_engine_revision_must_match_source_identity(revision: str | None) -> None:
+    source = {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+    manifest = {
+        "detectors": "engine",
+        "engineRevision": revision,
+        "sources": {"engine": source, "product": source},
+        "sourcesChangedDuringRun": False,
+    }
+    assert not source_identity_complete(manifest)
+    manifest["engineRevision"] = source["revision"]
+    assert source_identity_complete(manifest)
+
+
+@pytest.mark.parametrize("bad_id", ["", "A-vulnerable-det", None])
+def test_complete_run_set_requires_unique_nonempty_scan_ids(bad_id: str | None) -> None:
+    corpus = {"pairs": [{"id": "A"}]}
+    runs = [
+        {
+            "case": "A",
+            "detector": "deterministic",
+            "variant": variant,
+            "runIndex": 0,
+            "scanId": f"A-{variant}-det",
+        }
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {"detectors": "deterministic", "runs": runs}
+    assert run_set_complete(manifest, corpus)
+    runs[1]["scanId"] = bad_id
+    assert not run_set_complete(manifest, corpus)
+
+
+def test_declared_engine_repetitions_reject_a_missing_whole_iteration() -> None:
+    corpus = {"pairs": [{"id": "A"}, {"id": "B"}]}
+    runs = [
+        {
+            "case": case["id"],
+            "detector": "engine",
+            "variant": variant,
+            "runIndex": index,
+            "scanId": f"{case['id']}-{variant}-{index}",
+        }
+        for case in corpus["pairs"]
+        for variant in ("vulnerable", "clean")
+        for index in range(3)
+    ]
+    manifest = {"harnessVersion": 4, "detectors": "engine", "engineRuns": 3, "runs": runs}
+    assert run_set_complete(manifest, corpus)
+    manifest["runs"] = [run for run in runs if run["runIndex"] != 2]
+    assert not run_set_complete(manifest, corpus)
+
+
+@pytest.mark.parametrize("count", [None, True, 0, -1, "1", 10**20])
+def test_declared_engine_repetitions_must_be_a_bounded_positive_integer(count: object) -> None:
+    manifest = {
+        "harnessVersion": 4,
+        "detectors": "engine",
+        "engineRuns": count,
+        "runs": [
+            {
+                "case": "A",
+                "detector": "engine",
+                "variant": variant,
+                "runIndex": 0,
+                "scanId": variant,
+            }
+            for variant in ("vulnerable", "clean")
+        ],
+    }
+    assert not run_set_complete(manifest, {"pairs": [{"id": "A"}]})
+
+
+def test_v3_engine_receipts_cannot_prove_requested_repetitions() -> None:
+    manifest = {
+        "harnessVersion": 3,
+        "detectors": "engine",
+        "runs": [
+            {
+                "case": "A",
+                "detector": "engine",
+                "variant": variant,
+                "runIndex": 0,
+                "scanId": variant,
+            }
+            for variant in ("vulnerable", "clean")
+        ],
+    }
+    assert not run_set_complete(manifest, {"pairs": [{"id": "A"}]})
+
+
+def test_unknown_detector_cannot_form_a_complete_run_set() -> None:
+    runs = [
+        {"case": "A", "detector": "unknown", "variant": variant, "runIndex": 0, "scanId": variant}
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {"harnessVersion": 4, "detectors": "unknown", "engineRuns": None, "runs": runs}
+    assert not run_set_complete(manifest, {"pairs": [{"id": "A"}]})
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"scanId": "another-run"},
+        {"caseId": "other-case"},
+        {"variant": "unknown"},
+        {"runIndex": 9},
+        {"scanner": "engine"},
+        {"scanner": None},
+        {"scanner": "__discovery__"},
+        {"scanner": "__coverage__"},
+        {"startLine": True},
+        {"startLine": False},
+        {"startLine": 0},
+        {"startLine": -1},
+        {"startLine": 1.0},
+        {"startLine": "1"},
+        {"file": ["bad.ts"]},
+        {"id": ["rule"]},
+    ],
+)
+def test_finding_must_belong_to_the_recorded_run(tmp_path: Path, changed: dict) -> None:
+    case = {"id": "A", "class": "auth", "vulnerable": "bad.ts", "clean": "safe.ts"}
+    corpus = {"name": "fixture", "revision": "v1", "pairs": [case]}
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    (tmp_path / "bad.ts").write_text("bad() // CASE:A\n")
+    (tmp_path / "safe.ts").write_text("safe() // CASE:A\n")
+    runs = [
+        {
+            "case": "A",
+            "detector": "deterministic",
+            "variant": variant,
+            "runIndex": 0,
+            "scanId": f"A-{variant}-det",
+            "returncode": 0,
+            "emitted": 3 if variant == "vulnerable" else 2,
+        }
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {
+        "harnessVersion": 3,
+        "detectors": "deterministic",
+        "runs": runs,
+        "corpus": "fixture",
+        "corpusRevision": "v1",
+        "sourcesChangedDuringRun": False,
+        "sources": {
+            name: {
+                "revision": "a" * 40,
+                "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+                "dirty": False,
+            }
+            for name in ("engine", "product")
+        },
+        "corpusSha256": hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest(),
+        "fixtureSha256": {
+            name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+            for name in ("bad.ts", "safe.ts")
+        },
+    }
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    finding = {
+        "caseId": "A",
+        "variant": "vulnerable",
+        "scanId": "A-vulnerable-det",
+        "scanner": "sast",
+        "file": "bad.ts",
+        "startLine": 1,
+        "runIndex": 0,
+    }
+    sentinels = [
+        {
+            "caseId": "A",
+            "variant": variant,
+            "scanId": f"A-{variant}-det",
+            "runIndex": 0,
+            "scanner": scanner,
+            **payload,
+        }
+        for variant in ("vulnerable", "clean")
+        for scanner, payload in (
+            ("__discovery__", {"discovery": {}}),
+            ("__coverage__", {"coverageIssues": []}),
+        )
+    ]
+    path = tmp_path / "findings.jsonl"
+    path.write_text("\n".join(json.dumps(record) for record in [finding, *sentinels]) + "\n")
+    manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    valid = score(tmp_path, tmp_path)
+    assert valid["status"] == "COMPLETE"
+    assert valid["detectedCases"] == 1
+    assert valid["findingsDigestMatches"] is True
+    del manifest["findingsSha256"]
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+    manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    # The same run identities and record count cannot hide changed finding bytes.
+    changed_content = {**finding, "title": "different"}
+    path.write_text(
+        "\n".join(json.dumps(record) for record in [changed_content, *sentinels]) + "\n"
+    )
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+
+    # A pre-binding receipt remains readable but can no longer qualify as complete.
+    manifest["harnessVersion"] = 2
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "LEGACY_UNVALIDATED"
+    manifest["harnessVersion"] = 3
+    path.write_text(
+        "\n".join(json.dumps(record) for record in [{**finding, **changed}, *sentinels]) + "\n"
+    )
+    manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    invalid = score(tmp_path, tmp_path)
+    assert invalid["status"] == "INCOMPLETE"
+    assert invalid["detectedCases"] == 0
+    assert invalid["unboundRecords"] == 1
+    assert invalid["recordIntegrityIncomplete"] is True
+
+    for records in (sentinels, [finding, finding, *sentinels]):
+        path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+        manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+        assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+    path.write_text(
+        "\n".join(json.dumps(record) for record in [finding, *sentinels]) + "\nnot json\n"
+    )
+    manifest["findingsSha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
 
 
 def test_clean_findings_errors_and_repeat_runs_are_separate(tmp_path: Path) -> None:
@@ -50,23 +449,52 @@ def test_clean_findings_errors_and_repeat_runs_are_separate(tmp_path: Path) -> N
     ]
     records.extend(
         [
-            {**records[0], "variant": "clean"},
+            {**records[0], "variant": "clean", "scanId": "A-clean-engine-0"},
             {"scanner": "sast", "error": "scanner failed"},
             {"level": "info", "message": "scanner startup", "variant": "clean"},
         ]
     )
     (tmp_path / "findings.jsonl").write_text("\n".join(json.dumps(rec) for rec in records))
-    runs = [{"detector": "engine", "runIndex": i, "returncode": 0} for i in range(2)]
-    runs.append({"detector": "engine", "variant": "clean", "returncode": 0})
+    runs = [
+        {
+            "case": "A",
+            "detector": "engine",
+            "variant": "vulnerable",
+            "runIndex": i,
+            "scanId": f"A-engine-{i}",
+            "returncode": 0,
+        }
+        for i in range(2)
+    ]
+    runs.append(
+        {
+            "case": "A",
+            "detector": "engine",
+            "variant": "clean",
+            "runIndex": 0,
+            "scanId": "A-clean-engine-0",
+            "returncode": 0,
+        }
+    )
     (tmp_path / "run-manifest.json").write_text(
-        json.dumps({"harnessVersion": 2, "detectors": "engine", "runs": runs})
+        json.dumps(
+            {
+                "harnessVersion": 3,
+                "detectors": "engine",
+                "runs": runs,
+                "findingsSha256": hashlib.sha256(
+                    (tmp_path / "findings.jsonl").read_bytes()
+                ).hexdigest(),
+            }
+        )
     )
     result = score(tmp_path, tmp_path)
     assert result["detectedCases"] == 1
     assert result["cleanFindings"] == 1
     assert result["unmatchedFindings"] == 0
-    assert result["duplicateRate"] == 0
+    assert result["duplicateRate"] is None
     assert result["status"] == "INCOMPLETE"
+    assert result["engineStability"] is None
 
 
 def test_deterministic_runner_records_clean_polarity_and_failure(
@@ -93,6 +521,143 @@ def test_deterministic_runner_records_clean_polarity_and_failure(
     assert json.loads(output.getvalue())["variant"] == "clean"
     assert json.loads(output.getvalue())["caseId"] == "A"
     assert not seen[0].exists()
+
+
+def test_runner_records_digest_of_exact_findings_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    corpus_dir = tmp_path / "corpus" / "fixture"
+    corpus_dir.mkdir(parents=True)
+    case = {"id": "A", "class": "auth", "vulnerable": "bad.ts", "clean": "safe.ts"}
+    corpus = {"name": "fixture", "revision": "v1", "schemaVersion": "test", "pairs": [case]}
+    (corpus_dir / "corpus.json").write_text(json.dumps(corpus))
+    for filename in ("bad.ts", "safe.ts"):
+        (corpus_dir / filename).write_text("fixture // CASE:A\n")
+    monkeypatch.setattr(run, "BENCH_ROOT", tmp_path)
+    monkeypatch.setattr(run, "RESULTS_ROOT", tmp_path / "results")
+    source = {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+    monkeypatch.setattr(run, "source_state", lambda _path: source.copy())
+    monkeypatch.setattr(sys, "argv", ["run.py", "--corpus", "fixture"])
+
+    def execute(_corpus_dir: Path, case: dict, out: io.TextIOBase, variant: str) -> dict:
+        scan_id = f"{case['id']}-{variant}-det"
+        for scanner, payload in (
+            ("__discovery__", {"discovery": {}}),
+            ("__coverage__", {"coverageIssues": []}),
+        ):
+            out.write(
+                json.dumps(
+                    {
+                        "caseId": case["id"],
+                        "variant": variant,
+                        "scanId": scan_id,
+                        "runIndex": 0,
+                        "scanner": scanner,
+                        **payload,
+                    }
+                )
+                + "\n"
+            )
+        return {
+            "case": case["id"],
+            "variant": variant,
+            "scanId": scan_id,
+            "runIndex": 0,
+            "detector": "deterministic",
+            "emitted": 2,
+            "returncode": 0,
+        }
+
+    monkeypatch.setattr(run, "run_deterministic", execute)
+    assert run.main() == 0
+    result_dir = next((tmp_path / "results").iterdir())
+    manifest = json.loads((result_dir / "run-manifest.json").read_text())
+    assert manifest["harnessVersion"] == 4
+    assert manifest["engineRuns"] is None
+    assert (
+        manifest["findingsSha256"]
+        == hashlib.sha256((result_dir / "findings.jsonl").read_bytes()).hexdigest()
+    )
+    assert score(result_dir, corpus_dir)["status"] == "COMPLETE"
+    for malformed in (
+        {},
+        {"engine": source},
+        {"engine": source, "product": {}},
+        {"engine": {**source, "revision": "unknown"}, "product": source},
+        {"engine": source, "product": {**source, "dirty": None}},
+    ):
+        manifest["sources"] = malformed
+        (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
+        assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
+    manifest["sources"] = {"engine": source, "product": source}
+    del manifest["sourcesChangedDuringRun"]
+    (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
+    manifest["sourcesChangedDuringRun"] = False
+    for unknown_version in (5, True, "3"):
+        manifest["harnessVersion"] = unknown_version
+        (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
+        assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
+    manifest["harnessVersion"] = 4
+    findings_path = result_dir / "findings.jsonl"
+    findings_path.write_bytes(b"\xff\n")
+    manifest["findingsSha256"] = hashlib.sha256(findings_path.read_bytes()).hexdigest()
+    (result_dir / "run-manifest.json").write_text(json.dumps(manifest))
+    assert score(result_dir, corpus_dir)["status"] == "INCOMPLETE"
+
+
+def test_runner_records_requested_engine_repetitions_without_running_an_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    corpus_dir = tmp_path / "corpus" / "fixture"
+    corpus_dir.mkdir(parents=True)
+    case = {"id": "A", "vulnerable": "bad.ts", "clean": "safe.ts"}
+    corpus = {"name": "fixture", "revision": "v1", "schemaVersion": "test", "pairs": [case]}
+    (corpus_dir / "corpus.json").write_text(json.dumps(corpus))
+    for filename in ("bad.ts", "safe.ts"):
+        (corpus_dir / filename).write_text("fixture")
+    monkeypatch.setattr(run, "BENCH_ROOT", tmp_path)
+    monkeypatch.setattr(run, "RESULTS_ROOT", tmp_path / "results")
+    monkeypatch.setattr(run, "source_state", lambda _path: {})
+    monkeypatch.setattr(run, "engine_revision", lambda: "fixture")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run.py",
+            "--corpus",
+            "fixture",
+            "--detectors",
+            "engine",
+            "--runs",
+            "3",
+            "--engine-approve",
+            "test",
+        ],
+    )
+
+    def no_engine(_corpus: Path, case: dict, _out: io.TextIOBase, index: int, variant: str) -> dict:
+        return {
+            "case": case["id"],
+            "detector": "engine",
+            "variant": variant,
+            "runIndex": index,
+            "scanId": f"{variant}-{index}",
+            "emitted": 0,
+            "returncode": 0,
+        }
+
+    monkeypatch.setattr(run, "run_engine", no_engine)
+    assert run.main() == 0
+    result_dir = next((tmp_path / "results").iterdir())
+    manifest = json.loads((result_dir / "run-manifest.json").read_text())
+    assert manifest["harnessVersion"] == 4
+    assert manifest["engineRuns"] == 3
+    assert run_set_complete(manifest, corpus)
 
 
 def test_generated_receipts_do_not_invalidate_source_state(tmp_path: Path) -> None:
@@ -126,6 +691,98 @@ def test_generated_receipts_do_not_invalidate_source_state(tmp_path: Path) -> No
     assert after["trackedDiffSha256"] != before["trackedDiffSha256"]
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        None,
+        {},
+        {"error": "unreadable"},
+        {"schemaVersion": "2.0"},
+        {"runId": "wrong"},
+        {"status": "running"},
+        {"phase": "finalizing"},
+        {"sandboxCapabilities": None},
+        {"sandboxCapabilities": {"statuses": []}},
+        {"sandboxCapabilities": {"schema": "unexpected"}},
+    ],
+)
+def test_engine_score_requires_valid_run_receipts(tmp_path: Path, invalid: object) -> None:
+    case = {"id": "A", "class": "auth", "vulnerable": "bad.ts", "clean": "safe.ts"}
+    corpus = {"name": "test", "revision": "v1", "pairs": [case]}
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus))
+    for name in ("bad.ts", "safe.ts"):
+        (tmp_path / name).write_text("example // CASE:A\n")
+    (tmp_path / "findings.jsonl").write_bytes(b"")
+    source = {
+        "revision": "a" * 40,
+        "trackedDiffSha256": hashlib.sha256(b"").hexdigest(),
+        "dirty": False,
+    }
+    caps = {
+        "schema": "lyrashield-sandbox-capabilities/1.0",
+        "backend": "docker",
+        "probedAt": "2026-11-04T00:00:00+00:00",
+        "statuses": {"exec": "supported"},
+        "preflightDegradations": [],
+        "preflightFailures": [],
+    }
+    runs = [
+        {
+            "case": "A",
+            "detector": "engine",
+            "variant": variant,
+            "runIndex": 0,
+            "scanId": f"A-{variant}-engine-0",
+            "returncode": 0,
+            "emitted": 0,
+            "runReceipt": {
+                "schemaVersion": "1.1",
+                "runId": f"A-{variant}-engine-0",
+                "status": "completed",
+                "phase": "completed",
+                "sandboxCapabilities": caps,
+            },
+        }
+        for variant in ("vulnerable", "clean")
+    ]
+    manifest = {
+        "harnessVersion": 4,
+        "engineRuns": 1,
+        "detectors": "engine",
+        "runs": runs,
+        "engineRevision": source["revision"],
+        "sources": {"engine": source, "product": source},
+        "sourcesChangedDuringRun": False,
+        "corpus": "test",
+        "corpusRevision": "v1",
+        "corpusSha256": hashlib.sha256((tmp_path / "corpus.json").read_bytes()).hexdigest(),
+        "fixtureSha256": {
+            name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+            for name in ("bad.ts", "safe.ts")
+        },
+        "findingsSha256": hashlib.sha256(b"").hexdigest(),
+    }
+    path = tmp_path / "run-manifest.json"
+    path.write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "COMPLETE"
+    manifest["engineRuns"] = 2
+    path.write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+    manifest["engineRuns"] = 1
+    manifest["harnessVersion"] = 3
+    path.write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "INCOMPLETE"
+    manifest["harnessVersion"] = 4
+    runs[0]["runReceipt"] = {**runs[0]["runReceipt"], **invalid} if invalid else invalid
+    path.write_text(json.dumps(manifest))
+    result = score(tmp_path, tmp_path)
+    assert result["status"] == "INCOMPLETE"
+    assert result["engineReceipts"]["invalid"] == 1
+    manifest["harnessVersion"] = 2
+    path.write_text(json.dumps(manifest))
+    assert score(tmp_path, tmp_path)["status"] == "LEGACY_UNVALIDATED"
+
+
 def test_engine_run_receipt_surfaces_run_record_fields(tmp_path: Path) -> None:
     run_dir = tmp_path / "strix_runs" / "scan-1"
     run_dir.mkdir(parents=True)
@@ -133,8 +790,13 @@ def test_engine_run_receipt_surfaces_run_record_fields(tmp_path: Path) -> None:
         json.dumps(
             {
                 "schema_version": "1.1",
+                "run_id": "scan-1",
+                "status": "completed",
+                "phase": "completed",
                 "sandbox_capabilities": {
+                    "schema": "lyrashield-sandbox-capabilities/1.0",
                     "backend": "docker",
+                    "probed_at": "2026-11-04T00:00:00+00:00",
                     "capabilities": {
                         "exec": {"status": "supported"},
                         "mounts": {"status": "unprobed"},
@@ -157,7 +819,11 @@ def test_engine_run_receipt_surfaces_run_record_fields(tmp_path: Path) -> None:
     )
     receipt = run.engine_run_receipt(tmp_path, "scan-1")
     assert receipt["schemaVersion"] == "1.1"
+    assert receipt["runId"] == "scan-1"
+    assert receipt["status"] == receipt["phase"] == "completed"
     caps = receipt["sandboxCapabilities"]
+    assert caps["schema"] == "lyrashield-sandbox-capabilities/1.0"
+    assert caps["probedAt"] == "2026-11-04T00:00:00+00:00"
     assert caps["backend"] == "docker"
     assert caps["statuses"] == {"exec": "supported", "mounts": "unprobed"}
     assert caps["preflightDegradations"] == ["egress_policy_delivery"]
@@ -176,6 +842,81 @@ def test_engine_run_receipt_missing_and_unreadable(tmp_path: Path) -> None:
     (bad / "run.json").write_text("{not json")
     receipt = run.engine_run_receipt(tmp_path, "bad-scan")
     assert "error" in receipt
+    (bad / "run.json").write_bytes(b"\xff")
+    receipt = run.engine_run_receipt(tmp_path, "bad-scan")
+    assert "error" in receipt
+
+
+@pytest.mark.parametrize(
+    "preflight",
+    [
+        None,
+        {},
+        {"degradations": [], "failures": None},
+        {"degradations": [], "failures": [42]},
+        {"degradations": [], "failures": [{"control": "guard"}]},
+    ],
+)
+def test_invalid_preflight_provenance_cannot_qualify_engine_receipt(
+    tmp_path: Path, preflight: object
+) -> None:
+    run_dir = tmp_path / "strix_runs" / "scan-1"
+    run_dir.mkdir(parents=True)
+    record = {
+        "schema_version": "1.1",
+        "run_id": "scan-1",
+        "status": "completed",
+        "phase": "completed",
+        "sandbox_capabilities": {
+            "schema": "lyrashield-sandbox-capabilities/1.0",
+            "backend": "docker",
+            "probed_at": "2026-11-04T00:00:00+00:00",
+            "capabilities": {"exec": {"status": "supported"}},
+            "preflight": {"degradations": [], "failures": []},
+        },
+    }
+    (run_dir / "run.json").write_text(json.dumps(record))
+    receipt = run.engine_run_receipt(tmp_path, "scan-1")
+    assert engine_receipt_valid({"scanId": "scan-1", "runReceipt": receipt})
+    record["sandbox_capabilities"]["preflight"] = preflight
+    (run_dir / "run.json").write_text(json.dumps(record))
+    receipt = run.engine_run_receipt(tmp_path, "scan-1")
+    assert not engine_receipt_valid({"scanId": "scan-1", "runReceipt": receipt})
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema": "other"},
+        {"backend": ""},
+        {"probedAt": "not-a-time"},
+        {"probedAt": "2026-11-04T00:00:00"},
+        {"statuses": {}},
+        {"statuses": {"exec": "unknown"}},
+        {"preflightDegradations": None},
+        {"preflightFailures": ["guard"]},
+    ],
+)
+def test_engine_receipt_rejects_each_invalid_capability_field(change: dict) -> None:
+    caps = {
+        "schema": "lyrashield-sandbox-capabilities/1.0",
+        "backend": "docker",
+        "probedAt": "2026-11-04T00:00:00+00:00",
+        "statuses": {"exec": "supported"},
+        "preflightDegradations": [],
+        "preflightFailures": [],
+    }
+    receipt = {
+        "schemaVersion": "1.1",
+        "runId": "scan-1",
+        "status": "completed",
+        "phase": "completed",
+        "sandboxCapabilities": caps,
+    }
+    run_record = {"scanId": "scan-1", "runReceipt": receipt}
+    assert engine_receipt_valid(run_record)
+    receipt["sandboxCapabilities"] = {**caps, **change}
+    assert not engine_receipt_valid(run_record)
 
 
 def test_scoring_requires_original_corpus_and_fixture_bytes(tmp_path: Path) -> None:

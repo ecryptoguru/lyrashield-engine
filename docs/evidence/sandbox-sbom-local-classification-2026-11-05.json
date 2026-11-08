@@ -1,0 +1,266 @@
+{
+  "architecture": "amd64",
+  "dockerServer": "29.9.2/0367cbe",
+  "ignoredLinks": {
+    "count": 2535,
+    "policy": {
+      "id": "sandbox-bounded-package-link-policy",
+      "version": 2
+    }
+  },
+  "image": "sha256:8233203294f63dee305842334263037acaf7e9e4f75297b87ddfbf0267b3e688",
+  "inventoryCounts": {
+    "deb": 1,
+    "npm": 1766,
+    "pypi": 191
+  },
+  "limitations": [
+    "One local amd64 image only; this is not a hosted or release qualification.",
+    "The two duplicate-key npm manifests remain hard failures.",
+    "Three directory aliases remain unresolved because the bounded policy cannot prove that nested links are metadata-safe."
+  ],
+  "priorUnresolved": [
+    {
+      "classification": "failed",
+      "path": "usr/lib/python3/dist-packages/mitmproxy/addons/onboardingapp/static/fontawesome",
+      "reason": "directory link can expose unscanned metadata"
+    },
+    {
+      "classification": "failed",
+      "path": "usr/lib/python3/dist-packages/mitmproxy/tools/web/static/fonts",
+      "reason": "directory link can expose unscanned metadata"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/lib/python3/dist-packages/tld/res/effective_tld_names.dat.txt",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/@npmcli/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/@webassemblyjs/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/esprima/dist",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/events/events.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/glob/dist/node_modules/glob",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/gyp",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/inherits/inherits_browser.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/istanbul-reports/lib/html/assets/vendor/prettify.css",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/istanbul-reports/lib/html/assets/vendor/prettify.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/istanbul/lib/assets/vendor/prettify.css",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/istanbul/lib/assets/vendor/prettify.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmaccess/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmdiff/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmexec/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmfund/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmhook/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmorg/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmpack/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmpublish/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmsearch/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmteam/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/libnpmversion/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/node-gyp/gyp/gyp_main.py",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/npm-packlist/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "failed",
+      "path": "usr/share/nodejs/npm/man",
+      "reason": "directory link can expose unscanned metadata"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/npm/node_modules/node-gyp/bin/node-gyp.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/pacote/node_modules",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/regenerate/regenerate.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/rimraf/dist/node_modules/rimraf",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "failed",
+      "path": "usr/share/nodejs/source-map/package.json",
+      "reason": "duplicate types JSON field"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/sprintf-js/dist",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/sprintf-js/src/angular-sprintf.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/sprintf-js/src/sprintf.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/terser-webpack-plugin/dist",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/terser-webpack-plugin/types",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/undici/types",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/util/support",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "resolved-by-policy",
+      "path": "usr/share/nodejs/util/util.js",
+      "reason": "metadata-safe alias"
+    },
+    {
+      "classification": "failed",
+      "path": "usr/share/nodejs/windows-release/package.json",
+      "reason": "duplicate engines JSON field"
+    }
+  ],
+  "rootfs": {
+    "sha256": "sha256:937e15f7ebd9f6c2b5df2410d8f874f20eaa881237b5b861fa24cce4de3ea242",
+    "size": 4053626368
+  },
+  "schema": "lyrashield.sandbox.sbom-local-classification.v1",
+  "summary": {
+    "priorUnresolved": 42,
+    "remainingFailures": 5,
+    "resolvedByPolicy": 37
+  },
+  "unresolved": [
+    {
+      "path": "usr/lib/python3/dist-packages/mitmproxy/addons/onboardingapp/static/fontawesome",
+      "reason": "directory link can expose unscanned metadata"
+    },
+    {
+      "path": "usr/lib/python3/dist-packages/mitmproxy/tools/web/static/fonts",
+      "reason": "directory link can expose unscanned metadata"
+    },
+    {
+      "path": "usr/share/nodejs/npm/man",
+      "reason": "directory link can expose unscanned metadata"
+    },
+    {
+      "path": "usr/share/nodejs/source-map/package.json",
+      "reason": "duplicate types JSON field"
+    },
+    {
+      "path": "usr/share/nodejs/windows-release/package.json",
+      "reason": "duplicate engines JSON field"
+    }
+  ]
+}

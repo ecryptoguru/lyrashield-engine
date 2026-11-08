@@ -51,6 +51,27 @@ def test_source_manifest_covers_binary_and_source_archives_for_both_architecture
     )
 
 
+def test_distro_and_supplement_manifests_declare_exactly_twelve_unique_binary_paths() -> None:
+    supplement = json.loads((INPUTS / "applications.cdx.json").read_text())
+    distro_paths = {
+        component["name"]: next(
+            prop["value"]
+            for prop in component["properties"]
+            if prop["name"] == "lyrashield:binary:path"
+        )
+        for component in supplement["components"]
+    }
+    assert distro_paths == {
+        "github.com/ffuf/ffuf/v2": "/usr/bin/ffuf",
+        "github.com/projectdiscovery/naabu/v2": "/usr/bin/naabu",
+        "github.com/projectdiscovery/nuclei/v3": "/usr/bin/nuclei",
+        "github.com/projectdiscovery/subfinder/v2": "/usr/bin/subfinder",
+    }
+    supplement_apps = json.loads((ROOT / "containers/go-tools/applications.json").read_text())
+    paths = [*distro_paths.values(), *(app["binary"] for app in supplement_apps["applications"])]
+    assert len(paths) == len(set(paths)) == 12
+
+
 def test_build_stops_before_extraction_on_bad_source(tmp_path: Path) -> None:
     # Exercise the production entrypoint before it can reach extraction or compilation.
     for name, body in {

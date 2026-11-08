@@ -21,6 +21,10 @@
         {
           "name": "lyrashield:upstream:commit",
           "value": "1571aa17535d8bfcf42258659a141df0b12efa51"
+        },
+        {
+          "name": "lyrashield:binary:path",
+          "value": "/usr/bin/ffuf"
         }
       ]
     },
@@ -42,6 +46,10 @@
         {
           "name": "lyrashield:upstream:commit",
           "value": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8"
+        },
+        {
+          "name": "lyrashield:binary:path",
+          "value": "/usr/bin/naabu"
         }
       ]
     },
@@ -63,6 +71,10 @@
         {
           "name": "lyrashield:upstream:commit",
           "value": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4"
+        },
+        {
+          "name": "lyrashield:binary:path",
+          "value": "/usr/bin/nuclei"
         }
       ]
     },
@@ -84,6 +96,10 @@
         {
           "name": "lyrashield:upstream:commit",
           "value": "b360529eebcd29345e44b3a9da3b2b0c04a13ff2"
+        },
+        {
+          "name": "lyrashield:binary:path",
+          "value": "/usr/bin/subfinder"
         }
       ]
     }
