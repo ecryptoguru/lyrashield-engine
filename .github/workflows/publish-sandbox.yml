@@ -410,7 +410,7 @@ jobs:
             rootfs_size="$(stat -c %s "$platform_dir/rootfs.tar")"
             test "$rootfs_size" -le 8589934592
             rootfs_digest="sha256:$(sha256sum "$platform_dir/rootfs.tar" | cut -d' ' -f1)"
-            python3 scripts/check_sandbox_sbom_coverage.py platform \
+            python3 -m scripts.check_sandbox_sbom_coverage platform \
               --architecture "$arch" --image "$image" \
               --qualification evidence/qualification.json --sbom-predicate evidence/sbom-predicate.json \
               --manifest "$platform_dir/manifest.json" --config "$platform_dir/config.json" \
@@ -436,7 +436,7 @@ jobs:
           image="$REGISTRY/$IMAGE_NAME"
           docker_server_raw="$(docker version --format '{{.Server.Version}}/{{.Server.GitCommit}}')"
           [[ "$docker_server_raw" =~ ^[A-Za-z0-9._+/:-]{1,256}$ ]]
-          python3 scripts/check_sandbox_sbom_coverage.py aggregate \
+          python3 -m scripts.check_sandbox_sbom_coverage aggregate \
             --qualification evidence/qualification.json --sbom-predicate evidence/sbom-predicate.json \
             --image "$image" \
             --applications containers/go-tools/applications.json \
