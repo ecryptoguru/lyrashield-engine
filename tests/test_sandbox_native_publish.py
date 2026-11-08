@@ -280,7 +280,9 @@ def test_coverage_qualification_uses_created_containers_and_bounded_exports_befo
     assert "timeout 900" in qualify["run"]
     assert "8589934593" in qualify["run"]
     assert "docker export" in qualify["run"]
-    assert "scripts/check_sandbox_sbom_coverage.py" in qualify["run"]
+    # The gate must run as a module: it imports scripts.* and script-style
+    # invocation would fail with ModuleNotFoundError before producing receipts.
+    assert "python3 -m scripts.check_sandbox_sbom_coverage platform" in qualify["run"]
     assert "platformManifests" in qualify["run"]
     assert "--container-id" in qualify["run"]
     assert "--expected-rootfs-digest" in qualify["run"]
@@ -289,6 +291,7 @@ def test_coverage_qualification_uses_created_containers_and_bounded_exports_befo
         step for step in steps if step.get("name") == "Assemble bounded SBOM coverage predicate"
     )
     assert assemble["run"].count("aggregate") == 1
+    assert "python3 -m scripts.check_sandbox_sbom_coverage aggregate" in assemble["run"]
     assert "--applications" in assemble["run"]
     assert "--expected-go-tool-digest" in assemble["run"]
     assert "--docker-server" in assemble["run"]
