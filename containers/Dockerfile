@@ -348,7 +348,15 @@ RUN /usr/bin/python3 -I -S /opt/lyrashield/verify_go_tool_provenance.py --write-
 RUN install -d -m 0700 -o root -g root /run/lyrashield-relay
 RUN setcap cap_net_raw,cap_net_bind_service+eip /usr/lib/nmap/nmap
 COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chown=root:root containers/normalize_rootfs_metadata.py /opt/lyrashield/normalize_rootfs_metadata.py
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Normalize rootfs metadata so the bounded SBOM coverage qualification sees
+# unambiguous shipped bytes: canonical last-wins JSON for duplicate-key
+# package manifests, and real directories in place of directory aliases
+# whose subtree could hide unscanned metadata. The scanner policy is
+# unchanged and this fails the build if anything remains unresolvable.
+RUN /usr/bin/python3 /opt/lyrashield/normalize_rootfs_metadata.py --root /
 
 # Start as root: the entrypoint performs the privileged startup phase, then
 # irreversibly execs the agent phase as the unprivileged pentester user.
