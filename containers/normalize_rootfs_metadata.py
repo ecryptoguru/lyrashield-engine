@@ -225,7 +225,7 @@ def canonicalize_npm_metadata(root: Path) -> list[str]:
             raise ValueError(f"package metadata exceeds size budget: {relative}")
         try:
             canonical, changed_flag = canonical_with_last_wins(data)
-        except (UnicodeDecodeError, ValueError) as error:
+        except (UnicodeDecodeError, TypeError, ValueError) as error:
             raise ValueError(f"malformed package metadata: {relative}: {error}") from None
         if changed_flag:
             info = os.lstat(path)
