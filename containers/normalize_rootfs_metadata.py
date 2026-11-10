@@ -446,8 +446,9 @@ def python_roots(root: Path, *, _budget: Budget | None = None) -> list[Path]:
                 candidates = [
                     path
                     for base in candidates
-                    for path, _info in _children(base, root, budget)
+                    for path, info in _children(base, root, budget)
                     if fnmatch.fnmatchcase(path.name, component)
+                    and not stat.S_ISREG(info.st_mode)
                     and _existing_directory(path, root, budget)
                 ]
         for candidate in candidates:

@@ -327,6 +327,20 @@ class TestIdempotency:
 
 
 class TestAdversarialRootfs:
+    @pytest.mark.parametrize("prefix", ["usr/lib", "usr/local/lib"])
+    def test_python_root_discovery_skips_regular_zip_siblings(
+        self, tmp_path: Path, prefix: str
+    ) -> None:
+        packages = tmp_path / prefix / "python3.12" / "dist-packages"
+        packages.mkdir(parents=True)
+        archive = tmp_path / prefix / "python312.zip"
+        archive.write_bytes(b"unrelated python archive")
+
+        roots = API["python_roots"](tmp_path)
+
+        assert packages in roots
+        assert archive.read_bytes() == b"unrelated python archive"
+
     def test_predictable_file_staging_symlink_never_overwrites_outside(
         self, tmp_path: Path
     ) -> None:
