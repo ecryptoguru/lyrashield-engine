@@ -10,7 +10,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { fontconfigOverlay, unpackFonts } from "./ci-browser-fonts.mjs";
+import {
+  FONT_COMPRESSED_LIMIT,
+  fontconfigOverlay,
+  unpackFonts,
+} from "./ci-browser-fonts.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,12 +33,18 @@ const maxBuffer = 32 * 1024 * 1024;
 function runCommand(
   command,
   args,
-  { timeout = 30_000, binary = false, input, env } = {},
+  {
+    timeout = 30_000,
+    binary = false,
+    input,
+    env,
+    outputLimit = maxBuffer,
+  } = {},
 ) {
   const result = spawnSync(command, args, {
     encoding: binary ? null : "utf8",
     timeout,
-    maxBuffer,
+    maxBuffer: outputLimit,
     input,
     env,
   });
@@ -227,7 +237,7 @@ export async function startBrowser({
     const archive = run(
       "docker",
       ["exec", id, "node", "/tmp/ci-browser/container.mjs", "font-archive"],
-      { binary: true, timeout: 120_000 },
+      { binary: true, timeout: 120_000, outputLimit: FONT_COMPRESSED_LIMIT },
     );
     // The bounded private overlay remains under RUNNER_TEMP for GitHub job
     // cleanup. No stored dynamic path grants recursive host deletion authority.

@@ -114,7 +114,7 @@ try {
       files.length > 0 &&
         files.length < 512 &&
         files.reduce((sum, file) => sum + file.bytes.length, 0) <=
-          64 * 1024 * 1024,
+          FONT_DATA_LIMIT,
     );
     process.stdout.write(createFontArchive(files));
   } else throw new Error("Unknown container verification command");

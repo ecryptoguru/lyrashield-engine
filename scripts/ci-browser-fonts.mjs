@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 export const FONT_ARCHIVE_LIMIT = 128 * 1024 * 1024;
+export const FONT_COMPRESSED_LIMIT = 64 * 1024 * 1024;
 export const FONT_DATA_LIMIT = 96 * 1024 * 1024;
 export const FONT_FAMILIES = [
   "FreeSans",
@@ -68,7 +69,7 @@ function octal(bytes) {
 }
 
 export function readFontArchive(compressed) {
-  if (!Buffer.isBuffer(compressed) || compressed.length > 32 * 1024 * 1024)
+  if (!Buffer.isBuffer(compressed) || compressed.length > FONT_COMPRESSED_LIMIT)
     throw new Error("Font archive compressed size exceeds its bound");
   const archive = gunzipSync(compressed, {
     maxOutputLength: FONT_ARCHIVE_LIMIT,

@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createFontArchive } from "../ci-browser-fonts.mjs";
+import {
+  createFontArchive,
+  FONT_COMPRESSED_LIMIT,
+} from "../ci-browser-fonts.mjs";
 import {
   BROWSER_IMAGE,
   BROWSER_VERSION,
@@ -179,6 +182,15 @@ test("extracts pinned fonts and verifies the unchanged local browser runtime", a
         (call) => call.command === "node" && call.args.includes("install"),
       ).args,
       ["/locked/playwright/cli.js", "install", "chromium"],
+    );
+    const archiveCall = f.calls.find((call) =>
+      call.args.includes("font-archive"),
+    );
+    assert.equal(archiveCall.config.outputLimit, FONT_COMPRESSED_LIMIT);
+    assert.ok(
+      f.calls
+        .filter((call) => call !== archiveCall)
+        .every((call) => call.config.outputLimit === undefined),
     );
     const transfers = f.calls.filter((call) =>
       call.args.includes("--interactive"),

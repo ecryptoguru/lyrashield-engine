@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import {
   FONT_DATA_LIMIT,
+  FONT_COMPRESSED_LIMIT,
   createFontArchive,
   readFontArchive,
   unpackFonts,
@@ -81,7 +82,7 @@ test("rejects damaged headers, truncation and nonzero trailing data", () => {
 
 test("caps compressed and expanded archive data", () => {
   assert.throws(
-    () => readFontArchive(Buffer.alloc(32 * 1024 * 1024 + 1)),
+    () => readFontArchive(Buffer.alloc(FONT_COMPRESSED_LIMIT + 1)),
     /compressed size/,
   );
   assert.throws(() =>
@@ -112,4 +113,14 @@ test("includes the required WenQuanYi TrueType collection within the measured im
   // The exact pinned image contains 195 regular assets totaling 69,271,220 bytes.
   assert.ok(FONT_DATA_LIMIT > 69_271_220);
   assert.equal(FONT_DATA_LIMIT, 96 * 1024 * 1024);
+});
+
+test("font transport and export bounds cover the measured pinned archive", () => {
+  assert.ok(FONT_COMPRESSED_LIMIT > 39_459_956);
+  assert.equal(FONT_COMPRESSED_LIMIT, 64 * 1024 * 1024);
+  const source = readFileSync(
+    new URL("../ci-browser-container.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /files\.reduce\([\s\S]*?<=\s*FONT_DATA_LIMIT/);
 });
