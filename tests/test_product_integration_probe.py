@@ -22,6 +22,18 @@ PRODUCT = product_integration_probe.PRODUCT_REPO
 INSTALLED = (PRODUCT / ".github/scripts/run-user-scan-slot-runtime.mjs").is_file()
 
 
+def probe_timeout_seconds(*, margin: float = 300) -> float:
+    # Pre/postflight allow up to three 20s commands and eighteen 10s git calls.
+    # The remaining margin covers process startup and local source reads.
+    return (
+        product_integration_probe.CHILD_TIMEOUT_SECONDS
+        + product_integration_probe.CHILD_INTERRUPT_SECONDS
+        + product_integration_probe.CHILD_KILL_SECONDS
+        + product_integration_probe.CLEANUP_TIMEOUT_SECONDS
+        + margin
+    )
+
+
 def test_opt_in_uses_the_probe_default_product_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -182,6 +194,71 @@ def test_parent_cleanup_has_a_global_deadline(
     assert time.monotonic() - started < 2
 
 
+def test_outer_deadline_allows_forced_child_cleanup_to_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owned = "a" * 64
+    expected = "sha256:" + "d" * 64
+    identity = "fixture-parent"
+    docker, marker = cleanup_docker(
+        tmp_path,
+        {
+            owned: {
+                "Id": owned,
+                "Image": expected,
+                "Config": {
+                    "Image": "redis:7-alpine",
+                    "Labels": {product_integration_probe.OWNERSHIP_LABEL: identity},
+                },
+            }
+        },
+    )
+    budgets = {
+        "CHILD_TIMEOUT_SECONDS": 0.2,
+        "CHILD_INTERRUPT_SECONDS": 0.2,
+        "CHILD_KILL_SECONDS": 0.1,
+        "CLEANUP_TIMEOUT_SECONDS": 0.5,
+    }
+    for name, budget in budgets.items():
+        monkeypatch.setattr(product_integration_probe, name, budget)
+    child = (
+        "import signal,time\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        f"print('OWNED_CREATED:{owned}', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    parent = (
+        "import sys,time\n"
+        "from pathlib import Path\n"
+        "from benchmarks import product_integration_probe as probe\n"
+        + "".join(f"probe.{name} = {budget}\n" for name, budget in budgets.items())
+        + "def cleanup(output):\n"
+        "    time.sleep(0.25)\n"
+        f"    result = probe.cleanup_owned_containers(output, docker={str(docker)!r}, "
+        f"env={{}}, cwd=Path({str(tmp_path)!r}), identity={identity!r}, "
+        f"image_ids={{'redis:7-alpine': {expected!r}}})\n"
+        "    print('PARENT_CLEANUP_FINISHED', flush=True)\n"
+        "    return result\n"
+        "try:\n"
+        f"    probe.run_child([sys.executable, '-c', {child!r}], env={{}}, "
+        f"cwd=Path({str(tmp_path)!r}), cleanup=cleanup)\n"
+        "except RuntimeError as error: print(error)\n"
+        "else: raise SystemExit('child did not time out')\n"
+    )
+    proc = subprocess.run(  # noqa: S603 -- controlled parent/child and fake Docker regression
+        [sys.executable, "-c", parent],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=probe_timeout_seconds(margin=2),
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "PARENT_CLEANUP_FINISHED" in proc.stdout
+    assert "all logged owned containers removed" in proc.stdout
+    assert json.loads(marker.read_text().splitlines()[-1]) == ["rm", "--force", "--volumes", owned]
+
+
 def test_failed_run_reports_only_its_unconfirmed_container_ids() -> None:
     first, second = "a" * 64, "b" * 64
     output = f"OWNED_CREATED:{first}\nOWNED_CREATED:{second}\nOWNED_REMOVED:{first}\n"
@@ -326,7 +403,7 @@ def test_owned_postgres_redis_run_records_product_queue_evidence() -> None:
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=600,
+        timeout=probe_timeout_seconds(),
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
