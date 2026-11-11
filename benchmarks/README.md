@@ -14,6 +14,12 @@ Upstream details remain available in the [usestrix/benchmarks repository](https:
 
 The versioned corpora live in [`corpus/v1`](./corpus/v1/README.md), [`corpus/v2`](./corpus/v2/corpus.json), and [`corpus/v3`](./corpus/v3/README.md). V3 keeps the historical cases, adds PHP and frozen-SCA fixtures, records identity/retest and partial-result scenarios, and binds adjudication, held-out, advisory, and path-profile contracts. The runner defaults to v3 and scores one-to-one outcomes with raw denominators and Wilson intervals only when the claim gates are reportable. See the [corpus inventory](./CORPUS-INVENTORY.md) for historical contents and limits.
 
+When scoring bound records, malformed non-null finding file, rule ID, or line fields invalidate the receipt instead of earning case-match credit. Missing locations remain unmatched; a corpus-declared absence control can still match without a line. Existing historical receipts are not rewritten.
+
+The [original evaluation execution report](../execution-task-8-evaluation-report.md) retains evidence for implementation head `3d2b1e0a`, including its failed Docker timing assertion. Its completion statement applies to that earlier repository task, not current runtime qualification or the new integration revision. The deadline fixture repair and refreshed source require their own verification; no historical result is relabeled successful.
+
+A successful run must record an integer zero process return code. Missing or non-integer values make the result incomplete; this validation does not authenticate a manifest or detect intentional manifest-only edits.
+
 ## Evaluation requirements
 
 Before changing orchestration for claimed quality gains—or publishing any result claim—build a private, versioned corpus that records:

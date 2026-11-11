@@ -215,6 +215,22 @@ def test_ambiguous_scenarios_remain_in_the_category_ledger(tmp_path: Path) -> No
     )
 
 
+@pytest.mark.parametrize("returncode", [False, 0.0, None, "0", -1])
+def test_v3_scoring_requires_an_integer_zero_exit_code(tmp_path: Path, returncode: Any) -> None:
+    corpus = json.loads((CORPUS_DIR / "corpus.json").read_text(encoding="utf-8"))
+    result_dir, manifest = _result_fixture(tmp_path, [])
+    assert score_v3(result_dir, CORPUS_DIR, corpus)["failedRuns"] == 0
+    manifest["runs"][0]["returncode"] = returncode
+    (result_dir / "run-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    summary = score_v3(result_dir, CORPUS_DIR, corpus)
+    assert summary["status"] == "INCOMPLETE"
+    assert summary["failedRuns"] == 1
+    assert any(
+        item.get("category") == "failed_run" and item.get("scanId") == manifest["runs"][0]["scanId"]
+        for item in summary["categories"]["incomplete"]
+    )
+
+
 def test_scoring_rejects_detector_evidence_from_another_path_profile(tmp_path: Path) -> None:
     corpus = json.loads((CORPUS_DIR / "corpus.json").read_text(encoding="utf-8"))
     result_dir, manifest = _result_fixture(tmp_path, [])

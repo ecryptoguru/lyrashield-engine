@@ -351,7 +351,9 @@ def score_v3(  # noqa: PLR0912, PLR0915 - the category ledger is intentionally e
         )
 
     failed_runs = [
-        run for run in manifest["runs"] if run.get("returncode") != 0 or run.get("errors")
+        run
+        for run in manifest["runs"]
+        if type(run.get("returncode")) is not int or run["returncode"] != 0 or run.get("errors")
     ]
     incomplete.extend(
         {"category": "failed_run", "scanId": run.get("scanId")} for run in failed_runs

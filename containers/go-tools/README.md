@@ -71,6 +71,11 @@ A deliberately vulnerable historical Interactsh application inventory must
 match CVE-2024-5262 and fail the same HIGH/CRITICAL scanner policy as a negative
 control. The binary dependency audits and all raw retained rows remain separate.
 
+The reviewed publisher also requires the `lyrashield:binary:path` property on
+each distro application component. That property binds the installed
+`/usr/bin` ELF file, its SPDX file checksum, and its embedded Go relationship
+slice to one reviewed application coordinate.
+
 Every build runs both affected Trivy source test packages with the locked graph,
 jsonv2 experiment and fixed compiler. Runtime compression regressions use larger
 independently C-encoded Zstandard and XZ fixtures. They reject literal-token

@@ -156,7 +156,7 @@ jobs:
       id-token: write
       attestations: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -214,13 +214,55 @@ jobs:
           with open("evidence/qualification.json", "w", encoding="utf8") as out:
               json.dump(evidence, out, sort_keys=True, separators=(",", ":"))
           PY
-      - name: Generate an SPDX SBOM for the published digest
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - name: Install checksum-pinned Syft
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --connect-timeout 30 --max-time 180 \
+            https://github.com/anchore/syft/releases/download/v1.56.0/syft_1.56.0_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/syft.tar.gz"
+          printf '%s  %s\n' 1c2493cfcf52d3367d6cb25780d9190c111c2219c34c820574c43e8bae15c528 "$RUNNER_TEMP/syft.tar.gz" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP" syft
+          python3 scripts/check_syft_cataloger.py "$RUNNER_TEMP/syft"
+          printf '%s\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.index.outputs.digest }}
-          output-file: sandbox.spdx.json
-          artifact-name: lyrashield-sandbox-${{ needs.resolve.outputs.revision }}.spdx.json
-          upload-release-assets: false
+          version: 1.3.6
+      - name: Generate per-platform SPDX SBOMs
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          mkdir -p evidence/sboms
+          for arch in amd64 arm64; do
+            child="$(python3 -c 'import json,sys; print(json.load(open("evidence/children.json"))[sys.argv[1]])' "$arch")"
+            [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools inspect "$image@$child" --raw > "evidence/$arch.manifest.json"
+            syft scan "registry:$image@$child" --platform "linux/$arch" \
+              -o "spdx-json=evidence/sboms/sandbox-$arch.spdx.json"
+          done
+      - name: Attach and validate complete SBOM artifact
+        id: sbom
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          (
+            cd evidence/sboms
+            oras attach --artifact-type application/vnd.lyrashield.sandbox-sbom.v1 \
+              --export-manifest ../sbom-artifact.json --format json "$image@$INDEX_DIGEST" \
+              sandbox-amd64.spdx.json:application/spdx+json \
+              sandbox-arm64.spdx.json:application/spdx+json > ../sbom-attach.json
+          )
+          artifact="$(python3 -c 'import json,sys; x=json.load(open("evidence/sbom-attach.json")); assert x["reference"] == sys.argv[1]+"@"+x["digest"]; print(x["digest"])' "$image")"
+          [[ "$artifact" =~ ^sha256:[0-9a-f]{64}$ ]]
+          python3 scripts/prepare_sandbox_sbom.py \
+            --qualification evidence/qualification.json --index-metadata evidence/index-metadata.json \
+            --amd64-manifest evidence/amd64.manifest.json --arm64-manifest evidence/arm64.manifest.json \
+            --artifact-manifest evidence/sbom-artifact.json --artifact-digest "$artifact" \
+            --image "$image" --sbom-dir evidence/sboms --output evidence/sbom-predicate.json
+          printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
       - name: Sign provenance for the immutable image digest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -237,14 +279,228 @@ jobs:
           predicate-path: evidence/qualification.json
           push-to-registry: true
           create-storage-record: false
-      - name: Attest the generated SBOM
+      - name: Sign per-platform SBOM binding
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.index.outputs.digest }}
-          sbom-path: sandbox.spdx.json
+          predicate-type: https://lyrashieldai.com/attestations/sandbox-sbom/v1
+          predicate-path: evidence/sbom-predicate.json
           push-to-registry: true
           create-storage-record: false
+      - name: Verify signed sandbox publication
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+          ARTIFACT_DIGEST: ${{ steps.sbom.outputs.artifact }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          mkdir -p evidence/verified evidence/retrieved
+          for pair in \
+            'provenance https://slsa.dev/provenance/v1' \
+            'qualification https://lyrashieldai.com/attestations/sandbox-qualification/v1' \
+            'sbom https://lyrashieldai.com/attestations/sandbox-sbom/v1'; do
+            read -r name predicate <<< "$pair"
+            verified=false
+            for _ in 1 2 3 4 5; do
+              if gh attestation verify "oci://$image@$INDEX_DIGEST" --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-sandbox.yml" \
+                --signer-digest "$GITHUB_SHA" --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF" \
+                --deny-self-hosted-runners --bundle-from-oci --predicate-type "$predicate" --format json \
+                > "evidence/verified/$name.json"; then
+                verified=true
+                break
+              fi
+              sleep 5
+            done
+            [[ "$verified" == true ]]
+          done
+          python3 scripts/check_sandbox_attestations.py \
+            --repo "$GITHUB_REPOSITORY" --image "$image" --digest "$INDEX_DIGEST" \
+            --revision "$GITHUB_SHA" --ref "$GITHUB_REF" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --phase publication \
+            --provenance evidence/verified/provenance.json \
+            --qualification evidence/verified/qualification.json --sbom evidence/verified/sbom.json \
+            --expected-qualification evidence/qualification.json --expected-sbom evidence/sbom-predicate.json
+          oras manifest fetch "$image@$ARTIFACT_DIGEST" > evidence/retrieved-artifact.json
+          oras pull "$image@$ARTIFACT_DIGEST" --output evidence/retrieved
+          python3 scripts/prepare_sandbox_sbom.py \
+            --qualification evidence/qualification.json --index-metadata evidence/index-metadata.json \
+            --amd64-manifest evidence/amd64.manifest.json --arm64-manifest evidence/arm64.manifest.json \
+            --artifact-manifest evidence/retrieved-artifact.json --artifact-digest "$ARTIFACT_DIGEST" \
+            --image "$image" --sbom-dir evidence/retrieved --output evidence/retrieved-predicate.json
+          cmp evidence/sbom-predicate.json evidence/retrieved-predicate.json
+      - name: Install checksum-pinned Go metadata inspector
+        run: |
+          set -euo pipefail
+          go_archive="$RUNNER_TEMP/go1.27.3.linux-amd64.tar.gz"
+          curl --fail --location --retry 3 --connect-timeout 30 --max-time 180 \
+            https://go.dev/dl/go1.27.3.linux-amd64.tar.gz --output "$go_archive"
+          printf '%s  %s\n' 65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40 "$go_archive" | sha256sum --check --status
+          mkdir -p "$RUNNER_TEMP/go-metadata"
+          # The trimmed go binary locates GOROOT relative to itself, so the
+          # whole toolchain tree is required; extracting go/bin/go alone
+          # fails with "cannot find GOROOT directory".
+          tar -xzf "$go_archive" -C "$RUNNER_TEMP/go-metadata"
+          go_tool="$RUNNER_TEMP/go-metadata/go/bin/go"
+          test "$("$go_tool" version)" = 'go version go1.27.3 linux/amd64'
+          go_tool_sha256="$(sha256sum "$go_tool" | cut -d' ' -f1)"
+          [[ "$go_tool_sha256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'GO_METADATA_TOOL=%s\nGO_METADATA_TOOL_SHA256=%s\n' "$go_tool" "$go_tool_sha256" >> "$GITHUB_ENV"
+      - name: Qualify bounded SBOM coverage on both native images
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          docker_server_raw="$(docker version --format '{{.Server.Version}}/{{.Server.GitCommit}}')"
+          [[ "$docker_server_raw" =~ ^[A-Za-z0-9._+/:-]{1,256}$ ]]
+          container=""
+          child=""
+          platform_dir=""
+          cleanup_platform() {
+            if [[ -n "$container" ]]; then
+              docker rm -f "$container" >/dev/null 2>&1 || true
+              container=""
+            fi
+            if [[ -n "$child" ]]; then
+              docker image rm "$image@$child" >/dev/null 2>&1 || true
+            fi
+            if [[ -n "$platform_dir" ]]; then
+              rm -f "$platform_dir/rootfs.tar"
+              rm -rf "$platform_dir/captures"
+            fi
+          }
+          trap cleanup_platform EXIT
+          for arch in amd64 arm64; do
+            cleanup_platform
+            platform_dir="evidence/coverage/$arch"
+            install -d -m 700 "$platform_dir" "$platform_dir/captures"
+            child="$(python3 -c 'import json,sys; print(json.load(open("evidence/qualification.json"))["platformManifests"][sys.argv[1]])' "$arch")"
+            [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools inspect "$image@$child" --raw > "$platform_dir/manifest.json"
+            read -r config_digest config_size < <(
+              python3 - "$platform_dir/manifest.json" "$child" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          path, expected = Path(sys.argv[1]), sys.argv[2]
+          raw = path.read_bytes()
+          if "sha256:" + hashlib.sha256(raw).hexdigest() != expected and raw.endswith(b"\n"):
+              normalized = raw[:-1]
+              if "sha256:" + hashlib.sha256(normalized).hexdigest() != expected:
+                  raise SystemExit("manifest bytes differ from qualified child")
+              raw = normalized
+          elif "sha256:" + hashlib.sha256(raw).hexdigest() != expected:
+              raise SystemExit("manifest bytes differ from qualified child")
+          manifest = json.loads(raw)
+          config = manifest["config"]
+          assert manifest["schemaVersion"] == 2
+          assert isinstance(config["digest"], str) and len(config["digest"]) == 71
+          assert type(config["size"]) is int and config["size"] > 0
+          print(config["digest"], config["size"])
+          PY
+            )
+            [[ "$config_digest" =~ ^sha256:[0-9a-f]{64}$ && "$config_size" =~ ^[1-9][0-9]*$ ]]
+            oras blob fetch --output "$platform_dir/config.json" "$image@$config_digest"
+            test "$(stat -c %s "$platform_dir/config.json")" = "$config_size"
+            docker pull --platform "linux/$arch" "$image@$child" >/dev/null
+            container="$(docker create --platform "linux/$arch" --network none "$image@$child")"
+            [[ "$container" =~ ^[0-9a-f]{64}$ ]]
+            docker image inspect "$image@$child" > "$platform_dir/image-inspect.json"
+            docker inspect "$container" > "$platform_dir/container-inspect.json"
+            # The positional parameters are intentionally evaluated by the child bash process.
+            # shellcheck disable=SC2016
+            timeout 900s bash -c 'set -o pipefail; docker export "$1" | head -c 8589934593 > "$2"' _ "$container" "$platform_dir/rootfs.tar"
+            rootfs_size="$(stat -c %s "$platform_dir/rootfs.tar")"
+            test "$rootfs_size" -le 8589934592
+            rootfs_digest="sha256:$(sha256sum "$platform_dir/rootfs.tar" | cut -d' ' -f1)"
+            python3 -m scripts.check_sandbox_sbom_coverage platform \
+              --architecture "$arch" --image "$image" \
+              --qualification evidence/qualification.json --sbom-predicate evidence/sbom-predicate.json \
+              --manifest "$platform_dir/manifest.json" --config "$platform_dir/config.json" \
+              --image-inspect "$platform_dir/image-inspect.json" \
+              --container-inspect "$platform_dir/container-inspect.json" \
+              --container-id "$container" \
+              --rootfs "$platform_dir/rootfs.tar" --expected-rootfs-digest "$rootfs_digest" \
+              --spdx "evidence/retrieved/sandbox-$arch.spdx.json" \
+              --go-tool "$GO_METADATA_TOOL" --expected-go-tool-digest "$GO_METADATA_TOOL_SHA256" \
+              --applications containers/go-tools/applications.json \
+              --distro-applications containers/go-tools/distro/applications.cdx.json \
+              --docker-server "$docker_server_raw" \
+              --capture-dir "$platform_dir/captures" --output "$platform_dir/receipt.json"
+            sha256sum "$platform_dir/receipt.json" > "$platform_dir/receipt.sha256"
+            cleanup_platform
+          done
+          trap - EXIT
+          test -f evidence/coverage/amd64/receipt.json
+          test -f evidence/coverage/arm64/receipt.json
+      - name: Assemble bounded SBOM coverage predicate
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          docker_server_raw="$(docker version --format '{{.Server.Version}}/{{.Server.GitCommit}}')"
+          [[ "$docker_server_raw" =~ ^[A-Za-z0-9._+/:-]{1,256}$ ]]
+          python3 -m scripts.check_sandbox_sbom_coverage aggregate \
+            --qualification evidence/qualification.json --sbom-predicate evidence/sbom-predicate.json \
+            --image "$image" \
+            --applications containers/go-tools/applications.json \
+            --distro-applications containers/go-tools/distro/applications.cdx.json \
+            --expected-go-tool-digest "$GO_METADATA_TOOL_SHA256" \
+            --docker-server "$docker_server_raw" \
+            --amd64-receipt evidence/coverage/amd64/receipt.json \
+            --arm64-receipt evidence/coverage/arm64/receipt.json \
+            --output evidence/coverage/coverage-predicate.json
+          sha256sum evidence/coverage/coverage-predicate.json > evidence/coverage/coverage-predicate.sha256
+      - name: Sign bounded SBOM coverage qualification
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          predicate-type: https://lyrashieldai.com/attestations/sandbox-sbom-coverage/v1
+          predicate-path: evidence/coverage/coverage-predicate.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Verify signed sandbox publication coverage
+        env:
+          INDEX_DIGEST: ${{ steps.index.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$IMAGE_NAME"
+          verified=false
+          for _ in 1 2 3 4 5; do
+            if gh attestation verify "oci://$image@$INDEX_DIGEST" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-sandbox.yml" \
+              --signer-digest "$GITHUB_SHA" --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF" \
+              --deny-self-hosted-runners --bundle-from-oci \
+              --predicate-type https://lyrashieldai.com/attestations/sandbox-sbom-coverage/v1 --format json \
+              > evidence/verified/coverage.json; then
+              verified=true
+              break
+            fi
+            sleep 5
+          done
+          [[ "$verified" == true ]]
+          python3 scripts/check_sandbox_attestations.py \
+            --repo "$GITHUB_REPOSITORY" --image "$image" --digest "$INDEX_DIGEST" \
+            --revision "$GITHUB_SHA" --ref "$GITHUB_REF" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --phase coverage \
+            --provenance evidence/verified/provenance.json \
+            --qualification evidence/verified/qualification.json --sbom evidence/verified/sbom.json \
+            --coverage evidence/verified/coverage.json \
+            --expected-qualification evidence/qualification.json \
+            --expected-sbom evidence/sbom-predicate.json \
+            --expected-coverage evidence/coverage/coverage-predicate.json
+      - name: Upload bounded SBOM coverage evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sandbox-sbom-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/coverage
+          if-no-files-found: error
+          retention-days: 30
+      - name: Hold promotion pending independent package coverage
+        run: |
+          echo '::error::Independent package coverage for both native images has not been qualified.'
+          exit 1
       - name: Promote the smoke-qualified digest
         env:
           RELEASE_TAG: ${{ github.ref_name }}
