@@ -1,7 +1,8 @@
 /** Invoke the product's owned PostgreSQL/Redis fixture with offline-only tools. */
 import { execFile } from "node:child_process"
 import { readFile } from "node:fs/promises"
-import { join, resolve } from "node:path"
+import { lstatSync, realpathSync } from "node:fs"
+import { basename, join, resolve, sep } from "node:path"
 import { pathToFileURL } from "node:url"
 
 function arg(name) {
@@ -13,6 +14,9 @@ function arg(name) {
 const product = resolve(arg("product"))
 const docker = resolve(arg("docker"))
 const dockerHost = arg("docker-host")
+const identity = arg("identity")
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(identity))
+  throw new Error("invalid diagnostic ownership identity")
 const pnpm = resolve(arg("pnpm"))
 const corepackHome = resolve(arg("corepack-home"))
 const temporary = resolve(arg("temporary"))
@@ -36,10 +40,34 @@ function dockerArguments(args) {
   if (action === "create") {
     const image = args.at(-1)
     const expectedPort = image === "postgres:16-alpine" ? "127.0.0.1::5432" : "127.0.0.1::6379"
-    if (!images.has(image) || !args.includes(expectedPort) || args.includes("--network=host")) {
+    const label = args[2]
+    const envFile = args[6]
+    const validEnv =
+      image !== "postgres:16-alpine" ||
+      (args[5] === "--env-file" &&
+        basename(envFile) === "postgres.env" &&
+        lstatSync(envFile).isFile() &&
+        realpathSync(envFile).startsWith(`${realpathSync(temporary)}${sep}`))
+    if (
+      !images.has(image) ||
+      args.length !== (image === "postgres:16-alpine" ? 8 : 6) ||
+      args[1] !== "--label" ||
+      !/^lyrashield\.user-scan-slot-fixture=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        label
+      ) ||
+      args[3] !== "--publish" ||
+      args[4] !== expectedPort ||
+      !validEnv
+    ) {
       throw new Error("refusing non-fixture container creation")
     }
-    return ["create", "--pull=never", ...args.slice(1)]
+    return [
+      "create",
+      "--pull=never",
+      "--label",
+      `lyrashield.product-integration-probe=${identity}`,
+      ...args.slice(1)
+    ]
   }
   const containerId =
     action === "inspect" || action === "start"
@@ -51,8 +79,13 @@ function dockerArguments(args) {
           : undefined
   if (!containerId || !owned.has(containerId))
     throw new Error("refusing non-owned Docker operation")
-  if (action === "inspect" || action === "start" || action === "exec" || action === "rm")
+  if ((action === "inspect" || action === "start") && args.length === 2) return args
+  if (action === "rm" && args.length === 4 && args[1] === "--force" && args[2] === "--volumes")
     return args
+  if (action === "exec") {
+    const command = args[args[1] === "-i" ? 3 : 2]
+    if (["pg_isready", "psql", "redis-cli"].includes(command)) return args
+  }
   throw new Error("unsupported Docker operation")
 }
 

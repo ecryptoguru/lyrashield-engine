@@ -105,7 +105,8 @@ case or profile is measured by this diagnostic.
 
 This diagnostic invokes the product's existing owned-fixture suite with fresh
 loopback PostgreSQL and Redis containers. It requires cached `postgres:16-alpine`
-and `redis:7-alpine` images, an installed product checkout, and a clean product
+and `redis:7-alpine` images, a clean engine checkout, an installed product
+checkout, and a clean product
 HEAD matching its locally refreshed `origin/main`:
 
 ```sh
@@ -115,6 +116,8 @@ LYRASHIELD_AI_DIR=/path/to/lyrashield-ai \
 
 The launcher rejects remote Docker contexts, prevents image pulls, restricts
 operations to its own container IDs and removes those services after the run.
+Forced child timeouts trigger bounded parent cleanup that independently verifies
+each logged container's per-run ownership label and captured image identity.
 It requires macOS `sandbox-exec` and confines fixture-process filesystem writes
 to its private temporary directory, keeping the product checkout read-only.
 It executes the product's real restricted-role database, scan admission and

@@ -11,8 +11,15 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
+from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from benchmarks.corpus.v3.validate import validate
 from benchmarks.offline_sca_probe import digest
@@ -23,6 +30,11 @@ CORPUS = BENCH_ROOT / "corpus/v3"
 RUNNER = BENCH_ROOT / "run_product_integration.mjs"
 IMAGES = ("postgres:16-alpine", "redis:7-alpine")
 HASH = re.compile(r"sha256:[0-9a-f]{64}")
+OWNERSHIP_LABEL = "lyrashield.product-integration-probe"
+CHILD_TIMEOUT_SECONDS = 480
+CHILD_INTERRUPT_SECONDS = 90
+CHILD_KILL_SECONDS = 10
+CLEANUP_TIMEOUT_SECONDS = 30
 
 
 def command(args: list[str], *, env: dict[str, str], cwd: Path) -> str:
@@ -121,6 +133,66 @@ def cleanup_description(output: str) -> str:
     return "no owned container identity logged; cleanup unknown"
 
 
+def cleanup_owned_containers(
+    output: str,
+    *,
+    docker: str,
+    env: dict[str, str],
+    cwd: Path,
+    identity: str,
+    image_ids: dict[str, str],
+) -> str:
+    """Remove only exact IDs independently verified against this invocation."""
+    created = set(re.findall(r"^OWNED_CREATED:([0-9a-f]{64})$", output, re.MULTILINE))
+    deadline = time.monotonic() + CLEANUP_TIMEOUT_SECONDS
+    # Child removal logs are not authority to skip an existing owned service.
+    for container_id in sorted(created):
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            inspected = subprocess.run(
+                [docker, "inspect", container_id],
+                env=env,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=min(5, remaining),
+                check=True,
+            )
+            records = json.loads(inspected.stdout)
+            if not isinstance(records, list) or len(records) != 1:
+                continue
+            record = records[0]
+            config = record.get("Config", {})
+            image = config.get("Image")
+            if (
+                record.get("Id") != container_id
+                or config.get("Labels", {}).get(OWNERSHIP_LABEL) != identity
+                or image not in image_ids
+                or record.get("Image") != image_ids[image]
+            ):
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            deleted = subprocess.run(
+                [docker, "rm", "--force", "--volumes", container_id],
+                env=env,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=min(5, remaining),
+                check=True,
+            )
+            if deleted.stdout.strip() == container_id:
+                output += f"\nOWNED_REMOVED:{container_id}\n"
+        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
+            # Failed or ambiguous cleanup is reported as unconfirmed, never adopted.
+            continue
+    return output
+
+
 def write_sandbox_profile(temporary: Path) -> str:
     root = json.dumps(str(temporary.resolve()))
     return (
@@ -129,25 +201,48 @@ def write_sandbox_profile(temporary: Path) -> str:
     )
 
 
-def run_child(args: list[str], *, env: dict[str, str], cwd: Path) -> tuple[str, str]:
+def run_child(
+    args: list[str], *, env: dict[str, str], cwd: Path, cleanup: Callable[[str], str]
+) -> tuple[str, str]:
     proc = subprocess.Popen(
-        args, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        args,
+        env=env,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
     try:
-        stdout, stderr = proc.communicate(timeout=480)
+        stdout, stderr = proc.communicate(timeout=CHILD_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         proc.send_signal(signal.SIGINT)
         try:
-            stdout, stderr = proc.communicate(timeout=90)
+            stdout, stderr = proc.communicate(timeout=CHILD_INTERRUPT_SECONDS)
         except subprocess.TimeoutExpired as exc:
-            proc.kill()
-            stdout, _stderr = proc.communicate()
-            raise RuntimeError(f"fixture timed out; {cleanup_description(stdout)}") from exc
-        raise RuntimeError(f"fixture timed out; {cleanup_description(stdout)}") from None
+            if os.name == "posix":
+                with suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+            try:
+                stdout, _stderr = proc.communicate(timeout=CHILD_KILL_SECONDS)
+            except subprocess.TimeoutExpired as final:
+                raw = final.output or b""
+                stdout = raw.decode(errors="replace") if isinstance(raw, bytes) else raw
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+            raise RuntimeError(
+                f"fixture timed out; {cleanup_description(cleanup(stdout))}"
+            ) from exc
+        raise RuntimeError(f"fixture timed out; {cleanup_description(cleanup(stdout))}") from None
     if proc.returncode != 0:
         output_hash = hashlib.sha256((stdout + stderr).encode()).hexdigest()
         raise RuntimeError(
-            f"fixture execution failed; {cleanup_description(stdout)}; output sha256 {output_hash}"
+            f"fixture execution failed; {cleanup_description(cleanup(stdout))}; "
+            f"output sha256 {output_hash}"
         )
     return stdout, stderr
 
@@ -176,6 +271,9 @@ def main() -> int:  # noqa: PLR0912, PLR0915 -- sequential fail-closed fixture o
                 "product source identity mismatch: "
                 "a clean checkout of refreshed origin/main is required"
             )
+        engine_source = source_state(BENCH_ROOT.parent)
+        if engine_source["dirty"]:
+            raise RuntimeError("a clean engine checkout is required")  # noqa: TRY301
         validate(CORPUS)
         sandbox = Path("/usr/bin/sandbox-exec")
         if sys.platform != "darwin" or not sandbox.is_file():
@@ -219,7 +317,7 @@ def main() -> int:  # noqa: PLR0912, PLR0915 -- sequential fail-closed fixture o
             "sandboxPath": str(sandbox),
             "sandboxSha256": digest(sandbox),
         }
-        sources = {"engine": source_state(BENCH_ROOT.parent), "product": product_source}
+        sources = {"engine": engine_source, "product": product_source}
         adjudication = json.loads((CORPUS / "adjudications.json").read_text())["review"]["status"]
         held_out = json.loads((CORPUS / "held-out.json").read_text())["status"]
         profiles = json.loads((BENCH_ROOT / "profiles/v1/paths.json").read_text())["profiles"]
@@ -233,6 +331,7 @@ def main() -> int:  # noqa: PLR0912, PLR0915 -- sequential fail-closed fixture o
                 "HOME": directory,
                 "TMPDIR": directory,
             }
+            identity = str(uuid.uuid4())
             stdout, stderr = run_child(
                 [
                     str(sandbox),
@@ -246,6 +345,8 @@ def main() -> int:  # noqa: PLR0912, PLR0915 -- sequential fail-closed fixture o
                     docker,
                     "--docker-host",
                     host,
+                    "--identity",
+                    identity,
                     "--pnpm",
                     pnpm,
                     "--corepack-home",
@@ -257,6 +358,14 @@ def main() -> int:  # noqa: PLR0912, PLR0915 -- sequential fail-closed fixture o
                 ],
                 env=child_env,
                 cwd=BENCH_ROOT.parent,
+                cleanup=lambda output: cleanup_owned_containers(
+                    output,
+                    docker=docker,
+                    env=docker_env,
+                    cwd=BENCH_ROOT.parent,
+                    identity=identity,
+                    image_ids=image_ids,
+                ),
             )
             lines = [
                 line.removeprefix("PRODUCTPROBE:")
