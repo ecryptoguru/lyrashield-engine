@@ -162,6 +162,13 @@ test("accepts measured PCF BDF accelerator reservations while enforcing stored b
   const excessive = Buffer.from(bytes);
   excessive.writeUInt32LE(16 * 1024 * 1024 + 1, 80);
   assert.throws(() => verifyBitmapFont(gzipSync(excessive)), /table bounds/);
+  const unrelated = Buffer.from(bytes);
+  unrelated.writeUInt32LE(101, 80);
+  assert.throws(() => verifyBitmapFont(gzipSync(unrelated)), /table bounds/);
+  const inkBounds = Buffer.from(bytes);
+  inkBounds.writeUInt32LE(0x100, 76);
+  assert.throws(() => verifyBitmapFont(gzipSync(inkBounds)), /table bounds/);
+  verifyBitmapFont(gzipSync(Buffer.concat([inkBounds, Buffer.alloc(24)])));
   assert.throws(
     () => verifyBitmapFont(gzipSync(bytes.subarray(0, 151))),
     /table bounds/,
