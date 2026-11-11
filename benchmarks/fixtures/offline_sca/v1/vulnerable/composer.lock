@@ -1,0 +1,10 @@
+{
+  "_readme": ["Synthetic package coordinates only; no network resolution."],
+  "content-hash": "b2c15dfbc2d95eea17990c907df971aa",
+  "packages": [
+    {
+      "name": "example/legacy-router",
+      "version": "2.3.0"
+    }
+  ]
+}

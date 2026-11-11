@@ -52,3 +52,27 @@ own exact runs and receipts exist. The current runner only executes
 `deterministic_core` and `local_engine_cli`; it rejects the other v3 profiles
 until dedicated harnesses and their required bindings exist. A
 deterministic-core run cannot stand in for another path.
+
+### Offline Composer diagnostic
+
+The local probe below runs the product's resolved dependency inventory and SCA
+scanner on a separately versioned synthetic Composer pair based on
+`PHP-COMPOSER-01`, using the checksum-bound synthetic advisory snapshot. It
+requires an installed product checkout and creates a new output directory:
+
+```sh
+LYRASHIELD_AI_DIR=/path/to/lyrashield-ai \
+  uv run python -m benchmarks.offline_sca_probe --output /path/to/new/receipt-directory
+```
+
+This diagnostic fixture set does not alter or execute the frozen v3 case bytes.
+The receipt binds the input files, source states, runner, local runtime shim,
+and retained result bytes. It records no qualified image or model route. The
+runner supplies a frozen advisory batch, denies fetch requests, and removes
+developer service configuration from the scanner process; this is not an
+operating-system network isolation proof. Its six other SCA corpus cases are
+TypeScript placeholders, not lockfiles. None of the v3 SCA cases are evaluated
+by this probe.
+The existing full-profile runner and scoring gates remain closed. All profiles
+remain `NOT_MEASURED`, independent adjudication is not complete, and held-out
+data is not provided. No benchmark claim follows from this diagnostic.
