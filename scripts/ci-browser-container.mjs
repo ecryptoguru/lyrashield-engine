@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { createFontArchive, FONT_FILE, FONT_FAMILIES } from "./fonts.mjs";
+import {
+  createFontArchive,
+  FONT_FILE,
+  FONT_FAMILIES,
+  FONT_DATA_LIMIT,
+} from "./fonts.mjs";
 
 const packages = [
   "xvfb",

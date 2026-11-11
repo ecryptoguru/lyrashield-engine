@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 export const FONT_ARCHIVE_LIMIT = 128 * 1024 * 1024;
-export const FONT_DATA_LIMIT = 64 * 1024 * 1024;
+export const FONT_DATA_LIMIT = 96 * 1024 * 1024;
 export const FONT_FAMILIES = [
   "FreeSans",
   "IPAGothic",
@@ -15,7 +15,7 @@ export const FONT_FAMILIES = [
   "Liberation Sans",
 ];
 export const FONT_FILE =
-  /^(?:truetype|opentype|type1|X11)\/[a-zA-Z0-9_./-]+\.(?:ttf|otf|pcf\.gz|enc\.gz|pfb|afm|t1|dir|alias|scale)$/;
+  /^(?:truetype|opentype|type1|X11)\/[a-zA-Z0-9_./-]+\.(?:ttf|ttc|otf|pcf\.gz|enc\.gz|pfb|afm|t1|dir|alias|scale)$/;
 
 export function createFontArchive(files) {
   const manifest = {

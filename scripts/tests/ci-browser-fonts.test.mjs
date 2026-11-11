@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import {
+  FONT_DATA_LIMIT,
   createFontArchive,
   readFontArchive,
   unpackFonts,
@@ -99,4 +100,16 @@ test("private fontconfig keeps host rules, gives its cache priority and escapes 
   assert.ok(config.includes("<reset-dirs/>"));
   assert.ok(config.includes("owned&amp;fonts&quot;"));
   assert.ok(config.includes("cache&lt;private&gt;"));
+});
+
+test("includes the required WenQuanYi TrueType collection within the measured image bound", () => {
+  const collection = {
+    path: "truetype/wqy/wqy-zenhei.ttc",
+    bytes: Buffer.from("collection fixture"),
+  };
+  const { entries } = readFontArchive(createFontArchive([collection]));
+  assert.deepEqual(entries.get(collection.path), collection.bytes);
+  // The exact pinned image contains 195 regular assets totaling 69,271,220 bytes.
+  assert.ok(FONT_DATA_LIMIT > 69_271_220);
+  assert.equal(FONT_DATA_LIMIT, 96 * 1024 * 1024);
 });
