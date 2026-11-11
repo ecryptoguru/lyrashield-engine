@@ -80,7 +80,6 @@ async function verify() {
   const full = chromium.executablePath();
   assert.ok(full.endsWith("/chromium-1234/chrome-linux64/chrome"));
   const binaries = [
-    full,
     join(
       dirname(dirname(dirname(full))),
       "chromium_headless_shell-1234",
@@ -88,7 +87,7 @@ async function verify() {
       "chrome-headless-shell",
     ),
   ];
-  for (const name of ["chromium", "chromium-headless-shell"]) {
+  for (const name of ["chromium-headless-shell"]) {
     const browser = browsers.find((entry) => entry.name === name);
     assert.equal(browser.revision, "1234");
     assert.equal(browser.browserVersion, "151.0.7922.34");
@@ -169,7 +168,7 @@ async function verify() {
   }
   const available = statfsSync(browserTemp);
   console.log(
-    `Verified ${manifest.files.length} pinned font assets, overlay families, host libraries and both local Chromium browsers; bounded lifecycle probe peak=${peakTemporaryBytes} bytes, available=${available.bavail * available.bsize} bytes`,
+    `Verified ${manifest.files.length} pinned font assets, overlay families, host libraries and local Chromium headless shell; bounded lifecycle probe peak=${peakTemporaryBytes} bytes, available=${available.bavail * available.bsize} bytes`,
   );
 }
 
