@@ -186,13 +186,14 @@ export function verifyBitmapFont(compressed) {
     const format = bytes.readUInt32LE(at + 4);
     const size = bytes.readUInt32LE(at + 8);
     const offset = bytes.readUInt32LE(at + 12);
+    const acceleratorSize = format & 0x100 ? 72 : 48;
     // The pinned legacy BDF accelerators reserve 100 bytes in the TOC but
     // store 48 bytes, or 72 bytes when the format includes ink bounds.
-    const stored =
-      type === 256 && size === 100 ? (format & 0x100 ? 72 : 48) : size;
+    const stored = type === 256 && size === 100 ? acceleratorSize : size;
     if (
       types.has(type) ||
       size < 4 ||
+      (type === 256 && size < acceleratorSize) ||
       size > 16 * 1024 * 1024 ||
       offset < start ||
       offset + stored > bytes.length

@@ -165,6 +165,9 @@ test("accepts measured PCF BDF accelerator reservations while enforcing stored b
   const unrelated = Buffer.from(bytes);
   unrelated.writeUInt32LE(101, 80);
   assert.throws(() => verifyBitmapFont(gzipSync(unrelated)), /table bounds/);
+  const undersized = Buffer.from(bytes);
+  undersized.writeUInt32LE(4, 80);
+  assert.throws(() => verifyBitmapFont(gzipSync(undersized)), /table bounds/);
   const inkBounds = Buffer.from(bytes);
   inkBounds.writeUInt32LE(0x100, 76);
   assert.throws(() => verifyBitmapFont(gzipSync(inkBounds)), /table bounds/);
