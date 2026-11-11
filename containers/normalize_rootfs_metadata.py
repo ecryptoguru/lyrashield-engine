@@ -14,12 +14,10 @@ both (duplicate JSON field; directory link that can expose unscanned
 metadata). Rather than weakening that policy, this build-time helper
 rewrites the image bytes so they are unambiguous:
 
-- every ``package.json`` under the declared npm metadata roots is parsed
-  strictly; if it contains duplicate keys it is rewritten in canonical
-  form, keeping the LAST value for each duplicated key. That is exactly
-  what every JSON consumer (Node's ``JSON.parse``, jq, Python ``json``,
-  Go) already resolves to, so the effective document is unchanged and
-  only the ambiguity is removed. Files without duplicates are untouched.
+- only identical, top-level duplicate ``types`` in source-map 0.8.0 and
+  ``engines`` in windows-release 6.0.0 are collapsed, plus the two exact
+  checksum-bound original image manifests. Duplicate identities and all
+  other conflicts fail closed. Files without duplicates are untouched.
 - every directory symlink under a declared metadata root whose target
   fails the scanner's own metadata-safety predicate is materialized:
   the symlink is replaced with a real directory containing a
@@ -41,12 +39,19 @@ inputs rather than in a Python package.
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
+import stat
 import sys
+import time
 from bisect import bisect_left
+from collections import deque
+from contextlib import contextmanager
 from email.parser import BytesParser
 from pathlib import Path
 
@@ -78,11 +83,285 @@ MAX_IDENTITY_CHARS = 1024
 # Bounds, mirroring the scanner budgets so the fix cannot do unbounded work.
 MAX_METADATA_BYTES = 32 * 1024 * 1024
 MAX_METADATA_FILES = 200_000
+MAX_TOTAL_METADATA_BYTES = 256 * 1024 * 1024
+MAX_DIRECTORY_ENTRIES = 1_000_000
+MAX_DIRECTORIES = 200_000
+MAX_DIRECTORY_DEPTH = 256
+MAX_PROCESS_SECONDS = 900
 MAX_LINK_DEPTH = 64
 MAX_MATERIALIZED_FILES = 100_000
 MAX_MATERIALIZED_BYTES = 8 * 1024 * 1024 * 1024
 
 METADATA_NAMES = ("package.json", "METADATA")
+REVIEWED_DUPLICATES = {
+    ("source-map", "0.8.0"): "types",
+    ("windows-release", "6.0.0"): "engines",
+}
+# Exact originals from both native images in held run 42538824189; fixtures
+# retain their bytes. This exception cannot normalize other identity/content.
+REVIEWED_DUPLICATE_INPUTS = {
+    ("source-map", "0.8.0"): "3982740d6a191217de9200430ec40ac7db82912801f9e318d20ed2420834b7ea",
+    ("windows-release", "6.0.0"): (
+        "4d30a8eaf0f3692f37b1ffd58170c7b739bc22748b84f613a370a069c3ae95c1"
+    ),
+}
+
+
+class Budget:
+    """One cumulative budget across discovery, normalization and verification."""
+
+    def __init__(self):
+        self.deadline = time.monotonic() + MAX_PROCESS_SECONDS
+        self.entries = 0
+        self.directories = 0
+        self.metadata_files = 0
+        self.metadata_bytes = 0
+        self.copy_files = 0
+        self.copy_bytes = 0
+
+    def check(self):
+        if time.monotonic() >= self.deadline:
+            raise ValueError("metadata normalization processing deadline exceeded")
+
+    def directory(self):
+        self.check()
+        self.directories += 1
+        if self.directories > MAX_DIRECTORIES:
+            raise ValueError("metadata directory count budget exceeded")
+
+    def entry(self):
+        self.check()
+        self.entries += 1
+        if self.entries > MAX_DIRECTORY_ENTRIES:
+            raise ValueError("metadata directory entry budget exceeded")
+
+    def metadata(self, size):
+        self.check()
+        self.metadata_files += 1
+        self.metadata_bytes += size
+        if self.metadata_files > MAX_METADATA_FILES:
+            raise ValueError("too many package metadata candidates")
+        if self.metadata_bytes > MAX_TOTAL_METADATA_BYTES:
+            raise ValueError("total metadata size budget exceeded")
+
+    def copy(self, size):
+        self.check()
+        self.copy_files += 1  # Directories, including empty ones, count too.
+        self.copy_bytes += size
+        if self.copy_files > MAX_MATERIALIZED_FILES:
+            raise ValueError("materialized metadata exceeds total file budget")
+        if self.copy_bytes > MAX_MATERIALIZED_BYTES:
+            raise ValueError("materialized metadata exceeds total copy budget")
+
+
+def image_root(root: Path) -> Path:
+    if root.is_symlink():
+        raise ValueError("image root must not be a symlink")
+    root = root.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("image root must be a directory")
+    _check_trusted_root(root.stat())
+    return root
+
+
+def _check_trusted_root(info):
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o022:
+        raise ValueError("trusted image root must be owned by euid and not group/world writable")
+
+
+def _resolve_path(path: Path, root: Path, budget: Budget) -> Path:
+    """Resolve every component without letting the host follow image symlinks.
+
+    Absolute symlink targets are image-absolute, not host-absolute. Reject an
+    escape before even stat'ing it, including through a symlinked ancestor.
+    """
+    budget.check()
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        raise ValueError(f"symlink target escapes image root: {path}") from None
+    pending = deque(parts)
+    current = root
+    seen = set()
+    while pending:
+        budget.check()
+        part = pending.popleft()
+        if part == "..":
+            if current == root:
+                raise ValueError(f"symlink target escapes image root: {path}")
+            current = current.parent
+            continue
+        candidate = current / part
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            if seen:
+                raise ValueError(f"symlink target does not exist: {path}") from None
+            raise
+        if stat.S_ISLNK(info.st_mode):
+            if candidate in seen:
+                raise ValueError(f"cyclic directory symlink: {path}")
+            seen.add(candidate)
+            if len(seen) > MAX_LINK_DEPTH:
+                raise ValueError(f"directory symlink chain too deep: {path}")
+            raw = candidate.readlink()
+            if raw.is_absolute():
+                current = root
+                raw = raw.relative_to("/")
+            pending.extendleft(reversed(raw.parts))
+        else:
+            current = candidate
+    return current
+
+
+def _open_relative(directory_fd: int, name: Path, flags: int) -> int:
+    """Open a relative entry through held, no-follow directory descriptors."""
+    if name.is_absolute() or ".." in name.parts:
+        raise ValueError("descriptor-relative path escapes directory")
+    parts = name.parts
+    directory = os.dup(directory_fd)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        if not parts:
+            return os.dup(directory)
+        return os.open(parts[-1], flags | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+    finally:
+        os.close(directory)
+
+
+def _open_beneath(path: Path, root: Path, flags: int) -> int:
+    """No-follow opens for the final entry AND each resolved parent."""
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        return _open_relative(root_fd, path.relative_to(root), flags)
+    finally:
+        os.close(root_fd)
+
+
+@contextmanager
+def _destination(path: Path, root: Path):
+    """Hold the trusted staging root and the destination's verified parent."""
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        _check_trusted_root(os.fstat(root_fd))
+        parent_fd = _open_relative(
+            root_fd, path.parent.relative_to(root), os.O_RDONLY | os.O_DIRECTORY
+        )
+        try:
+            yield root_fd, parent_fd
+        finally:
+            os.close(parent_fd)
+    finally:
+        os.close(root_fd)
+
+
+@contextmanager
+def _regular_file(path: Path, root: Path, budget: Budget):
+    resolved = _resolve_path(path, root, budget)
+    fd = _open_beneath(resolved, root, os.O_RDONLY | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"unsupported non-regular file: {path}")
+        yield stream, info
+
+
+def _read_metadata(path: Path, root: Path, budget: Budget) -> bytes:
+    with _regular_file(path, root, budget) as (stream, info):
+        if not 0 <= info.st_size <= MAX_METADATA_BYTES:
+            raise ValueError(f"package metadata exceeds size budget: {path}")
+        budget.metadata(info.st_size)
+        data = stream.read(MAX_METADATA_BYTES + 1)
+        budget.check()
+        if len(data) > MAX_METADATA_BYTES:
+            raise ValueError(f"package metadata exceeds size budget: {path}")
+        if len(data) != info.st_size:
+            raise ValueError(f"metadata changed during read: {path}")
+        return data
+
+
+def _children(path: Path, root: Path, budget: Budget):
+    budget.directory()
+    resolved = _resolve_path(path, root, budget)
+    fd = _open_beneath(resolved, root, os.O_RDONLY | os.O_DIRECTORY)
+    entries = []
+    try:
+        with os.scandir(fd) as scan:
+            for entry in scan:
+                budget.entry()
+                child = path / entry.name
+                info = entry.stat(follow_symlinks=False)
+                entries.append((child, info))
+    finally:
+        os.close(fd)
+    return sorted(entries, key=lambda entry: entry[0].name)
+
+
+def _walk_entries(target: Path, root: Path, budget: Budget):
+    stack = [(target, 0)]
+    while stack:
+        directory, depth = stack.pop()
+        if depth > MAX_DIRECTORY_DEPTH:
+            raise ValueError("metadata directory depth budget exceeded")
+        children = _children(directory, root, budget)
+        for path, info in children:
+            if stat.S_ISLNK(info.st_mode):
+                _resolve_path(path, root, budget)
+            yield path, info
+        stack.extend(
+            (path, depth + 1) for path, info in reversed(children) if stat.S_ISDIR(info.st_mode)
+        )
+
+
+def _existing_directory(path: Path, root: Path, budget: Budget) -> bool:
+    try:
+        resolved = _resolve_path(path, root, budget)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(resolved.lstat().st_mode):
+        raise ValueError(f"metadata root is not a directory: {path}")
+    return True
+
+
+def _staging(_path: Path, root: Path, *, directory: bool = False, _root_fd=None):
+    """Stage only under the trusted root, never a package-controlled parent."""
+    name = ".normalize-" + secrets.token_hex(16)
+    root_fd = (
+        os.dup(_root_fd)
+        if _root_fd is not None
+        else os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    )
+    try:
+        _check_trusted_root(os.fstat(root_fd))
+        if directory:
+            os.mkdir(name, mode=0o700, dir_fd=root_fd)
+            try:
+                fd = _open_relative(root_fd, Path(name), os.O_RDONLY | os.O_DIRECTORY)
+            except OSError:
+                os.rmdir(name, dir_fd=root_fd)
+                raise
+        else:
+            fd = _open_relative(root_fd, Path(name), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        return root / name, fd
+    finally:
+        os.close(root_fd)
+
+
+def _discard_staging(name: str, root_fd: int, *, directory: bool = False):
+    if directory:
+        if not shutil.rmtree.avoids_symlink_attacks:
+            raise ValueError("descriptor-relative staging cleanup requires safe rmtree")
+        shutil.rmtree(name, dir_fd=root_fd)
+    else:
+        os.unlink(name, dir_fd=root_fd)
+
+
+def _preserve_file_info(fd, info):
+    os.fchown(fd, info.st_uid, info.st_gid)
+    os.fchmod(fd, stat.S_IMODE(info.st_mode))
 
 
 def metadata_kind(name: str):
@@ -148,13 +427,32 @@ def guarded_scope(name: str):
     return None
 
 
-def python_roots(root: Path) -> list[Path]:
+def python_roots(root: Path, *, _budget: Budget | None = None) -> list[Path]:
     """Existing directories matching the declared python metadata roots."""
+    root = image_root(root)
+    budget = _budget or Budget()
     found = []
     seen = set()
     for pattern in PYTHON_ROOT_PATTERNS:
-        for candidate in sorted(root.glob(pattern)):
-            if candidate.is_dir() and str(candidate) not in seen:
+        candidates = [root]
+        for component in pattern.split("/"):
+            if "*" not in component:
+                candidates = [
+                    base / component
+                    for base in candidates
+                    if _existing_directory(base / component, root, budget)
+                ]
+            else:
+                candidates = [
+                    path
+                    for base in candidates
+                    for path, info in _children(base, root, budget)
+                    if fnmatch.fnmatchcase(path.name, component)
+                    and not stat.S_ISREG(info.st_mode)
+                    and _existing_directory(path, root, budget)
+                ]
+        for candidate in candidates:
+            if str(candidate) not in seen:
                 seen.add(str(candidate))
                 found.append(candidate)
     return found
@@ -167,23 +465,14 @@ def last_wins_pairs(pairs):
 
 
 def canonical_with_last_wins(data: bytes) -> tuple[bytes, bool]:
-    """Canonicalize JSON bytes, resolving duplicate keys last-wins.
-
-    Returns ``(canonical_bytes, changed)``. Raises ``ValueError`` on
-    malformed JSON or a non-object top level. ``changed`` is True only
-    when the input actually contains duplicate keys; the canonical form
-    is the value every JSON consumer already parses the input to (last
-    occurrence wins), so the effective document is unchanged. Files
-    without duplicates are reported unchanged so their bytes stay
-    untouched.
-    """
+    """Collapse identical reviewed fields or exact checksum-bound originals."""
     duplicates = []
 
     def pairs_hook(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                duplicates.append(key)
+                duplicates.append((result, key, result[key], value))
             result[key] = value
         return result
 
@@ -192,6 +481,20 @@ def canonical_with_last_wins(data: bytes) -> tuple[bytes, bool]:
         raise TypeError("package metadata must be a JSON object")
     if not duplicates:
         return data, False
+    identity = (parsed.get("name"), parsed.get("version"))
+    allowed = REVIEWED_DUPLICATES.get(identity)
+    exact_original = hashlib.sha256(data).hexdigest() == REVIEWED_DUPLICATE_INPUTS.get(identity)
+    for document, key, previous, value in duplicates:
+        if (
+            document is not parsed
+            or key != allowed
+            or (
+                not exact_original
+                and json.dumps(previous, sort_keys=True, allow_nan=False)
+                != json.dumps(value, sort_keys=True, allow_nan=False)
+            )
+        ):
+            raise ValueError(f"unreviewed duplicate {key} JSON field")
     canonical = (json.dumps(parsed, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     # Internal invariant: canonical bytes must read back to the same value.
     if json.loads(canonical, object_pairs_hook=last_wins_pairs) != parsed:
@@ -199,41 +502,53 @@ def canonical_with_last_wins(data: bytes) -> tuple[bytes, bool]:
     return canonical, True
 
 
-def iter_npm_metadata_files(root: Path):
+def iter_npm_metadata_files(root: Path, *, _budget: Budget | None = None):
     """Yield (relative_posix_name, absolute_path) for scanned npm metadata."""
+    root = image_root(root)
+    budget = _budget or Budget()
     for rel_root in NPM_ROOTS:
         base = root / rel_root
-        if not base.is_dir():
+        if not _existing_directory(base, root, budget):
             continue
-        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
-            dirnames.sort()
-            for filename in sorted(filenames):
-                path = Path(dirpath) / filename
-                relative = path.relative_to(root).as_posix()
-                if is_npm_metadata(relative) and path.is_file() and not path.is_symlink():
-                    yield relative, path
+        for path, info in _walk_entries(base, root, budget):
+            relative = path.relative_to(root).as_posix()
+            if is_npm_metadata(relative) and not stat.S_ISLNK(info.st_mode):
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError(f"unsupported package metadata entry: {relative}")
+                yield relative, _resolve_path(path, root, budget)
 
 
-def canonicalize_npm_metadata(root: Path) -> list[str]:
+def canonicalize_npm_metadata(root: Path, *, _budget: Budget | None = None) -> list[str]:
     """Canonicalize duplicate-key package.json files under the npm roots."""
+    root = image_root(root)
+    budget = _budget or Budget()
     changed = []
-    for seen, (relative, path) in enumerate(iter_npm_metadata_files(root)):
-        if seen >= MAX_METADATA_FILES:
-            raise ValueError("too many package metadata candidates")
-        data = path.read_bytes()
-        if len(data) > MAX_METADATA_BYTES:
-            raise ValueError(f"package metadata exceeds size budget: {relative}")
+    for relative, path in iter_npm_metadata_files(root, _budget=budget):
+        data = _read_metadata(path, root, budget)
         try:
             canonical, changed_flag = canonical_with_last_wins(data)
-        except (UnicodeDecodeError, TypeError, ValueError) as error:
+        except (UnicodeDecodeError, TypeError, ValueError, RecursionError) as error:
             raise ValueError(f"malformed package metadata: {relative}: {error}") from None
+        budget.check()
         if changed_flag:
-            info = os.lstat(path)
-            temporary = path.with_name(path.name + ".normalize-tmp")
-            temporary.write_bytes(canonical)
-            temporary.chmod(info.st_mode & 0o777)
-            os.chown(temporary, info.st_uid, info.st_gid)
-            temporary.replace(path)
+            if len(canonical) > MAX_METADATA_BYTES:
+                raise ValueError(f"canonical metadata exceeds size budget: {relative}")
+            with _destination(path, root) as (root_fd, parent_fd):
+                info = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                temporary, fd = _staging(path, root, _root_fd=root_fd)
+                published = False
+                try:
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(canonical)
+                        stream.flush()
+                        os.rename(
+                            temporary.name, path.name, src_dir_fd=root_fd, dst_dir_fd=parent_fd
+                        )
+                        published = True
+                        _preserve_file_info(stream.fileno(), info)
+                finally:
+                    if not published:
+                        _discard_staging(temporary.name, root_fd)
             changed.append(relative)
     return changed
 
@@ -246,26 +561,7 @@ def resolve_link(link: Path, root: Path) -> Path:
     or ends at a path that does not exist. Returns the resolved path,
     which may be a file or a directory.
     """
-    seen = {Path(link)}
-    current = link
-    for _ in range(MAX_LINK_DEPTH + 1):
-        raw = str(current.readlink())
-        base = current.parent / raw if not raw.startswith("/") else root / raw.lstrip("/")
-        current = Path(os.path.normpath(base))
-        if current in seen:
-            raise ValueError(f"cyclic directory symlink: {link.relative_to(root)}")
-        seen.add(current)
-        if not current.is_symlink():
-            break
-    else:
-        raise ValueError(f"directory symlink chain too deep: {link.relative_to(root)}")
-    try:
-        current.resolve().relative_to(root.resolve())
-    except ValueError:
-        raise ValueError(f"symlink target escapes image root: {link.relative_to(root)}") from None
-    if not current.exists():
-        raise ValueError(f"symlink target does not exist: {link.relative_to(root)}")
-    return current
+    return _resolve_path(link, image_root(root), Budget())
 
 
 def paths_below(sorted_paths, target):
@@ -314,7 +610,7 @@ def directory_alias_is_metadata_safe(
     return True
 
 
-def collect_target_tree(target: Path, root: Path):
+def collect_target_tree(target: Path, root: Path, *, _budget: Budget | None = None):
     """Index a target subtree for the safety predicate.
 
     Returns ``(entry_types, metadata_paths, symlink_paths, parsed_paths)``
@@ -322,31 +618,31 @@ def collect_target_tree(target: Path, root: Path):
     metadata files that parse cleanly (npm metadata is already
     canonicalized by the caller before linking checks run).
     """
+    root = image_root(root)
+    budget = _budget or Budget()
+    target = _resolve_path(target, root, budget)
     entry_types = {}
     metadata_paths = set()
     symlink_paths = set()
     parsed_paths = set()
-    entries = 0
-    for dirpath, dirnames, filenames in os.walk(target, followlinks=False):
-        for entry in dirnames + filenames:
-            entries += 1
-            if entries > MAX_METADATA_FILES:
-                raise ValueError("directory alias subtree exceeds entry budget")
-            path = Path(dirpath) / entry
-            relative = path.relative_to(root).as_posix()
-            if path.is_symlink():
-                entry_types[relative] = "symlink"
-                symlink_paths.add(relative)
-            elif path.is_dir():
-                entry_types[relative] = "directory"
-            else:
-                entry_types[relative] = "regular"
-            if entry in METADATA_NAMES:
-                metadata_paths.add(relative)
-                if entry_types.get(relative) == "regular":
-                    data = path.read_bytes()
-                    if data and _parses_as_scanned_metadata(relative, data):
-                        parsed_paths.add(relative)
+    for path, info in _walk_entries(target, root, budget):
+        relative = path.relative_to(root).as_posix()
+        if stat.S_ISLNK(info.st_mode):
+            entry_types[relative] = "symlink"
+            symlink_paths.add(relative)
+        elif stat.S_ISDIR(info.st_mode):
+            entry_types[relative] = "directory"
+        elif stat.S_ISREG(info.st_mode):
+            entry_types[relative] = "regular"
+        else:
+            raise ValueError(f"unsupported directory alias entry: {relative}")
+        if path.name in METADATA_NAMES:
+            metadata_paths.add(relative)
+            if entry_types.get(relative) == "regular":
+                data = _read_metadata(path, root, budget)
+                if data and _parses_as_scanned_metadata(relative, data):
+                    parsed_paths.add(relative)
+                budget.check()
     entry_types[target.relative_to(root).as_posix()] = "directory"
     return entry_types, metadata_paths, symlink_paths, parsed_paths
 
@@ -377,7 +673,7 @@ def _parse_scanned_metadata(kind: str | None, data: bytes) -> tuple[str | None, 
 def _parses_as_scanned_metadata(relative: str, data: bytes) -> bool:
     try:
         package, version = _parse_scanned_metadata(metadata_kind(relative), data)
-    except (UnicodeDecodeError, ValueError, AttributeError):
+    except (UnicodeDecodeError, ValueError, AttributeError, RecursionError):
         return False
     return all(
         isinstance(value, str) and value.strip() and len(value) <= MAX_IDENTITY_CHARS
@@ -385,76 +681,194 @@ def _parses_as_scanned_metadata(relative: str, data: bytes) -> bool:
     )
 
 
-def plan_copy(target: Path, relative: str, ancestors: set[str]) -> tuple[int, int]:
-    """Count files/bytes a dereferenced copy of ``target`` would produce.
+def _copy_entries(target: Path, root: Path, budget: Budget, ancestors: set[str]):
+    stack = [(target, Path(), frozenset(ancestors))]
+    while stack:
+        source, relative, parents = stack.pop()
+        resolved = _resolve_path(source, root, budget)
+        info = resolved.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            if str(resolved) in parents:
+                raise ValueError(f"cyclic directory symlink: {source}")
+            if len(parents) >= MAX_DIRECTORY_DEPTH:
+                raise ValueError("directory copy depth budget exceeded")
+            yield resolved, relative, info
+            parents = parents | {str(resolved)}
+            stack.extend(
+                (child, relative / child.name, parents)
+                for child, _info in reversed(_children(resolved, root, budget))
+            )
+        elif stat.S_ISREG(info.st_mode):
+            yield resolved, relative, info
+        else:
+            raise ValueError(f"unsupported directory alias entry: {source}")
 
-    Follows symlinks, tracks ancestor realpaths per recursion stack so a
-    directory cycle fails closed instead of recursing forever, and
-    enforces the copy budgets while counting. Returns ``(files, bytes)``.
-    """
-    real = str(target.resolve())
-    if real in ancestors:
-        raise ValueError(f"cyclic directory symlink: {relative}")
-    ancestors.add(real)
-    n_files = 0
-    n_bytes = 0
-    try:
-        with os.scandir(target) as scan:
-            for entry in scan:
-                if entry.is_dir(follow_symlinks=True):
-                    files, size = plan_copy(Path(entry.path), relative, ancestors)
-                    n_files += files
-                    n_bytes += size
-                elif entry.is_symlink() or entry.is_file(follow_symlinks=True):
-                    n_files += 1
-                    n_bytes += Path(entry.path).stat().st_size
-                if n_files > MAX_MATERIALIZED_FILES:
-                    raise ValueError(f"directory alias exceeds file budget: {relative}")
-                if n_bytes > MAX_MATERIALIZED_BYTES:
-                    raise ValueError(f"directory alias exceeds copy budget: {relative}")
-    finally:
-        ancestors.discard(real)
+
+def plan_copy(
+    target: Path,
+    relative: str,
+    ancestors: set[str],
+    *,
+    root: Path | None = None,
+    _budget: Budget | None = None,
+) -> tuple[int, int]:
+    """Count all copied entries/bytes, resolving every descendant inside root."""
+    root = image_root(root if root is not None else target)
+    budget = _budget or Budget()
+    n_files = n_bytes = 0
+    for _source, _name, info in _copy_entries(target, root, budget, ancestors):
+        n_files += 1
+        if stat.S_ISREG(info.st_mode):
+            n_bytes += info.st_size
+        if n_files > MAX_MATERIALIZED_FILES:
+            raise ValueError(f"directory alias exceeds file budget: {relative}")
+        if n_bytes > MAX_MATERIALIZED_BYTES:
+            raise ValueError(f"directory alias exceeds copy budget: {relative}")
     return n_files, n_bytes
 
 
-def link_roots(root: Path) -> list[Path]:
+def _copy_regular(source: Path, name: Path, root: Path, budget: Budget, *, destination_fd: int):
+    with _regular_file(source, root, budget) as (reader, info):
+        budget.copy(info.st_size)
+        fd = _open_relative(destination_fd, name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        with os.fdopen(fd, "wb") as writer:
+            size = 0
+            while True:
+                budget.check()
+                chunk = reader.read(min(1024 * 1024, info.st_size + 1 - size))
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > info.st_size:
+                    raise ValueError(f"source changed during copy: {source}")
+                writer.write(chunk)
+            if size != info.st_size:
+                raise ValueError(f"source changed during copy: {source}")
+            _preserve_file_info(writer.fileno(), info)
+
+
+def _copy_tree(target: Path, staging_fd: int, root: Path, budget: Budget):
+    directories = []
+    for source, name, info in _copy_entries(target, root, budget, set()):
+        if stat.S_ISDIR(info.st_mode):
+            budget.copy(0)
+            if name.parts:
+                parent_fd = _open_relative(staging_fd, name.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.mkdir(name.name, mode=0o700, dir_fd=parent_fd)
+                finally:
+                    os.close(parent_fd)
+            directories.append((name, info))
+        else:
+            _copy_regular(source, name, root, budget, destination_fd=staging_fd)
+    for name, info in reversed(directories[1:]):
+        fd = _open_relative(staging_fd, name, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            _preserve_file_info(fd, info)
+        finally:
+            os.close(fd)
+    return directories[0][1]
+
+
+def _scanner_safe_node_cycle(source: Path, target: Path, root: Path, budget: Budget) -> bool:
+    name = source.relative_to(root).as_posix()
+    destination = target.relative_to(root).as_posix()
+    scope = scope_inside(name)
+    if (
+        scope is None
+        or scope[0] != "npm"
+        or scope != scope_inside(destination)
+        or "/node_modules/" not in name[len(scope[1]) :]
+    ):
+        return False
+    entry_types, metadata_paths, symlink_paths, parsed_paths = collect_target_tree(
+        target, root, _budget=budget
+    )
+    return directory_alias_is_metadata_safe(
+        name,
+        destination,
+        entry_types=entry_types,
+        parsed_paths=parsed_paths,
+        metadata_paths=metadata_paths,
+        symlink_paths=symlink_paths,
+    )
+
+
+def _validate_target(target: Path, root: Path, budget: Budget):
+    # Ancestor cycles are checked before DAG deduplication. Only scanner-safe
+    # node_modules cycle edges within the same npm scope may remain aliases.
+    pending = [(target, ())]
+    visited = set()
+    while pending:
+        source, parents = pending.pop()
+        resolved = _resolve_path(source, root, budget)
+        info = resolved.lstat()
+        if stat.S_ISREG(info.st_mode):
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError(f"unsupported directory alias entry: {source}")
+        ancestors = [path for path, _source in parents]
+        if resolved in ancestors:
+            cycle = (*parents[ancestors.index(resolved) + 1 :], (resolved, source))
+            edges = [(path, edge) for path, edge in cycle if edge.is_symlink()]
+            if not edges or not all(
+                _scanner_safe_node_cycle(edge, path, root, budget) for path, edge in edges
+            ):
+                raise ValueError(f"cyclic directory symlink: {source}")
+            continue
+        if resolved in visited:
+            continue
+        if len(parents) > MAX_DIRECTORY_DEPTH:
+            raise ValueError("directory alias depth budget exceeded")
+        visited.add(resolved)
+        parents = (*parents, (resolved, source))
+        pending.extend((child, parents) for child, _info in _children(resolved, root, budget))
+
+
+def link_roots(root: Path, *, _budget: Budget | None = None) -> list[Path]:
     """Declared metadata roots that can contain directory aliases."""
-    found = python_roots(root)
+    root = image_root(root)
+    budget = _budget or Budget()
+    found = python_roots(root, _budget=budget)
     seen = {str(path) for path in found}
     for rel_root in NPM_ROOTS:
         base = root / rel_root
-        if base.is_dir() and str(base) not in seen:
+        if _existing_directory(base, root, budget) and str(base) not in seen:
             seen.add(str(base))
             found.append(base)
     return found
 
 
-def materialize_directory_symlinks(root: Path) -> list[str]:
+def _metadata_links(base: Path, root: Path, budget: Budget):
+    physical = _resolve_path(base.parent, root, budget) / base.name
+    if physical.is_symlink():
+        yield base
+    for path, info in _walk_entries(base, root, budget):
+        if stat.S_ISLNK(info.st_mode):
+            yield path
+
+
+def materialize_directory_symlinks(root: Path, *, _budget: Budget | None = None) -> list[str]:
     """Replace unsafe directory symlinks under metadata roots with copies."""
+    root = image_root(root)
+    budget = _budget or Budget()
     materialized = []
-    total_files = 0
-    total_bytes = 0
-    for base in link_roots(root):
-        if not base.exists():
-            continue
-        links = []
-        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
-            for entry in list(dirnames) + list(filenames):
-                path = Path(dirpath) / entry
-                if path.is_symlink():
-                    links.append(path)
+    for base in link_roots(root, _budget=budget):
+        links = list(_metadata_links(base, root, budget))
         for path in sorted(links):
-            if not path.is_symlink():
+            physical_link = _resolve_path(path.parent, root, budget) / path.name
+            if not physical_link.is_symlink():
                 # A previously materialized ancestor made this path real.
                 continue
             relative = path.relative_to(root).as_posix()
-            target = resolve_link(path, root)
+            target = _resolve_path(path, root, budget)
             if not target.is_dir():
                 # File links are validated by the scanner itself; this
                 # helper only neutralizes ambiguous directory aliases.
                 continue
+            _validate_target(target, root, budget)
             entry_types, metadata_paths, symlink_paths, parsed_paths = collect_target_tree(
-                target, root
+                target, root, _budget=budget
             )
             if directory_alias_is_metadata_safe(
                 relative,
@@ -465,81 +879,80 @@ def materialize_directory_symlinks(root: Path) -> list[str]:
                 symlink_paths=symlink_paths,
             ):
                 continue
-            link_stat = os.lstat(path)
-            staging = path.with_name(path.name + ".normalize-tmp")
-            if staging.exists() or staging.is_symlink():
-                raise ValueError(f"staging path already exists: {path}")
-            n_files, n_bytes = plan_copy(target, relative, set())
-            total_files += n_files
-            total_bytes += n_bytes
-            if total_files > MAX_MATERIALIZED_FILES or total_bytes > MAX_MATERIALIZED_BYTES:
+            n_files, n_bytes = plan_copy(target, relative, set(), root=root, _budget=budget)
+            if (
+                budget.copy_files + n_files > MAX_MATERIALIZED_FILES
+                or budget.copy_bytes + n_bytes > MAX_MATERIALIZED_BYTES
+            ):
                 raise ValueError("materialized metadata exceeds total copy budget")
-            shutil.copytree(target, staging, symlinks=False)
-            staging.chmod(target.stat().st_mode & 0o777)
-            os.chown(staging, link_stat.st_uid, link_stat.st_gid)
-            path.unlink()
-            staging.rename(path)
+            with _destination(physical_link, root) as (root_fd, parent_fd):
+                link_stat = os.stat(physical_link.name, dir_fd=parent_fd, follow_symlinks=False)
+                staging, fd = _staging(physical_link, root, directory=True, _root_fd=root_fd)
+                published = False
+                try:
+                    target_info = _copy_tree(target, fd, root, budget)
+                    os.unlink(physical_link.name, dir_fd=parent_fd)
+                    os.rename(
+                        staging.name, physical_link.name, src_dir_fd=root_fd, dst_dir_fd=parent_fd
+                    )
+                    published = True
+                    os.fchown(fd, link_stat.st_uid, link_stat.st_gid)
+                    os.fchmod(fd, stat.S_IMODE(target_info.st_mode))
+                finally:
+                    os.close(fd)
+                    if not published:
+                        _discard_staging(staging.name, root_fd, directory=True)
             materialized.append(relative)
     return materialized
 
 
-def verify_clean(root: Path) -> None:
+def verify_clean(root: Path, *, _budget: Budget | None = None) -> None:
     """Re-check the normalized tree with the scanner's own strict rules."""
-    for seen, (relative, path) in enumerate(iter_npm_metadata_files(root)):
-        if seen >= MAX_METADATA_FILES:
-            raise ValueError("too many package metadata candidates")
-        data = path.read_bytes()
-        if len(data) > MAX_METADATA_BYTES:
-            raise ValueError(f"oversized package metadata remains: {relative}")
-
-        def strict_pairs(pairs):
-            result = {}
-            for key, value in pairs:
-                if key in result:
-                    raise ValueError(f"duplicate {key} JSON field")
-                result[key] = value
-            return result
-
+    root = image_root(root)
+    budget = _budget or Budget()
+    for relative, path in iter_npm_metadata_files(root, _budget=budget):
+        data = _read_metadata(path, root, budget)
         try:
-            json.loads(data.decode("utf-8"), object_pairs_hook=strict_pairs)
-        except (UnicodeDecodeError, ValueError):
+            parsed = json.loads(data.decode("utf-8"), object_pairs_hook=strict_pairs_check)
+        except (UnicodeDecodeError, ValueError, RecursionError):
             raise ValueError(f"unresolved package metadata remains: {relative}") from None
-    for base in link_roots(root):
-        if not base.exists():
-            continue
-        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
-            for entry in list(dirnames) + list(filenames):
-                path = Path(dirpath) / entry
-                if not path.is_symlink():
-                    continue
-                relative = path.relative_to(root).as_posix()
-                target = resolve_link(path, root)
-                if not target.is_dir():
-                    continue
-                entry_types, metadata_paths, symlink_paths, parsed_paths = collect_target_tree(
-                    target, root
-                )
-                if not directory_alias_is_metadata_safe(
-                    relative,
-                    target.relative_to(root).as_posix(),
-                    entry_types=entry_types,
-                    parsed_paths=parsed_paths,
-                    metadata_paths=metadata_paths,
-                    symlink_paths=symlink_paths,
-                ):
-                    raise ValueError(f"unsafe directory symlink remains: {relative}")
+        if not isinstance(parsed, dict):
+            raise TypeError(f"unresolved package metadata remains: {relative}")
+        budget.check()
+    for base in link_roots(root, _budget=budget):
+        for path in _metadata_links(base, root, budget):
+            relative = path.relative_to(root).as_posix()
+            target = _resolve_path(path, root, budget)
+            if not target.is_dir():
+                continue
+            _validate_target(target, root, budget)
+            entry_types, metadata_paths, symlink_paths, parsed_paths = collect_target_tree(
+                target, root, _budget=budget
+            )
+            if not directory_alias_is_metadata_safe(
+                relative,
+                target.relative_to(root).as_posix(),
+                entry_types=entry_types,
+                parsed_paths=parsed_paths,
+                metadata_paths=metadata_paths,
+                symlink_paths=symlink_paths,
+            ):
+                raise ValueError(f"unsafe directory symlink remains: {relative}")
+    budget.check()
 
 
 def normalize(root: Path) -> tuple[list[str], list[str]]:
     """Normalize one image rootfs; returns (canonicalized, materialized)."""
-    canonicalized = canonicalize_npm_metadata(root)
-    materialized = materialize_directory_symlinks(root)
+    root = image_root(root)
+    budget = Budget()
+    canonicalized = canonicalize_npm_metadata(root, _budget=budget)
+    materialized = materialize_directory_symlinks(root, _budget=budget)
     # Materialization can expose package.json files that then need
     # canonicalization; canonicalization never creates links, so a single
     # canonical pass afterwards (idempotent for already-canonical files)
     # followed by verification is sufficient.
-    canonicalized += canonicalize_npm_metadata(root)
-    verify_clean(root)
+    canonicalized += canonicalize_npm_metadata(root, _budget=budget)
+    verify_clean(root, _budget=budget)
     return canonicalized, materialized
 
 
