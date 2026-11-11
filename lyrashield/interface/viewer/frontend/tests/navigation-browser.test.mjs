@@ -1,5 +1,5 @@
 import test from "node:test";
-import { chromium } from "playwright";
+import { launchViewerBrowser } from "./browser-fixture.js";
 import assert from "node:assert/strict";
 import { startPythonServer } from "./python-server-fixture.js";
 
@@ -7,7 +7,7 @@ test("mobile history opens empty live runs and preserves already-selected run da
   const server = await startPythonServer("tests/viewer_navigation_server.py");
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchViewerBrowser({ headless: true });
     const page = await browser.newPage({ viewport: { width: 375, height: 812 } });
     page.setDefaultTimeout(8000);
     // Live resources poll every 500ms; wait for rendered run identity instead
