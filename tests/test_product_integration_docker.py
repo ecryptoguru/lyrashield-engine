@@ -149,10 +149,14 @@ def test_required_create_options_receive_non_overridable_parent_ownership(
     assert calls[0][-1] == image
 
 
-def test_postgres_env_file_cannot_read_shared_files(tmp_path: Path) -> None:
+@pytest.mark.parametrize("relative", [False, True])
+def test_postgres_env_file_cannot_read_shared_or_relative_files(
+    tmp_path: Path, *, relative: bool
+) -> None:
     shared = tmp_path / "shared/postgres.env"
     shared.parent.mkdir()
     shared.write_text("not fixture input\n")
+    path = os.path.relpath(tmp_path / "private/postgres.env", ROOT) if relative else str(shared)
     _, calls = run_fixture(
         tmp_path,
         [
@@ -162,7 +166,7 @@ def test_postgres_env_file_cannot_read_shared_files(tmp_path: Path) -> None:
             "--publish",
             "127.0.0.1::5432",
             "--env-file",
-            str(shared),
+            path,
             "postgres:16-alpine",
         ],
     )

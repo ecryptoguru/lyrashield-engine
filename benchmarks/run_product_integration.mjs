@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import { lstatSync, realpathSync } from "node:fs"
-import { basename, join, resolve, sep } from "node:path"
+import { basename, isAbsolute, join, resolve, sep } from "node:path"
 import { pathToFileURL } from "node:url"
 
 function arg(name) {
@@ -45,6 +45,7 @@ function dockerArguments(args) {
     const validEnv =
       image !== "postgres:16-alpine" ||
       (args[5] === "--env-file" &&
+        isAbsolute(envFile) &&
         basename(envFile) === "postgres.env" &&
         lstatSync(envFile).isFile() &&
         realpathSync(envFile).startsWith(`${realpathSync(temporary)}${sep}`))
