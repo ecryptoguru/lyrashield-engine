@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -29,6 +30,20 @@ const require = createRequire(
 );
 const label = "lyrashield.engine-ci-browser";
 const maxBuffer = 32 * 1024 * 1024;
+
+export function cleanupBrowserTemp(path, identity) {
+  const current = lstatSync(path);
+  if (
+    !current.isDirectory() ||
+    current.isSymbolicLink() ||
+    current.dev !== identity.dev ||
+    current.ino !== identity.ino ||
+    current.uid !== process.getuid() ||
+    (current.mode & 0o077) !== 0
+  )
+    throw new Error("browser temporary directory changed");
+  rmSync(path, { recursive: true });
+}
 
 function runCommand(
   command,

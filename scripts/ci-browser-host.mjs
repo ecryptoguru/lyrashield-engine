@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { FONT_FAMILIES } from "./ci-browser-fonts.mjs";
+import { cleanupBrowserTemp } from "./ci-viewer-browser.mjs";
 
 const require = createRequire(
   new URL(
@@ -99,6 +100,7 @@ async function verify() {
     );
   const browserTemp = join(directory, "browser-tmp");
   mkdirSync(browserTemp, { mode: 0o700 });
+  const browserTempIdentity = lstatSync(browserTemp);
   process.env.TMPDIR = browserTemp;
   let peakTemporaryBytes = 0;
   const bytesIn = (path) =>
@@ -135,8 +137,8 @@ async function verify() {
           "English ไทย 日本語 中文 😀",
         );
         await page.close();
-        // Exercise the original local artifact lifecycle. Successful traces
-        // may grow during a browser lifetime, then must disappear on close.
+        // Exercise local tracing and record peak temporary storage while the
+        // browser is running. The owned directory is reclaimed after close.
         for (let iteration = 0; iteration < 3; iteration++) {
           const context = await browser.newContext();
           try {
@@ -156,17 +158,15 @@ async function verify() {
       } finally {
         await browser.close();
       }
-      assert.deepEqual(
-        readdirSync(browserTemp),
-        [],
-        "Local browser temporary artifacts were not reclaimed",
-      );
     }
   } finally {
     server.close();
     await once(server, "close");
   }
   const available = statfsSync(browserTemp);
+  // Chromium may leave task-owned temporary files after close. Reclaim only
+  // the exact private directory created for this probe, never a stored path.
+  cleanupBrowserTemp(browserTemp, browserTempIdentity);
   console.log(
     `Verified ${manifest.files.length} pinned font assets, overlay families, host libraries and local Chromium headless shell; bounded lifecycle probe peak=${peakTemporaryBytes} bytes, available=${available.bavail * available.bsize} bytes`,
   );

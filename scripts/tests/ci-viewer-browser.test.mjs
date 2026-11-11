@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,9 +21,53 @@ import {
 import {
   BROWSER_IMAGE,
   BROWSER_VERSION,
+  cleanupBrowserTemp,
   startBrowser,
   stopBrowser,
 } from "../ci-viewer-browser.mjs";
+
+test("reclaims Chromium leftovers only from the created browser directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "ci-browser-cleanup-test-"));
+  const browserTemp = join(root, "browser-tmp");
+  try {
+    mkdirSync(browserTemp, { mode: 0o700 });
+    const identity = lstatSync(browserTemp);
+    mkdirSync(join(browserTemp, ".org.chromium.Chromium.9XkL02"));
+    writeFileSync(
+      join(browserTemp, ".org.chromium.Chromium.9XkL02", "resource"),
+      "temporary",
+    );
+    writeFileSync(join(root, "keep"), "unrelated");
+    cleanupBrowserTemp(browserTemp, identity);
+    assert.equal(existsSync(browserTemp), false);
+    assert.equal(readFileSync(join(root, "keep"), "utf8"), "unrelated");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses cleanup when the browser directory was replaced", () => {
+  const root = mkdtempSync(join(tmpdir(), "ci-browser-cleanup-test-"));
+  const browserTemp = join(root, "browser-tmp");
+  try {
+    mkdirSync(browserTemp, { mode: 0o700 });
+    const identity = lstatSync(browserTemp);
+    mkdirSync(join(root, "foreign"));
+    writeFileSync(join(root, "foreign", "keep"), "unrelated");
+    renameSync(browserTemp, join(root, "original"));
+    symlinkSync(join(root, "foreign"), browserTemp);
+    assert.throws(
+      () => cleanupBrowserTemp(browserTemp, identity),
+      /browser temporary directory changed/,
+    );
+    assert.equal(
+      readFileSync(join(root, "foreign", "keep"), "utf8"),
+      "unrelated",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 const id = "a".repeat(64);
 function fixture(options = {}) {
