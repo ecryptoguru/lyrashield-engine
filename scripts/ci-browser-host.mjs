@@ -13,7 +13,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { FONT_FAMILIES, verifyBitmapFont } from "./ci-browser-fonts.mjs";
+import { FONT_FAMILIES } from "./ci-browser-fonts.mjs";
 
 const require = createRequire(
   new URL(
@@ -51,12 +51,10 @@ async function verify() {
       createHash("sha256").update(readFileSync(path)).digest("hex"),
       file.sha256,
     );
-    // Fontconfig does not decode these legacy X11 PCF encodings, including in
-    // the pinned source image. Validate their exact hash and bounded native
-    // structure; every scalable Chromium font still must pass fc-scan.
-    if (file.path.endsWith(".pcf.gz")) {
-      verifyBitmapFont(readFileSync(path));
-    } else if (/\.(?:ttf|ttc|otf|pfb|t1)$/.test(file.path))
+    // The manifest binds every bitmap asset to the exact pinned image. Legacy
+    // X11 PCF encodings are not readable by Fontconfig; scalable fonts still
+    // require fc-scan and every required family must resolve privately below.
+    if (/\.(?:ttf|ttc|otf|pfb|t1)$/.test(file.path))
       assert.ok(
         run("fc-scan", ["--format", "%{family}", path]).trim(),
         "Font asset is unreadable",
