@@ -1,0 +1,16 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Local evaluation fixture", "version": "1.0.0"},
+  "paths": {
+    "/api/health": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Local fixture response",
+            "content": {"application/json": {"schema": {"type": "object"}}}
+          }
+        }
+      }
+    }
+  }
+}
