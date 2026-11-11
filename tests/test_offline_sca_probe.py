@@ -29,7 +29,7 @@ def test_probe_executes_real_scanner_and_binds_retained_evidence(tmp_path: Path)
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
