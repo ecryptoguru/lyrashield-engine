@@ -140,12 +140,23 @@ jobs:
           restore-keys: |
             playwright-chromium-${{ runner.os }}-
 
+      - name: Install owned viewer dependencies
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        working-directory: lyrashield/interface/viewer/frontend
+        run: npm ci
+
+      - name: Test viewer browser CI lifecycle contracts
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        run: node --test scripts/tests/ci-viewer-browser.test.mjs scripts/tests/ci-browser-fonts.test.mjs
+
+      - name: Prepare qualified local viewer browser
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        run: node scripts/ci-viewer-browser.mjs start
+
       - name: Verify owned viewer source and committed build
         if: steps.changed_paths.outputs.docs_only != 'true'
         working-directory: lyrashield/interface/viewer/frontend
         run: |
-          npm ci
-          npx playwright install --with-deps chromium
           node --test --test-concurrency=1 tests/*.mjs
           npm run typecheck
           npm run build
@@ -154,6 +165,10 @@ jobs:
             echo "::error::owned viewer build produced untracked static assets"
             exit 1
           fi
+
+      - name: Stop owned viewer font source
+        if: always() && steps.changed_paths.outputs.docs_only != 'true'
+        run: node scripts/ci-viewer-browser.mjs stop
 
       # Customer-facing branding is gated on docs-only changes too: docs/** is
       # part of the checked scope, so skipping this gate would let upstream

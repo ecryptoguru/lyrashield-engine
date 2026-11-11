@@ -142,6 +142,7 @@ exclude = [
     "/htmlcov/**",
     "/.worktrees",
     "/tests/**",
+    "/scripts/tests/**",
     "/strix/interface/viewer/frontend/**",
     "/lyrashield/interface/viewer/frontend/**",
 ]
