@@ -76,3 +76,27 @@ by this probe.
 The existing full-profile runner and scoring gates remain closed. All profiles
 remain `NOT_MEASURED`, independent adjudication is not complete, and held-out
 data is not provided. No benchmark claim follows from this diagnostic.
+
+### Local URL/API diagnostic
+
+The following diagnostic runs the product URL and OpenAPI scanners through the
+product's scan-scoped relay to a synthetic HTTPS target bound to loopback:
+
+```sh
+LYRASHIELD_AI_DIR=/path/to/lyrashield-ai \
+  uv run python -m benchmarks.url_api_local_probe --output /path/to/new/receipt-directory
+```
+
+It verifies the fixture CA and hostname and checks denial of an untrusted CA,
+wrong hostname, blocked path, method, host and port, an opaque CONNECT, and an
+external redirect, plus invalid and revoked grants. The receipt binds the
+fixture, source, runner, runtime, target host and port, public certificate,
+scope digest and retained result bytes. The short-lived
+fixture grant and signing secret are not retained, so its signature cannot be
+independently reverified after the run.
+
+This harness uses test-only resolver and port overrides, a diagnostic scanner
+fetch adapter, and synthetic response bytes. It does not exercise the engine
+TLS bridge, production DNS, verified-domain admission, a model route, or a
+qualified image, and does not prove OS-level network isolation. No v3 URL/API
+case or profile is measured by this diagnostic.
