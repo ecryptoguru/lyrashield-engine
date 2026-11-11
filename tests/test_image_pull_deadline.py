@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import multiprocessing
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,10 +18,62 @@ from lyrashield.interface.image_pull import _run_bounded_docker_operation, _stop
 from lyrashield.lifecycle.deadline import RunDeadline, RunDeadlineExceededError
 
 
-# Importing the CLI/TUI in a spawned worker is setup for the stage-specific
-# checks below. Bound that separately from the operation's much shorter budget.
-# The real-clock test also covers terminating a worker during startup.
-_WORKER_STARTUP_TIMEOUT_SECONDS = 10.0
+# Spawned workers may import the CLI/TUI slowly under a loaded full suite.
+# Bound setup separately from the measured operation without spending its
+# 0.5-second budget. A separate real-clock test covers startup deadlines.
+_WORKER_STARTUP_TIMEOUT_SECONDS = 30.0
+
+
+class _StageClock:
+    def __init__(self, reached: threading.Event, clock: Any = time.monotonic) -> None:
+        self.reached = reached
+        self.clock = clock
+        self.started = clock()
+        self.operation_started: float | None = None
+
+    def __call__(self) -> float:
+        now = self.clock()
+        if self.reached.is_set():
+            if self.operation_started is None:
+                self.operation_started = now
+            return now - self.operation_started
+        elapsed = now - self.started
+        return elapsed if elapsed >= _WORKER_STARTUP_TIMEOUT_SECONDS else 0.0
+
+
+def test_stage_clock_allows_slow_setup_but_bounds_both_setup_and_operation() -> None:
+    current = [0.0]
+    reached = threading.Event()
+    operation_clock = _StageClock(reached, lambda: current[0])
+    current[0] = 12.0  # Beyond the old startup allowance, before operation begins.
+    assert operation_clock() == 0.0
+    reached.set()
+    assert operation_clock() == 0.0
+    current[0] = 12.5
+    assert operation_clock() == pytest.approx(0.5)
+
+    never_reached = _StageClock(threading.Event(), lambda: current[0])
+    current[0] += _WORKER_STARTUP_TIMEOUT_SECONDS
+    assert never_reached() >= _WORKER_STARTUP_TIMEOUT_SECONDS
+
+
+def test_fake_docker_daemon_joins_its_blocked_handler() -> None:
+    reached = threading.Event()
+    release = threading.Event()
+    exited = threading.Event()
+    server = _start_fake_docker_daemon("connection", reached, release, exited)
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=2) as client:
+            client.sendall(b"GET /version HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            assert reached.wait(timeout=2)
+            release.set()
+            server.shutdown()
+            server.server_close()
+            assert exited.is_set()
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
 
 
 def _blocked_docker_worker(sender: Any, _image: str, _expected_digest: str) -> None:
@@ -29,8 +82,17 @@ def _blocked_docker_worker(sender: Any, _image: str, _expected_digest: str) -> N
     sender.send(("complete", True))
 
 
-def _docker_daemon_handler(stage: str, reached: threading.Event) -> type[BaseHTTPRequestHandler]:
+def _docker_daemon_handler(
+    stage: str, reached: threading.Event, release: threading.Event, exited: threading.Event
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        def _hold(self) -> None:
+            reached.set()
+            try:
+                release.wait(timeout=12)
+            finally:
+                exited.set()
+
         def log_message(self, _format: str, *_args: Any) -> None:
             return
 
@@ -45,15 +107,13 @@ def _docker_daemon_handler(stage: str, reached: threading.Event) -> type[BaseHTT
         def do_GET(self) -> None:
             if self.path == "/version":
                 if stage == "connection":
-                    reached.set()
-                    time.sleep(12)
+                    self._hold()
                     return
                 self._json(200, {"ApiVersion": "1.41", "Version": "test"})
                 return
             if stage in {"inspect", "silent_pull"} and "/images/test-image/json" in self.path:
                 if stage == "inspect":
-                    reached.set()
-                    time.sleep(12)
+                    self._hold()
                     return
                 self._json(404, {"message": "No such image: test-image"})
                 return
@@ -75,16 +135,20 @@ def _docker_daemon_handler(stage: str, reached: threading.Event) -> type[BaseHTT
                 self.send_header("Content-Length", "4096")
                 self.end_headers()
                 self.wfile.flush()
-                time.sleep(12)
+                self._hold()
                 return
             self._json(404, {"message": "not found"})
 
     return Handler
 
 
-def _start_fake_docker_daemon(stage: str, reached: threading.Event) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _docker_daemon_handler(stage, reached))
-    server.daemon_threads = True
+def _start_fake_docker_daemon(
+    stage: str, reached: threading.Event, release: threading.Event, exited: threading.Event
+) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), _docker_daemon_handler(stage, reached, release, exited)
+    )
+    server.daemon_threads = False
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -180,41 +244,34 @@ def test_docker_connection_inspect_and_pull_are_deadline_bound(
     stage: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reached = threading.Event()
-    server = _start_fake_docker_daemon(stage, reached)
+    release = threading.Event()
+    exited = threading.Event()
+    server = _start_fake_docker_daemon(stage, reached, release, exited)
     monkeypatch.setenv("DOCKER_HOST", f"tcp://127.0.0.1:{server.server_port}")
     monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
     monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
     monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
     active_before = {process.pid for process in multiprocessing.active_children()}
-    started = time.monotonic()
-    operation_started: float | None = None
-
-    def operation_clock() -> float:
-        nonlocal operation_started
-        now = time.monotonic()
-        if reached.is_set():
-            if operation_started is None:
-                operation_started = now
-            return now - operation_started
-        # Never let broken setup hang the test. A worker that fails to reach
-        # the stage is stopped and then fails the reachability assertion.
-        return now - started if now - started >= _WORKER_STARTUP_TIMEOUT_SECONDS else 0.0
-
+    # A worker that never reaches the stage still expires at the setup bound.
+    operation_clock = _StageClock(reached)
     deadline = RunDeadline.start(0.5, clock=operation_clock)
 
     try:
         with pytest.raises(RunDeadlineExceededError):
             _run_bounded_docker_operation("test-image", "", deadline)
     finally:
+        operation_finished = time.monotonic()
+        release.set()
         server.shutdown()
         server.server_close()
 
     assert reached.is_set(), (
         f"fake Docker daemon did not reach {stage} during bounded worker startup"
     )
-    assert operation_started is not None
-    assert time.monotonic() - operation_started < 1.5
-    assert time.monotonic() - started < _WORKER_STARTUP_TIMEOUT_SECONDS + 1.5
+    assert operation_clock.operation_started is not None
+    assert exited.is_set(), "the fake Docker handler must exit during fixture cleanup"
+    assert operation_finished - operation_clock.operation_started < 1.5
+    assert operation_finished - operation_clock.started < _WORKER_STARTUP_TIMEOUT_SECONDS + 1.5
     assert {process.pid for process in multiprocessing.active_children()} <= active_before
 
 
