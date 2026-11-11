@@ -100,3 +100,33 @@ fetch adapter, and synthetic response bytes. It does not exercise the engine
 TLS bridge, production DNS, verified-domain admission, a model route, or a
 qualified image, and does not prove OS-level network isolation. No v3 URL/API
 case or profile is measured by this diagnostic.
+
+### Local product database and queue diagnostic
+
+This diagnostic invokes the product's existing owned-fixture suite with fresh
+loopback PostgreSQL and Redis containers. It requires cached `postgres:16-alpine`
+and `redis:7-alpine` images, a clean engine checkout, an installed product
+checkout, and a clean product
+HEAD matching its locally refreshed `origin/main`:
+
+```sh
+LYRASHIELD_AI_DIR=/path/to/lyrashield-ai \
+  uv run python -m benchmarks.product_integration_probe
+```
+
+The launcher rejects remote Docker contexts, prevents image pulls, restricts
+operations to its own container IDs and removes those services after the run.
+Forced child timeouts trigger bounded parent cleanup that independently verifies
+each logged container's per-run ownership label and captured image identity.
+It requires macOS `sandbox-exec` and confines fixture-process filesystem writes
+to its private temporary directory, keeping the product checkout read-only.
+It executes the product's real restricted-role database, scan admission and
+Redis queue tests without executing a scan or calling a model provider. The
+JSON printed to stdout binds the source, fixture, runtime, actual container image
+identities and transient test-result hashes. The temporary report is removed;
+the hashes alone cannot reproduce its contents.
+
+This is a diagnostic of direct product database and queue paths. It does not
+exercise the HTTP API, worker execution, broker, supervisor or current v3
+corpus. Docker and package-manager offline controls are not an OS-level network
+isolation proof. The profile and quality claims remain `NOT_MEASURED`.
