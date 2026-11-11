@@ -367,25 +367,21 @@ def test_outer_deadline_allows_forced_child_cleanup_to_finish(
     owned = "a" * 64
     expected = "sha256:" + "d" * 64
     identity = "fixture-parent"
-    docker, marker = cleanup_docker(
-        tmp_path,
-        {
-            owned: {
-                "Id": owned,
-                "Image": expected,
-                "Config": {
-                    "Image": "redis:7-alpine",
-                    "Labels": {product_integration_probe.OWNERSHIP_LABEL: identity},
-                },
-            }
+    docker, marker = tmp_path / "fixture-docker", tmp_path / "commands.jsonl"
+    record = {
+        "Id": owned,
+        "Image": expected,
+        "Config": {
+            "Image": "redis:7-alpine",
+            "Labels": {product_integration_probe.OWNERSHIP_LABEL: identity},
         },
-    )
+    }
     budgets = {
-        "CHILD_TIMEOUT_SECONDS": 0.2,
+        "CHILD_TIMEOUT_SECONDS": 1,
         "CHILD_INTERRUPT_SECONDS": 0.2,
         "CHILD_KILL_SECONDS": 0.1,
         "CHILD_REAP_SECONDS": 0.1,
-        "CLEANUP_TIMEOUT_SECONDS": 0.5,
+        "CLEANUP_TIMEOUT_SECONDS": 2,
     }
     for name, budget in budgets.items():
         monkeypatch.setattr(product_integration_probe, name, budget)
@@ -396,12 +392,27 @@ def test_outer_deadline_allows_forced_child_cleanup_to_finish(
         "time.sleep(30)\n"
     )
     parent = (
-        "import sys,time\n"
+        "import json,sys,time\n"
         "from pathlib import Path\n"
+        "from types import SimpleNamespace\n"
         "from benchmarks import product_integration_probe as probe\n"
         + "".join(f"probe.{name} = {budget}\n" for name, budget in budgets.items())
-        + "def cleanup(output):\n"
-        "    time.sleep(0.25)\n"
+        # Model Docker latency without fresh interpreter startup in the tiny
+        # cleanup budget. Other tests exercise the real fake-CLI boundary.
+        + "clock = [0.0]\n"
+        "probe.time.monotonic = lambda: clock[0]\n"
+        "def docker_command(args, **options):\n"
+        f"    assert args[0] == {str(docker)!r}\n"
+        "    assert 0 < options['timeout'] <= probe.CLEANUP_TIMEOUT_SECONDS\n"
+        f"    with Path({str(marker)!r}).open('a') as stream:\n"
+        "        stream.write(json.dumps(args[1:]) + '\\n')\n"
+        f"    if args[1:] == ['inspect', {owned!r}]:\n"
+        "        time.sleep(1.5)\n"
+        "        clock[0] += 1.5\n"
+        f"        return SimpleNamespace(stdout=json.dumps([{record!r}]))\n"
+        f"    assert args[1:] == ['rm', '--force', '--volumes', {owned!r}]\n"
+        f"    return SimpleNamespace(stdout={owned!r})\n"
+        "probe.subprocess.run = docker_command\n" + "def cleanup(output):\n"
         f"    result = probe.cleanup_owned_containers(output, docker={str(docker)!r}, "
         f"env={{}}, cwd=Path({str(tmp_path)!r}), identity={identity!r}, "
         f"image_ids={{'redis:7-alpine': {expected!r}}})\n"
@@ -418,7 +429,7 @@ def test_outer_deadline_allows_forced_child_cleanup_to_finish(
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=probe_timeout_seconds(margin=2),
+        timeout=probe_timeout_seconds(margin=1),
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
