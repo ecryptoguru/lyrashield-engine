@@ -13,6 +13,7 @@ import sys
 import time
 from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +32,7 @@ def probe_timeout_seconds(*, margin: float = 300) -> float:
         product_integration_probe.CHILD_TIMEOUT_SECONDS
         + product_integration_probe.CHILD_INTERRUPT_SECONDS
         + product_integration_probe.CHILD_KILL_SECONDS
+        + product_integration_probe.CHILD_REAP_SECONDS
         + product_integration_probe.CLEANUP_TIMEOUT_SECONDS
         + margin
     )
@@ -196,9 +198,11 @@ def test_parent_cleanup_has_a_global_deadline(
     assert time.monotonic() - started < 2
 
 
-@pytest.mark.parametrize("ignore_interrupt", [False, True])
+@pytest.mark.parametrize(
+    "ignore_interrupt,hold_pipes", [(False, False), (True, False), (True, True)]
+)
 def test_ctrl_c_reaps_child_and_cleans_owned_services_before_scratch_removal(
-    tmp_path: Path, *, ignore_interrupt: bool
+    tmp_path: Path, *, ignore_interrupt: bool, hold_pipes: bool
 ) -> None:
     owned = "a" * 64
     expected = "sha256:" + "d" * 64
@@ -220,10 +224,18 @@ def test_ctrl_c_reaps_child_and_cleans_owned_services_before_scratch_removal(
     cleanup_ready = tmp_path / "cleanup-ready"
     second_interrupt = tmp_path / "second-interrupt-sent"
     ordering = tmp_path / "cleanup-order.json"
+    pipe_holder = tmp_path / "pipe-holder.pid"
     child = (
-        "import json,os,signal,sys,time\n"
+        "import json,os,signal,subprocess,sys,time\n"
         "from pathlib import Path\n"
         + ("signal.signal(signal.SIGINT, signal.SIG_IGN)\n" if ignore_interrupt else "")
+        + (
+            "holder = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(30)'], "
+            "start_new_session=True)\n"
+            f"Path({str(pipe_holder)!r}).write_text(str(holder.pid))\n"
+            if hold_pipes
+            else ""
+        )
         + f"print('OWNED_CREATED:{owned}', flush=True)\n"
         + f"Path({str(ready)!r}).write_text(json.dumps("
         "{'pid': os.getpid(), 'scratch': sys.argv[1]}))\n" + "time.sleep(30)\n"
@@ -233,7 +245,8 @@ def test_ctrl_c_reaps_child_and_cleans_owned_services_before_scratch_removal(
         "from pathlib import Path\n"
         "from benchmarks import product_integration_probe as probe\n"
         "probe.CHILD_INTERRUPT_SECONDS = 0.1\n"
-        "probe.CHILD_KILL_SECONDS = 1\n"
+        "probe.CHILD_KILL_SECONDS = 0.1\n"
+        "probe.CHILD_REAP_SECONDS = 0.5\n"
         "try:\n"
         f"    with tempfile.TemporaryDirectory(dir={str(tmp_path)!r}) as scratch:\n"
         "        def cleanup(output):\n"
@@ -287,6 +300,10 @@ def test_ctrl_c_reaps_child_and_cleans_owned_services_before_scratch_removal(
             "--volumes",
             owned,
         ]
+        if hold_pipes:
+            # The escaped process is still alive, so it really kept the pipes
+            # open after the direct child was killed and independently reaped.
+            os.kill(int(pipe_holder.read_text()), 0)
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -294,6 +311,54 @@ def test_ctrl_c_reaps_child_and_cleans_owned_services_before_scratch_removal(
         if ready.is_file() and not ordering.is_file():
             with suppress(ProcessLookupError):
                 os.kill(json.loads(ready.read_text())["pid"], signal.SIGKILL)
+        if pipe_holder.is_file():
+            with suppress(ProcessLookupError):
+                os.killpg(int(pipe_holder.read_text()), signal.SIGKILL)
+
+
+def test_failed_direct_child_wait_retains_unknown_state_after_pipe_closure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events = []
+    owned = "a" * 64
+
+    def communicate(*, timeout: float) -> None:
+        events.append("communicate")
+        if len(events) == 1:
+            raise KeyboardInterrupt
+        raise subprocess.TimeoutExpired(
+            "fixture", timeout, output=f"OWNED_CREATED:{owned}\n".encode()
+        )
+
+    def wait(*, timeout: float) -> None:
+        events.append("wait")
+        assert timeout == product_integration_probe.CHILD_REAP_SECONDS
+        raise subprocess.TimeoutExpired("fixture", timeout)
+
+    proc = SimpleNamespace(
+        pid=12345,
+        communicate=communicate,
+        send_signal=lambda _signal: events.append("interrupt"),
+        kill=lambda: events.append("kill"),
+        stdout=SimpleNamespace(close=lambda: events.append("stdout closed")),
+        stderr=SimpleNamespace(close=lambda: events.append("stderr closed")),
+        wait=wait,
+    )
+    monkeypatch.setattr(
+        product_integration_probe.subprocess, "Popen", lambda *_args, **_kwargs: proc
+    )
+    monkeypatch.setattr(
+        product_integration_probe.os, "killpg", lambda *_args: events.append("kill")
+    )
+
+    def cleanup(output: str) -> str:
+        events.append("cleanup")
+        return output
+
+    with pytest.raises(RuntimeError, match="direct child reap unconfirmed"):
+        product_integration_probe.run_child(["fixture"], env={}, cwd=tmp_path, cleanup=cleanup)
+    assert events.index("stdout closed") < events.index("wait")
+    assert events.index("stderr closed") < events.index("wait") < events.index("cleanup")
 
 
 def test_outer_deadline_allows_forced_child_cleanup_to_finish(
@@ -319,6 +384,7 @@ def test_outer_deadline_allows_forced_child_cleanup_to_finish(
         "CHILD_TIMEOUT_SECONDS": 0.2,
         "CHILD_INTERRUPT_SECONDS": 0.2,
         "CHILD_KILL_SECONDS": 0.1,
+        "CHILD_REAP_SECONDS": 0.1,
         "CLEANUP_TIMEOUT_SECONDS": 0.5,
     }
     for name, budget in budgets.items():

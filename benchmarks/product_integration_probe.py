@@ -34,6 +34,7 @@ OWNERSHIP_LABEL = "lyrashield.product-integration-probe"
 CHILD_TIMEOUT_SECONDS = 480
 CHILD_INTERRUPT_SECONDS = 90
 CHILD_KILL_SECONDS = 10
+CHILD_REAP_SECONDS = 10
 CLEANUP_TIMEOUT_SECONDS = 30
 
 
@@ -234,6 +235,7 @@ def run_child(
             try:
                 stdout, stderr = proc.communicate(timeout=CHILD_INTERRUPT_SECONDS)
             except subprocess.TimeoutExpired as exc:
+                reap_state = ""
                 if os.name == "posix":
                     with suppress(ProcessLookupError):
                         os.killpg(proc.pid, signal.SIGKILL)
@@ -248,7 +250,15 @@ def run_child(
                         proc.stdout.close()
                     if proc.stderr:
                         proc.stderr.close()
-                raise RuntimeError(f"{reason}; {cleanup_description(cleanup(stdout))}") from exc
+                    # An escaped pipe holder can prevent communicate() from
+                    # completing even after the direct child was killed.
+                    try:
+                        proc.wait(timeout=CHILD_REAP_SECONDS)
+                    except (OSError, subprocess.SubprocessError):
+                        reap_state = "; direct child reap unconfirmed"
+                raise RuntimeError(
+                    f"{reason}; {cleanup_description(cleanup(stdout))}{reap_state}"
+                ) from exc
             raise RuntimeError(f"{reason}; {cleanup_description(cleanup(stdout))}") from None
     if proc.returncode != 0:
         output_hash = hashlib.sha256((stdout + stderr).encode()).hexdigest()
