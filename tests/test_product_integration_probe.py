@@ -7,9 +7,11 @@ import os
 import runpy
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -192,6 +194,106 @@ def test_parent_cleanup_has_a_global_deadline(
         == output
     )
     assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize("ignore_interrupt", [False, True])
+def test_ctrl_c_reaps_child_and_cleans_owned_services_before_scratch_removal(
+    tmp_path: Path, *, ignore_interrupt: bool
+) -> None:
+    owned = "a" * 64
+    expected = "sha256:" + "d" * 64
+    identity = "fixture-parent"
+    docker, marker = cleanup_docker(
+        tmp_path,
+        {
+            owned: {
+                "Id": owned,
+                "Image": expected,
+                "Config": {
+                    "Image": "redis:7-alpine",
+                    "Labels": {product_integration_probe.OWNERSHIP_LABEL: identity},
+                },
+            }
+        },
+    )
+    ready = tmp_path / "child-ready.json"
+    cleanup_ready = tmp_path / "cleanup-ready"
+    second_interrupt = tmp_path / "second-interrupt-sent"
+    ordering = tmp_path / "cleanup-order.json"
+    child = (
+        "import json,os,signal,sys,time\n"
+        "from pathlib import Path\n"
+        + ("signal.signal(signal.SIGINT, signal.SIG_IGN)\n" if ignore_interrupt else "")
+        + f"print('OWNED_CREATED:{owned}', flush=True)\n"
+        + f"Path({str(ready)!r}).write_text(json.dumps("
+        "{'pid': os.getpid(), 'scratch': sys.argv[1]}))\n" + "time.sleep(30)\n"
+    )
+    parent = (
+        "import json,os,sys,tempfile,time\n"
+        "from pathlib import Path\n"
+        "from benchmarks import product_integration_probe as probe\n"
+        "probe.CHILD_INTERRUPT_SECONDS = 0.1\n"
+        "probe.CHILD_KILL_SECONDS = 1\n"
+        "try:\n"
+        f"    with tempfile.TemporaryDirectory(dir={str(tmp_path)!r}) as scratch:\n"
+        "        def cleanup(output):\n"
+        f"            pid = json.loads(Path({str(ready)!r}).read_text())['pid']\n"
+        "            try: os.kill(pid, 0)\n"
+        "            except ProcessLookupError: pass\n"
+        "            else: raise RuntimeError('child was not reaped before cleanup')\n"
+        f"            Path({str(cleanup_ready)!r}).write_text('ready')\n"
+        f"            acknowledged = Path({str(second_interrupt)!r})\n"
+        "            deadline = time.monotonic() + 2\n"
+        "            while not acknowledged.exists() and time.monotonic() < deadline:\n"
+        "                time.sleep(0.01)\n"
+        f"            result = probe.cleanup_owned_containers(output, docker={str(docker)!r}, "
+        f"env={{}}, cwd=Path(scratch), identity={identity!r}, "
+        f"image_ids={{'redis:7-alpine': {expected!r}}})\n"
+        f"            Path({str(ordering)!r}).write_text(json.dumps("
+        "{'scratchExists': Path(scratch).is_dir(), 'childReaped': True}))\n"
+        "            return result\n"
+        f"        probe.run_child([sys.executable, '-c', {child!r}, scratch], env={{}}, "
+        "cwd=Path(scratch), cleanup=cleanup)\n"
+        "except RuntimeError as error: print(error)\n"
+        "else: raise SystemExit('parent was not cancelled')\n"
+    )
+    proc = subprocess.Popen(  # noqa: S603 -- controlled cancellation parent and fake Docker
+        [sys.executable, "-c", parent],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.is_file() and proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.is_file(), "controlled child did not become ready"
+        proc.send_signal(signal.SIGINT)
+        deadline = time.monotonic() + 5
+        while not cleanup_ready.is_file() and proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert cleanup_ready.is_file(), "parent did not reach bounded cleanup"
+        proc.send_signal(signal.SIGINT)
+        second_interrupt.write_text("sent")
+        stdout, stderr = proc.communicate(timeout=5)
+        assert proc.returncode == 0, stderr
+        assert "fixture cancelled; all logged owned containers removed" in stdout
+        assert json.loads(ordering.read_text()) == {"scratchExists": True, "childReaped": True}
+        assert not Path(json.loads(ready.read_text())["scratch"]).exists()
+        assert json.loads(marker.read_text().splitlines()[-1]) == [
+            "rm",
+            "--force",
+            "--volumes",
+            owned,
+        ]
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate(timeout=5)
+        if ready.is_file() and not ordering.is_file():
+            with suppress(ProcessLookupError):
+                os.kill(json.loads(ready.read_text())["pid"], signal.SIGKILL)
 
 
 def test_outer_deadline_allows_forced_child_cleanup_to_finish(

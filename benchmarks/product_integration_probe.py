@@ -13,13 +13,13 @@ import sys
 import tempfile
 import time
 import uuid
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 from benchmarks.corpus.v3.validate import validate
 from benchmarks.offline_sca_probe import digest
@@ -201,6 +201,16 @@ def write_sandbox_profile(temporary: Path) -> str:
     )
 
 
+@contextmanager
+def defer_interrupts() -> Iterator[None]:
+    """Finish bounded process/container cleanup before another terminal signal."""
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 def run_child(
     args: list[str], *, env: dict[str, str], cwd: Path, cleanup: Callable[[str], str]
 ) -> tuple[str, str]:
@@ -215,35 +225,38 @@ def run_child(
     )
     try:
         stdout, stderr = proc.communicate(timeout=CHILD_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        proc.send_signal(signal.SIGINT)
-        try:
-            stdout, stderr = proc.communicate(timeout=CHILD_INTERRUPT_SECONDS)
-        except subprocess.TimeoutExpired as exc:
-            if os.name == "posix":
-                with suppress(ProcessLookupError):
-                    os.killpg(proc.pid, signal.SIGKILL)
-            else:
-                proc.kill()
+    except (subprocess.TimeoutExpired, KeyboardInterrupt) as stopped:
+        reason = (
+            "fixture cancelled" if isinstance(stopped, KeyboardInterrupt) else "fixture timed out"
+        )
+        with defer_interrupts():
+            proc.send_signal(signal.SIGINT)
             try:
-                stdout, _stderr = proc.communicate(timeout=CHILD_KILL_SECONDS)
-            except subprocess.TimeoutExpired as final:
-                raw = final.output or b""
-                stdout = raw.decode(errors="replace") if isinstance(raw, bytes) else raw
-                if proc.stdout:
-                    proc.stdout.close()
-                if proc.stderr:
-                    proc.stderr.close()
-            raise RuntimeError(
-                f"fixture timed out; {cleanup_description(cleanup(stdout))}"
-            ) from exc
-        raise RuntimeError(f"fixture timed out; {cleanup_description(cleanup(stdout))}") from None
+                stdout, stderr = proc.communicate(timeout=CHILD_INTERRUPT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                if os.name == "posix":
+                    with suppress(ProcessLookupError):
+                        os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+                try:
+                    stdout, _stderr = proc.communicate(timeout=CHILD_KILL_SECONDS)
+                except subprocess.TimeoutExpired as final:
+                    raw = final.output or b""
+                    stdout = raw.decode(errors="replace") if isinstance(raw, bytes) else raw
+                    if proc.stdout:
+                        proc.stdout.close()
+                    if proc.stderr:
+                        proc.stderr.close()
+                raise RuntimeError(f"{reason}; {cleanup_description(cleanup(stdout))}") from exc
+            raise RuntimeError(f"{reason}; {cleanup_description(cleanup(stdout))}") from None
     if proc.returncode != 0:
         output_hash = hashlib.sha256((stdout + stderr).encode()).hexdigest()
-        raise RuntimeError(
-            f"fixture execution failed; {cleanup_description(cleanup(stdout))}; "
-            f"output sha256 {output_hash}"
-        )
+        with defer_interrupts():
+            raise RuntimeError(
+                f"fixture execution failed; {cleanup_description(cleanup(stdout))}; "
+                f"output sha256 {output_hash}"
+            )
     return stdout, stderr
 
 
