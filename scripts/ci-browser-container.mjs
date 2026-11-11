@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
-import { createServer } from "node:http";
-import { once } from "node:events";
-import { createRequire } from "node:module";
+import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { createFontArchive, FONT_FILE, FONT_FAMILIES } from "./fonts.mjs";
 
-const require = createRequire("/tmp/ci-browser/package.json");
-const { chromium } = require("playwright");
-const flags = ["--force-color-profile=srgb"];
 const packages = [
   "xvfb",
   "fonts-noto-color-emoji",
@@ -58,88 +53,44 @@ function run(command, args) {
   return result.stdout;
 }
 
-async function verifyBrowser(remote = false, full = false) {
-  const payload = {
-    verified: false,
-    proof: "engine-ci-browser-remote-download",
-  };
-  const server = createServer((request, response) => {
-    if (request.url === "/download") {
-      response.setHeader("Content-Type", "application/json");
-      response.setHeader(
-        "Content-Disposition",
-        'attachment; filename="ci-browser-proof.json"',
-      );
-      response.end(JSON.stringify(payload));
-      return;
-    }
-    response.setHeader("Content-Type", "text/html");
-    response.end("<!doctype html><p>English ไทย 日本語 中文 😀</p>");
-  }).listen(0, "127.0.0.1");
-  await once(server, "listening");
-  let browser;
-  try {
-    const launchOptions = {
-      headless: true,
-      args: flags,
-      ...(remote ? { artifactsDir: "/tmp/ci-browser/artifacts" } : {}),
-      ...(full ? { executablePath: chromium.executablePath() } : {}),
-    };
-    browser = remote
-      ? await chromium.connect("ws://127.0.0.1:31778/", {
-          headers: {
-            "x-playwright-launch-options": JSON.stringify(launchOptions),
-          },
-          timeout: 30_000,
-        })
-      : await chromium.launch(launchOptions);
-    assert.equal(browser.version(), "151.0.7922.34");
-    const page = await browser.newPage();
-    await page.goto(`http://127.0.0.1:${server.address().port}`);
+function verifyFonts() {
+  for (const name of packages.filter(
+    (name) =>
+      name.startsWith("fonts-") ||
+      name.startsWith("xfonts-") ||
+      name === "libfontconfig1",
+  )) {
     assert.equal(
-      await page.locator("p").textContent(),
-      "English ไทย 日本語 中文 😀",
+      run("dpkg-query", ["-W", "-f=${Status}", name]),
+      "install ok installed",
+      `${name} is unavailable in the pinned source image`,
     );
-    if (remote) {
-      const downloadEvent = page.waitForEvent("download");
-      await page.evaluate(() => {
-        const anchor = document.createElement("a");
-        anchor.href = "/download";
-        document.body.append(anchor);
-        anchor.click();
-      });
-      const download = await downloadEvent;
-      assert.equal(download.suggestedFilename(), "ci-browser-proof.json");
-      const file = `/tmp/ci-browser/download-${randomUUID()}.json`;
-      try {
-        await download.saveAs(file);
-        assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), payload);
-      } finally {
-        if (existsSync(file)) unlinkSync(file);
-      }
-    }
-    const commands = readdirSync("/proc")
-      .filter((entry) => /^\d+$/.test(entry))
-      .flatMap((pid) => {
-        try {
-          return [readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")];
-        } catch {
-          return [];
-        }
-      });
-    assert.ok(
-      commands.some(
-        (command) =>
-          command.some((arg) => arg.startsWith("/ms-playwright/chromium")) &&
-          flags.every((flag) => command.includes(flag)),
-      ),
-      "Viewer browser launch options were not honored",
-    );
-  } finally {
-    await browser?.close();
-    server.close();
-    await once(server, "close");
+    const changed = run("dpkg", ["-V", name])
+      .split("\n")
+      .filter(
+        (line) => line && !/^missing\s+\/usr\/share\/(doc|man)\//.test(line),
+      );
+    assert.deepEqual(changed, [], `${name} font file integrity mismatch`);
   }
+  for (const family of FONT_FAMILIES)
+    assert.ok(
+      run("fc-match", ["-f", "%{family}\t%{file}", family]).includes(family),
+      `${family} is unavailable in the source image`,
+    );
+}
+
+function fontFiles(directory = "/usr/share/fonts", prefix = "") {
+  return readdirSync(directory).flatMap((name) => {
+    const file = join(directory, name);
+    const path = prefix ? `${prefix}/${name}` : name;
+    const stat = lstatSync(file);
+    // Alternative aliases may be links; export only the regular font bytes.
+    if (stat.isSymbolicLink()) return [];
+    if (stat.isDirectory()) return fontFiles(file, path);
+    if (!FONT_FILE.test(path)) return [];
+    assert.ok(stat.isFile() && stat.size <= 32 * 1024 * 1024);
+    return [{ path, bytes: readFileSync(file) }];
+  });
 }
 
 try {
@@ -147,68 +98,20 @@ try {
   assert.match(readFileSync("/proc/self/status", "utf8"), /^CapEff:\s+0+$/m);
   assert.match(readFileSync("/proc/self/status", "utf8"), /^NoNewPrivs:\s+1$/m);
   assert.equal(process.arch, "x64");
-  for (const name of ["playwright", "playwright-core"])
-    assert.equal(require(`${name}/package.json`).version, "1.62.1");
-  const browsers = JSON.parse(
-    readFileSync(
-      "/tmp/ci-browser/node_modules/playwright-core/browsers.json",
-      "utf8",
-    ),
-  ).browsers;
-  for (const name of ["chromium", "chromium-headless-shell"]) {
-    const browser = browsers.find((entry) => entry.name === name);
-    assert.equal(browser.revision, "1234");
-    assert.equal(browser.browserVersion, "151.0.7922.34");
-  }
   const command = process.argv[2];
   if (command === "verify") {
-    for (const name of packages)
-      assert.equal(
-        run("dpkg-query", ["-W", "-f=${Status}", name]),
-        "install ok installed",
-        `${name} is unavailable`,
-      );
-    for (const name of packages.filter(
-      (name) => name.startsWith("fonts-") || name.startsWith("xfonts-"),
-    )) {
-      const output = run("dpkg", ["-V", name])
-        .split("\n")
-        .filter(
-          (line) => line && !/^missing\s+\/usr\/share\/(doc|man)\//.test(line),
-        );
-      assert.deepEqual(output, [], `${name} font file integrity mismatch`);
-    }
-    for (const family of [
-      "FreeSans",
-      "IPAGothic",
-      "Loma",
-      "Unifont",
-      "WenQuanYi Zen Hei",
-      "Noto Color Emoji",
-      "Liberation Sans",
-    ])
-      assert.ok(
-        run("fc-match", ["-f", "%{family}\t%{file}", family]).includes(family),
-        `${family} is unavailable`,
-      );
-    for (const binary of [
-      chromium.executablePath(),
-      "/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell",
-    ])
-      assert.ok(
-        !run("ldd", [binary]).includes("not found"),
-        "Browser native library is unavailable",
-      );
-    await verifyBrowser();
-    await verifyBrowser(false, true);
-    console.log(
-      "CI browser image, packages, fonts, native libraries and Chromium verified",
+    verifyFonts();
+    console.log("Pinned source font integrity and families verified");
+  } else if (command === "font-archive") {
+    verifyFonts();
+    const files = fontFiles();
+    assert.ok(
+      files.length > 0 &&
+        files.length < 512 &&
+        files.reduce((sum, file) => sum + file.bytes.length, 0) <=
+          64 * 1024 * 1024,
     );
-  } else if (command === "verify-server") {
-    await verifyBrowser(true);
-    console.log(
-      "CI loopback browser server honored viewer launch options and remote download artifacts",
-    );
+    process.stdout.write(createFontArchive(files));
   } else throw new Error("Unknown container verification command");
 } catch (error) {
   console.error(error.message);

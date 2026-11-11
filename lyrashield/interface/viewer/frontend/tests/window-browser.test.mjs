@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { launchViewerBrowser } from "./browser-fixture.js";
+import { chromium } from "playwright";
 import { startPythonServer } from "./python-server-fixture.js";
 for (const width of [1440, 375]) test(`bounded transcript older paging and retry at ${width}px`, { timeout: 30000 }, async () => {
   const server = await startPythonServer("tests/viewer_performance_server.py", ["--messages", "350"]);
   let browser;
   try {
-    browser = await launchViewerBrowser({ headless: true });
+    browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width, height: 1000 } }); page.setDefaultTimeout(5000);
     await page.goto(server.url); await page.locator(".react-flow__node").first().click();
     await page.getByText(/^Message 349:/).waitFor();

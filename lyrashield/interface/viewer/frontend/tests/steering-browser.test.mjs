@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launchViewerBrowser } from "./browser-fixture.js";
+import { chromium } from "playwright";
 
 const root = fileURLToPath(new URL("../../../../../", import.meta.url));
 const python = resolve(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
@@ -18,7 +18,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 375, height: 812
     try {
       const [ready] = await once(server.stdout, "data");
       const { url } = JSON.parse(ready.toString());
-      browser = await launchViewerBrowser({ headless: true });
+      browser = await chromium.launch({ headless: true });
       const page = await browser.newPage({ viewport });
       page.setDefaultTimeout(8000);
       await page.goto(url);

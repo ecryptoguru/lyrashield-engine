@@ -4,14 +4,14 @@ import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launchViewerBrowser } from "./browser-fixture.js";
+import { chromium } from "playwright";
 const root = fileURLToPath(new URL("../../../../../", import.meta.url));
 async function fixture(fn, viewport = { width: 1440, height: 1000 }) {
   const server = spawn(resolve(root, ".venv/bin/python"), [resolve(root, "tests/viewer_steering_server.py")], { cwd: root, env: { ...process.env, PYTHONPATH: root }, stdio: ["ignore", "pipe", "pipe"] });
   let browser;
   try {
     const [ready] = await once(server.stdout, "data");
-    browser = await launchViewerBrowser({ headless: true });
+    browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport }); page.setDefaultTimeout(8000);
     await fn(page, JSON.parse(ready.toString()).url);
   } finally {

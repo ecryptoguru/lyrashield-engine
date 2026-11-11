@@ -131,6 +131,15 @@ jobs:
         if: steps.changed_paths.outputs.docs_only != 'true'
         run: python3 scripts/report_twin_drift.py
 
+      - name: Cache Playwright browser download
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('lyrashield/interface/viewer/frontend/package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+
       - name: Install owned viewer dependencies
         if: steps.changed_paths.outputs.docs_only != 'true'
         working-directory: lyrashield/interface/viewer/frontend
@@ -138,9 +147,9 @@ jobs:
 
       - name: Test viewer browser CI lifecycle contracts
         if: steps.changed_paths.outputs.docs_only != 'true'
-        run: node --test scripts/tests/ci-viewer-browser.test.mjs
+        run: node --test scripts/tests/ci-viewer-browser.test.mjs scripts/tests/ci-browser-fonts.test.mjs
 
-      - name: Start qualified loopback viewer browser
+      - name: Prepare qualified local viewer browser
         if: steps.changed_paths.outputs.docs_only != 'true'
         run: node scripts/ci-viewer-browser.mjs start
 
@@ -157,7 +166,7 @@ jobs:
             exit 1
           fi
 
-      - name: Stop owned viewer browser
+      - name: Stop owned viewer font source
         if: always() && steps.changed_paths.outputs.docs_only != 'true'
         run: node scripts/ci-viewer-browser.mjs stop
 

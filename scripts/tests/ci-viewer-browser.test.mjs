@@ -10,10 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createFontArchive } from "../ci-browser-fonts.mjs";
 import {
   BROWSER_IMAGE,
   BROWSER_VERSION,
-  BROWSER_PORT,
   startBrowser,
   stopBrowser,
 } from "../ci-viewer-browser.mjs";
@@ -39,8 +39,27 @@ function fixture(options = {}) {
   let searches = 0;
   const run = (command, args, config = {}) => {
     calls.push({ command, args, config });
-    if (command === "tar" && options.failTransfer)
-      throw new Error("package transfer failed");
+    if (args.includes("font-archive")) {
+      if (options.failTransfer) throw new Error("font archive transfer failed");
+      return createFontArchive([
+        {
+          path: "truetype/freefont/FreeSans.ttf",
+          bytes: Buffer.from("verified-font-fixture"),
+        },
+      ]);
+    }
+    if (command === "node" && args[0].endsWith("ci-browser-host.mjs")) {
+      if (options.substituteState) {
+        writeFileSync(
+          join(dir, "engine-ci-browser-123-2-app-core-tests.json"),
+          options.substituteState,
+        );
+        throw new Error("host unavailable after state substitution");
+      }
+      if (options.failHost) throw new Error("host native runtime unavailable");
+    }
+    if (command === "node" && args.includes("install") && options.failInstall)
+      throw new Error("browser binary install unavailable");
     if (args[0] === "image")
       return JSON.stringify([
         {
@@ -81,8 +100,6 @@ function fixture(options = {}) {
       ]);
     if (args.includes("verify") && options.failVerify)
       throw new Error("native dependency missing");
-    if (args.includes("verify-server") && options.failServer)
-      throw new Error("remote browser unavailable");
     if (config.binary)
       return options.bytes ?? Buffer.from("0000ftyp000000000000000000000000");
     return "";
@@ -90,16 +107,6 @@ function fixture(options = {}) {
   const input = {
     env,
     run,
-    wait: async () => {
-      if (options.substituteState) {
-        writeFileSync(
-          join(dir, "engine-ci-browser-123-2-app-core-tests.json"),
-          options.substituteState,
-        );
-        throw new Error("loopback unavailable after state substitution");
-      }
-      if (options.failWait) throw new Error("loopback unavailable");
-    },
     packages: () => ["/locked/playwright", "/locked/playwright-core"],
   };
   return {
@@ -112,7 +119,7 @@ function fixture(options = {}) {
   };
 }
 
-test("uses the exact amd64 image and a loopback-only nonroot mount-free container", async () => {
+test("extracts pinned fonts and verifies the unchanged local browser runtime", async () => {
   const f = fixture();
   try {
     await startBrowser(f.input);
@@ -124,16 +131,16 @@ test("uses the exact amd64 image and a loopback-only nonroot mount-free containe
       BROWSER_IMAGE,
     ]);
     const args = f.calls.find((call) => call.args[0] === "run").args;
-    for (const pair of [
+    for (const [flag, value] of [
       ["--user", "1000:1000"],
       ["--cap-drop", "ALL"],
-      ["--network", "host"],
+      ["--network", "none"],
       ["--security-opt", "no-new-privileges"],
-      ["--shm-size", "512m"],
       ["--tmpfs", "/tmp:rw,nosuid,nodev,size=512m"],
     ])
-      assert.equal(args[args.indexOf(pair[0]) + 1], pair[1]);
+      assert.equal(args[args.indexOf(flag) + 1], value);
     assert.ok(args.includes("--read-only"));
+    assert.ok(args.includes("--init"));
     for (const forbidden of [
       "--privileged",
       "--mount",
@@ -149,70 +156,50 @@ test("uses the exact amd64 image and a loopback-only nonroot mount-free containe
       args.slice(args.indexOf("--env"), args.indexOf("--env") + 2),
       ["--env", "HOME=/tmp"],
     );
-    const server = f.calls.find((call) =>
-      call.args.some((arg) => arg.includes("run-server")),
-    );
-    const serverCommand = server.args.at(-1);
-    assert.match(serverCommand, /--unsafe/);
-    assert.match(serverCommand, /--host 127\.0\.0\.1 --port 31778/);
-    assert.match(serverCommand, /--artifacts-dir \/tmp\/ci-browser\/artifacts/);
-    assert.match(serverCommand, /server\.log 2>&1$/);
     assert.ok(
-      f.calls.findIndex((call) => call.args.includes("verify-server")) >
-        f.calls.indexOf(server),
+      !f.calls.some(
+        (call) =>
+          call.args.some((arg) => arg.includes("run-server")) ||
+          call.args.includes("--unsafe"),
+      ),
     );
+    const host = f.calls.find(
+      (call) =>
+        call.command === "node" && call.args[0].endsWith("ci-browser-host.mjs"),
+    );
+    const config = host.config.env.FONTCONFIG_FILE;
     assert.equal(
       readFileSync(f.env.GITHUB_ENV, "utf8"),
-      "LYRASHIELD_VIEWER_BROWSER_WS_ENDPOINT=ws://127.0.0.1:31778/\n",
+      `FONTCONFIG_FILE=${config}\n`,
     );
+    assert.ok(!readFileSync(f.env.GITHUB_ENV, "utf8").includes("WS_ENDPOINT"));
+    assert.ok(readFileSync(config, "utf8").includes("/etc/fonts/fonts.conf"));
     assert.deepEqual(
-      f.calls.filter((call) => call.command === "tar").map((call) => call.args),
-      [
-        ["-C", "/locked/playwright", "-cf", "-", "."],
-        ["-C", "/locked/playwright-core", "-cf", "-", "."],
-      ],
+      f.calls.find(
+        (call) => call.command === "node" && call.args.includes("install"),
+      ).args,
+      ["/locked/playwright/cli.js", "install", "chromium"],
     );
     const transfers = f.calls.filter((call) =>
       call.args.includes("--interactive"),
     );
-    assert.equal(transfers.length, 3);
+    assert.equal(transfers.length, 2);
     assert.ok(transfers.every((call) => Buffer.isBuffer(call.config.input)));
-    assert.deepEqual(
-      transfers.slice(0, 2).map((call) => call.args),
-      [
-        [
-          "exec",
-          "--interactive",
-          "--workdir",
-          "/tmp/ci-browser/node_modules/playwright",
-          id,
-          "tar",
-          "-xf",
-          "-",
-        ],
-        [
-          "exec",
-          "--interactive",
-          "--workdir",
-          "/tmp/ci-browser/node_modules/playwright-core",
-          id,
-          "tar",
-          "-xf",
-          "-",
-        ],
-      ],
+    assert.ok(
+      !f.calls.some((call) => call.command === "tar" || call.args[0] === "cp"),
     );
-    assert.ok(!f.calls.some((call) => call.args[0] === "cp"));
     stopBrowser(f.input);
     assert.deepEqual(f.calls.at(-1).args, ["rm", "--force", id]);
+    // Overlay deletion is delegated to GitHub RUNNER_TEMP cleanup, not state.
+    assert.ok(existsSync(config));
     stopBrowser(f.input);
   } finally {
     f.clean();
   }
 });
 
-for (const failure of ["failTransfer", "failVerify", "failWait", "failServer"])
-  test(`${failure} fails closed, removes only its container and publishes no endpoint`, async () => {
+for (const failure of ["failTransfer", "failVerify", "failInstall", "failHost"])
+  test(`${failure} fails closed, removes only its container and publishes no font configuration`, async () => {
     const f = fixture({ [failure]: true });
     try {
       await assert.rejects(startBrowser(f.input));
@@ -396,7 +383,6 @@ test("qualified browser version matches both frozen frontend package locks", () 
       lock.packages[`node_modules/${name}`].version,
       BROWSER_VERSION,
     );
-  assert.equal(BROWSER_PORT, 31778);
 });
 
 test("existing state fails before Docker and preserves the original receipt", async () => {
@@ -421,11 +407,6 @@ test("endpoint publication failure cleans up the exact acknowledged container", 
     assert.equal(
       existsSync(join(f.dir, "engine-ci-browser-123-2-app-core-tests.json")),
       false,
-    );
-    assert.ok(
-      f.calls.some(
-        (call) => call.args.includes("tail") && call.args.includes("4096"),
-      ),
     );
   } finally {
     f.clean();
