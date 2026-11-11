@@ -13,7 +13,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { FONT_FAMILIES } from "./ci-browser-fonts.mjs";
+import { FONT_FAMILIES, verifyBitmapFont } from "./ci-browser-fonts.mjs";
 
 const require = createRequire(
   new URL(
@@ -24,9 +24,6 @@ const require = createRequire(
 const playwright = require.resolve("playwright/package.json");
 const core = createRequire(playwright).resolve("playwright-core/package.json");
 const { chromium } = createRequire(core)("playwright-core");
-const { registry } = createRequire(core)(
-  join(dirname(core), "lib/coreBundle.js"),
-);
 
 function run(command, args) {
   const result = spawnSync(command, args, {
@@ -54,7 +51,12 @@ async function verify() {
       createHash("sha256").update(readFileSync(path)).digest("hex"),
       file.sha256,
     );
-    if (/\.(?:ttf|ttc|otf|pfb|t1|pcf\.gz)$/.test(file.path))
+    // Fontconfig does not decode these legacy X11 PCF encodings, including in
+    // the pinned source image. Validate their exact hash and bounded native
+    // structure; every scalable Chromium font still must pass fc-scan.
+    if (file.path.endsWith(".pcf.gz")) {
+      verifyBitmapFont(readFileSync(path));
+    } else if (/\.(?:ttf|ttc|otf|pfb|t1)$/.test(file.path))
       assert.ok(
         run("fc-scan", ["--format", "%{family}", path]).trim(),
         "Font asset is unreadable",
@@ -77,9 +79,16 @@ async function verify() {
   const browsers = JSON.parse(
     readFileSync(join(dirname(core), "browsers.json"), "utf8"),
   ).browsers;
+  const full = chromium.executablePath();
+  assert.ok(full.endsWith("/chromium-1234/chrome-linux64/chrome"));
   const binaries = [
-    chromium.executablePath(),
-    registry.findExecutable("chromium-headless-shell").executablePath(),
+    full,
+    join(
+      dirname(dirname(dirname(full))),
+      "chromium_headless_shell-1234",
+      "chrome-headless-shell-linux64",
+      "chrome-headless-shell",
+    ),
   ];
   for (const name of ["chromium", "chromium-headless-shell"]) {
     const browser = browsers.find((entry) => entry.name === name);
@@ -109,7 +118,9 @@ async function verify() {
       );
     }, 0);
   const server = createServer((_request, response) =>
-    response.end("<!doctype html><p>English ไทย 日本語 中文 😀</p>"),
+    response.end(
+      '<!doctype html><meta charset="utf-8"><p>English ไทย 日本語 中文 😀</p>',
+    ),
   ).listen(0, "127.0.0.1");
   await once(server, "listening");
   try {

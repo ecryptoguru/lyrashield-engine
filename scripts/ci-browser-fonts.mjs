@@ -168,5 +168,36 @@ export function fontconfigOverlay(fonts, cache) {
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
-  return `<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig><cachedir>${escape(cache)}</cachedir><include ignore_missing="no">/etc/fonts/fonts.conf</include><reset-dirs/><dir>${escape(fonts)}</dir></fontconfig>\n`;
+  return `<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig><cachedir>${escape(cache)}</cachedir><include ignore_missing="no">/etc/fonts/fonts.conf</include><dir>${escape(fonts)}</dir><selectfont><rejectfont><glob>*</glob></rejectfont><acceptfont><glob>${escape(fonts)}/*</glob></acceptfont></selectfont></fontconfig>\n`;
+}
+
+export function verifyBitmapFont(compressed) {
+  const bytes = gunzipSync(compressed, { maxOutputLength: 16 * 1024 * 1024 });
+  if (bytes.length < 8 || bytes.readUInt32LE(0) !== 0x70636601)
+    throw new Error("Invalid legacy PCF font header");
+  const count = bytes.readUInt32LE(4);
+  const start = 8 + count * 16;
+  if (!count || count > 32 || start > bytes.length)
+    throw new Error("Invalid legacy PCF font table count");
+  const types = new Set();
+  for (let table = 0; table < count; table++) {
+    const at = 8 + table * 16;
+    const type = bytes.readUInt32LE(at);
+    const size = bytes.readUInt32LE(at + 8);
+    const offset = bytes.readUInt32LE(at + 12);
+    // Legacy BDF accelerator tables reserve 100 bytes in the TOC even when
+    // their optional ink bounds are absent and only 48 bytes are stored.
+    const stored = type === 256 ? Math.min(size, 48) : size;
+    if (
+      types.has(type) ||
+      size < 4 ||
+      size > 16 * 1024 * 1024 ||
+      offset < start ||
+      offset + stored > bytes.length
+    )
+      throw new Error("Invalid legacy PCF font table bounds");
+    types.add(type);
+  }
+  if (![1, 4, 8, 32].every((type) => types.has(type)))
+    throw new Error("Legacy PCF font is missing required tables");
 }
