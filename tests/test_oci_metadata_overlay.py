@@ -175,6 +175,39 @@ def test_ambiguous_replacement_with_live_hardlink_fails_atomically():
     assert model.entries == before and model.entries["a"].inode is model.entries["alias"].inode
 
 
+def test_many_regular_replacements_use_one_bounded_alias_index(monkeypatch):
+    module = api()
+    model = module.MetadataRoot()
+    first = layer([(f"file-{index}", "file", b"old", None) for index in range(200)])
+    apply(model, first, 0)
+    monkeypatch.setattr(module, "MAX_SCAN_WORK", 500)
+    second = layer([(f"file-{index}", "file", b"new", None) for index in range(200)])
+    apply(model, second, 1)
+    assert all(model.entries[f"file-{index}"].inode.source_layer == 1 for index in range(200))
+
+
+def test_explicit_inventory_entry_budget_is_bounded_and_default_is_preserved(monkeypatch):
+    module = api()
+    monkeypatch.setattr(module, "MAX_OVERLAY_ENTRIES", 4)
+    raw = layer([(f"file-{index}", "file", b"value", None) for index in range(5)])
+    with pytest.raises(ValueError, match="entry limit"):
+        apply(module.MetadataRoot(), raw, 0)
+    model = module.MetadataRoot(max_entries=6)
+    apply(model, raw, 0)
+    assert len(model.entries) == 6
+    with pytest.raises(ValueError, match="entry policy"):
+        module.MetadataRoot(max_entries=module.MAX_ALLOWED_OVERLAY_ENTRIES + 1)
+
+
+def test_many_disjoint_whiteouts_use_a_bounded_path_index(monkeypatch):
+    module = api()
+    model = module.MetadataRoot()
+    apply(model, layer([(f"file-{index}", "file", b"old", None) for index in range(200)]), 0)
+    monkeypatch.setattr(module, "MAX_SCAN_WORK", 5000)
+    apply(model, layer([(f".wh.file-{index}", "file", b"", None) for index in range(200)]), 1)
+    assert set(model.entries) == {""}
+
+
 def test_symlink_ancestor_and_unresolved_hardlink_fail_atomically():
     model = api().MetadataRoot()
     apply(model, layer([("link", "symlink", "/target", None)]), 0)
