@@ -45,6 +45,14 @@ export function cleanupBrowserTemp(path, identity) {
   rmSync(path, { recursive: true });
 }
 
+export async function withBrowserTemp(path, identity, probe) {
+  try {
+    return await probe();
+  } finally {
+    cleanupBrowserTemp(path, identity);
+  }
+}
+
 function runCommand(
   command,
   args,
