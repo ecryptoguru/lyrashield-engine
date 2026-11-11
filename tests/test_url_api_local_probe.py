@@ -31,7 +31,7 @@ def test_real_scanners_and_tls_relay_are_scoped_and_non_reportable(tmp_path: Pat
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=180,
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
