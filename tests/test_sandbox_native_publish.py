@@ -213,6 +213,77 @@ def assert_workflow_contract(workflow):
     assert "--phase coverage" in coverage_verify
 
 
+@pytest.mark.parametrize(
+    ("status", "conclusion", "accepted"),
+    [
+        ("completed", "success", True),
+        ("completed", "failure", False),
+        ("completed", "cancelled", False),
+        ("completed", "skipped", False),
+        ("completed", "neutral", False),
+        ("in_progress", None, False),
+        ("queued", None, False),
+        ("waiting", None, False),
+    ],
+)
+def test_native_source_resolver_requires_latest_ci_attempt(tmp_path, status, conclusion, accepted):
+    """Run the shipped resolver with an older success and a newer authoritative run."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows/publish-sandbox.yml").read_text())
+    resolver = next(s for s in workflow["jobs"]["resolve"]["steps"] if s.get("id") == "source")[
+        "run"
+    ]
+    revision = "a" * 40
+    base = {"head_sha": revision, "head_branch": "main", "event": "push"}
+    runs = [
+        {**base, "id": 1, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+        {**base, "id": 2, "run_attempt": 3, "status": status, "conclusion": conclusion},
+        {
+            **base,
+            "id": 99,
+            "run_attempt": 1,
+            "head_branch": "feature",
+            "status": "completed",
+            "conclusion": "success",
+        },
+    ]
+    fixture = tmp_path / "runs.json"
+    fixture.write_text(json.dumps({"workflow_runs": runs}))
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    # These mocks only supply remote/source observations; jq and the complete
+    # production resolver execute unchanged. No network or real Git mutation.
+    for name, script in {
+        "gh": '#!/bin/bash\n[[ "$*" != *"status="* ]] || exit 90\ncat "$CI_FIXTURE"\n',
+        "git": '#!/bin/bash\nif [[ "$1" == rev-parse ]]; then echo "$GITHUB_SHA"; fi\n',
+    }.items():
+        path = tools / name
+        path.write_text(script)
+        path.chmod(0o700)
+    output = tmp_path / "output"
+    result = subprocess.run(  # noqa: S603 - fixed shell and exact repository resolver with fake observations
+        ["/bin/bash", "-euo", "pipefail", "-c", resolver],
+        env={
+            **os.environ,
+            "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+            "GITHUB_SHA": revision,
+            "GITHUB_REPOSITORY": "ecryptoguru/lyrashield-engine",
+            "GITHUB_OUTPUT": str(output),
+            "REQUESTED_RUNTIME": revision,
+            "CI_FIXTURE": str(fixture),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if accepted:
+        assert result.returncode == 0, result.stderr
+        assert output.read_text() == f"revision={revision}\nci_run=2\nci_attempt=3\n"
+    else:
+        assert result.returncode != 0
+        assert not output.exists()
+
+
 def test_native_workflow_binds_source_and_cannot_promote_before_qualification():
     workflow = yaml.safe_load((ROOT / ".github/workflows/publish-sandbox.yml").read_text())
     assert_workflow_contract(workflow)

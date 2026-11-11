@@ -44,23 +44,23 @@ jobs:
         run: |
           set -euo pipefail
           revision="${REQUESTED_RUNTIME:-$GITHUB_SHA}"
-          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
           # Historical releases require an explicit, reviewed qualification.
           # The M engine revision completed the full derivative and worker gates.
           qualified_historical="992b3d9df696753c7b62a31ea58f1ca5d21055c1"
-          [[ "$revision" == "$GITHUB_SHA" || "$revision" == "$qualified_historical" ]]
+          [[ "$revision" == "$GITHUB_SHA" || "$revision" == "$qualified_historical" ]] || exit 1
           test "$(git rev-parse --verify "$revision^{commit}")" = "$revision"
           git merge-base --is-ancestor "$revision" "$GITHUB_SHA"
           # The jq variable is interpreted by jq, not by the shell.
           # shellcheck disable=SC2016
           ci_record="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
-            -f head_sha="$revision" -f event=push -f status=success -f per_page=100 | \
+            -f head_sha="$revision" -f event=push -f per_page=100 | \
             jq -c --arg revision "$revision" \
-            '[.workflow_runs[] | select(.head_sha == $revision and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success") | {id, attempt: .run_attempt}] | max_by(.id) // empty')"
-          [[ -n "$ci_record" ]]
+            '[.workflow_runs[] | select(.head_sha == $revision and .head_branch == "main" and .event == "push")] | max_by(.id) | select(.status == "completed" and .conclusion == "success") | {id, attempt: .run_attempt}')"
+          [[ -n "$ci_record" ]] || exit 1
           ci_run="$(jq -r '.id' <<< "$ci_record")"
           ci_attempt="$(jq -r '.attempt' <<< "$ci_record")"
-          [[ "$ci_run" =~ ^[1-9][0-9]*$ && "$ci_attempt" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ci_run" =~ ^[1-9][0-9]*$ && "$ci_attempt" =~ ^[1-9][0-9]*$ ]] || exit 1
           printf 'revision=%s\nci_run=%s\nci_attempt=%s\n' "$revision" "$ci_run" "$ci_attempt" >> "$GITHUB_OUTPUT"
 
   build:
