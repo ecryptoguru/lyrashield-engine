@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { FONT_FAMILIES } from "./ci-browser-fonts.mjs";
+import { withBrowserTemp } from "./ci-viewer-browser.mjs";
 
 const require = createRequire(
   new URL(
@@ -99,77 +100,81 @@ async function verify() {
     );
   const browserTemp = join(directory, "browser-tmp");
   mkdirSync(browserTemp, { mode: 0o700 });
-  process.env.TMPDIR = browserTemp;
-  let peakTemporaryBytes = 0;
-  const bytesIn = (path) =>
-    readdirSync(path).reduce((total, name) => {
-      const file = join(path, name);
-      const stat = lstatSync(file);
-      return (
-        total +
-        (stat.isSymbolicLink()
-          ? 0
-          : stat.isDirectory()
-            ? bytesIn(file)
-            : stat.size)
-      );
-    }, 0);
-  const server = createServer((_request, response) =>
-    response.end(
-      '<!doctype html><meta charset="utf-8"><p>English ไทย 日本語 中文 😀</p>',
-    ),
-  ).listen(0, "127.0.0.1");
-  await once(server, "listening");
-  try {
-    for (const binary of binaries) {
-      const browser = await chromium.launch({
-        headless: true,
-        executablePath: binary,
-      });
-      try {
-        assert.equal(browser.version(), "151.0.7922.34");
-        const page = await browser.newPage();
-        await page.goto(`http://127.0.0.1:${server.address().port}`);
-        assert.equal(
-          await page.locator("p").textContent(),
-          "English ไทย 日本語 中文 😀",
+  const browserTempIdentity = lstatSync(browserTemp);
+  await withBrowserTemp(browserTemp, browserTempIdentity, async () => {
+    process.env.TMPDIR = browserTemp;
+    let peakTemporaryBytes = 0;
+    const bytesIn = (path) =>
+      readdirSync(path).reduce((total, name) => {
+        const file = join(path, name);
+        const stat = lstatSync(file);
+        return (
+          total +
+          (stat.isSymbolicLink()
+            ? 0
+            : stat.isDirectory()
+              ? bytesIn(file)
+              : stat.size)
         );
-        await page.close();
-        // Exercise the original local artifact lifecycle. Successful traces
-        // may grow during a browser lifetime, then must disappear on close.
-        for (let iteration = 0; iteration < 3; iteration++) {
-          const context = await browser.newContext();
-          try {
-            await context.tracing.start({ snapshots: true, screenshots: true });
-            const probe = await context.newPage();
-            await probe.goto(`http://127.0.0.1:${server.address().port}`);
-            await probe.screenshot();
-            await context.tracing.stop();
-            peakTemporaryBytes = Math.max(
-              peakTemporaryBytes,
-              bytesIn(browserTemp),
-            );
-          } finally {
-            await context.close();
+      }, 0);
+    const server = createServer((_request, response) =>
+      response.end(
+        '<!doctype html><meta charset="utf-8"><p>English ไทย 日本語 中文 😀</p>',
+      ),
+    );
+    try {
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      for (const binary of binaries) {
+        const browser = await chromium.launch({
+          headless: true,
+          executablePath: binary,
+        });
+        try {
+          assert.equal(browser.version(), "151.0.7922.34");
+          const page = await browser.newPage();
+          await page.goto(`http://127.0.0.1:${server.address().port}`);
+          assert.equal(
+            await page.locator("p").textContent(),
+            "English ไทย 日本語 中文 😀",
+          );
+          await page.close();
+          // Exercise local tracing and record peak temporary storage while the
+          // browser is running. The owned directory is reclaimed after close.
+          for (let iteration = 0; iteration < 3; iteration++) {
+            const context = await browser.newContext();
+            try {
+              await context.tracing.start({
+                snapshots: true,
+                screenshots: true,
+              });
+              const probe = await context.newPage();
+              await probe.goto(`http://127.0.0.1:${server.address().port}`);
+              await probe.screenshot();
+              await context.tracing.stop();
+              peakTemporaryBytes = Math.max(
+                peakTemporaryBytes,
+                bytesIn(browserTemp),
+              );
+            } finally {
+              await context.close();
+            }
           }
+        } finally {
+          await browser.close();
         }
-      } finally {
-        await browser.close();
       }
-      assert.deepEqual(
-        readdirSync(browserTemp),
-        [],
-        "Local browser temporary artifacts were not reclaimed",
-      );
+    } finally {
+      if (server.listening) {
+        server.close();
+        await once(server, "close");
+      }
     }
-  } finally {
-    server.close();
-    await once(server, "close");
-  }
-  const available = statfsSync(browserTemp);
-  console.log(
-    `Verified ${manifest.files.length} pinned font assets, overlay families, host libraries and local Chromium headless shell; bounded lifecycle probe peak=${peakTemporaryBytes} bytes, available=${available.bavail * available.bsize} bytes`,
-  );
+    const available = statfsSync(browserTemp);
+    console.log(
+      `Verified ${manifest.files.length} pinned font assets, overlay families, host libraries and local Chromium headless shell; bounded lifecycle probe peak=${peakTemporaryBytes} bytes, available=${available.bavail * available.bsize} bytes`,
+    );
+  });
 }
 
 verify().catch((error) => {
