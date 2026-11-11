@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "lyrashield-adjudication/1.0.0",
+  "corpus": {
+    "name": "lyrashield-development-v3",
+    "revision": "v3"
+  },
+  "review": {
+    "status": "NOT_INDEPENDENTLY_REVIEWED",
+    "protocol": "Two independent reviewers inspect raw findings against source, corpus locators, evidence, and negative controls. Disagreements require a third reviewer. Implementation authors cannot satisfy independence.",
+    "implementationAuthors": [
+      "task-8-implementation"
+    ],
+    "reviewers": [],
+    "reviewedAt": null,
+    "requiredReviewerCount": 2
+  },
+  "allowedOutcomes": [
+    "true_positive",
+    "false_positive",
+    "false_negative",
+    "ambiguous",
+    "unreachable",
+    "incomplete"
+  ],
+  "decisions": []
+}

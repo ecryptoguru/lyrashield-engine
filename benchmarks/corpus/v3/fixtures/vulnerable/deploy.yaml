@@ -1,0 +1,26 @@
+# Synthetic AI-built-app fixture — Kubernetes cases.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fixture-app
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: fixture/app:1.0
+          securityContext:
+            privileged: true  # CASE:IAC-05
+      volumes:
+        - name: host
+          hostPath:
+            path: /etc  # CASE:IAC-06
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fixture-admin
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]  # CASE:IAC-07

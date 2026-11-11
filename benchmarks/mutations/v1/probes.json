@@ -1,0 +1,113 @@
+{
+  "schemaVersion": "lyrashield-mutation-probes/1.0.0",
+  "probes": [
+    {
+      "id": "authorization-scope-pattern",
+      "gate": "authorization",
+      "requirement": "An empty or match-all target scope must not become authorized.",
+      "sourcePath": "lyrashield/tools/proxy/tools.py",
+      "old": "        if _is_match_all_pattern(pattern):",
+      "new": "        if False and _is_match_all_pattern(pattern):",
+      "test": [
+        "tests/test_proxy_client.py::test_validate_scope_allowlist_rejects_match_all"
+      ],
+      "expectedFailureText": "test_validate_scope_allowlist_rejects_match_all"
+    },
+    {
+      "id": "workspace-resume-path",
+      "gate": "workspace_scope",
+      "requirement": "A hand-edited resume record cannot place a workspace file outside the workspace.",
+      "sourcePath": "strix/interface/cli_args.py",
+      "old": "        except ValueError as error:\n            raise ResumeError(f\"--resume {args.resume}: invalid workspace file: {error}\") from error",
+      "new": "        except ValueError:\n            args.workspace_files = []",
+      "test": [
+        "tests/test_cli_target_list_strix.py::test_resume_rejects_an_edited_workspace_file_path"
+      ],
+      "expectedFailureText": "test_resume_rejects_an_edited_workspace_file_path"
+    },
+    {
+      "id": "gate-root-provenance",
+      "gate": "gate_identity",
+      "requirement": "A finish output from a different agent cannot satisfy the root completion gate.",
+      "sourcePath": "lyrashield/interface/main.py",
+      "old": "        if item.agent is not root:\n            continue",
+      "new": "        if False:\n            continue",
+      "test": [
+        "tests/test_finish_gate_provenance.py::test_finish_tool_provenance_rejects_ambiguous_or_foreign_items[different_agent]"
+      ],
+      "expectedFailureText": "test_finish_tool_provenance_rejects_ambiguous_or_foreign_items"
+    },
+    {
+      "id": "evidence-foreign-host",
+      "gate": "evidence_scope",
+      "requirement": "A captured HTTP exchange for another host cannot bind to a finding.",
+      "sourcePath": "lyrashield/artifacts/evidence.py",
+      "old": "        if expected:\n            return host == expected.lower().rstrip(\".\")",
+      "new": "        if expected:\n            return True",
+      "test": [
+        "tests/test_pending_http_evidence.py::test_foreign_host_remains_pending"
+      ],
+      "expectedFailureText": "test_foreign_host_remains_pending"
+    },
+    {
+      "id": "cleanup-failure-not-success",
+      "gate": "cleanup_unknown",
+      "requirement": "A failed sandbox delete remains failed and retryable.",
+      "sourcePath": "lyrashield/runtime/session_manager.py",
+      "old": "            _record_cleanup_receipt(scan_id, CLEANUP_FAILED, last_error=str(exc))\n            return CLEANUP_FAILED",
+      "new": "            _record_cleanup_receipt(scan_id, CLEANUP_REMOVED)\n            return CLEANUP_REMOVED",
+      "test": [
+        "tests/test_session_cleanup.py::test_cleanup_reports_sandbox_delete_failure"
+      ],
+      "expectedFailureText": "test_cleanup_reports_sandbox_delete_failure"
+    },
+    {
+      "id": "billing-cap-replay",
+      "gate": "billing_cap_replay",
+      "requirement": "A finite provider request keeps the configured hard output cap and cannot replay.",
+      "sourcePath": "lyrashield/lifecycle/inputs.py",
+      "old": "        max_tokens=max_output_tokens,",
+      "new": "        max_tokens=None,",
+      "test": [
+        "tests/test_physical_budget_boundaries.py::test_litellm_422_cannot_replay_without_output_cap"
+      ],
+      "expectedFailureText": "test_litellm_422_cannot_replay_without_output_cap"
+    },
+    {
+      "id": "cache-prompt-identity",
+      "gate": "cache_identity",
+      "requirement": "Changing prompt context changes the triage cache identity.",
+      "sourcePath": "lyrashield/triage/service.py",
+      "old": "            \"inputChecksum\": checksum(input_artifact.model_dump(mode=\"json\", by_alias=True)),",
+      "new": "            \"inputChecksum\": \"constant\",",
+      "test": [
+        "tests/test_ai_security_triage.py::test_cache_key_includes_all_prompt_context"
+      ],
+      "expectedFailureText": "test_cache_key_includes_all_prompt_context"
+    },
+    {
+      "id": "report-signature-payload",
+      "gate": "report_signature",
+      "requirement": "An Ed25519 report signature must reject changed report bytes.",
+      "sourcePath": "benchmarks/report_signature.py",
+      "old": "    if payload_digest != envelope[\"payloadSha256\"]:",
+      "new": "    if False:",
+      "test": [
+        "tests/test_report_signature.py::test_report_signature_rejects_changed_payload_and_envelope"
+      ],
+      "expectedFailureText": "test_report_signature_rejects_changed_payload_and_envelope"
+    },
+    {
+      "id": "analytics-private-message",
+      "gate": "analytics_privacy",
+      "requirement": "Telemetry error properties retain exception type only, never private messages.",
+      "sourcePath": "strix/telemetry/_common.py",
+      "old": "    props = {\"exception_type\": _exception_name(exc)}",
+      "new": "    props = {\"exception_type\": _exception_name(exc), \"message\": str(exc)}",
+      "test": [
+        "tests/test_telemetry_errors.py::test_error_event_carries_phase_and_class_but_no_message"
+      ],
+      "expectedFailureText": "test_error_event_carries_phase_and_class_but_no_message"
+    }
+  ]
+}

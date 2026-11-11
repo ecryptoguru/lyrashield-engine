@@ -2,9 +2,10 @@
 Benchmark runner — corpus fixtures through deterministic scanners (offline,
 free) and the engine CLI (founder-gated, costs model budget).
 
-  uv run python benchmarks/run.py --corpus v2 --detectors deterministic
-  uv run python benchmarks/run.py --corpus v2 --detectors all --runs 2 \
-      --engine-approve "I authorize spend"
+  uv run python benchmarks/run.py --corpus v3 --detectors deterministic
+  uv run python benchmarks/run.py --corpus v3 --detectors all --runs 3 \
+      --engine-approve "I authorize spend" --model-provider openai \
+      --model gpt-6-sol --model-route-receipt path/to/route.json
 
 Deterministic runs invoke the sibling product repo's scanners via tsx and
 cost nothing. Engine runs require --engine-approve and record the exact
@@ -26,10 +27,17 @@ import time
 from pathlib import Path
 from typing import Any, TextIO
 
+from benchmarks.corpus.v3.validate import validate as validate_corpus_v3
+from benchmarks.evaluation_v3 import corpus_contract_hashes
+from benchmarks.score import PROFILE_DETECTORS
+
 
 BENCH_ROOT = Path(__file__).resolve().parent
 RESULTS_ROOT = BENCH_ROOT / "results"
 DETERMINISTIC_RUNNER = BENCH_ROOT / "run_deterministics.ts"
+DETERMINISTIC_SCANNER_CONTRACT_VERSION = "lyrashield-deterministic/3.0.0"
+PROFILE_PATH = BENCH_ROOT / "profiles" / "v1" / "paths.json"
+RUNNABLE_V3_PROFILES = {"deterministic_core", "local_engine_cli"}
 
 # Sibling product repo — where the deterministic scanner sources live.
 PRODUCT_REPO = Path(
@@ -61,6 +69,53 @@ def source_state(repo: Path) -> dict[str, Any]:
 def load_corpus(corpus_dir: Path) -> dict[str, Any]:
     corpus: dict[str, Any] = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
     return corpus
+
+
+def load_profiles() -> dict[str, dict[str, Any]]:
+    record = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+    return {profile["id"]: profile for profile in record["profiles"]}
+
+
+def _require_runnable_v3_profile(
+    parser: argparse.ArgumentParser,
+    corpus: dict[str, Any],
+    profile_id: str,
+    detectors: str,
+) -> None:
+    if corpus.get("schemaVersion") != "lyrashield-evaluation-corpus/3.0.0":
+        return
+    if profile_id not in RUNNABLE_V3_PROFILES:
+        parser.error(f"path profile {profile_id} requires a dedicated evaluation harness")
+    if detectors != PROFILE_DETECTORS[profile_id]:
+        parser.error(f"path profile {profile_id} requires {PROFILE_DETECTORS[profile_id]} evidence")
+
+
+def cases_for_profile(corpus: dict[str, Any], profile_id: str) -> list[dict[str, Any]]:
+    if corpus.get("schemaVersion") != "lyrashield-evaluation-corpus/3.0.0":
+        return list(corpus["pairs"])
+    return [case for case in corpus["pairs"] if profile_id in case.get("supportedProfiles", [])]
+
+
+def executable_identity(command: str) -> dict[str, Any]:
+    resolved = shutil.which(command)
+    if resolved is None:
+        return {"command": command, "path": None, "sha256": None}
+    path = Path(resolved).resolve()
+    return {
+        "command": command,
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
+    }
+
+
+def model_route(provider: str, model: str, receipt_path: str) -> dict[str, Any]:
+    path = Path(receipt_path).expanduser().resolve()
+    return {
+        "provider": provider,
+        "model": model,
+        "receiptPath": str(path),
+        "receiptSha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
+    }
 
 
 def materialize_fixture(
@@ -307,11 +362,22 @@ def engine_revision() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corpus", default="v2", help="corpus dir name under benchmarks/corpus")
+    parser.add_argument("--corpus", default="v3", help="corpus dir name under benchmarks/corpus")
     parser.add_argument(
         "--detectors",
         choices=["deterministic", "engine", "all"],
         default="deterministic",
+    )
+    parser.add_argument(
+        "--path-profile",
+        choices=[
+            "deterministic_core",
+            "offline_sca",
+            "url_api",
+            "local_engine_cli",
+            "product_integration",
+        ],
+        help="evaluation path; defaults to deterministic_core or local_engine_cli",
     )
     parser.add_argument("--runs", type=int, default=1, help="engine runs per case (stability)")
     parser.add_argument(
@@ -319,12 +385,17 @@ def main() -> int:
         metavar="PHRASE",
         help="required for engine runs; any non-empty phrase records authorization",
     )
+    parser.add_argument("--model-provider", help="exact provider for paid engine runs")
+    parser.add_argument("--model", help="exact model identifier for paid engine runs")
+    parser.add_argument("--model-route-receipt", help="retained provider-route receipt path")
     args = parser.parse_args()
     if args.runs < 1:
         parser.error("--runs must be positive")
 
     corpus_dir = BENCH_ROOT / "corpus" / args.corpus
     corpus = load_corpus(corpus_dir)
+    if corpus.get("schemaVersion") == "lyrashield-evaluation-corpus/3.0.0":
+        validate_corpus_v3(corpus_dir)
 
     wants_engine = args.detectors in ("engine", "all")
     if wants_engine and not args.engine_approve:
@@ -334,6 +405,23 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if wants_engine and not all((args.model_provider, args.model, args.model_route_receipt)):
+        parser.error("engine runs require --model-provider, --model and --model-route-receipt")
+    profile_id = args.path_profile or ("local_engine_cli" if wants_engine else "deterministic_core")
+    profiles = load_profiles()
+    if profile_id not in profiles:
+        parser.error(f"unknown path profile: {profile_id}")
+    _require_runnable_v3_profile(parser, corpus, profile_id, args.detectors)
+    route = (
+        model_route(args.model_provider, args.model, args.model_route_receipt)
+        if wants_engine
+        else None
+    )
+    if route is not None and route["receiptSha256"] is None:
+        parser.error(f"model route receipt is unreadable: {route['receiptPath']}")
+    selected_cases = cases_for_profile(corpus, profile_id)
+    if not selected_cases:
+        parser.error(f"corpus has no cases for path profile {profile_id}")
 
     sources = {"engine": source_state(BENCH_ROOT.parent), "product": source_state(PRODUCT_REPO)}
     fixture_hashes = {
@@ -349,7 +437,7 @@ def main() -> int:
     findings_path = out_dir / "findings.jsonl"
     runs_meta = []
     with findings_path.open("w", encoding="utf-8") as out:
-        for case in corpus["pairs"]:
+        for case in selected_cases:
             for variant in ("vulnerable", "clean"):
                 if args.detectors in ("deterministic", "all"):
                     runs_meta.append(run_deterministic(corpus_dir, case, out, variant))
@@ -371,6 +459,16 @@ def main() -> int:
         "corpusRevision": corpus["revision"],
         "schemaVersion": corpus["schemaVersion"],
         "detectors": args.detectors,
+        "scannerContractVersion": DETERMINISTIC_SCANNER_CONTRACT_VERSION
+        if args.detectors in ("deterministic", "all")
+        else None,
+        "pathProfile": profile_id,
+        "selectedCaseIds": [case["id"] for case in selected_cases],
+        "modelRoute": route,
+        "executable": executable_identity("lyrashield") if wants_engine else None,
+        "corpusContractsSha256": corpus_contract_hashes(corpus_dir, corpus)
+        if "contracts" in corpus
+        else {},
         "engineRevision": engine_revision() if wants_engine else None,
         "engineApproved": bool(args.engine_approve) if wants_engine else None,
         "runs": runs_meta,

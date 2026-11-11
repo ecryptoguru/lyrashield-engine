@@ -28,6 +28,13 @@ from typing import Any
 
 BENCH_ROOT = Path(__file__).resolve().parent
 LINE_TOLERANCE = 3
+PROFILE_DETECTORS = {
+    "deterministic_core": "deterministic",
+    "offline_sca": "deterministic",
+    "url_api": "engine",
+    "local_engine_cli": "engine",
+    "product_integration": "engine",
+}
 
 
 def load_findings(raw: bytes) -> list[dict[str, Any]]:
@@ -291,6 +298,11 @@ def source_identity_complete(manifest: dict[str, Any]) -> bool:
     )
 
 
+def path_profile_evidence_valid(manifest: dict[str, Any]) -> bool:
+    """Require the detector evidence to come from the claimed evaluation path."""
+    return manifest.get("detectors") == PROFILE_DETECTORS.get(manifest.get("pathProfile"))
+
+
 def engine_receipt_valid(run: dict[str, Any]) -> bool:
     receipt = run.get("runReceipt")
     if (
@@ -540,7 +552,15 @@ def main() -> int:
     parser.add_argument("--corpus", default="v2")
     parser.add_argument("--results", required=True)
     args = parser.parse_args()
-    summary = score(Path(args.results), BENCH_ROOT / "corpus" / args.corpus)
+    results_dir = Path(args.results)
+    corpus_dir = BENCH_ROOT / "corpus" / args.corpus
+    corpus = json.loads((corpus_dir / "corpus.json").read_text(encoding="utf-8"))
+    if corpus.get("schemaVersion") == "lyrashield-evaluation-corpus/3.0.0":
+        from benchmarks.evaluation_v3 import score_v3  # noqa: PLC0415 - avoids helper import cycle
+
+        summary = score_v3(results_dir, corpus_dir, corpus)
+    else:
+        summary = score(results_dir, corpus_dir)
     print(json.dumps(summary, indent=2))
     return 0 if summary["status"] == "COMPLETE" else 1
 

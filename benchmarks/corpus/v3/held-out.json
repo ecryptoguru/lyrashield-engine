@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "lyrashield-held-out-contract/1.0.0",
+  "corpus": {
+    "name": "lyrashield-development-v3",
+    "revision": "v3"
+  },
+  "status": "NOT_PROVIDED",
+  "storage": "SEPARATE_REVIEWER_ONLY",
+  "developmentAccess": false,
+  "checksums": {
+    "algorithm": "sha256",
+    "manifest": null,
+    "fixtures": null,
+    "labels": null
+  },
+  "requirements": [
+    "The held-out manifest, fixture bytes, and labels are stored outside this repository.",
+    "Development authors do not access held-out bytes while tuning the implementation.",
+    "An independent reviewer verifies every checksum and records the verification date before scoring."
+  ],
+  "limitations": [
+    "No held-out fixture, label set, or checksum has been supplied; held-out quality is NOT_MEASURED."
+  ]
+}

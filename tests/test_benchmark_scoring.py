@@ -578,6 +578,7 @@ def test_runner_records_digest_of_exact_findings_bytes(
     manifest = json.loads((result_dir / "run-manifest.json").read_text())
     assert manifest["harnessVersion"] == 4
     assert manifest["engineRuns"] is None
+    assert manifest["scannerContractVersion"] == "lyrashield-deterministic/3.0.0"
     assert (
         manifest["findingsSha256"]
         == hashlib.sha256((result_dir / "findings.jsonl").read_bytes()).hexdigest()
@@ -620,6 +621,8 @@ def test_runner_records_requested_engine_repetitions_without_running_an_engine(
     (corpus_dir / "corpus.json").write_text(json.dumps(corpus))
     for filename in ("bad.ts", "safe.ts"):
         (corpus_dir / filename).write_text("fixture")
+        route_receipt = tmp_path / "route.json"
+        route_receipt.write_text('{"provider":"fixture"}\n')
     monkeypatch.setattr(run, "BENCH_ROOT", tmp_path)
     monkeypatch.setattr(run, "RESULTS_ROOT", tmp_path / "results")
     monkeypatch.setattr(run, "source_state", lambda _path: {})
@@ -637,6 +640,12 @@ def test_runner_records_requested_engine_repetitions_without_running_an_engine(
             "3",
             "--engine-approve",
             "test",
+            "--model-provider",
+            "fixture",
+            "--model",
+            "fixture-model",
+            "--model-route-receipt",
+            str(route_receipt),
         ],
     )
 
