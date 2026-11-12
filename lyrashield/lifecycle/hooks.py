@@ -524,6 +524,9 @@ class BudgetExceededError(RuntimeError):
 
 
 _active_hooks: ReportUsageHooks | None = None
+_active_hooks_context: ContextVar[ReportUsageHooks | None] = ContextVar(
+    "lyrashield_active_hooks", default=None
+)
 
 
 def set_active_hooks(hooks: ReportUsageHooks | None) -> None:
@@ -534,10 +537,11 @@ def set_active_hooks(hooks: ReportUsageHooks | None) -> None:
     """
     global _active_hooks  # noqa: PLW0603
     _active_hooks = hooks
+    _active_hooks_context.set(hooks)
 
 
 def get_active_hooks() -> ReportUsageHooks | None:
-    return _active_hooks
+    return _active_hooks_context.get() or _active_hooks
 
 
 class SubagentBudgetReservedError(RuntimeError):
@@ -632,6 +636,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         interactive: bool = False,
         report_state: Any = None,
         phase_allowance_usd: float | None = None,
+        scan_id: str | None = None,
     ) -> None:
         if max_budget_usd is not None and (
             not math.isfinite(max_budget_usd) or max_budget_usd <= 0
@@ -677,6 +682,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         state = get_global_report_state()
         self._report_state: Any = report_state or state
         state = self._report_state
+        self._scan_id = scan_id or getattr(state, "run_name", None)
         self._journal = (
             state.enable_finite_budget(max_budget_usd)
             if max_budget_usd is not None and isinstance(state, ReportState)
@@ -701,7 +707,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         if entry is not None and entry[0] is input_items and self._journal is not None:
             attempt = self._durable_agents.get(entry[3])
             if attempt is not None:
-                return self._journal, attempt
+                return self._journal, attempt, self._scan_id
         return None
 
     def durable_attempt(self, key: str) -> str | None:
@@ -771,7 +777,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         bounded = self._max_budget_usd is not None
         with (
             finite_physical_attempt(bounded),
-            durable_physical_admission(self._journal, self._direct_attempt.get()),
+            durable_physical_admission(self._journal, self._direct_attempt.get(), self._scan_id),
             provider_managed_retries_disabled(bounded or should_disable_provider_managed_retries()),
             websocket_pre_event_retries_disabled(
                 bounded or should_disable_websocket_pre_event_retries()

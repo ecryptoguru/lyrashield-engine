@@ -38,9 +38,11 @@ _durable_admission: ContextVar[Any] = ContextVar("lyrashield_durable_admission",
 
 
 @contextmanager
-def durable_physical_admission(owner: Any, attempt: str | None) -> Iterator[None]:
+def durable_physical_admission(
+    owner: Any, attempt: str | None, scan_id: str | None = None
+) -> Iterator[None]:
     token = _durable_admission.set(
-        (owner, attempt) if owner is not None and attempt is not None else None
+        (owner, attempt, scan_id) if owner is not None and attempt is not None else None
     )
     try:
         yield
@@ -48,7 +50,7 @@ def durable_physical_admission(owner: Any, attempt: str | None) -> Iterator[None
         _durable_admission.reset(token)
 
 
-def _authorize_durable(input_items: Any) -> str:
+def _get_durable_admission(input_items: Any) -> tuple[Any, str, str | None]:
     admission = _durable_admission.get()
     if admission is None:
         from lyrashield.lifecycle.hooks import get_active_hooks  # noqa: PLC0415
@@ -57,7 +59,11 @@ def _authorize_durable(input_items: Any) -> str:
         admission = hooks.physical_admission(input_items) if hooks is not None else None
     if admission is None:
         raise PhysicalBudgetAdapterError("Finite physical dispatch requires a durable admission.")
-    owner, attempt = admission
+    return cast("tuple[Any, str, str | None]", admission)
+
+
+def _authorize_durable(input_items: Any) -> str:
+    owner, attempt, _ = _get_durable_admission(input_items)
     owner.authorize(attempt)
     return attempt
 
@@ -461,7 +467,12 @@ def _unique_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 class _SinglePostTransport(httpx.AsyncBaseTransport):
     def __init__(
-        self, original: httpx.AsyncClient, maximum: int, quoted: dict[str, Any], endpoint: httpx.URL
+        self,
+        original: httpx.AsyncClient,
+        maximum: int,
+        quoted: dict[str, Any],
+        endpoint: httpx.URL,
+        scan_id: str | None,
     ) -> None:
         self.original = original
         self.quoted = quoted
@@ -470,7 +481,7 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
         self.sent = False
         self.durable_input: Any = None
         self.usage_evidence: _UsageEvidence | None = None
-        self.gateway_scan_id = _gateway_scan_id(endpoint)
+        self.gateway_scan_id = _gateway_scan_id(endpoint, scan_id)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         # Body streams may execute arbitrary async callbacks. Freeze every
@@ -579,7 +590,7 @@ def _set_gateway_headers(headers: httpx.Headers, scan_id: str | None, attempt: s
     headers["x-lyra-scan-id"] = scan_id
 
 
-def _gateway_scan_id(endpoint: httpx.URL) -> str | None:
+def _gateway_scan_id(endpoint: httpx.URL, scan_id: str | None) -> str | None:
     raw = os.environ.get("LYRASHIELD_PROVIDER_GATEWAY_ORIGIN")
     if raw is None:
         return None
@@ -587,9 +598,9 @@ def _gateway_scan_id(endpoint: httpx.URL) -> str | None:
         origin = httpx.URL(raw)
     except Exception as exc:
         raise PhysicalBudgetAdapterError("Provider gateway origin is invalid.") from exc
-    scan_id = os.environ.get("STRIX_RUN_ID", "")
     if (
         origin.scheme not in {"http", "https"}
+        or (origin.scheme == "http" and origin.host not in {"127.0.0.1", "::1"})
         or not origin.host
         or origin.username
         or origin.password
@@ -600,6 +611,7 @@ def _gateway_scan_id(endpoint: httpx.URL) -> str | None:
         or endpoint.host != origin.host
         or endpoint.port != origin.port
         or not re.match(r"^/v1/provider/[a-z][a-z0-9-]{1,63}/", endpoint.path)
+        or not isinstance(scan_id, str)
         or not re.fullmatch(r"[A-Za-z0-9._:-]{3,192}", scan_id)
     ):
         raise PhysicalBudgetAdapterError("Provider gateway identity or endpoint is invalid.")
@@ -692,10 +704,14 @@ async def _physical_call(
         )
     original_http = resolved._client
     quoted = _quoted_fields(model, settings, resolved, args, kwargs)
+    durable_input = kwargs.get("input", args[1] if len(args) > 1 else None)
+    scan_id = None
+    if os.environ.get("LYRASHIELD_PROVIDER_GATEWAY_ORIGIN") is not None:
+        _, _, scan_id = _get_durable_admission(durable_input)
     transport = _SinglePostTransport(
-        original_http, maximum, quoted, _admitted_endpoint(resolved, original_http, quoted)
+        original_http, maximum, quoted, _admitted_endpoint(resolved, original_http, quoted), scan_id
     )
-    transport.durable_input = kwargs.get("input", args[1] if len(args) > 1 else None)
+    transport.durable_input = durable_input
     async with httpx.AsyncClient(
         transport=transport,
         timeout=original_http.timeout,

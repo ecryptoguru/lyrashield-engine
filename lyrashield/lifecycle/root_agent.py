@@ -221,6 +221,7 @@ async def build_root_runtime(
         model_settings=delegate_model_settings,
     )
     hooks = services.usage_hooks_factory(
+        scan_id=scan_id,
         model=resolved_model,
         max_budget_usd=max_budget_usd,
         max_output_tokens=max_output_tokens,
