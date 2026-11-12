@@ -23,7 +23,7 @@ import sys
 import tarfile
 import tempfile
 from collections import Counter, defaultdict
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -156,6 +156,30 @@ def verified_predicate(records, predicate_type, args):
             candidates.append(predicate)
     require(len(candidates) == 1, "missing or ambiguous authenticated predicate")
     return candidates[0]
+
+
+@contextmanager
+def private_command_scratch(path):
+    """Keep command output and child temporary files on the checked filesystem."""
+    info = path.lstat()
+    require(
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == os.getuid()
+        and stat.S_IMODE(info.st_mode) == 0o700,
+        "command scratch must be a private owned directory",
+    )
+    previous_directory = tempfile.tempdir
+    previous_environment = os.environ.get("TMPDIR")
+    tempfile.tempdir = str(path)
+    os.environ["TMPDIR"] = str(path)
+    try:
+        yield
+    finally:
+        tempfile.tempdir = previous_directory
+        if previous_environment is None:
+            os.environ.pop("TMPDIR", None)
+        else:
+            os.environ["TMPDIR"] = previous_environment
 
 
 def bounded_command(command, limit, timeout):
@@ -472,6 +496,11 @@ def main():
         "scratch must be private and owned",
     )
     require(shutil.disk_usage(args.scratch).free >= 8 * 1024**3, "insufficient scratch space")
+    with private_command_scratch(args.scratch):
+        verify_inventory(args)
+
+
+def verify_inventory(args):
     policy = SimpleNamespace(
         repo=REPOSITORY,
         image=IMAGE,
@@ -591,8 +620,7 @@ def main():
         os.close(directory)
 
 
-if __name__ == "__main__":
-
+def run_cli():
     def timeout(_signum, _frame):
         raise TimeoutError("independent inventory deadline exceeded")
 
@@ -600,5 +628,12 @@ if __name__ == "__main__":
     signal.alarm(MAX_SECONDS)
     try:
         main()
+    except Exception:  # noqa: BLE001 - never expose selected metadata or transport details
+        sys.stderr.write("Independent inventory verification failed.\n")
+        sys.exit(1)
     finally:
         signal.alarm(0)
+
+
+if __name__ == "__main__":
+    run_cli()

@@ -42,6 +42,7 @@ from scripts.verify_sandbox_package_inventory import (
     REPOSITORY,
     authenticate,
     bounded_command,
+    private_command_scratch,
     require,
     sha256,
     trusted_tool,
@@ -499,34 +500,39 @@ def main():
         prefix="sandbox-inventory-", dir=os.environ["RUNNER_TEMP"]
     ) as temporary:
         root = Path(temporary)
-        blobs, scratch, receipts = prepare(args, root)
-        signal.alarm(0)  # The verifier has its own 30-minute process deadline.
-        command = [
-            sys.executable,
-            "-m",
-            "scripts.verify_sandbox_package_inventory",
-            "--blobs",
-            str(blobs),
-            "--scratch",
-            str(scratch),
-            "--producer-receipts",
-            str(receipts),
-            "--source-repository",
-            str(args.source_repository),
-            "--go-tool",
-            str(args.go_tool),
-            "--output",
-            str(args.output),
-            "--index-digest",
-            args.index_digest,
-            "--revision",
-            args.revision,
-            "--run-id",
-            args.run_id,
-            "--run-attempt",
-            args.run_attempt,
-        ]
-        run_verifier(command, scratch)
+        with private_command_scratch(root):
+            acquire_and_verify(args, root)
+
+
+def acquire_and_verify(args, root):
+    blobs, scratch, receipts = prepare(args, root)
+    signal.alarm(0)  # The verifier has its own 30-minute process deadline.
+    command = [
+        sys.executable,
+        "-m",
+        "scripts.verify_sandbox_package_inventory",
+        "--blobs",
+        str(blobs),
+        "--scratch",
+        str(scratch),
+        "--producer-receipts",
+        str(receipts),
+        "--source-repository",
+        str(args.source_repository),
+        "--go-tool",
+        str(args.go_tool),
+        "--output",
+        str(args.output),
+        "--index-digest",
+        args.index_digest,
+        "--revision",
+        args.revision,
+        "--run-id",
+        args.run_id,
+        "--run-attempt",
+        args.run_attempt,
+    ]
+    run_verifier(command, scratch)
 
 
 if __name__ == "__main__":

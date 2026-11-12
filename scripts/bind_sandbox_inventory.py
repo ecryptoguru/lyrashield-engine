@@ -5,7 +5,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import signal
+import sys
+import tempfile
 from pathlib import Path
 
 from scripts.acquire_sandbox_inventory import (
@@ -17,7 +20,11 @@ from scripts.acquire_sandbox_inventory import (
 )
 from scripts.check_sandbox_sbom_coverage import read_regular, require, sha256
 from scripts.verify_oci_layer_binding import read_json
-from scripts.verify_sandbox_package_inventory import MAX_HELPER_ADDRESS_SPACE, bounded_command
+from scripts.verify_sandbox_package_inventory import (
+    MAX_HELPER_ADDRESS_SPACE,
+    bounded_command,
+    private_command_scratch,
+)
 
 
 WORKFLOW = ".github/workflows/verify-sandbox-inventory.yml"
@@ -119,9 +126,17 @@ def main():
     parser.add_argument("--source-repository", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    result = bind(
-        read_json(read_regular(args.receipt, 16 * 1024**2)), args.source_repository, os.environ
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="inventory-bind-", dir=os.environ["RUNNER_TEMP"]
+    ) as root:
+        scratch = Path(root)
+        require(shutil.disk_usage(scratch).free >= 32 * 1024**2, "insufficient binding scratch")
+        with private_command_scratch(scratch):
+            result = bind(
+                read_json(read_regular(args.receipt, 16 * 1024**2)),
+                args.source_repository,
+                os.environ,
+            )
     with args.output.open("x") as output:
         json.dump(result, output, sort_keys=True, separators=(",", ":"))
         output.write("\n")
@@ -137,5 +152,8 @@ if __name__ == "__main__":
     try:
         apply_process_limits()
         main()
+    except Exception:  # noqa: BLE001 - do not expose receipt contents or paths
+        sys.stderr.write("Independent inventory identity binding failed.\n")
+        sys.exit(1)
     finally:
         signal.alarm(0)

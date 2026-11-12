@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from scripts import acquire_sandbox_inventory as acquire
 from scripts import check_go_sbom_coverage as go_inspector
+from scripts import verify_sandbox_package_inventory as verifier
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Linux resource and procfs semantics")
@@ -51,11 +52,46 @@ class ResourceTests(unittest.TestCase):
                         hit_limit = True
                         break
                 self.assertTrue(hit_limit, "test tmpfs was not bounded to 1 MiB")
+                previous_environment = os.environ.get("TMPDIR")
                 with patch.object(tempfile, "tempdir", "/scratch"):
                     result, _, _ = go_inspector.inspect_binary(
                         binary, tool, "amd64", scratch=scratch
                     )
+                    with verifier.private_command_scratch(scratch):
+                        output = verifier.bounded_command(
+                            [sys.executable, "-c", "import os; print(os.environ['TMPDIR'])"],
+                            1024,
+                            5,
+                        )
+                    self.assertEqual(tempfile.tempdir, "/scratch")
+                    self.assertEqual(os.environ.get("TMPDIR"), previous_environment)
                 self.assertEqual(result, {})
+                self.assertEqual(output.decode().strip(), str(scratch))
+
+    def test_command_scratch_rejects_public_directory_and_restores_environment(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            scratch = Path(directory) / "public"
+            scratch.mkdir(mode=0o755)
+            scratch.chmod(0o755)
+            before = os.environ.get("TMPDIR")
+            with self.assertRaises(ValueError), verifier.private_command_scratch(scratch):
+                pass
+            self.assertEqual(os.environ.get("TMPDIR"), before)
+
+    def test_verifier_cli_redacts_exceptions_with_untrusted_metadata(self):
+        code = (
+            "from scripts import verify_sandbox_package_inventory as v\n"
+            "def fail():\n"
+            "    raise ValueError('private-package-identity')\n"
+            "v.main=fail\n"
+            "v.run_cli()\n"
+        )
+        result = subprocess.run(  # noqa: S603 - fixed local redaction regression
+            [sys.executable, "-c", code], check=False, capture_output=True, timeout=10
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, b"Independent inventory verification failed.\n")
+        self.assertNotIn(b"private-package-identity", result.stderr)
 
     def test_inspector_uses_checked_scratch_with_unusable_default_temp(self):
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
