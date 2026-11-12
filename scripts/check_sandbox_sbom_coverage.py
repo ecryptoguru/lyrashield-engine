@@ -507,7 +507,17 @@ def validate_spdx(path, predicate_item, image, architecture, manifest_digest, co
     return raw, json_object(raw)
 
 
-def build_go_receipts(applications, captures, document, architecture, go_tool, go_tool_digest):
+def build_go_receipts(
+    applications,
+    captures,
+    document,
+    architecture,
+    go_tool,
+    go_tool_digest,
+    *,
+    scratch=None,
+    max_tool_address_space=None,
+):
     captured = {item["path"]: item for item in captures}
     require(
         set(captured) == {item["binary"] for item in applications}, "Go binary capture set mismatch"
@@ -517,7 +527,11 @@ def build_go_receipts(applications, captures, document, architecture, go_tool, g
     for application in applications:
         capture = captured[application["binary"]]
         build_info, binary_hash, tool_hash = inspect_binary(
-            capture["localPath"], go_tool, architecture
+            capture["localPath"],
+            go_tool,
+            architecture,
+            scratch=scratch,
+            max_address_space=max_tool_address_space,
         )
         require(binary_hash == capture["sha256"], "captured Go binary changed before inspection")
         require(tool_hash == go_tool_digest, "Go metadata tool changed during binary inspection")

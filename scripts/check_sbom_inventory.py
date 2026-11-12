@@ -457,6 +457,7 @@ def spdx_inventory(document):
 def collect_metadata(kind, data):
     identities = set()
     if kind == "deb":
+        installed = set()
         for stanza in re.split(rb"\n\s*\n", data):
             if not stanza.strip():
                 continue
@@ -470,6 +471,10 @@ def collect_metadata(kind, data):
             package, version, arch = msg.get("Package"), msg.get("Version"), msg.get("Architecture")
             if not valid_identity(package, version, arch):
                 raise ValueError("missing Debian package identity")
+            key = package.strip(), arch.strip()
+            if key in installed:
+                raise ValueError("duplicate installed Debian package architecture")
+            installed.add(key)
             identities.add((package, version, arch))
     elif kind == "pypi":
         msg = BytesParser().parsebytes(data)

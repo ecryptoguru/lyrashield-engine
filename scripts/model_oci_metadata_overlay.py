@@ -10,6 +10,8 @@ mandatory, including for blocked I/O and any long individual library call.
 
 # ruff: noqa: INP001
 import time
+from bisect import bisect_left
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Optional
@@ -26,6 +28,7 @@ from scripts.verify_pax_capability_stream import MAX_CHANGESET_RECORD_BYTES, MAX
 
 
 MAX_OVERLAY_ENTRIES = 100_000
+MAX_ALLOWED_OVERLAY_ENTRIES = 200_000
 MAX_OVERLAY_BYTES = 64 * 1024**2
 MAX_SCAN_WORK = 10_000_000
 
@@ -53,6 +56,7 @@ class MetadataEntry:
     gid: Optional[int]  # noqa: UP045 - Python 3.9
     mtime: Optional[int]  # noqa: UP045 - Python 3.9
     target: str = field(default="", repr=False)
+    hardlink_target: str = field(default="", repr=False)
     inode: Optional[SymbolicInode] = field(default=None, repr=False)  # noqa: UP045 - Python 3.9
     capability_header: Optional[bytes] = field(default=None, repr=False)  # noqa: UP045
     capability_state: str = "unknown"
@@ -75,10 +79,15 @@ class MetadataRoot:
     Calling this object directly does not authenticate or verify its inputs.
     """
 
-    def __init__(self, *, linux_literal_paths=False, deadline=None):
+    def __init__(self, *, linux_literal_paths=False, deadline=None, max_entries=None):
         if type(linux_literal_paths) is not bool:
             raise ValueError("invalid path policy")
         self.linux_literal_paths = linux_literal_paths
+        self.max_entries = max_entries
+        if max_entries is not None and (
+            type(max_entries) is not int or not 0 < max_entries <= MAX_ALLOWED_OVERLAY_ENTRIES
+        ):
+            raise ValueError("invalid overlay entry policy")
         self.deadline = time.monotonic() + MAX_SECONDS if deadline is None else deadline
         self.entries = {"": MetadataEntry("dir", None, None, None, None)}
         self.next_layer = 0
@@ -220,25 +229,43 @@ class MetadataRoot:
         return members
 
     def apply_whiteouts(self, tree, whiteouts):
-        work, touched = 0, set()
+        paths = sorted(tree) if whiteouts else []
+        work, touched = len(paths), set()
         for member in whiteouts:
             self.check_deadline()
             parent = require_parent(tree, member.path)
-            work += len(tree)
+            work += max(1, len(paths).bit_length())
             if work > MAX_SCAN_WORK:
                 raise ValueError("overlay work limit exceeded")
             if member.kind == "opaque":
                 prefix = f"{parent}/" if parent else ""
-                doomed = [path for path in tree if path != parent and path.startswith(prefix)]
+                doomed = []
             else:
                 victim = member.target
-                doomed = [path for path in tree if path == victim or path.startswith(victim + "/")]
+                prefix = victim + "/"
+                doomed = [victim] if victim in tree else []
+            cursor = bisect_left(paths, prefix)
+            while cursor < len(paths) and paths[cursor].startswith(prefix):
+                path = paths[cursor]
+                cursor += 1
+                work += 1
+                if work > MAX_SCAN_WORK:
+                    raise ValueError("overlay work limit exceeded")
+                if path != parent and path in tree:
+                    doomed.append(path)
             for path in doomed:
                 del tree[path]
             touched.add(parent)
         return work, touched
 
     def apply_additions(self, tree, additions, layer_index, work, touched):  # noqa: PLR0912 - closed dispatch
+        # Replacements must reject live aliases without scanning the whole tree
+        # once per file. Count the already-bounded tree once and update counts
+        # transactionally as this changeset replaces/adds names.
+        aliases = Counter(id(node.inode) for node in tree.values() if node.inode is not None)
+        work += len(tree)
+        if work > MAX_SCAN_WORK:
+            raise ValueError("overlay work limit exceeded")
         for member in additions:
             self.check_deadline()
             path = member.path
@@ -255,12 +282,8 @@ class MetadataRoot:
                     raise ValueError("overlay work limit exceeded")
                 if any(name.startswith(path + "/") for name in tree):
                     raise ValueError("nonempty directory replacement unsupported")
-            if prior and prior.kind == "file":
-                work += len(tree)
-                if work > MAX_SCAN_WORK:
-                    raise ValueError("overlay work limit exceeded")
-                if sum(node.inode is prior.inode for node in tree.values()) > 1:
-                    raise ValueError("ambiguous hardlinked replacement")
+            if prior and prior.kind == "file" and aliases[id(prior.inode)] > 1:
+                raise ValueError("ambiguous hardlinked replacement")
             attrs = member.mode, member.uid, member.gid, member.mtime
             if member.kind == "file":
                 inode = SymbolicInode(
@@ -275,7 +298,7 @@ class MetadataRoot:
                     raise ValueError("unresolved or non-file hardlink")
                 if attrs != (target.mode, target.uid, target.gid, target.mtime):
                     raise ValueError("hardlink metadata differs from target")
-                node = target
+                node = replace(target, hardlink_target=member.target)
             elif member.kind == "dir":
                 node = MetadataEntry("dir", *attrs)
             elif member.kind == "symlink":
@@ -287,8 +310,13 @@ class MetadataRoot:
                 )
             else:
                 raise ValueError("unsupported changeset member")
+            if prior is not None and prior.inode is not None:
+                aliases[id(prior.inode)] -= 1
+            if node.inode is not None:
+                aliases[id(node.inode)] += 1
             tree[path] = node
-            if len(tree) > MAX_OVERLAY_ENTRIES:
+            entry_limit = MAX_OVERLAY_ENTRIES if self.max_entries is None else self.max_entries
+            if len(tree) > entry_limit:
                 raise ValueError("overlay entry limit exceeded")
 
     def apply(self, members, layer_index, layer_size):
@@ -307,6 +335,7 @@ class MetadataRoot:
         for path, node in tree.items():
             self.check_deadline()
             retained += len(path.encode()) + len(node.target.encode())
+            retained += len(node.hardlink_target.encode())
             retained += len(node.capability_header or b"")
             if node.inode is not None:
                 retained += len(node.inode.capability_header or b"")
@@ -317,8 +346,8 @@ class MetadataRoot:
 
 
 class _Receiver:
-    def __init__(self, *, linux_literal_paths):
-        self.root = MetadataRoot(linux_literal_paths=linux_literal_paths)
+    def __init__(self, *, linux_literal_paths, max_entries=None):
+        self.root = MetadataRoot(linux_literal_paths=linux_literal_paths, max_entries=max_entries)
         self.reader = None
         self.count = 0
         self.tracked = 0
@@ -351,7 +380,9 @@ class _Receiver:
         self.reader = None
 
 
-def model_verified_image(directory, manifest_digest, platform, *, linux_literal_paths=False):
+def model_verified_image(
+    directory, manifest_digest, platform, *, linux_literal_paths=False, max_entries=None
+):
     """Model ordered, locally verified layers; caller must authenticate the manifest.
 
     No files are extracted. This is a conservative metadata-only virtual model,
@@ -361,7 +392,7 @@ def model_verified_image(directory, manifest_digest, platform, *, linux_literal_
     if platform not in {"linux/amd64", "linux/arm64"}:
         raise ValueError("unsupported platform")
     try:
-        receiver = _Receiver(linux_literal_paths=linux_literal_paths)
+        receiver = _Receiver(linux_literal_paths=linux_literal_paths, max_entries=max_entries)
         report = verify(directory, manifest_digest, platform, receiver=receiver)
         layers = tuple((item["digest"], item["diffId"], item["size"]) for item in report["layers"])
         return MetadataOverlayResult(
