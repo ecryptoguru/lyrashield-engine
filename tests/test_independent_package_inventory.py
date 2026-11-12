@@ -5,9 +5,11 @@ import hashlib
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import tarfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -386,3 +388,20 @@ def test_host_command_output_and_deadline_are_bounded(tmp_path):
     pid = int(marker.read_text())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+def test_trusted_tool_rejects_writable_ancestor_even_with_matching_digest(monkeypatch):
+    candidate = Path("/usr/local/lib/lyrashield-inventory/go/bin/go")
+    metadata = {
+        path: SimpleNamespace(
+            st_mode=(stat.S_IFREG | 0o755) if path == candidate else (stat.S_IFDIR | 0o755),
+            st_uid=0,
+        )
+        for path in (candidate, *candidate.parents)
+    }
+    monkeypatch.setattr(Path, "lstat", lambda path: metadata[path])
+    monkeypatch.setattr(verifier, "digest_file", lambda _path: "expected")
+    assert verifier.trusted_tool(candidate, "expected") == candidate
+    metadata[Path("/usr/local/lib")].st_mode |= 0o020
+    with pytest.raises(ValueError, match="protected"):
+        verifier.trusted_tool(candidate, "expected")

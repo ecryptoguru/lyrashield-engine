@@ -76,7 +76,7 @@ jobs:
             --index-digest "$INDEX_DIGEST" --revision "$ENGINE_REVISION" \
             --run-id "$PUBLISH_RUN_ID" --run-attempt "$PUBLISH_ATTEMPT" \
             --source-repository "$GITHUB_WORKSPACE" \
-            --go-tool /opt/lyrashield-inventory/go/bin/go \
+            --go-tool /usr/local/lib/lyrashield-inventory/go/bin/go \
             --output "$RUNNER_TEMP/independent-sandbox-inventory-raw.json"
       - name: Bind measured inventory to immutable verifier source
         run: |

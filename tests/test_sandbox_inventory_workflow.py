@@ -293,3 +293,14 @@ def test_oversized_or_ambiguous_receipt_is_rejected(transfer, case, error):
     assert result.returncode != 0
     assert error in result.stderr.lower()
     assert not (transfer[0] / "independent-sandbox-inventory.json").exists()
+
+
+def test_protected_go_installation_matches_verifier_and_checks_ancestry():
+    acquisition = workflow()["jobs"]["independent-inventory"]
+    command = named(acquisition, "Authenticate and independently verify exact publication")["run"]
+    go_tool = "/usr/local/lib/lyrashield-inventory/go/bin/go"
+    assert "--go-tool " + go_tool in command
+    installer = (ROOT / "scripts/prepare_independent_inventory_tools.sh").read_text()
+    assert "for parent in / /usr /usr/local /usr/local/lib" in installer
+    assert "trusted_tool(Path(" in installer
+    assert "/opt/lyrashield-inventory" not in installer
