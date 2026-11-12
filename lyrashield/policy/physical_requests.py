@@ -48,7 +48,7 @@ def durable_physical_admission(owner: Any, attempt: str | None) -> Iterator[None
         _durable_admission.reset(token)
 
 
-def _authorize_durable(input_items: Any) -> str:
+def _authorize_durable(input_items: Any) -> tuple[str, str | None]:
     admission = _durable_admission.get()
     if admission is None:
         from lyrashield.lifecycle.hooks import get_active_hooks  # noqa: PLC0415
@@ -58,8 +58,10 @@ def _authorize_durable(input_items: Any) -> str:
     if admission is None:
         raise PhysicalBudgetAdapterError("Finite physical dispatch requires a durable admission.")
     owner, attempt = admission
-    owner.authorize(attempt)
-    return attempt
+    if not isinstance(attempt, str):
+        raise PhysicalBudgetAdapterError("Finite physical dispatch requires a durable attempt ID.")
+    scan_id = owner.authorize(attempt)
+    return attempt, scan_id if isinstance(scan_id, str) else None
 
 
 class FiniteBudgetModelSettings(ModelSettings):
@@ -470,7 +472,7 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
         self.sent = False
         self.durable_input: Any = None
         self.usage_evidence: _UsageEvidence | None = None
-        self.gateway_scan_id = _gateway_scan_id(endpoint)
+        self.gateway_enabled = _gateway_enabled(endpoint)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         # Body streams may execute arbitrary async callbacks. Freeze every
@@ -544,8 +546,8 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
             content=bytes(body),
             extensions=extensions,
         )
-        attempt = _authorize_durable(self.durable_input)
-        _set_gateway_headers(request.headers, self.gateway_scan_id, attempt)
+        attempt, scan_id = _authorize_durable(self.durable_input)
+        _set_gateway_headers(request.headers, self.gateway_enabled, scan_id, attempt)
         self.sent = True
         # Auth and redirect flow run above this counter on the scoped client.
         # Reuse the resolved URL's pool/TLS transport below those flows, so
@@ -569,28 +571,35 @@ class _SinglePostTransport(httpx.AsyncBaseTransport):
         pass
 
 
-def _set_gateway_headers(headers: httpx.Headers, scan_id: str | None, attempt: str) -> None:
-    if scan_id is None:
+def _set_gateway_headers(
+    headers: httpx.Headers, gateway_enabled: bool, scan_id: str | None, attempt: str
+) -> None:
+    if not gateway_enabled:
         return
-    if not re.fullmatch(r"[a-f0-9]{32}:[1-9][0-9]{0,18}", attempt):
+    if (
+        scan_id is None
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,191}", scan_id)
+        or ".." in scan_id
+        or not re.fullmatch(r"[a-f0-9]{32}:[1-9][0-9]{0,18}", attempt)
+    ):
         raise PhysicalBudgetAdapterError("Gateway request identity is invalid.")
     # Model-controlled headers cannot choose a scan or physical request identity.
     headers["x-lyra-request-id"] = attempt
     headers["x-lyra-scan-id"] = scan_id
 
 
-def _gateway_scan_id(endpoint: httpx.URL) -> str | None:
+def _gateway_enabled(endpoint: httpx.URL) -> bool:
     raw = os.environ.get("LYRASHIELD_PROVIDER_GATEWAY_ORIGIN")
     if raw is None:
-        return None
+        return False
     try:
         origin = httpx.URL(raw)
     except Exception as exc:
         raise PhysicalBudgetAdapterError("Provider gateway origin is invalid.") from exc
-    scan_id = os.environ.get("STRIX_RUN_ID", "")
     if (
         origin.scheme not in {"http", "https"}
         or not origin.host
+        or (origin.scheme == "http" and origin.host not in {"127.0.0.1", "::1"})
         or origin.username
         or origin.password
         or origin.path not in {"", "/"}
@@ -600,14 +609,13 @@ def _gateway_scan_id(endpoint: httpx.URL) -> str | None:
         or endpoint.host != origin.host
         or endpoint.port != origin.port
         or not re.match(r"^/v1/provider/[a-z][a-z0-9-]{1,63}/", endpoint.path)
-        or not re.fullmatch(r"[A-Za-z0-9._:-]{3,192}", scan_id)
     ):
         raise PhysicalBudgetAdapterError("Provider gateway identity or endpoint is invalid.")
-    return scan_id
+    return True
 
 
 def _require_gateway_usage(transport: _SinglePostTransport | None, matched: bool) -> None:
-    if transport is not None and transport.gateway_scan_id and transport.sent and not matched:
+    if transport is not None and transport.gateway_enabled and transport.sent and not matched:
         raise PhysicalBudgetAdapterError(
             "Provider gateway terminal usage is unavailable; reconcile before retry."
         )
@@ -745,7 +753,7 @@ class _PhysicalAttemptModel(Model):
             try:
                 response = await model.get_response(*args, **kwargs)
             except Exception as exc:
-                if transport is not None and transport.gateway_scan_id and transport.sent:
+                if transport is not None and transport.gateway_enabled and transport.sent:
                     raise PhysicalBudgetAdapterError(
                         "Provider gateway outcome is unknown; reconcile before retry."
                     ) from exc
@@ -784,7 +792,7 @@ class _PhysicalAttemptModel(Model):
                     yield event
                 _require_gateway_usage(transport, completed)
             except Exception as exc:
-                if transport is not None and transport.gateway_scan_id and transport.sent:
+                if transport is not None and transport.gateway_enabled and transport.sent:
                     raise PhysicalBudgetAdapterError(
                         "Provider gateway outcome is unknown; reconcile before retry."
                     ) from exc

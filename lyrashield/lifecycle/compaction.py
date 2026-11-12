@@ -28,7 +28,7 @@ from lyrashield.artifacts.state import get_global_report_state
 from lyrashield.lifecycle.inputs import make_model_settings
 from lyrashield.lifecycle.sessions import replace_session_items, session_write_lock
 from lyrashield.policy.models import StrixProvider
-from lyrashield.policy.physical_requests import guard_physical_model
+from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError, guard_physical_model
 from lyrashield.utils.redaction import redact_text
 from strix.config import load_settings
 from strix.llm.context_budget import context_window, count_tokens, output_limit
@@ -414,10 +414,8 @@ async def _summarize(
                 )
             except Exception:
                 logger.exception("failed to record SDK usage for compaction")
-    except (BudgetExceededError, BudgetPausedError):
-        # A budget rejection from the reservation is not a generic compaction
-        # failure — it must propagate so the interactive pause handler (or the
-        # non-interactive budget stop) sees it. Re-raise unchanged.
+    except (BudgetExceededError, BudgetPausedError, PhysicalBudgetAdapterError):
+        # Budget rejection or uncertain dispatch must stop the scan.
         raise
     except Exception:
         logger.exception("compaction summary call failed for model %s", model)

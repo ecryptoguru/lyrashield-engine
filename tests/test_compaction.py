@@ -16,6 +16,7 @@ from openai.types.responses import (
 
 from lyrashield.lifecycle import compaction
 from lyrashield.lifecycle.sessions import replace_session_items
+from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError
 from lyrashield.policy.settings import ContextSettings
 
 
@@ -409,6 +410,28 @@ async def test_maybe_compact_skips_when_summary_fails(monkeypatch: pytest.Monkey
     before = await session.get_items()
 
     assert await compaction.maybe_compact(session, model="m", force=True) is False
+    assert await session.get_items() == before
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_stops_after_unknown_provider_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_budget(monkeypatch, keep_tokens=30, window=4_000)
+
+    class UncertainModel:
+        async def get_response(self, **_kwargs: Any) -> Any:
+            raise PhysicalBudgetAdapterError("reconcile before retry")
+
+    class UncertainProvider:
+        def get_model(self, _model_name: str | None) -> Any:
+            return UncertainModel()
+
+    monkeypatch.setattr(compaction, "StrixProvider", UncertainProvider)
+    session = FakeSession(_turns(12))
+    before = await session.get_items()
+    with pytest.raises(PhysicalBudgetAdapterError, match="reconcile before retry"):
+        await compaction.maybe_compact(session, model="m", force=True)
     assert await session.get_items() == before
 
 
