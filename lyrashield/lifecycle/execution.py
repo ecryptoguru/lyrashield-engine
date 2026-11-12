@@ -42,6 +42,7 @@ from lyrashield.lifecycle.sessions import (
 )
 from lyrashield.policy import codex
 from lyrashield.policy.loader import load_settings
+from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError
 
 
 if TYPE_CHECKING:
@@ -781,7 +782,12 @@ async def _run_cycle_parked(
             event_sink=event_sink,
             hooks=hooks,
         )
-    except (BudgetExceededError, BudgetPausedError, SubagentBudgetReservedError):
+    except (
+        BudgetExceededError,
+        BudgetPausedError,
+        SubagentBudgetReservedError,
+        PhysicalBudgetAdapterError,
+    ):
         raise
     except Exception as exc:
         logger.exception("error escaped the run cycle for %s; parking as failed", agent_id)
@@ -830,6 +836,8 @@ async def _run_cycle(
                         logger.exception("image-budget enforcement failed for %s", agent_id)
                 try:
                     await _compact_session(agent, session, run_config, force=False)
+                except PhysicalBudgetAdapterError:
+                    raise
                 except Exception:
                     logger.exception("proactive compaction failed for %s", agent_id)
                 with contextlib.suppress(Exception):
@@ -901,6 +909,9 @@ async def _run_cycle(
             await coordinator.set_status(agent_id, "stopped")
             await coordinator.trigger_budget_stop()
             raise
+        except PhysicalBudgetAdapterError:
+            await coordinator.trigger_budget_stop()
+            raise
         except Exception as exc:
             if image_strips < 3 and session is not None and _is_image_rejection(exc):
                 try:
@@ -925,6 +936,9 @@ async def _run_cycle(
             ):
                 try:
                     compacted = await _compact_session(agent, session, run_config, force=True)
+                except PhysicalBudgetAdapterError:
+                    await coordinator.trigger_budget_stop()
+                    raise
                 except Exception:
                     logger.exception("overflow compaction recovery failed for %s", agent_id)
                     compacted = False

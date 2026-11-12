@@ -30,6 +30,7 @@ from lyrashield.lifecycle.execution import (
     _notify_root_on_budget_reserve,
 )
 from lyrashield.lifecycle.sessions import seed_initial_input
+from lyrashield.policy.physical_requests import PhysicalBudgetAdapterError
 from lyrashield.tools.finish.tool import finish_scan
 
 
@@ -725,6 +726,53 @@ async def test_run_cycle_parked_parks_instead_of_raising(
     assert result is None
     assert coordinator.statuses["root"] == "failed"
     assert coordinator.errors["root"] == "unexpected explosion"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forced", [False, True])
+@pytest.mark.parametrize("interactive", [False, True])
+async def test_uncertain_compaction_stops_scan_before_more_provider_work(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, forced: bool, interactive: bool
+) -> None:
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    session = SQLiteSession("root", tmp_path / "agents.db")
+    calls: list[bool] = []
+
+    async def compact(*_args: Any, force: bool, **_kwargs: Any) -> bool:
+        calls.append(force)
+        if force == forced:
+            raise PhysicalBudgetAdapterError("reconcile before retry")
+        return False
+
+    stream = _StructuredRefusalStream("unused")
+    stream.run_loop_exception = RuntimeError("synthetic overflow")
+    streamed = MagicMock(return_value=stream)
+    monkeypatch.setattr(execution, "_compact_session", compact)
+    monkeypatch.setattr(execution, "is_context_overflow", lambda _error: True)
+    monkeypatch.setattr(execution.Runner, "run_streamed", streamed)
+    try:
+        run = execution._run_cycle_parked if interactive else execution._run_cycle
+        extra = {} if interactive else {"interactive": False}
+        with pytest.raises(PhysicalBudgetAdapterError, match="reconcile before retry"):
+            await run(
+                MagicMock(),
+                coordinator,
+                "root",
+                input_data="task",
+                run_config=MagicMock(),
+                context={},
+                max_turns=5,
+                session=session,
+                event_sink=None,
+                hooks=None,
+                **extra,
+            )
+        assert coordinator.budget_stopped
+        assert calls == ([False, True] if forced else [False])
+        assert streamed.call_count == int(forced)
+    finally:
+        session.close()
 
 
 class _SalvageStream:

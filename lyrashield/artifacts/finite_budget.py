@@ -343,7 +343,7 @@ class BudgetJournal:
         if self.snapshot()[GUARD]["pending"]:
             raise FinancialStateError("pending provider charge prevents paid resume")
 
-    def authorize(self, attempt: str) -> None:
+    def authorize(self, attempt: str) -> str:
         """One physical submission may consume this durable admission once."""
         with self._lock:
             current = self._current()
@@ -351,7 +351,11 @@ class BudgetJournal:
                 entry["id"] == attempt for entry in current[GUARD]["pending"]
             ):
                 raise FinancialStateError("missing or consumed durable admission")
+            run_id = current[GUARD]["run_id"]
+            if not isinstance(run_id, str) or not run_id:
+                raise FinancialStateError("durable admission has no run identity")
             self._dispatched.add(attempt)
+            return run_id
 
     def reserve(self, quote: float, *, kind: str = "llm") -> str:
         with self._lock:

@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import io
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
@@ -18,7 +19,7 @@ from openai import RateLimitError
 from lyrashield.agents.factory import build_strix_agent, make_child_factory
 from lyrashield.agents.prompt import render_system_prompt
 from lyrashield.artifacts import evidence as _evidence
-from lyrashield.artifacts.state import get_global_report_state
+from lyrashield.artifacts.state import ReportState, get_global_report_state
 from lyrashield.lifecycle.agents import AgentCoordinator
 from lyrashield.lifecycle.execution import (
     _is_content_filter_error,
@@ -214,6 +215,15 @@ async def run_strix_scan(
     context before prompt rendering. Child agents keep the standard scan prompt
     and context.
     """
+    if os.environ.get("LYRASHIELD_PROVIDER_GATEWAY_ORIGIN") is not None:
+        report_state = artifact_state if artifact_state is not None else get_global_report_state()
+        if not isinstance(report_state, ReportState):
+            raise RuntimeError("Gateway execution requires its scan-bound report owner")
+        if scan_id is None:
+            scan_id = report_state.run_id
+        elif scan_id != report_state.run_id:
+            raise RuntimeError("Gateway scan identity does not match its durable owner")
+
     if scan_id is None:
         scan_id = f"scan-{uuid.uuid4().hex[:8]}"
 
