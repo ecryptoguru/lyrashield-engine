@@ -19,6 +19,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 from collections import Counter, defaultdict
@@ -74,6 +75,7 @@ IMAGE = "ghcr.io/ecryptoguru/lyrashield-sandbox"
 MAX_AUTH_BYTES = 16 * 1024**2
 MAX_SCOPED_TAR_BYTES = 3 * 1024**3
 MAX_SECONDS = 1800
+MAX_HELPER_ADDRESS_SPACE = 2 * 1024**3
 MAX_FINAL_HEADERS = 200_000
 GH_TOOL = Path("/usr/bin/gh")
 GH_TOOL_SHA256 = "62c11fbaa08835168c3d1acf8a645ac6268a13a5682c73581388c9df0c622617"
@@ -163,6 +165,8 @@ def bounded_command(command, limit, timeout):
         def bounds():
             resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+            if sys.platform.startswith("linux"):
+                resource.setrlimit(resource.RLIMIT_AS, (MAX_HELPER_ADDRESS_SPACE,) * 2)
             cpu_seconds = max(1, math.ceil(timeout))
             resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
 
@@ -413,7 +417,14 @@ def verify_platform(
         require(not observed["unresolved"], "bounded header inventory is incomplete")
         validate_inventory(observed["inventory"], document)
         go, _ = build_go_receipts(
-            applications, observed["captures"], document, architecture, go_tool, go_tool_digest
+            applications,
+            observed["captures"],
+            document,
+            architecture,
+            go_tool,
+            go_tool_digest,
+            scratch=private,
+            max_tool_address_space=MAX_HELPER_ADDRESS_SPACE,
         )
         counts = {kind: len(values) for kind, values in observed["inventory"].items()}
         counts["goApplications"] = len(go)

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+from functools import partial
 from pathlib import Path
 from urllib.parse import quote
 
@@ -269,8 +270,10 @@ def read_bounded(path, limit):
     return data
 
 
-def limit_tool_output():
+def limit_tool_output(max_address_space=None):
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_TOOL_OUTPUT, MAX_TOOL_OUTPUT))
+    if max_address_space is not None:
+        resource.setrlimit(resource.RLIMIT_AS, (max_address_space, max_address_space))
 
 
 def digest_file(path):
@@ -291,7 +294,7 @@ def digest_file(path):
     return digest.hexdigest()
 
 
-def inspect_binary(binary, go_tool, architecture):
+def inspect_binary(binary, go_tool, architecture, *, scratch=None, max_address_space=None):
     if architecture not in ARCHITECTURES or not Path(go_tool).is_absolute():
         raise ValueError("invalid tool or architecture")
     tool_hash = digest_file(go_tool)
@@ -300,7 +303,18 @@ def inspect_binary(binary, go_tool, architecture):
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode) or not 20 <= metadata.st_size <= MAX_BINARY:
             raise ValueError("invalid binary size or type")
-        with tempfile.TemporaryFile() as snapshot, tempfile.TemporaryFile() as output:
+        if scratch is not None:
+            scratch_stat = Path(scratch).lstat()
+            if (
+                not stat.S_ISDIR(scratch_stat.st_mode)
+                or scratch_stat.st_uid != os.getuid()
+                or stat.S_IMODE(scratch_stat.st_mode) != 0o700
+            ):
+                raise ValueError("inspector scratch must be private and owned")
+        with (
+            tempfile.TemporaryFile(dir=scratch) as snapshot,
+            tempfile.TemporaryFile(dir=scratch) as output,
+        ):
             digest = hashlib.sha256()
             size = 0
             while chunk := os.read(fd, 1024 * 1024):
@@ -331,6 +345,8 @@ def inspect_binary(binary, go_tool, architecture):
                 "GOWORK": "off",
                 "LC_ALL": "C",
             }
+            if scratch is not None:
+                env["TMPDIR"] = os.fspath(scratch)
             # The operator supplies a trusted Go tool. The copied target is only read.
             subprocess.run(  # noqa: S603
                 [str(go_tool), "version", "-m", "-json", f"/dev/fd/{snapshot.fileno()}"],
@@ -341,7 +357,7 @@ def inspect_binary(binary, go_tool, architecture):
                 timeout=30,
                 check=True,
                 pass_fds=(snapshot.fileno(),),
-                preexec_fn=limit_tool_output,
+                preexec_fn=partial(limit_tool_output, max_address_space),
             )
             output.seek(0)
             result = output.read(MAX_TOOL_OUTPUT + 1)

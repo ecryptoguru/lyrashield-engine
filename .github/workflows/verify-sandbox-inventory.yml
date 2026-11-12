@@ -33,6 +33,12 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 65
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,7 +75,29 @@ jobs:
             --run-id "$PUBLISH_RUN_ID" --run-attempt "$PUBLISH_ATTEMPT" \
             --source-repository "$GITHUB_WORKSPACE" \
             --go-tool /opt/lyrashield-inventory/go/bin/go \
+            --output "$RUNNER_TEMP/independent-sandbox-inventory-raw.json"
+      - name: Bind measured inventory to immutable verifier source
+        run: |
+          set -euo pipefail
+          python3 -m scripts.bind_sandbox_inventory \
+            --receipt "$RUNNER_TEMP/independent-sandbox-inventory-raw.json" \
+            --source-repository "$GITHUB_WORKSPACE" \
             --output "$RUNNER_TEMP/independent-sandbox-inventory.json"
+      - name: Authenticate inventory evidence publication
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Attest independently measured inventory
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/ecryptoguru/lyrashield-sandbox
+          subject-digest: ${{ inputs.index_digest }}
+          predicate-type: https://lyrashieldai.com/attestations/sandbox-independent-inventory/v1
+          predicate-path: ${{ runner.temp }}/independent-sandbox-inventory.json
+          push-to-registry: true
+          create-storage-record: false
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: independent-sandbox-inventory-${{ github.run_id }}-${{ github.run_attempt }}

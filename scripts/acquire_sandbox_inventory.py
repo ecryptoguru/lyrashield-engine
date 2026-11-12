@@ -10,6 +10,7 @@ import hashlib
 import io
 import os
 import re
+import resource
 import shutil
 import signal
 import stat
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -56,6 +58,10 @@ MAX_LAYER = 2 * 1024**3
 SCRATCH = 8 * 1024**3
 MAX_RECEIPT_ZIP = 16 * 1024**2
 MAX_RECEIPT = 4 * 1024**2
+VERIFIER_ADDRESS_SPACE = 4 * 1024**3
+VERIFIER_CPU_SECONDS = 1800
+VERIFIER_FDS = 256
+VERIFIER_WALL_SECONDS = 1810
 
 
 class RegistryRedirect(HTTPRedirectHandler):
@@ -456,6 +462,31 @@ def prepare(args, root):  # noqa: PLR0915 - one linear fail-closed verification 
     return blobs, scratch, receipts
 
 
+def apply_process_limits():
+    resource.setrlimit(resource.RLIMIT_AS, (VERIFIER_ADDRESS_SPACE,) * 2)
+    resource.setrlimit(resource.RLIMIT_CPU, (VERIFIER_CPU_SECONDS,) * 2)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (VERIFIER_FDS,) * 2)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+def run_verifier(command, scratch):
+    child = subprocess.Popen(  # noqa: S603 - fixed Python module and validated selector
+        command,
+        env={**os.environ, "TMPDIR": str(scratch)},
+        start_new_session=True,
+        preexec_fn=apply_process_limits,  # noqa: PLW1509 - single-threaded POSIX CLI
+    )
+    try:
+        status = child.wait(timeout=VERIFIER_WALL_SECONDS)
+    except BaseException:
+        with suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        child.wait(timeout=10)
+        raise
+    if status:
+        raise subprocess.CalledProcessError(status, command)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("index-digest", "revision", "run-id", "run-attempt"):
@@ -495,7 +526,7 @@ def main():
             "--run-attempt",
             args.run_attempt,
         ]
-        subprocess.run(command, check=True, timeout=1810)  # noqa: S603 - fixed Python module and validated selector
+        run_verifier(command, scratch)
 
 
 if __name__ == "__main__":
@@ -506,6 +537,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(1200)
     try:
+        apply_process_limits()
         main()
     except Exception:  # noqa: BLE001 - suppress transport URLs and credentials
         # Registry redirect errors may contain signed URLs; never print them.
