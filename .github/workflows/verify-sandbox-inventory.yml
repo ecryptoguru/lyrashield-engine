@@ -1,0 +1,78 @@
+name: Independently verify sandbox package inventory
+
+on:
+  workflow_dispatch:
+    inputs:
+      index_digest:
+        description: Exact published OCI index digest
+        type: string
+        required: true
+      revision:
+        description: Exact published engine and workflow revision
+        type: string
+        required: true
+      run_id:
+        description: Sandbox publisher run ID with documented promotion hold
+        type: string
+        required: true
+      run_attempt:
+        description: Exact publisher attempt
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+jobs:
+  independent-inventory:
+    if: >-
+      github.repository_id == '1297157605' &&
+      github.repository_owner_id == '116722580' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate immutable selector and trusted source
+        env:
+          INDEX_DIGEST: ${{ inputs.index_digest }}
+          ENGINE_REVISION: ${{ inputs.revision }}
+          PUBLISH_RUN_ID: ${{ inputs.run_id }}
+          PUBLISH_ATTEMPT: ${{ inputs.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ENGINE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PUBLISH_RUN_ID" =~ ^[1-9][0-9]{0,19}$ && "$PUBLISH_ATTEMPT" =~ ^[1-9][0-9]{0,19}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse --verify "$ENGINE_REVISION^{commit}")" = "$ENGINE_REVISION"
+          git merge-base --is-ancestor "$ENGINE_REVISION" "$GITHUB_SHA"
+      - name: Install checksum-pinned protected verification tools
+        run: bash scripts/prepare_independent_inventory_tools.sh
+      - name: Authenticate and independently verify exact publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INDEX_DIGEST: ${{ inputs.index_digest }}
+          ENGINE_REVISION: ${{ inputs.revision }}
+          PUBLISH_RUN_ID: ${{ inputs.run_id }}
+          PUBLISH_ATTEMPT: ${{ inputs.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 -m scripts.acquire_sandbox_inventory \
+            --index-digest "$INDEX_DIGEST" --revision "$ENGINE_REVISION" \
+            --run-id "$PUBLISH_RUN_ID" --run-attempt "$PUBLISH_ATTEMPT" \
+            --source-repository "$GITHUB_WORKSPACE" \
+            --go-tool /opt/lyrashield-inventory/go/bin/go \
+            --output "$RUNNER_TEMP/independent-sandbox-inventory.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: independent-sandbox-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/independent-sandbox-inventory.json
+          if-no-files-found: error
+          retention-days: 7
