@@ -122,6 +122,14 @@ def test_gateway_accepts_secure_or_explicit_loopback_origin(monkeypatch, origin:
     assert _gateway_enabled(httpx.URL(origin + "/v1/provider/azure-ai/openai/v1/responses"))
 
 
+@pytest.mark.parametrize("scan_id", [None, "", "x", "bad scan", "../bad", ".hidden"])
+def test_gateway_rejects_invalid_durable_scan_identity(scan_id: str | None) -> None:
+    with pytest.raises(PhysicalBudgetAdapterError, match="identity is invalid"):
+        _set_gateway_headers(
+            httpx.Headers(), gateway_enabled=True, scan_id=scan_id, attempt=f"{'a' * 32}:1"
+        )
+
+
 @pytest.mark.asyncio
 async def test_runner_rejects_scan_that_disagrees_with_durable_owner() -> None:
     state = ReportState("scan-owner")
