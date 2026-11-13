@@ -325,6 +325,9 @@ RUN python3 -m venv /app/.venv && \
 # the replay egress guard. One implementation lives in
 # lyrashield/tools/proxy/caido_api.py; this COPY is its only packaging step.
 COPY --chown=root:root lyrashield/runtime/target_relay_proxy.py /opt/lyrashield/target_relay_proxy.py
+COPY --chown=root:root lyrashield/runtime/sandbox_start.py /opt/lyrashield/sandbox_start.py
+COPY --chown=root:root lyrashield/runtime/controller_authority.py /opt/lyrashield/controller_authority.py
+COPY --chown=root:root lyrashield/runtime/controller-qualification-key.json /opt/lyrashield/controller-qualification-key.json
 COPY --chown=root:root containers/verify_semgrep_pyjwt.py /opt/lyrashield/verify_semgrep_pyjwt.py
 COPY --chown=root:root containers/verify_brotli.py /opt/lyrashield/verify_brotli.py
 COPY --chown=root:root containers/verify_pip_vendors.py /opt/lyrashield/verify_pip_vendors.py
