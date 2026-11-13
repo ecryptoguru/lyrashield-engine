@@ -82,9 +82,17 @@ receipt ACKs, and reject fresh engine attachments to used uncertain attempts.
 No agent transcript replay framework is needed to safely finalize a crashed
 attempt as failed/inconclusive after reconciliation.
 
-Disposable tests run the exact pinned Linux sandbox base with a read-only
-checked-source overlay and test-only public signing root. They verify delayed
-start rejection, unchanged output, clock/resource substitution failures and
-whole-sandbox termination of a `SIGSTOP` process by separately owned control.
-They do not qualify the production image, installed watchdog, real guard issuer,
-mounted repository sources, live engine attachment or paid execution.
+The existing Linux image CI job runs disposable tests against its exact built
+image with the installed helper files. Positive signatures use only a read-only
+test public-key overlay. A separate test verifies the actual installed managed
+public-key and helper bytes, the image's source label, and rejection without
+installed authority. CI retains image build metadata, a bounded test receipt
+and JUnit results. The receipt distinguishes the tested checkout from the PR
+head and labels its qualification state `UNQUALIFIED`.
+
+Local tests without an explicitly built image use the pinned Linux base and a
+read-only checked-source overlay. Both modes verify delayed-start rejection,
+unchanged output, clock/resource substitution failures and whole-sandbox
+termination of a `SIGSTOP` process by separately owned fixture control. Neither
+mode proves a real managed positive authority, installed protected watchdog,
+mounted repository source, live engine attachment or paid execution.

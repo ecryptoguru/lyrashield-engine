@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -19,7 +22,8 @@ from lyrashield.runtime import controller_authority, sandbox_start
 pytest_plugins = ("tests.test_controller_backend",)
 
 
-BASE = (
+ARTIFACT_IMAGE = os.environ.get("LYRASHIELD_TEST_NATIVE_SANDBOX_IMAGE")
+BASE = ARTIFACT_IMAGE or (
     "ghcr.io/ecryptoguru/lyrashield-sandbox@"
     "sha256:33ba62763f46440d2a86154a939331fa6cde4e0398536fb05deb314471c1dfce"
 )
@@ -76,13 +80,13 @@ def ticket_for(
 
 @pytest.fixture
 def native(runtime: dict[str, Any], tmp_path: Path) -> Any:
-    """Read-only checked-source overlay on exact pinned base, no image rebuild."""
+    """Built helpers in artifact mode; source overlay otherwise; public test key only."""
     client = docker.from_env(timeout=15)
     client.ping()
     context = tmp_path / "source"
     context.mkdir()
     volumes = {}
-    for name in ("controller_authority.py", "sandbox_start.py"):
+    for name in () if ARTIFACT_IMAGE else ("controller_authority.py", "sandbox_start.py"):
         source = context / name
         source.write_bytes((ROOT / "lyrashield/runtime" / name).read_bytes())
         volumes[str(source)] = {"bind": "/opt/lyrashield/" + name, "mode": "ro"}
@@ -135,11 +139,93 @@ def native(runtime: dict[str, Any], tmp_path: Path) -> Any:
         client.close()
 
 
+@pytest.mark.skipif(not ARTIFACT_IMAGE, reason="requires an explicitly built native image")
+def test_built_artifact_pin_and_closed_admission(tmp_path: Path) -> None:
+    """Actual installed key bytes fail closed; positive fixtures never replace this proof."""
+    assert ARTIFACT_IMAGE
+    client = docker.from_env(timeout=30)
+    try:
+        image = client.images.get(ARTIFACT_IMAGE)
+        git = shutil.which("git")
+        assert git
+        source = (
+            subprocess.check_output(  # noqa: S603 - trusted test checkout, no shell
+                [git, "rev-parse", "HEAD"],
+                cwd=ROOT,
+            )
+            .decode()
+            .strip()
+        )
+        assert image.attrs["Architecture"] == "amd64"
+        assert image.attrs["Os"] == "linux"
+        assert image.labels["org.opencontainers.image.revision"] == source
+        checksums = {}
+        options = {
+            "remove": True,
+            "platform": "linux/amd64",
+            "network_mode": "none",
+            "read_only": True,
+            "cap_drop": ["ALL"],
+            "security_opt": ["no-new-privileges"],
+            "user": "pentester",
+        }
+        for name in (
+            "sandbox_start.py",
+            "controller_authority.py",
+            "controller-qualification-key.json",
+        ):
+            installed = client.containers.run(
+                image.id, ["/opt/lyrashield/" + name], entrypoint="/usr/bin/cat", **options
+            )
+            assert installed == (ROOT / "lyrashield/runtime" / name).read_bytes()
+            checksums[name] = sandbox_start.checksum(installed)
+        container = client.containers.create(
+            image.id,
+            [
+                "-I",
+                "/opt/lyrashield/sandbox_start.py",
+                "--ticket",
+                "/run/lyrashield/tickets/missing.json",
+            ],
+            entrypoint="/app/.venv/bin/python",
+            **{key: value for key, value in options.items() if key != "remove"},
+        )
+        try:
+            container.start()
+            assert container.wait(timeout=30)["StatusCode"] == 125
+            assert sandbox_start.ADMISSION_PREFIX not in container.logs()
+        finally:
+            container.remove(force=True)
+        receipt = {
+            "schema": "lyrashield-native-sandbox-test-receipt/1",
+            "source": source,
+            "prHead": os.environ.get("LYRASHIELD_TEST_PR_HEAD"),
+            "imageConfigId": image.id,
+            "repoDigests": image.attrs.get("RepoDigests", []),
+            "descriptor": image.attrs.get("Descriptor"),
+            "installedChecksums": checksums,
+            "actualPinnedKeyWithoutAuthority": {"exitCode": 125, "admitted": False},
+            "qualification": "UNQUALIFIED",
+            "limitations": [
+                "Positive native signatures use a read-only test public-key overlay",
+                "No real managed authority or protected host watchdog",
+                "No mounted source or end-to-end launch acceptance",
+            ],
+        }
+        directory = Path(os.environ.get("LYRASHIELD_TEST_NATIVE_RECEIPT_DIR", str(tmp_path)))
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "native-artifact-receipt.json").write_text(
+            json.dumps(receipt, indent=2) + "\n"
+        )
+    finally:
+        client.close()
+
+
 def runtime_key(_runtime: dict[str, Any]) -> dict[str, Any]:
     # Existing fixture has replaced only the consumer's pinned-key function.
     from lyrashield.runtime import controller_backend  # noqa: PLC0415
 
-    return controller_backend._pinned_key()
+    return controller_backend._pinned_key()  # type: ignore[attr-defined]
 
 
 def native_clock(container: Any) -> dict[str, Any]:
@@ -156,7 +242,9 @@ def native_clock(container: Any) -> dict[str, Any]:
         user="pentester",
     )
     assert result.exit_code == 0
-    return json.loads(result.output)
+    clock = json.loads(result.output)
+    assert isinstance(clock, dict)
+    return clock
 
 
 def install_record(container: Any, target: str, name: str, data: bytes) -> None:
