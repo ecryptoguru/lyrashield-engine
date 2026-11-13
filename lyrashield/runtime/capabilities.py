@@ -316,7 +316,31 @@ def probe_session_capabilities(
                 STATUS_UNPROBED,
                 f"probe raised {type(exc).__name__}",
             )
-    if relay_configured:
+    if backend_name == "controller":
+        # Only the native attach adapter verifies the pinned managed signature.
+        # A generic backend-provided dictionary is not runtime authority.
+        from lyrashield.runtime.controller_backend import ControllerSession  # noqa: PLC0415
+
+        inner = getattr(session, "_inner", session)
+        grant = inner.installed_grant if isinstance(inner, ControllerSession) else None
+        matching_scope = (
+            grant is not None
+            and sorted(grant["authorizedHosts"]) == sorted(authorized_hosts)
+            and grant["relayRequired"] == relay_configured
+        )
+        for name in ("exec", "ports", "network_policy", "mounts", "exec_constraints"):
+            capabilities[name] = (
+                dict(grant["capabilities"][name])
+                if matching_scope and grant is not None
+                else _cap(STATUS_ABSENT, "installed controller authority does not match scan scope")
+            )
+        if relay_configured:
+            capabilities["scoped_relay"] = (
+                dict(grant["capabilities"]["scoped_relay"])
+                if matching_scope and grant is not None
+                else _cap(STATUS_ABSENT, "installed controller relay authority does not match")
+            )
+    if relay_configured and backend_name != "controller":
         # The scoped relay grant rides a read-only mount into the container
         # and the bridge config was verified during proxy bootstrap; both are
         # probed above. A requested relay with an unverifiable grant mount is

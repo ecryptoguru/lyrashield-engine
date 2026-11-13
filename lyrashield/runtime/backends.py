@@ -89,4 +89,10 @@ async def docker_backend(
 
 def get_backend(name: str) -> SandboxBackend:
     """Return product Docker behavior, delegating custom backends upstream."""
-    return docker_backend if name == "docker" else get_upstream_backend(name)
+    if name == "docker":
+        return docker_backend
+    if name == "controller":
+        from lyrashield.runtime.controller_backend import controller_backend  # noqa: PLC0415
+
+        return controller_backend
+    return get_upstream_backend(name)

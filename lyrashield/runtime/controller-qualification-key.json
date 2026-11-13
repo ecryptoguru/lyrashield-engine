@@ -1,0 +1,9 @@
+{
+  "keyId": "https://lyrashieldqualb2f8f58b.vault.azure.net/keys/runtime-qualification/04fcf77a4e4e47629eae1de963b8560f",
+  "algorithm": "RS256",
+  "publicKey": {
+    "kty": "RSA",
+    "n": "quuhO0p9EqTncnJy09Eyq1db9eAsUCptU1MB6rdRxMiyzTLgCz3bjEl_Gav5pJMngocILUTQIw5FqsGKJ925kCzmCzk73mHYRv7EU5O7bW6r3lAvQel_TduqA7kdHdjXI3C40Z1AJrex00yWZH4VsNe6DApNc1n0r1adXa3umMpopWsqbovB9vbfWj5htTaPAqVpNntpA4e3neUJ1T0plnWUyUKbEDY22xtLRJ2M_W0L2d9mTUqvtIDjKXsKQhXy1EjBfxkGBwBcz8eVHkWivCEQcuVX2h01LP9NIq8tLOidRE-_-0lO-oc6Rlbh81wXHFeJw6_nrjp3GWLX2oEzQa9Rb8Mngs_u_sh8H48K03Zs-kl3x_cOA1Dp01wVRciE5xPCpwEMAmXY4I-hEysUTo_SnFMXvfpgXCJce_oMlHVdS4XNMygat47qCCBgousKdoLdvhEKV91EWI-uLtV0pIukrqVe6_9K4EznheAfswWFJdqXAI31NM1RB-YkjA89",
+    "e": "AQAB"
+  }
+}
