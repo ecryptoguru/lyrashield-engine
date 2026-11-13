@@ -664,6 +664,17 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
                 exposed_ports=(_CONTAINER_CAIDO_PORT,),
                 bind_mounts=bind_mounts,
             )
+            if backend_name == "controller":
+                from lyrashield.runtime.controller_backend import (  # noqa: PLC0415
+                    assert_controller_scan_authority,
+                )
+
+                assert_controller_scan_authority(
+                    session,
+                    scan_id,
+                    authorized_hosts,
+                    relay_required=bool(environment.get("STRIX_TARGET_RELAY")),
+                )
             # ``session`` is now a live sandbox handle; every later startup
             # await is covered by the owned delete in the except block.
 

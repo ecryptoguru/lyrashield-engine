@@ -256,6 +256,7 @@ jobs:
         run: python3 containers/system-python-security/hydrate_runtime_inputs.py --download
 
       - name: Build sandbox image
+        id: native_image
         if: steps.changed_paths.outputs.docs_only != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
@@ -266,12 +267,54 @@ jobs:
           tags: lyrashield-sandbox:ci
           load: true
           push: false
+          labels: |
+            org.opencontainers.image.source=https://github.com/ecryptoguru/lyrashield-engine
+            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,version=2,scope=engine-sandbox-v1
           cache-to: type=gha,version=2,mode=max,scope=engine-sandbox-v1
 
       - name: Smoke sandbox image
         if: steps.changed_paths.outputs.docs_only != 'true'
         run: bash scripts/smoke-sandbox.sh lyrashield-sandbox:ci
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Verify native admission against the built artifact
+        if: steps.changed_paths.outputs.docs_only != 'true'
+        env:
+          LYRASHIELD_TEST_NATIVE_SANDBOX_IMAGE: lyrashield-sandbox:ci
+          LYRASHIELD_TEST_NATIVE_RECEIPT_DIR: ${{ runner.temp }}/native-sandbox-proof
+          LYRASHIELD_TEST_PR_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          NATIVE_BUILD_METADATA: ${{ steps.native_image.outputs.metadata }}
+        run: |
+          mkdir -p "$LYRASHIELD_TEST_NATIVE_RECEIPT_DIR"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          metadata = json.loads(os.environ['NATIVE_BUILD_METADATA'])
+          destination = Path(os.environ['LYRASHIELD_TEST_NATIVE_RECEIPT_DIR'])
+          (destination / 'build-metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          PY
+          uv sync --frozen
+          uv run --frozen pytest -q tests/test_native_sandbox_start.py \
+            --junitxml="$LYRASHIELD_TEST_NATIVE_RECEIPT_DIR/native-admission-junit.xml"
+
+      - name: Retain native artifact test receipts
+        if: always() && steps.changed_paths.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-sandbox-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-sandbox-proof/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Relay grant isolation (built image)
         if: steps.changed_paths.outputs.docs_only != 'true'
