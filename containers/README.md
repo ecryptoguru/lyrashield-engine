@@ -13,8 +13,8 @@ write, then updates RECORD to describe the changed bytes.
   hashes. PyJWT 2.15.1 is pinned in both engine and sandbox locks (CVE-2026-101918
   fix line); the verified Semgrep wheel and its source remain unchanged.
 - Semgrep 1.178.0 runtime: MCP 1.30.0 fixes redirect/header and schema-reference
-  issues. OpenTelemetry API/SDK/exporter 1.45.1 and matching instrumentation
-  0.66b1 fix the vulnerable API line. These exact resolver overrides correspond
+  issues. OpenTelemetry API/SDK/exporter 1.45.2 and matching instrumentation
+  0.66b2 fix the vulnerable API line. These exact resolver overrides correspond
   to exact METADATA substitutions, validated together before writes.
 - Independent security refresh: aiohttp 3.14.5, graphql-core 3.3.1, certifi
   2026.10.19, and setuptools 84.1.0. The graph is hash-pinned for both CPUs.

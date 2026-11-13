@@ -39,19 +39,19 @@ PATCHES = {
 
 SEMGREP_RUNTIME_PATCHES = (
     (b"Requires-Dist: mcp==1.29.0", b"Requires-Dist: mcp==1.30.0"),
-    (b"Requires-Dist: opentelemetry-api~=1.37.0", b"Requires-Dist: opentelemetry-api==1.45.1"),
-    (b"Requires-Dist: opentelemetry-sdk~=1.37.0", b"Requires-Dist: opentelemetry-sdk==1.45.1"),
+    (b"Requires-Dist: opentelemetry-api~=1.37.0", b"Requires-Dist: opentelemetry-api==1.45.2"),
+    (b"Requires-Dist: opentelemetry-sdk~=1.37.0", b"Requires-Dist: opentelemetry-sdk==1.45.2"),
     (
         b"Requires-Dist: opentelemetry-exporter-otlp-proto-http~=1.37.0",
-        b"Requires-Dist: opentelemetry-exporter-otlp-proto-http==1.45.1",
+        b"Requires-Dist: opentelemetry-exporter-otlp-proto-http==1.45.2",
     ),
     (
         b"Requires-Dist: opentelemetry-instrumentation-requests~=0.58b0",
-        b"Requires-Dist: opentelemetry-instrumentation-requests==0.66b1",
+        b"Requires-Dist: opentelemetry-instrumentation-requests==0.66b2",
     ),
     (
         b"Requires-Dist: opentelemetry-instrumentation-threading~=0.58b0",
-        b"Requires-Dist: opentelemetry-instrumentation-threading==0.66b1",
+        b"Requires-Dist: opentelemetry-instrumentation-threading==0.66b2",
     ),
 )
 
