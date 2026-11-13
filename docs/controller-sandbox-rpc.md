@@ -9,19 +9,39 @@ The trusted launcher supplies `LYRASHIELD_SUPERVISOR_TOOL_URL` (protected HTTPS
 origin), `TOOL_TOKEN`, `ATTEMPT_ID`, `OPERATION_ID`, `AUTHORITY_EPOCH_ID` and
 `SANDBOX_HANDLE`, each with the `LYRASHIELD_SUPERVISOR_` prefix. The token is an
 ephemeral scan credential, never a signing key. HTTP is used only by explicitly
-constructed disposable fixture clients. Redirects and environment proxy settings
+constructed `MockTransport` fixture clients. The launcher also supplies the public
+signed `LYRASHIELD_SUPERVISOR_RUNTIME_AUTHORITY` envelope. The consumer verifies
+the pinned signature, issuer, epoch and signed `toolChannel` origin before it
+constructs a real transport or sends the bearer credential. The configured origin
+must exactly match that signed protected HTTPS origin; caller URLs or keys cannot
+override it. Redirects and environment proxy settings
 are disabled; TLS certificate verification remains enabled.
 
 Every response includes exact `binding` with `attemptId`, `operationId`,
 `authorityEpochId` and opaque `sandboxHandle`. Every POST includes that binding.
 Mutations also include original UUID `requestId` and `commandId`; responses echo
-`requestId` and `status: COMPLETED`. A running PTY can acknowledge its completed
+`requestId` and `status: COMPLETED`. Operation-specific fields validate inside the
+same uncertainty boundary before receipt ACK or cursor commit. A running PTY can acknowledge its completed
 start operation with a null process exit code. A timeout, cancellation, malformed
 acknowledgement or other status retains the original request ID and blocks new
-tool mutations. The controller must durably record the original operation before
+tool mutations. Normal mutations serialize through receipt validation and ACK;
+physical recovery stop may bypass a long command, retaining all uncertain IDs.
+The controller must durably record the original operation before
 invocation, fence current authority through invocation, and never replay uncertain
 work. Reads do not trigger retries of mutations. Recovery stops use one stable
-stop request ID, including subsequent cleanup attempts.
+stop request ID derived from the binding, including subsequent cleanup attempts.
+Same-session PTY polls/stdin serialize read and cursor commit; their responses
+must carry the exact requested session ID.
+
+After validation the client POSTs `request/{originalRequestId}/ack` with binding,
+original `requestId` and `responseChecksum` (prefixed SHA-256 of the full retained
+response's sorted compact UTF-8 JSON). The server returns those same values with
+`status: ACKNOWLEDGED`. Only this metadata ACK retries, at most three times. Missing
+ACK retains the original tool ID and never repeats the tool. The server must hold
+unacknowledged terminal responses and new work for original-operation recovery.
+ACK alone does not prove persisted agent conversation: crashed engines must not
+resume a used attempt without durable host attachment identity and reconciliation.
+Consumer fixtures do not prove this restart boundary.
 
 All endpoints are under `/v1/sandbox/{attemptId}` and use the scan-bound bearer
 credential. GET requests also carry `X-LyraShield-Sandbox-Handle`.
@@ -40,6 +60,7 @@ credential. GET requests also carry `X-LyraShield-Sandbox-Handle`.
 | POST `workspace/hydrate` | `archiveBase64`, bare `sha256` | completed acknowledgement |
 | GET `port/{port}` | only an installed exposed port | `host`, `port`, `tls`, empty `query` |
 | POST `stop` | stable recovery request ID | completed acknowledgement followed by independently observed `running: false` |
+| POST `request/{originalRequestId}/ack` | original `requestId`, canonical `responseChecksum` | `status: ACKNOWLEDGED`, same request ID and checksum |
 
 The native SDK adapter implements all six `BaseSandboxSession` primitives:
 `_exec_internal`, `read`, `write`, `running`, `persist_workspace` and
@@ -79,6 +100,10 @@ repository `1286618458`, owner
 `116722580`, workflow `.github/workflows/issue-runtime-qualification.yml`, product
 source, positive run ID and attempt. The consumer matches the protected host
 observer's field sets.
+Its signed `toolChannel` has exactly `schema: lyrashield-sandbox-tool-channel/1`
+and a canonical protected `https://host[:port]` origin. DNS/IPv4 host labels are
+ASCII lowercase; default port 443 is omitted. Paths, queries, fragments and user
+credentials are rejected. The worker's protected policy URL must match it.
 
 The root delegates one `sandboxGrantSigner` with schema
 `lyrashield-sandbox-grant-signer/1`, purpose `sandbox-tool-grants`, `algorithm`,
@@ -99,14 +124,22 @@ remains open: the server must check the live current OPEN database epoch under
 the shared fence before new grant issuance and every tool invocation. Image and
 policy bind the root sandbox/policy digests. Manifest checksum is SHA-256 over
 sorted compact UTF-8 JSON from the pinned SDK's `manifest.model_dump(mode=json)`;
-it must describe the already prepared resources, including installed source and
-relay policy. Caller bind-mount dictionaries are never installed by the adapter.
+it must describe the already prepared resources. The manifest excludes separate
+bind mounts, so nonempty caller bind dictionaries explicitly reject before
+transport creation. Supporting them requires an installed approved resource
+descriptor binding logical target paths, read-only restrictions and immutable
+source/attachment/relay/policy identities to this engine run. Mutable caller host
+paths cannot establish that authority or be silently ignored.
 
 Capability entries have `status: supported`, nonempty `detail` and independently
 observed nonempty `evidence`. Required entries are `exec`, `pty`, `files`, `ports`,
 `network_policy`, `mounts` and `exec_constraints`, plus `scoped_relay` when needed.
 Missing observation cannot be converted into support by method availability.
 The scan ID, authorized hosts and relay requirements must match the engine run.
+Before the last sixty grant seconds, tools automatically request authenticated
+state renewal. Renewal serializes and retains the identical root and static grant
+contents; only issue/expiry times may advance. The server must live-fence the same
+OPEN epoch before renewing. No new attempt or paid execution starts.
 
 The product still must implement the fenced server, prepared descriptor/source
 installation, independent observations, managed root issuer, protected local

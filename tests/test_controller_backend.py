@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -145,6 +146,10 @@ def runtime(
             "runId": "123",
             "attempt": "1",
         },
+        "toolChannel": {
+            "schema": "lyrashield-sandbox-tool-channel/1",
+            "origin": "https://private-controller",
+        },
     }
     return {
         "connection": connection,
@@ -168,8 +173,41 @@ def response(runtime: dict[str, Any], **values: Any) -> dict[str, Any]:
 async def attached(
     runtime: dict[str, Any], handler: Any
 ) -> tuple[controller.ControllerClient, controller.ControllerSession]:
+    retained: dict[str, str] = {}
+
+    async def with_ack(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/ack"):
+            body = json.loads(request.content)
+            assert body["responseChecksum"] == retained[body["requestId"]]
+            if runtime.get("ackHandler") is not None:
+                return runtime["ackHandler"](request)
+            return httpx.Response(
+                200,
+                json=response(
+                    runtime,
+                    requestId=body["requestId"],
+                    responseChecksum=body["responseChecksum"],
+                    status="ACKNOWLEDGED",
+                ),
+            )
+        result = handler(request)
+        if hasattr(result, "__await__"):
+            result = await result
+        if result.status_code == 200:
+            decoded = result.json()
+            if decoded.get("requestId"):
+                retained[decoded["requestId"]] = (
+                    "sha256:"
+                    + hashlib.sha256(
+                        json.dumps(
+                            decoded, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                        ).encode()
+                    ).hexdigest()
+                )
+        return result
+
     client = controller.ControllerClient(
-        runtime["connection"], transport=httpx.MockTransport(handler)
+        runtime["connection"], transport=httpx.MockTransport(with_ack)
     )
     inner = controller.ControllerSession(
         client, runtime["manifest"], (8080,), runtime["grant"]["imageDigest"]
@@ -451,8 +489,355 @@ def test_attempt_grant_is_a_bounded_lease(runtime: dict[str, Any]) -> None:
         )
 
 
+@pytest.mark.parametrize("field,value", [("stdoutBase64", "!"), ("exitCode", "zero")])
+async def test_malformed_completed_exec_holds_original_before_receipt_ack(
+    runtime: dict[str, Any], field: str, value: Any
+) -> None:
+    sent = []
+    acknowledgements = []
+    runtime["ackHandler"] = acknowledgements.append
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/state"):
+            return httpx.Response(
+                200, json=response(runtime, running=True, grant=runtime["sign"](runtime["grant"]))
+            )
+        body = json.loads(request.content)
+        sent.append(body)
+        result = response(
+            runtime,
+            requestId=body["requestId"],
+            status="COMPLETED",
+            stdoutBase64="",
+            stderrBase64="",
+            exitCode=0,
+        )
+        result[field] = value
+        return httpx.Response(200, json=result)
+
+    client, inner = await attached(runtime, handler)
+    for _ in range(2):
+        with pytest.raises(controller.ControllerOperationUnknownError) as failed:
+            await inner.exec("paid-once", user="pentester")
+        assert failed.value.request_id == sent[0]["requestId"]
+    assert len(sent) == 1 and not acknowledgements
+    await client.close()
+
+
+@pytest.mark.parametrize(
+    "field,value", [("outputCursor", "broken"), ("outputBase64", "!"), ("sessionId", 1002)]
+)
+async def test_malformed_pty_stdin_holds_original_without_committing_cursor(
+    runtime: dict[str, Any], field: str, value: Any
+) -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/state"):
+            return httpx.Response(
+                200, json=response(runtime, running=True, grant=runtime["sign"](runtime["grant"]))
+            )
+        body = json.loads(request.content)
+        requests.append(body)
+        result = response(
+            runtime,
+            requestId=body["requestId"],
+            status="COMPLETED",
+            sessionId=1001,
+            outputBase64="",
+            outputCursor=0,
+            exitCode=None,
+            originalTokenCount=0,
+        )
+        if request.url.path.endswith("/stdin"):
+            result[field] = value
+        return httpx.Response(200, json=result)
+
+    client, inner = await attached(runtime, handler)
+    await inner.pty_exec_start("cat", user="pentester")
+    for _ in range(2):
+        with pytest.raises(controller.ControllerOperationUnknownError) as failed:
+            await inner.pty_write_stdin(session_id=1001, chars="once\n")
+        assert failed.value.request_id == requests[1]["requestId"]
+    assert len(requests) == 2 and inner._pty_output_cursors == {1001: 0}
+    await client.close()
+
+
+async def test_concurrent_mutations_do_not_overwrite_or_replay_unknown(
+    runtime: dict[str, Any],
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    requests = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/state"):
+            return httpx.Response(
+                200, json=response(runtime, running=True, grant=runtime["sign"](runtime["grant"]))
+            )
+        requests.append(json.loads(request.content))
+        entered.set()
+        await release.wait()
+        raise httpx.ReadTimeout("lost acknowledgement")
+
+    client, inner = await attached(runtime, handler)
+    first = asyncio.create_task(inner.exec("first", user="pentester"))
+    await entered.wait()
+    second = asyncio.create_task(inner.exec("second", user="pentester"))
+    release.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+    assert all(isinstance(result, controller.ControllerOperationUnknownError) for result in results)
+    assert len(requests) == 1
+    assert list(client.unknown_request_ids) == [requests[0]["requestId"]]
+    await client.close()
+
+
+async def test_recovery_stop_retains_both_uncertain_ids_and_is_stable_after_restart(
+    runtime: dict[str, Any],
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    command_ids = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/state"):
+            return httpx.Response(
+                200, json=response(runtime, running=True, grant=runtime["sign"](runtime["grant"]))
+            )
+        body = json.loads(request.content)
+        command_ids.append(body["requestId"])
+        if request.url.path.endswith("/exec"):
+            started.set()
+            await release.wait()
+        raise httpx.ReadTimeout("acknowledgement lost")
+
+    client, inner = await attached(runtime, handler)
+    execution = asyncio.create_task(inner.exec("original", user="pentester"))
+    await started.wait()
+    with pytest.raises(controller.ControllerOperationUnknownError):
+        await client.delete(inner)
+    release.set()
+    with pytest.raises(controller.ControllerOperationUnknownError):
+        await execution
+    assert set(client.unknown_request_ids) == set(command_ids) and len(command_ids) == 2
+    restarted = controller.ControllerClient(
+        runtime["connection"], transport=httpx.MockTransport(handler)
+    )
+    assert restarted.stop_request_id == client.stop_request_id
+    await restarted.close()
+    await client.close()
+
+
+async def test_same_pty_polls_serialize_cursor_delivery(runtime: dict[str, Any]) -> None:
+    cursors = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/state"):
+            return httpx.Response(
+                200, json=response(runtime, running=True, grant=runtime["sign"](runtime["grant"]))
+            )
+        cursor = int(request.url.params["outputCursor"])
+        cursors.append(cursor)
+        await asyncio.sleep(0)
+        return httpx.Response(
+            200,
+            json=response(
+                runtime,
+                sessionId=1001,
+                outputBase64=base64.b64encode(bytes([97 + cursor])).decode(),
+                outputCursor=cursor + 1,
+                exitCode=None,
+                originalTokenCount=1,
+            ),
+        )
+
+    client, inner = await attached(runtime, handler)
+    results = await asyncio.gather(
+        inner.pty_write_stdin(session_id=1001, chars=""),
+        inner.pty_write_stdin(session_id=1001, chars=""),
+    )
+    assert cursors == [0, 1]
+    assert [result.output for result in results] == [b"a", b"b"]
+    await client.close()
+
+
+async def test_receipt_ack_retries_same_metadata_and_holds_original_if_lost(
+    runtime: dict[str, Any],
+) -> None:
+    acknowledgements = []
+
+    def missing_ack(request: httpx.Request) -> httpx.Response:
+        acknowledgements.append(json.loads(request.content))
+        raise httpx.ReadTimeout("receipt acknowledgement lost")
+
+    runtime["ackHandler"] = missing_ack
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/state"):
+            return httpx.Response(
+                200, json=response(runtime, running=True, grant=runtime["sign"](runtime["grant"]))
+            )
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=response(
+                runtime,
+                requestId=body["requestId"],
+                status="COMPLETED",
+                stdoutBase64="",
+                stderrBase64="",
+                exitCode=0,
+            ),
+        )
+
+    client, inner = await attached(runtime, handler)
+    with pytest.raises(controller.ControllerOperationUnknownError) as failed:
+        await inner.exec("once", user="pentester")
+    assert len(acknowledgements) == 3
+    assert all(value == acknowledgements[0] for value in acknowledgements)
+    assert failed.value.request_id == acknowledgements[0]["requestId"]
+    await client.close()
+
+
+async def test_long_scan_refreshes_same_signed_attempt_without_new_work(
+    runtime: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [datetime.now(UTC)]
+
+    class TestClock(datetime):
+        @classmethod
+        def now(cls, _tz: Any = None) -> datetime:
+            return clock[0]
+
+    monkeypatch.setattr(controller, "datetime", TestClock)
+    refreshed = []
+    executions = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/state"):
+            grant = (
+                runtime["grant"]
+                if not refreshed
+                else {
+                    **runtime["grant"],
+                    "issuedAt": int(clock[0].timestamp()),
+                    "expiresAt": int(clock[0].timestamp()) + 900,
+                }
+            )
+            refreshed.append(grant)
+            return httpx.Response(
+                200, json=response(runtime, running=True, grant=runtime["sign"](grant))
+            )
+        body = json.loads(request.content)
+        executions.append(body)
+        return httpx.Response(
+            200,
+            json=response(
+                runtime,
+                requestId=body["requestId"],
+                status="COMPLETED",
+                stdoutBase64="",
+                stderrBase64="",
+                exitCode=0,
+            ),
+        )
+
+    client, inner = await attached(runtime, handler)
+    for _ in range(6):
+        clock[0] += timedelta(minutes=10)
+        await inner.exec("next legitimate tool", user="pentester")
+    assert len(executions) == 6 and len(refreshed) > 2
+    assert all(value["binding"] == runtime["connection"].binding for value in executions)
+    assert inner.installed_grant["expiresAt"] > int(clock[0].timestamp())
+    await client.close()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("scanId", "other"),
+        ("manifestChecksum", "f" * 64),
+        ("authorizedHosts", ["other.example"]),
+        ("sandboxHandle", "other"),
+    ],
+)
+async def test_refresh_cannot_rebind_scan_or_resources(
+    runtime: dict[str, Any], monkeypatch: pytest.MonkeyPatch, field: str, value: Any
+) -> None:
+    clock = [datetime.now(UTC)]
+
+    class TestClock(datetime):
+        @classmethod
+        def now(cls, _tz: Any = None) -> datetime:
+            return clock[0]
+
+    monkeypatch.setattr(controller, "datetime", TestClock)
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        grant = (
+            runtime["grant"]
+            if len(requests) == 1
+            else {
+                **runtime["grant"],
+                field: value,
+                "issuedAt": int(clock[0].timestamp()),
+                "expiresAt": int(clock[0].timestamp()) + 900,
+            }
+        )
+        return httpx.Response(
+            200, json=response(runtime, running=True, grant=runtime["sign"](grant))
+        )
+
+    client, inner = await attached(runtime, handler)
+    clock[0] += timedelta(minutes=10)
+    with pytest.raises(controller.ControllerUnavailableError):
+        await inner.exec("must not execute", user="pentester")
+    assert len(requests) == 2 and all(request.url.path.endswith("/state") for request in requests)
+    await client.close()
+
+
+def test_unsigned_or_wrong_origin_never_constructs_token_transport(
+    runtime: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name, value in {
+        "TOOL_URL": "https://attacker.example",
+        "TOOL_TOKEN": "secret-test-token",
+        "ATTEMPT_ID": "attempt",
+        "OPERATION_ID": "operation",
+        "AUTHORITY_EPOCH_ID": "epoch",
+        "SANDBOX_HANDLE": "opaque-sandbox",
+    }.items():
+        monkeypatch.setenv(f"LYRASHIELD_SUPERVISOR_{name}", value)
+    monkeypatch.setenv(
+        "LYRASHIELD_SUPERVISOR_RUNTIME_AUTHORITY", json.dumps(runtime["runtimeAuthority"])
+    )
+    with pytest.raises(controller.ControllerUnavailableError):
+        controller.ControllerConnection.from_environment()
+    monkeypatch.setenv("LYRASHIELD_SUPERVISOR_TOOL_URL", "https://private-controller")
+    monkeypatch.setenv("LYRASHIELD_SUPERVISOR_RUNTIME_AUTHORITY", "{}")
+    with pytest.raises(controller.ControllerUnavailableError):
+        controller.ControllerConnection.from_environment()
+
+
+async def test_mounts_without_approved_descriptor_reject_before_transport(
+    runtime: dict[str, Any],
+) -> None:
+    with pytest.raises(controller.ControllerUnavailableError, match="immutable mount descriptors"):
+        await controller.controller_backend(
+            image=runtime["grant"]["imageDigest"],
+            manifest=runtime["manifest"],
+            exposed_ports=(8080,),
+            bind_mounts=[
+                {"source": "/mutable/path", "target": "/workspace/source", "read_only": True}
+            ],
+        )
+
+
 def test_production_connection_rejects_insecure_origin_and_secret_is_redacted(
     monkeypatch: pytest.MonkeyPatch,
+    runtime: dict[str, Any],
 ) -> None:
     for name in (
         "TOOL_URL",
@@ -467,5 +852,9 @@ def test_production_connection_rejects_insecure_origin_and_secret_is_redacted(
     with pytest.raises(controller.ControllerUnavailableError):
         controller.ControllerConnection.from_environment()
     monkeypatch.setenv("LYRASHIELD_SUPERVISOR_TOOL_URL", "https://private-controller")
+    monkeypatch.setenv("LYRASHIELD_SUPERVISOR_AUTHORITY_EPOCH_ID", "epoch")
+    monkeypatch.setenv(
+        "LYRASHIELD_SUPERVISOR_RUNTIME_AUTHORITY", json.dumps(runtime["runtimeAuthority"])
+    )
     connection = controller.ControllerConnection.from_environment()
     assert "token='test'" not in repr(connection)

@@ -17,6 +17,7 @@ import math
 import os
 import shlex
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -64,6 +65,7 @@ _AUTHORITY_FIELDS = frozenset(
         "acceptanceDigest",
         "sandboxGrantSigner",
         "issuer",
+        "toolChannel",
     }
 )
 
@@ -132,6 +134,7 @@ class ControllerConnection:
     operation_id: str
     authority_epoch_id: str
     sandbox_handle: str
+    runtime_authority: Any = field(default=None, repr=False)
 
     @property
     def binding(self) -> dict[str, str]:
@@ -165,7 +168,25 @@ class ControllerConnection:
                 for c in value
             ):
                 _reject()
-        return cls(*values)
+        envelope = json.loads(
+            _text(os.environ.get("LYRASHIELD_SUPERVISOR_RUNTIME_AUTHORITY"), max_length=128 * 1024)
+        )
+        authority = verify_runtime_authority(envelope, values[4])
+        origin = _tool_origin(values[0].rstrip("/"))
+        if origin != authority["toolChannel"]["origin"]:
+            _reject()
+        if not values[1].isascii() or any(c in values[1] for c in "\r\n"):
+            _reject()
+        values[0] = origin
+        return cls(
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            runtime_authority=envelope,
+        )
 
 
 def _pinned_key() -> dict[str, Any]:
@@ -173,6 +194,43 @@ def _pinned_key() -> dict[str, Any]:
         "dict[str, Any]",
         json.loads(Path(__file__).with_name("controller-qualification-key.json").read_text()),
     )
+
+
+def _tool_origin(value: Any) -> str:
+    origin = _text(value, max_length=1024)
+    parsed = urlsplit(origin)
+    host = parsed.hostname
+    if (
+        parsed.scheme != "https"
+        or not host
+        or not host.isascii()
+        or parsed.username
+        or parsed.password
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        _reject()
+    labels = host.split(".")
+    if not all(
+        label
+        and len(label) <= 63
+        and label[0] != "-"
+        and label[-1] != "-"
+        and all(c in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in label)
+        for label in labels
+    ):
+        _reject()
+    try:
+        port = parsed.port
+    except ValueError:
+        _reject()
+    if port is not None and (port == 443 or not 1 <= port <= 65535):
+        _reject()
+    canonical = f"https://{host}" + (f":{port}" if port is not None else "")
+    if canonical != origin:
+        _reject()
+    return canonical
 
 
 def _public_key(jwk: Any) -> rsa.RSAPublicKey:
@@ -225,14 +283,20 @@ def _verify_envelope(envelope: Any, key: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def verify_installed_grant(  # noqa: PLR0912, PLR0915
-    envelope: Any, connection: ControllerConnection, runtime_authority: Any
-) -> dict[str, Any]:
-    """Verify managed root → epoch delegated key → installed sandbox grant."""
+def verify_runtime_authority(runtime_authority: Any, epoch_id: str) -> dict[str, Any]:  # noqa: PLR0912
+    """Verify the public root before contacting any credential-bearing endpoint."""
     root_key = _pinned_key()
     authority = _verify_envelope(runtime_authority, root_key)
     if set(authority) != _AUTHORITY_FIELDS:
         _reject()
+    channel = authority["toolChannel"]
+    if (
+        not isinstance(channel, dict)
+        or set(channel) != {"schema", "origin"}
+        or channel["schema"] != "lyrashield-sandbox-tool-channel/1"
+    ):
+        _reject()
+    _tool_origin(channel["origin"])
     for name in ("productRevision", "engineRevision"):
         value = _text(authority[name])
         if len(value) != 40 or any(c not in "0123456789abcdef" for c in value):
@@ -288,7 +352,7 @@ def verify_installed_grant(  # noqa: PLR0912, PLR0915
     issued = _integer(authority.get("issuedAt"), minimum=1)
     if issued > now:
         _reject()
-    if authority.get("epochId") != connection.authority_epoch_id:
+    if authority.get("epochId") != epoch_id:
         _reject()
     signer = authority.get("sandboxGrantSigner")
     if not isinstance(signer, dict) or set(signer) != {
@@ -318,7 +382,6 @@ def verify_installed_grant(  # noqa: PLR0912, PLR0915
         or set(signer["publicKey"]) != {"kty", "n", "e"}
     ):
         _reject()
-    grant = _verify_envelope(envelope, signer)
     public_key = _public_key(signer["publicKey"])
     if public_key.public_numbers() == _public_key(root_key["publicKey"]).public_numbers():
         _reject()
@@ -327,6 +390,16 @@ def verify_installed_grant(  # noqa: PLR0912, PLR0915
     )
     if signer["publicKeySha256"] != "sha256:" + hashlib.sha256(der).hexdigest():
         _reject()
+    return authority
+
+
+def verify_installed_grant(  # noqa: PLR0912
+    envelope: Any, connection: ControllerConnection, runtime_authority: Any
+) -> dict[str, Any]:
+    authority = verify_runtime_authority(runtime_authority, connection.authority_epoch_id)
+    grant = _verify_envelope(envelope, authority["sandboxGrantSigner"])
+    issued = authority["issuedAt"]
+    now = int(datetime.now(UTC).timestamp())
     if "sha256:" + str(grant.get("policyChecksum")) != authority.get(
         "runtimePolicyDigest"
     ) or grant.get("imageDigest") != authority.get("sandboxDigest"):
@@ -388,6 +461,14 @@ class ControllerClient:
         self, connection: ControllerConnection, *, transport: httpx.AsyncBaseTransport | None = None
     ) -> None:
         self.connection = connection
+        if connection.runtime_authority is None and not isinstance(transport, httpx.MockTransport):
+            _reject()
+        if connection.runtime_authority is not None:
+            authority = verify_runtime_authority(
+                connection.runtime_authority, connection.authority_epoch_id
+            )
+            if connection.url != authority["toolChannel"]["origin"]:
+                _reject()
         self.http = httpx.AsyncClient(
             base_url=connection.url,
             headers={"Authorization": f"Bearer {connection.token}"},
@@ -396,8 +477,15 @@ class ControllerClient:
             transport=transport,
             timeout=330,
         )
-        self.unknown_request_id: str | None = None
-        self.stop_request_id = str(uuid.uuid4())
+        self.unknown_request_ids: dict[str, None] = {}
+        self._mutation_lock = asyncio.Lock()
+        self.stop_request_id = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(connection.binding, sort_keys=True) + "/stop")
+        )
+
+    @property
+    def unknown_request_id(self) -> str | None:
+        return next(iter(self.unknown_request_ids), None)
 
     async def call(
         self,
@@ -407,6 +495,33 @@ class ControllerClient:
         mutation: bool = False,
         request_id: str | None = None,
         recovery: bool = False,
+        validate: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        if mutation and not recovery:
+            async with self._mutation_lock:
+                return await self._call(
+                    path, body, mutation=mutation, request_id=request_id, validate=validate
+                )
+        # Physical recovery stop cannot wait behind a 300-second command.
+        # It retains its own stable ID alongside any unresolved command IDs.
+        return await self._call(
+            path,
+            body,
+            mutation=mutation,
+            request_id=request_id,
+            recovery=recovery,
+            validate=validate,
+        )
+
+    async def _call(  # noqa: PLR0912
+        self,
+        path: str,
+        body: dict[str, Any] | None,
+        *,
+        mutation: bool,
+        request_id: str | None = None,
+        recovery: bool = False,
+        validate: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         if mutation and self.unknown_request_id and not recovery:
             raise ControllerOperationUnknownError(self.unknown_request_id)
@@ -422,6 +537,7 @@ class ControllerClient:
                 f"/v1/sandbox/{self.connection.attempt_id}/{path}",
                 json=payload if method == "POST" else None,
                 headers={"X-LyraShield-Sandbox-Handle": self.connection.sandbox_handle},
+                timeout=330 if mutation else (40 if path.startswith("pty/") else 10),
             ) as response:
                 if response.status_code != 200:
                     _reject()
@@ -437,6 +553,10 @@ class ControllerClient:
                 _reject()
             if mutation and result.get("status") != "COMPLETED":
                 raise ControllerOperationUnknownError(request_id or "")
+            if validate is not None:
+                validate(result)
+            if mutation and request_id is not None:
+                await self._acknowledge(request_id, result)
         except (
             httpx.HTTPError,
             ValueError,
@@ -444,12 +564,39 @@ class ControllerClient:
             asyncio.CancelledError,
         ) as error:
             if mutation:
-                self.unknown_request_id = request_id
+                if request_id is not None:
+                    self.unknown_request_ids[request_id] = None
                 if isinstance(error, asyncio.CancelledError):
                     raise
                 raise ControllerOperationUnknownError(request_id or "") from None
             raise ControllerUnavailableError("Controller read unavailable") from None
         return result
+
+    async def _acknowledge(self, request_id: str, result: dict[str, Any]) -> None:
+        raw = json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        checksum = "sha256:" + hashlib.sha256(raw).hexdigest()
+
+        def validate_ack(response: dict[str, Any]) -> None:
+            if (
+                response.get("requestId") != request_id
+                or response.get("status") != "ACKNOWLEDGED"
+                or response.get("responseChecksum") != checksum
+            ):
+                _reject()
+
+        for attempt in range(3):
+            try:
+                await self._call(
+                    f"request/{request_id}/ack",
+                    {"requestId": request_id, "responseChecksum": checksum},
+                    mutation=False,
+                    validate=validate_ack,
+                )
+            except ControllerUnavailableError:
+                if attempt == 2:
+                    raise
+            else:
+                return
 
     async def delete(self, session: Any) -> None:
         if getattr(getattr(session, "_inner", session), "client", None) is not self:
@@ -485,6 +632,9 @@ class ControllerSession(BaseSandboxSession):
         )
         self.installed_grant: dict[str, Any] | None = None
         self._pty_output_cursors: dict[int, int] = {}
+        self._pty_locks: dict[int, asyncio.Lock] = {}
+        self._grant_refresh_lock = asyncio.Lock()
+        self._runtime_authority: Any = None
 
     async def start(self) -> None:
         # SDK startup would provision users/mounts/environment. This is an
@@ -494,6 +644,11 @@ class ControllerSession(BaseSandboxSession):
         grant = verify_installed_grant(
             response.get("grant"), self.client.connection, response.get("runtimeAuthority")
         )
+        if (
+            self.client.connection.runtime_authority is not None
+            and response.get("runtimeAuthority") != self.client.connection.runtime_authority
+        ):
+            _reject()
         if response.get("running") is not True:
             _reject()
         if grant["manifestChecksum"] != manifest_checksum(self.state.manifest):
@@ -507,7 +662,45 @@ class ControllerSession(BaseSandboxSession):
         if sorted(grant["exposedPorts"]) != sorted(self.state.exposed_ports):
             _reject()
         self.installed_grant = grant
+        self._runtime_authority = response.get("runtimeAuthority")
         self.state.workspace_root_ready = True
+
+    async def _ensure_admission(self) -> None:
+        grant = self.installed_grant
+        if grant is None:
+            _reject()
+        if int(datetime.now(UTC).timestamp()) < grant["expiresAt"] - 60:
+            return
+        async with self._grant_refresh_lock:
+            grant = self.installed_grant
+            if grant is None:
+                _reject()
+            if int(datetime.now(UTC).timestamp()) < grant["expiresAt"] - 60:
+                return
+            # This is a read-only renewal of the same attempt. The protected
+            # server must fence the live OPEN epoch before issuing the grant.
+            response = await self.client.call("state")
+            refreshed = verify_installed_grant(
+                response.get("grant"), self.client.connection, response.get("runtimeAuthority")
+            )
+            if (
+                response.get("running") is not True
+                or response.get("runtimeAuthority") != self._runtime_authority
+            ):
+                _reject()
+
+            def static(value: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    key: item for key, item in value.items() if key not in {"issuedAt", "expiresAt"}
+                }
+
+            if (
+                static(refreshed) != static(grant)
+                or refreshed["issuedAt"] < grant["issuedAt"]
+                or refreshed["expiresAt"] <= grant["expiresAt"]
+            ):
+                _reject()
+            self.installed_grant = refreshed
 
     def _admit(self) -> dict[str, Any]:
         grant = self.installed_grant
@@ -574,8 +767,12 @@ class ControllerSession(BaseSandboxSession):
     async def _exec_internal(
         self, *command: str | Path, timeout: float | None = None
     ) -> ExecResult:
+        await self._ensure_admission()
         result = await self.client.call(
-            "exec", self._exec_body([str(c) for c in command], timeout), mutation=True
+            "exec",
+            self._exec_body([str(c) for c in command], timeout),
+            mutation=True,
+            validate=self._validate_exec_result,
         )
         return ExecResult(
             stdout=_bytes(result.get("stdoutBase64"), maximum=MAX_OUTPUT_BYTES),
@@ -583,7 +780,16 @@ class ControllerSession(BaseSandboxSession):
             exit_code=_integer(result.get("exitCode"), minimum=-255, maximum=255),
         )
 
+    @staticmethod
+    def _validate_exec_result(result: dict[str, Any]) -> None:
+        stdout = _bytes(result.get("stdoutBase64"), maximum=MAX_OUTPUT_BYTES)
+        stderr = _bytes(result.get("stderrBase64"), maximum=MAX_OUTPUT_BYTES)
+        if len(stdout) + len(stderr) > MAX_OUTPUT_BYTES:
+            _reject()
+        _integer(result.get("exitCode"), minimum=-255, maximum=255)
+
     async def read(self, path: Path, *, user: str | User | None = None) -> io.IOBase:
+        await self._ensure_admission()
         self._prepare_exec_command("true", shell=False, user=user)
         result = await self.client.call(
             "files/read", {"path": self._path(path), "maxBytes": MAX_FILE_BYTES}
@@ -598,6 +804,7 @@ class ControllerSession(BaseSandboxSession):
         return io.BytesIO(data)
 
     async def write(self, path: Path, data: io.IOBase, *, user: str | User | None = None) -> None:
+        await self._ensure_admission()
         self._prepare_exec_command("true", shell=False, user=user)
         content = data.read(MAX_FILE_BYTES + 1)
         if not isinstance(content, bytes) or len(content) > MAX_FILE_BYTES:
@@ -617,11 +824,13 @@ class ControllerSession(BaseSandboxSession):
         return _boolean(result.get("running"))
 
     async def persist_workspace(self) -> io.IOBase:
+        await self._ensure_admission()
         self._admit()
         result = await self.client.call("workspace/persist", {"maxBytes": MAX_ARCHIVE_BYTES})
         return self._checked_stream(result, "archiveBase64", MAX_ARCHIVE_BYTES)
 
     async def hydrate_workspace(self, data: io.IOBase) -> None:
+        await self._ensure_admission()
         self._admit()
         content = data.read(MAX_ARCHIVE_BYTES + 1)
         if not isinstance(content, bytes) or len(content) > MAX_ARCHIVE_BYTES:
@@ -636,6 +845,7 @@ class ControllerSession(BaseSandboxSession):
         )
 
     async def _resolve_exposed_port(self, port: int) -> ExposedPortEndpoint:
+        await self._ensure_admission()
         self._admit()
         result = await self.client.call(f"port/{port}")
         host = _text(result.get("host"), max_length=253)
@@ -656,16 +866,34 @@ class ControllerSession(BaseSandboxSession):
             query=query,
         )
 
-    def _pty_update(self, result: dict[str, Any]) -> PtyExecUpdate:
+    def _validate_pty_result(
+        self, result: dict[str, Any], expected_session_id: int | None = None
+    ) -> None:
         process = result.get("sessionId")
         exit_code = result.get("exitCode")
         tokens = result.get("originalTokenCount")
+        if expected_session_id is not None and process != expected_session_id:
+            _reject()
         if process is not None:
             process = _integer(process, minimum=1)
             cursor = _integer(result.get("outputCursor"))
             if cursor < self._pty_output_cursors.get(process, 0):
                 _reject()
-            self._pty_output_cursors[process] = cursor
+        _bytes(result.get("outputBase64"), maximum=MAX_OUTPUT_BYTES)
+        if exit_code is not None:
+            _integer(exit_code, minimum=-255, maximum=255)
+        if tokens is not None:
+            _integer(tokens)
+        if process is None and exit_code is None:
+            _reject()
+
+    def _pty_update(self, result: dict[str, Any]) -> PtyExecUpdate:
+        self._validate_pty_result(result)
+        process = result.get("sessionId")
+        exit_code = result.get("exitCode")
+        tokens = result.get("originalTokenCount")
+        if process is not None:
+            self._pty_output_cursors[process] = result["outputCursor"]
         return PtyExecUpdate(
             process_id=None if process is None else _integer(process, minimum=1),
             output=_bytes(result.get("outputBase64"), maximum=MAX_OUTPUT_BYTES),
@@ -700,12 +928,17 @@ class ControllerSession(BaseSandboxSession):
         yield_time_s: float | None = None,
         max_output_tokens: int | None = None,
     ) -> PtyExecUpdate:
+        await self._ensure_admission()
         body = self._exec_body(
             self._prepare_exec_command(*command, shell=shell, user=user), timeout
         )
         body.update(self._pty_bounds(yield_time_s, max_output_tokens))
         body["tty"] = _boolean(tty)
-        return self._pty_update(await self.client.call("pty/start", body, mutation=True))
+        return self._pty_update(
+            await self.client.call(
+                "pty/start", body, mutation=True, validate=self._validate_pty_result
+            )
+        )
 
     async def pty_write_stdin(
         self,
@@ -714,6 +947,25 @@ class ControllerSession(BaseSandboxSession):
         chars: str,
         yield_time_s: float | None = None,
         max_output_tokens: int | None = None,
+    ) -> PtyExecUpdate:
+        await self._ensure_admission()
+        _integer(session_id, minimum=1)
+        lock = self._pty_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            return await self._pty_write_stdin(
+                session_id=session_id,
+                chars=chars,
+                yield_time_s=yield_time_s,
+                max_output_tokens=max_output_tokens,
+            )
+
+    async def _pty_write_stdin(
+        self,
+        *,
+        session_id: int,
+        chars: str,
+        yield_time_s: float | None,
+        max_output_tokens: int | None,
     ) -> PtyExecUpdate:
         self._admit()
         _integer(session_id, minimum=1)
@@ -726,16 +978,29 @@ class ControllerSession(BaseSandboxSession):
                 f"yieldTimeSeconds={bounds['yieldTimeSeconds']}"
                 f"&maxOutputTokens={bounds['maxOutputTokens']}&outputCursor={cursor}"
             )
-            return self._pty_update(await self.client.call(f"pty/{session_id}?{query}"))
+            return self._pty_update(
+                await self.client.call(
+                    f"pty/{session_id}?{query}",
+                    validate=lambda result: self._validate_pty_result(result, session_id),
+                )
+            )
         body = {
             "sessionId": session_id,
             "chars": chars,
             "outputCursor": self._pty_output_cursors.get(session_id, 0),
             **self._pty_bounds(yield_time_s, max_output_tokens),
         }
-        return self._pty_update(await self.client.call("pty/stdin", body, mutation=True))
+        return self._pty_update(
+            await self.client.call(
+                "pty/stdin",
+                body,
+                mutation=True,
+                validate=lambda result: self._validate_pty_result(result, session_id),
+            )
+        )
 
     async def pty_terminate_all(self) -> None:
+        await self._ensure_admission()
         self._admit()
         await self.client.call("pty/terminate", mutation=True)
 
@@ -757,7 +1022,10 @@ async def controller_backend(
     bind_mounts: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, Any]:
     """Attach to a trusted prepared sandbox; never provision caller mounts."""
-    _ = bind_mounts  # verified installed manifest represents prepared mounts
+    if bind_mounts:
+        raise ControllerUnavailableError(
+            "Controller attachment requires approved immutable mount descriptors"
+        )
     client = ControllerClient(ControllerConnection.from_environment())
     inner = ControllerSession(client, manifest, exposed_ports, image)
     try:
