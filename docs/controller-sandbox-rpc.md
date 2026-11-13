@@ -72,8 +72,10 @@ The managed root key is bundled in `controller-qualification-key.json`; no calle
 key or key selected from environment can replace it. The root body uses
 `lyrashield-installed-runtime-authority/1`, `launch-qualified-controller`, exact
 product/engine revisions, worker/sandbox/broker/supervisor/provider-gateway image
-digests, migration/policy/acceptance digests, epoch and Unix-second times (maximum
-900 seconds). Its exact issuer identifies repository `1286618458`, owner
+digests, migration/policy/acceptance digests, epoch and positive Unix-second
+`issuedAt`. This immutable installed deployment identity does not expire after
+fifteen minutes; it is not an execution lease. Its exact issuer identifies
+repository `1286618458`, owner
 `116722580`, workflow `.github/workflows/issue-runtime-qualification.yml`, product
 source, positive run ID and attempt. The consumer matches the protected host
 observer's field sets.
@@ -91,7 +93,10 @@ The delegated per-attempt body uses `lyrashield-runtime-sandbox-grant/v1`,
 `installed: true`, `scanId`, the four binding fields, `imageDigest`, bare
 `manifestChecksum`/`policyChecksum`, `workspaceRoot`, `exposedPorts`,
 `authorizedHosts`, `relayRequired`, Unix-second `issuedAt`/`expiresAt` and
-`capabilities`. Times are contained by the root's validity window. Image and
+`capabilities`. A grant is issued no earlier than the root and expires within
+900 seconds of its own issue time. The static root never proves that its epoch
+remains open: the server must check the live current OPEN database epoch under
+the shared fence before new grant issuance and every tool invocation. Image and
 policy bind the root sandbox/policy digests. Manifest checksum is SHA-256 over
 sorted compact UTF-8 JSON from the pinned SDK's `manifest.model_dump(mode=json)`;
 it must describe the already prepared resources, including installed source and

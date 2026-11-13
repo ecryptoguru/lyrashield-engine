@@ -61,7 +61,6 @@ _AUTHORITY_FIELDS = frozenset(
         "epochId",
         "epoch",
         "issuedAt",
-        "expiresAt",
         "acceptanceDigest",
         "sandboxGrantSigner",
         "issuer",
@@ -286,9 +285,8 @@ def verify_installed_grant(  # noqa: PLR0912, PLR0915
         or authority.get("purpose") != "launch-qualified-controller"
     ):
         _reject()
-    issued = _integer(authority.get("issuedAt"))
-    expires = _integer(authority.get("expiresAt"))
-    if not issued <= now < expires <= issued + 900:
+    issued = _integer(authority.get("issuedAt"), minimum=1)
+    if issued > now:
         _reject()
     if authority.get("epochId") != connection.authority_epoch_id:
         _reject()
@@ -343,7 +341,7 @@ def verify_installed_grant(  # noqa: PLR0912, PLR0915
     _text(grant.get("scanId"))
     grant_issued = _integer(grant.get("issuedAt"))
     grant_expires = _integer(grant.get("expiresAt"))
-    if not issued <= grant_issued <= now < grant_expires <= expires:
+    if not issued <= grant_issued <= now < grant_expires <= grant_issued + 900:
         _reject()
     for name in ("manifestChecksum", "policyChecksum"):
         value = _text(grant.get(name))

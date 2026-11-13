@@ -127,7 +127,6 @@ def runtime(
         "epochId": connection.authority_epoch_id,
         "epoch": 1,
         "issuedAt": now - 60,
-        "expiresAt": now + 600,
         "sandboxGrantSigner": {
             "schema": "lyrashield-sandbox-grant-signer/1",
             "purpose": "sandbox-tool-grants",
@@ -417,7 +416,9 @@ async def test_capability_record_requires_same_installed_scope(runtime: dict[str
     await client.close()
 
 
-@pytest.mark.parametrize("change", ["epoch", "purpose", "fingerprint", "issuer", "undelegated-key"])
+@pytest.mark.parametrize(
+    "change", ["epoch", "purpose", "fingerprint", "issuer", "undelegated-key", "root-expiry"]
+)
 def test_root_delegation_must_match_epoch_role_and_issuer(
     runtime: dict[str, Any], change: str
 ) -> None:
@@ -430,13 +431,23 @@ def test_root_delegation_must_match_epoch_role_and_issuer(
         authority["sandboxGrantSigner"]["publicKeySha256"] = "sha256:" + "f" * 64
     elif change == "issuer":
         authority["issuer"]["workflow"] = ".github/workflows/caller-workflow.yml"
-    else:
+    elif change == "undelegated-key":
         authority["sandboxGrantSigner"]["keyId"] = "undelegated-key"
+    else:
+        authority["expiresAt"] = authority["issuedAt"] + 900
     with pytest.raises(controller.ControllerUnavailableError):
         controller.verify_installed_grant(
             runtime["sign"](runtime["grant"]),
             runtime["connection"],
             runtime["signAuthority"](authority),
+        )
+
+
+def test_attempt_grant_is_a_bounded_lease(runtime: dict[str, Any]) -> None:
+    grant = {**runtime["grant"], "expiresAt": runtime["grant"]["issuedAt"] + 901}
+    with pytest.raises(controller.ControllerUnavailableError):
+        controller.verify_installed_grant(
+            runtime["sign"](grant), runtime["connection"], runtime["runtimeAuthority"]
         )
 
 
