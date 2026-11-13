@@ -196,6 +196,25 @@ def test_built_artifact_pin_and_closed_admission(tmp_path: Path) -> None:
             assert sandbox_start.ADMISSION_PREFIX not in container.logs()
         finally:
             container.remove(force=True)
+        directory = Path(os.environ.get("LYRASHIELD_TEST_NATIVE_RECEIPT_DIR", str(tmp_path)))
+        directory.mkdir(parents=True, exist_ok=True)
+        inventories = {
+            "debian-inventory.txt": ("/usr/bin/dpkg-query", ["-W", "-f=${Package}\t${Version}\n"]),
+            "venv-python-inventory.json": (
+                "/app/.venv/bin/python",
+                ["-I", "-m", "pip", "list", "--format=json"],
+            ),
+        }
+        inventory_checksums = {}
+        for name, (executable, argv) in inventories.items():
+            observed = client.containers.run(image.id, argv, entrypoint=executable, **options)
+            assert 0 < len(observed) < 16 * 1024 * 1024
+            (directory / name).write_bytes(observed)
+            inventory_checksums[name] = sandbox_start.checksum(observed)
+        metadata_path = directory / "build-metadata.json"
+        if os.environ.get("LYRASHIELD_TEST_NATIVE_RECEIPT_DIR"):
+            metadata = json.loads(metadata_path.read_text())
+            assert metadata["containerimage.config.digest"] == image.id
         receipt = {
             "schema": "lyrashield-native-sandbox-test-receipt/1",
             "source": source,
@@ -204,16 +223,16 @@ def test_built_artifact_pin_and_closed_admission(tmp_path: Path) -> None:
             "repoDigests": image.attrs.get("RepoDigests", []),
             "descriptor": image.attrs.get("Descriptor"),
             "installedChecksums": checksums,
+            "inventoryChecksums": inventory_checksums,
             "actualPinnedKeyWithoutAuthority": {"exitCode": 125, "admitted": False},
             "qualification": "UNQUALIFIED",
             "limitations": [
                 "Positive native signatures use a read-only test public-key overlay",
                 "No real managed authority or protected host watchdog",
                 "No mounted source or end-to-end launch acceptance",
+                "Debian and venv package metadata only; no independent complete SBOM qualification",
             ],
         }
-        directory = Path(os.environ.get("LYRASHIELD_TEST_NATIVE_RECEIPT_DIR", str(tmp_path)))
-        directory.mkdir(parents=True, exist_ok=True)
         (directory / "native-artifact-receipt.json").write_text(
             json.dumps(receipt, indent=2) + "\n"
         )

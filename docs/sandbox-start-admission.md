@@ -88,7 +88,9 @@ test public-key overlay. A separate test verifies the actual installed managed
 public-key and helper bytes, the image's source label, and rejection without
 installed authority. CI retains image build metadata, a bounded test receipt
 and JUnit results. The receipt distinguishes the tested checkout from the PR
-head and labels its qualification state `UNQUALIFIED`.
+head and labels its qualification state `UNQUALIFIED`. Observed Debian and venv
+package inventories are retained with checksums and bound to the build action's
+actual image config digest; they do not claim independent SBOM completeness.
 
 Local tests without an explicitly built image use the pinned Linux base and a
 read-only checked-source overlay. Both modes verify delayed-start rejection,
