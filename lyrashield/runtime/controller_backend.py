@@ -638,7 +638,8 @@ class ControllerSession(BaseSandboxSession):
     ) -> PtyExecUpdate:
         await self._ensure_admission()
         body = self._exec_body(
-            self._prepare_exec_command(*command, shell=shell, user=user), timeout
+            self._prepare_exec_command(*command, shell=shell, user=user),  # nosec B604: builds an authenticated sandbox RPC body, never launches a host shell
+            timeout,
         )
         body.update(self._pty_bounds(yield_time_s, max_output_tokens))
         body["tty"] = _boolean(tty)

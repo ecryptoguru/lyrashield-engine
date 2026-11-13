@@ -248,7 +248,7 @@ def main() -> int:
             "executionDeadlineNs": ticket["executionDeadlineNs"],
         }
         os.write(2, ADMISSION_PREFIX + canonical(frame) + b"\n")
-        os.execvp(ticket["command"]["argv"][0], ticket["command"]["argv"])  # noqa: S606 -- signed sandbox command
+        os.execvp(ticket["command"]["argv"][0], ticket["command"]["argv"])  # noqa: S606  # nosec B606: starts the signed sandbox command after signature, identity, scope and deadline verification
     except (OSError, ValueError, authority.ControllerUnavailableError):
         sys.stderr.write("Sandbox start admission unavailable\n")
         return 125
