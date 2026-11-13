@@ -66,7 +66,7 @@ def metadata_kind(name):
         return "deb"
     if re.fullmatch(
         r"(?:(?:usr/lib|usr/local/lib)/python[^/]+/dist-packages|"
-        r"app/\.venv/lib/python[^/]+/site-packages)/[^/]+\.dist-info/METADATA",
+        r"app/\.venv/lib/python[^/]+/site-packages)/(?:[^/]+/)*[^/]+\.dist-info/METADATA",
         name,
     ):
         return "pypi"

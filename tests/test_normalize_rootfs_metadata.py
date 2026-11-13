@@ -164,10 +164,11 @@ class TestNpmMetadataScopeParity:
         [
             "usr/lib/python3/dist-packages/example-1.0.dist-info/METADATA",
             "app/.venv/lib/python3.14/site-packages/example-1.0.dist-info/METADATA",
+            "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/example-1.0.dist-info/METADATA",
         ],
     )
     def test_metadata_kind_agrees_with_scanner(self, name: str) -> None:
-        assert metadata_kind(name) == SCANNER["metadata_kind"](name)
+        assert metadata_kind(name) == SCANNER["metadata_kind"](name) == "pypi"
 
 
 class TestCanonicalizeFiles:

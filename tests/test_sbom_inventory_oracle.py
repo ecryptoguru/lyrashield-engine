@@ -109,6 +109,62 @@ def test_scoped_inventory_matches_dpkg_python_and_installed_npm(tmp_path):
     assert result["missing"] == []
 
 
+@pytest.mark.parametrize("covered", [False, True])
+def test_nested_vendored_python_metadata_requires_sbom_coverage(tmp_path, covered):
+    write_inputs(tmp_path)
+    nested = (
+        "app/.venv/lib/python3.12/site-packages/"
+        "setuptools/_vendor/importlib_metadata-8.7.1.dist-info/METADATA"
+    )
+    data = b"Name: importlib_metadata\nVersion: 8.7.1\n"
+    with tarfile.open(tmp_path / "rootfs.tar", "a") as archive:
+        item = tarfile.TarInfo(nested)
+        item.size = len(data)
+        archive.addfile(item, io.BytesIO(data))
+    if covered:
+        path = tmp_path / "sbom.json"
+        document = json.loads(path.read_text())
+        document["packages"].append(
+            {
+                "name": "importlib-metadata",
+                "versionInfo": "8.7.1",
+                "externalRefs": [
+                    {
+                        "referenceType": "purl",
+                        "referenceLocator": "pkg:pypi/importlib-metadata@8.7.1",
+                    }
+                ],
+            }
+        )
+        path.write_text(json.dumps(document))
+    run = invoke(tmp_path)
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["inventoryCounts"]["pypi"] == 2
+    assert run.returncode == (0 if covered else 1)
+    assert result["missing"] == (
+        [] if covered else [{"ecosystem": "pypi", "identity": ["importlib-metadata", "8.7.1"]}]
+    )
+
+
+def test_nested_vendored_python_metadata_cannot_escape_declared_root(tmp_path):
+    write_inputs(tmp_path)
+    nested = (
+        "app/.venv/lib/python3.12/site-packages/"
+        "setuptools/_vendor/importlib_metadata-8.7.1.dist-info/METADATA"
+    )
+    with tarfile.open(tmp_path / "rootfs.tar", "a") as archive:
+        link = tarfile.TarInfo(nested)
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/etc/passwd"
+        archive.addfile(link)
+    result = invoke(tmp_path)
+    assert result.returncode != 0
+    assert any(
+        item["path"] == nested
+        for item in json.loads((tmp_path / "result.json").read_text())["unresolved"]
+    )
+
+
 @pytest.mark.parametrize("name", ["libsample", "my-pkg", "@scope/example"])
 def test_missing_inventory_item_fails_closed(tmp_path, name):
     write_inputs(tmp_path, omit=name)

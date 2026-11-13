@@ -139,6 +139,17 @@ def test_final_inventory_uses_ordered_changes_and_original_verified_extents(tmp_
     assert not (tmp_path / "usr").exists()
 
 
+def test_nested_vendored_python_metadata_is_selected_from_verified_layers(tmp_path):
+    nested = "usr/lib/python3/dist-packages/setuptools/_vendor/vendor-1.dist-info/METADATA"
+    content = b"Name: vendor\nVersion: 1\n"
+    result, payloads, _ = observe(
+        tmp_path, [layer([*metadata_entries(), (nested, "file", content)])]
+    )
+    assert result["unresolved"] == []
+    assert ("vendor", "1") in result["inventory"]["pypi"]
+    assert payloads[nested].read_bytes() == content
+
+
 @pytest.mark.parametrize("mutation", ["compressed", "diffid", "platform", "missing"])
 def test_corrupt_or_wrong_native_bytes_never_produce_a_model(tmp_path, mutation):
     blobs, identity, manifest, config = image(tmp_path, [layer(metadata_entries())])
