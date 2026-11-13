@@ -123,8 +123,8 @@ def verify_telemetry() -> None:
     """Exercise the exact telemetry graph used by the unchanged Semgrep CLI."""
 
     assert version("mcp") == "1.30.0"
-    assert version("opentelemetry-api") == "1.45.1"
-    assert version("opentelemetry-sdk") == "1.45.1"
+    assert version("opentelemetry-api") == "1.45.2"
+    assert version("opentelemetry-sdk") == "1.45.2"
     received = []
 
     origin = _telemetry_server(received)

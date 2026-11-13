@@ -4,8 +4,8 @@ pyjwt[crypto]==2.15.1
 
 # Semgrep 1.178.0: exact reviewed runtime security overrides.
 mcp==1.30.0
-opentelemetry-api==1.45.1
-opentelemetry-sdk==1.45.1
-opentelemetry-exporter-otlp-proto-http==1.45.1
-opentelemetry-instrumentation-requests==0.66b1
-opentelemetry-instrumentation-threading==0.66b1
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-instrumentation-requests==0.66b2
+opentelemetry-instrumentation-threading==0.66b2
