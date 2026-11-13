@@ -237,6 +237,34 @@ class TestLinkMaterialization:
         assert materialized == []
         assert link.is_symlink()
 
+    def test_python_alias_to_scanned_nested_metadata_is_untouched(self, tmp_path: Path) -> None:
+        base = "app/.venv/lib/python3.12/site-packages"
+        link = make_dir_link(
+            tmp_path,
+            f"{base}/example-1.dist-info",
+            f"{base}/setuptools/_vendor/example-1.dist-info",
+        )
+        data = b"Name: example\nVersion: 1\n"
+        (link / "METADATA").write_bytes(data)
+
+        assert materialize_directory_symlinks(tmp_path) == []
+        assert link.is_symlink()
+        assert (link / "METADATA").read_bytes() == data
+        verify_clean(tmp_path)
+
+    def test_python_alias_to_unscanned_nested_metadata_is_materialized(self, tmp_path: Path) -> None:
+        base = "app/.venv/lib/python3.12/site-packages"
+        target = "opt/vendor/example-1.dist-info"
+        link = make_dir_link(tmp_path, f"{base}/example-1.dist-info", target)
+        data = b"Name: example\nVersion: 1\n"
+        (tmp_path / target / "METADATA").write_bytes(data)
+
+        assert materialize_directory_symlinks(tmp_path) == [f"{base}/example-1.dist-info"]
+        assert not link.is_symlink()
+        assert (link / "METADATA").read_bytes() == data
+        assert (tmp_path / target / "METADATA").read_bytes() == data
+        verify_clean(tmp_path)
+
     def test_safe_npm_node_modules_alias_is_untouched(self, tmp_path: Path) -> None:
         """Node convention links whose metadata kinds agree stay aliases."""
         tool = tmp_path / "usr/share/nodejs/npm/node_modules/example"
