@@ -483,7 +483,8 @@
       "            if environment.get(\"STRIX_TARGET_RELAY\"):",
       "            environment[\"STRIX_RUN_ID\"] = scan_id",
       "                target_relay=bool(environment.get(\"STRIX_TARGET_RELAY\")),",
-      "                relay_configured=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
+      "                relay_configured=bool(environment.get(\"STRIX_TARGET_RELAY\")),",
+      "                    relay_required=bool(environment.get(\"STRIX_TARGET_RELAY\")),"
     ],
     "lyrashield/telemetry/README.md": [
       "- `STRIX_NO_UPDATE_CHECK=1` \u2014 disables the upstream self-update network check.",
