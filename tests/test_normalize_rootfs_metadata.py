@@ -252,7 +252,9 @@ class TestLinkMaterialization:
         assert (link / "METADATA").read_bytes() == data
         verify_clean(tmp_path)
 
-    def test_python_alias_to_unscanned_nested_metadata_is_materialized(self, tmp_path: Path) -> None:
+    def test_python_alias_to_unscanned_nested_metadata_is_materialized(
+        self, tmp_path: Path
+    ) -> None:
         base = "app/.venv/lib/python3.12/site-packages"
         target = "opt/vendor/example-1.dist-info"
         link = make_dir_link(tmp_path, f"{base}/example-1.dist-info", target)
