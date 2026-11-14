@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.classify_engine_ci_paths import is_documentation_only
+from scripts.classify_engine_ci_paths import is_documentation_only, is_native_boundary_relevant
 
 
 CI_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
@@ -99,3 +99,41 @@ def test_viewer_browser_suites_retain_the_original_local_launches() -> None:
         assert "chromium.launch({ headless: true })" in source
         assert "browser?.close()" in source
         assert "launchViewerBrowser" not in source
+
+
+def test_native_boundary_runs_for_runtime_tests_build_and_locks() -> None:
+    assert is_native_boundary_relevant(["lyrashield/artifacts/finite_budget.py"])
+    assert is_native_boundary_relevant(["strix/runtime/docker_client.py"])
+    assert is_native_boundary_relevant(["tests/test_finite_budget_windows.py"])
+    assert is_native_boundary_relevant(["scripts/build.sh"])
+    assert is_native_boundary_relevant(["strix.spec"])
+    assert is_native_boundary_relevant(["uv.lock", "docs/notes.mdx"])
+    assert is_native_boundary_relevant([".github/workflows/ci.yml"])
+    assert is_native_boundary_relevant(["lyrashield/interface/viewer/static/app.js"])
+
+
+def test_native_boundary_skips_viewer_frontend_source_only() -> None:
+    frontend = "lyrashield/interface/viewer/frontend"
+    paths = [f"{frontend}/src/App.tsx", f"{frontend}/package-lock.json"]
+    assert not is_native_boundary_relevant(paths)
+
+
+def test_native_boundary_skips_docs_only_and_runs_for_unknown_inputs() -> None:
+    assert not is_native_boundary_relevant(["docs/llm-providers/overview.mdx", "README.md"])
+    assert is_native_boundary_relevant([])
+    assert is_native_boundary_relevant(["some-unclassified-output.svg"])
+
+
+def test_native_boundary_jobs_require_the_classified_output() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    windows = workflow.split("windows-attachment-boundary:", 1)[1].split(
+        "\n  macos-financial-boundary:", 1
+    )[0]
+    macos = workflow.split("macos-financial-boundary:", 1)[1]
+    for job in (windows, macos):
+        assert "needs: changes" in job
+        assert "if: needs.changes.outputs.native_boundary != 'false'" in job
+    assert "native_boundary=true" in workflow
+    changes_job = workflow.split("jobs:", 1)[1].split("  python-audit:", 1)[0]
+    assert "native_boundary: ${{ steps.changed_paths.outputs.native_boundary }}" in changes_job
