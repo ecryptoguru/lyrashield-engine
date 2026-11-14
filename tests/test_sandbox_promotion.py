@@ -3,6 +3,7 @@
 import copy
 import io
 import json
+import subprocess
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -233,12 +234,79 @@ def test_attestation_policy_requires_exact_independent_certificate_and_body(monk
         gate.authenticate_inventory(value, receipt)
 
 
+@pytest.mark.parametrize("changed_engine_ci", [False, True])
+def test_qualification_retains_and_refreshes_engine_ci(tmp_path, monkeypatch, changed_engine_ci):
+    value = selection()
+    source = "f" * 40
+    source_ci = {"runId": "46", "runAttempt": "1"}
+    engine_ci = {"runId": "40", "runAttempt": "1"}
+    engine_reads = []
+
+    def latest_ci(revision):
+        if revision == source:
+            return source_ci
+        assert revision == value["engineRevision"]
+        engine_reads.append(1)
+        return (
+            {**engine_ci, "runAttempt": "2"}
+            if changed_engine_ci and len(engine_reads) > 1
+            else engine_ci
+        )
+
+    class RegistryStub:
+        def fetch(self, _kind, _digest, destination, *, limit):
+            assert limit == 65536
+            destination.write_bytes(b"{}")
+
+    platforms = {
+        arch: "sha256:" + str(index) * 64 for index, arch in enumerate(("amd64", "arm64"), 1)
+    }
+    predicate = {
+        "engineRevision": value["engineRevision"],
+        "workflowRevision": value["engineRevision"],
+        "runId": value["publisherRunId"],
+        "runAttempt": value["publisherAttempt"],
+        "indexDigest": value["indexDigest"],
+        "platformManifests": platforms,
+    }
+    monkeypatch.setattr(gate, "trusted_tool", lambda *_args: None)
+    monkeypatch.setattr(gate, "current_source", lambda *_args: source)
+    monkeypatch.setattr(gate, "qualified_ci", latest_ci)
+    monkeypatch.setattr(gate, "git", lambda *_args: gate.PUBLISHER_WORKFLOW_BLOB.encode())
+    monkeypatch.setattr(gate, "inventory_run", lambda *_args: None)
+    monkeypatch.setattr(gate, "inventory_artifact", lambda *_args: {})
+    monkeypatch.setattr(gate, "authenticate_inventory", lambda *_args: None)
+    monkeypatch.setattr(gate, "Registry", RegistryStub)
+    monkeypatch.setattr(
+        gate,
+        "authenticate",
+        lambda *_args: dict.fromkeys(
+            (gate.QUAL_TYPE, gate.SBOM_TYPE, gate.COVERAGE_TYPE), predicate
+        ),
+    )
+    monkeypatch.setattr(
+        gate,
+        "platform_manifests",
+        lambda *_args: ({arch: (digest,) for arch, digest in platforms.items()}, None),
+    )
+    monkeypatch.setattr(gate, "fetch_receipts", lambda *_args: None)
+    monkeypatch.setattr(gate, "validate_receipt", lambda *_args: None)
+    if changed_engine_ci:
+        with pytest.raises(ValueError, match="engine CI changed during qualification"):
+            gate.qualify(value, tmp_path, {}, tmp_path)
+    else:
+        result = gate.qualify(value, tmp_path, {}, tmp_path)
+        assert result["engineCi"] == engine_ci and result["ci"] == source_ci
+    assert len(engine_reads) == 2
+
+
 def test_promotion_requires_exact_registry_ack_and_fresh_main_before_mutation(monkeypatch):
     value = selection()
     result = {
         "selector": value,
         "promotionSource": "f" * 40,
         "ci": {"runId": "46", "runAttempt": "1"},
+        "engineCi": {"runId": "40", "runAttempt": "1"},
         "packageCoverage": "bounded_scope_matched",
         "productionRuntimeQualified": False,
     }
@@ -249,7 +317,13 @@ def test_promotion_requires_exact_registry_ack_and_fresh_main_before_mutation(mo
     monkeypatch.setattr(
         gate, "current_source", lambda _repository, _environment: result["promotionSource"]
     )
-    monkeypatch.setattr(gate, "qualified_ci", lambda _revision: result["ci"])
+    monkeypatch.setattr(
+        gate,
+        "qualified_ci",
+        lambda revision: (
+            result["ci"] if revision == result["promotionSource"] else result["engineCi"]
+        ),
+    )
     monkeypatch.setattr(
         gate, "bounded_command", lambda command, _limit, _timeout: calls.append(command)
     )
@@ -267,6 +341,19 @@ def test_promotion_requires_exact_registry_ack_and_fresh_main_before_mutation(mo
             gate.IMAGE + "@" + value["indexDigest"],
         ]
     ]
+    answers = iter((False,))
+    monkeypatch.setattr(
+        gate,
+        "qualified_ci",
+        lambda revision: (
+            result["ci"]
+            if revision == result["promotionSource"]
+            else {**result["engineCi"], "runAttempt": "2"}
+        ),
+    )
+    with pytest.raises(ValueError, match="engine CI changed before promotion"):
+        gate.promote(result, Path("/repo"), {})
+    assert len(calls) == 1
     answers = iter((False,))
     monkeypatch.setattr(gate, "current_source", lambda _repository, _environment: "0" * 40)
     with pytest.raises(ValueError, match="main changed before"):
@@ -320,6 +407,88 @@ def test_unacknowledged_mutation_retains_pending_and_unknown_without_replay(tmp_
         gate.main()
     assert attempts == [1]
     assert destination.with_name(destination.name + ".pending.json").read_bytes() == pending
+
+
+def test_existing_receipt_is_rejected_before_qualification_or_mutation(tmp_path, monkeypatch):
+    destination = tmp_path / "receipt.json"
+    destination.write_bytes(b"original qualification receipt")
+    calls = []
+    monkeypatch.setattr(
+        gate.sys,
+        "argv",
+        ["qualify_sandbox_promotion.py", "--promote", "--output", str(destination)],
+    )
+    monkeypatch.setattr(gate, "qualify", lambda *_args: calls.append("qualification"))
+    monkeypatch.setattr(gate, "promote", lambda *_args: calls.append("mutation"))
+    with pytest.raises(FileExistsError, match="receipt already exists"):
+        gate.main()
+    assert calls == [] and destination.read_bytes() == b"original qualification receipt"
+
+
+@pytest.mark.parametrize("late_failure", ["storage_error", "competing_receipt"])
+def test_final_receipt_failure_after_mutation_is_unknown(tmp_path, monkeypatch, late_failure):
+    destination = tmp_path / "receipt.json"
+    receipt = {"selector": selection(), "packageCoverage": "bounded_scope_matched"}
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("SANDBOX_PROMOTION_SELECTOR", json.dumps(selection()))
+    monkeypatch.setattr(
+        gate.sys,
+        "argv",
+        ["qualify_sandbox_promotion.py", "--promote", "--output", str(destination)],
+    )
+    monkeypatch.setattr(gate, "qualify", lambda *_args: receipt)
+    attempts = []
+
+    def acknowledged_promotion(*_args):
+        attempts.append(1)
+        if late_failure == "competing_receipt":
+            destination.write_bytes(b"competing receipt")
+        return receipt
+
+    original_open = Path.open
+
+    def storage_open(path, mode="r", *args, **kwargs):
+        if path == destination and mode == "x" and late_failure == "storage_error":
+            raise OSError("Late receipt persistence failure")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(gate, "promote", acknowledged_promotion)
+    monkeypatch.setattr(Path, "open", storage_open)
+    with pytest.raises(OSError):
+        gate.main()
+    pending = destination.with_name(destination.name + ".pending.json").read_bytes()
+    unknown = json.loads(destination.with_name(destination.name + ".unconfirmed.json").read_bytes())
+    assert attempts == [1] and unknown["outcome"] == "UNKNOWN"
+    assert unknown["pendingReceiptDigest"] == gate.sha256(pending)
+    assert json.loads(pending) == receipt
+    assert (
+        destination.read_bytes() == b"competing receipt"
+        if late_failure == "competing_receipt"
+        else not destination.exists()
+    )
+
+
+def test_cli_reports_unconfirmed_outcome_without_claiming_no_promotion(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDBOX_PROMOTION_SELECTOR", "{}")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    result = subprocess.run(  # noqa: S603 - current interpreter, fixed module, owned temporary output
+        [
+            gate.sys.executable,
+            "-m",
+            "scripts.qualify_sandbox_promotion",
+            "--promote",
+            "--output",
+            str(tmp_path / "receipt.json"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert result.stderr == "Sandbox promotion outcome unconfirmed; inspect retained receipts.\n"
+    assert "no image promoted" not in result.stderr
 
 
 def test_workflow_is_main_only_and_always_invokes_evidence_gate_before_tagging():

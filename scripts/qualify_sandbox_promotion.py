@@ -375,7 +375,7 @@ def qualify(
     trusted_tool(GH_TOOL, GH_TOOL_SHA256)
     revision = current_source(repository, environment)
     ci = qualified_ci(revision)
-    qualified_ci(value["engineRevision"])
+    engine_ci = qualified_ci(value["engineRevision"])
     for source in (value["engineRevision"], value["verifierRevision"]):
         git(repository, "merge-base", "--is-ancestor", source, revision)
     require(
@@ -433,11 +433,16 @@ def qualify(
         current_source(repository, environment) == revision, "main changed during qualification"
     )
     require(qualified_ci(revision) == ci, "CI changed during qualification")
+    require(
+        qualified_ci(value["engineRevision"]) == engine_ci,
+        "engine CI changed during qualification",
+    )
     return {
         "schema": "lyrashield.sandbox.promotion-inputs.v1",
         "selector": value,
         "promotionSource": revision,
         "ci": ci,
+        "engineCi": engine_ci,
         "limitations": LIMITATIONS,
         "packageCoverage": "bounded_scope_matched",
         "imageWideCompleteness": False,
@@ -482,6 +487,10 @@ def promote(
         "main changed before promotion",
     )
     require(qualified_ci(result["promotionSource"]) == result["ci"], "CI changed before promotion")
+    require(
+        qualified_ci(value["engineRevision"]) == result["engineCi"],
+        "engine CI changed before promotion",
+    )
     if not present:
         bounded_command(
             [
@@ -515,6 +524,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--promote", action="store_true")
     args = parser.parse_args()
+    try:
+        args.output.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError("Sandbox promotion receipt already exists")
     require(len(os.environ.get("SANDBOX_PROMOTION_SELECTOR", "")) <= 4096, "selector too large")
     with (
         tempfile.TemporaryDirectory(
@@ -535,6 +550,9 @@ def main() -> None:
                 output.write("\n")
             try:
                 result = promote(result, Path(os.environ["GITHUB_WORKSPACE"]), os.environ)
+                with args.output.open("x") as output:
+                    json.dump(result, output, sort_keys=True, separators=(",", ":"))
+                    output.write("\n")
             except BaseException:
                 with args.output.with_name(args.output.name + ".unconfirmed.json").open(
                     "x"
@@ -551,9 +569,10 @@ def main() -> None:
                     )
                     output.write("\n")
                 raise
-    with args.output.open("x") as output:
-        json.dump(result, output, sort_keys=True, separators=(",", ":"))
-        output.write("\n")
+    if not args.promote:
+        with args.output.open("x") as output:
+            json.dump(result, output, sort_keys=True, separators=(",", ":"))
+            output.write("\n")
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
         output.write("index_digest=" + result["selector"]["indexDigest"] + "\n")
         output.write("engine_revision=" + result["selector"]["engineRevision"] + "\n")
@@ -563,5 +582,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:  # noqa: BLE001 - never expose arbitrary receipt bodies or credentials
-        sys.stderr.write("Sandbox promotion evidence unconfirmed; no image promoted.\n")
+        sys.stderr.write("Sandbox promotion outcome unconfirmed; inspect retained receipts.\n")
         sys.exit(1)
