@@ -410,12 +410,13 @@ async def test_startup_faults_never_leak_owned_resources(
     else:
         mocks.client.delete.assert_not_called()
     # Staging dirs are removed once allocated; a staging fault allocated none.
-    if fault == "build_session_entries":
+    if fault in {"load_settings", "build_session_entries"}:
         mocks.rmtree.assert_not_called()
     else:
         mocks.rmtree.assert_any_call("/mock/staging", ignore_errors=True)
     # The policy dir only exists once write_egress_policy has run.
     if fault not in {
+        "load_settings",
         "build_session_entries",
         "derive_authorized_target_hosts",
         "write_egress_policy",

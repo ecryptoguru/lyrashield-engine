@@ -594,7 +594,8 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
 
         # Validate relay configuration before any host allocation so a
         # malformed grant or URL cannot leak staged, policy, or grant dirs.
-        relay_proxy = _target_relay_proxy_url()
+        backend_name = load_settings().runtime.backend
+        relay_proxy = None if backend_name == "controller" else _target_relay_proxy_url()
 
         # Resource handles owned by this create, initialized before the
         # allocation block so the single lifecycle scope below can clean up
@@ -613,43 +614,58 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
         # one run's evidence.
         caido_api.clear_scope_decisions()
         try:
-            entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(
-                local_sources, source_snapshots=source_snapshots
-            )
-
-            authorized_hosts = derive_authorized_target_hosts(targets)
-            policy_mount, policy_host_dir = write_egress_policy(scan_id, authorized_hosts)
-            bind_mounts.append(policy_mount)
-
-            # Attachments stage into a dedicated read-only mount; staging
-            # failures (e.g. a checksum drift between validation and copy)
-            # raise inside the ownership scope and the staging dir is
-            # removed by the except block below.
-            if attachments:
-                attachment_mount, attachments_dir = stage_attachments(scan_id, attachments)
-                bind_mounts.append(attachment_mount)
-
-            # Caido runs as an in-container sidecar; HTTP(S) traffic from any
-            # process started via ``session.exec`` (the SDK's Shell tool, etc.)
-            # picks up these env vars automatically. ``NO_PROXY`` keeps the
-            # agent-browser CDP daemon's localhost traffic from looping back
-            # through Caido. These variables steer clients toward the proxy;
-            # the enforced egress controls are the network policy admission
-            # check and the replay guard's policy file.
             container_caido_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
-            environment = build_sandbox_environment(container_caido_url)
-            if environment.get("STRIX_TARGET_RELAY"):
-                relay_mount, relay_dir = write_relay_upstream(relay_proxy or "")
-                bind_mounts.append(relay_mount)
-            environment["LYRASHIELD_EGRESS_POLICY"] = _EGRESS_POLICY_TARGET
-            environment["STRIX_RUN_ID"] = scan_id
-            manifest = Manifest(
-                entries=entries,
-                environment=Environment(value=environment),
-                extra_path_grants=extra_path_grants,
-            )
+            if backend_name == "controller":
+                from lyrashield.runtime.controller_manifest import (  # noqa: PLC0415
+                    controller_source_snapshots,
+                    read_controller_manifest,
+                )
 
-            backend_name = load_settings().runtime.backend
+                manifest, _ = read_controller_manifest(
+                    os.environ.get("LYRASHIELD_SUPERVISOR_MANIFEST_INPUT", ""), scan_id
+                )
+                # Source, attachment and policy mounts are already installed by
+                # the controller. SDK startup attaches to those exact resources;
+                # it cannot stage another source tree or install host mounts.
+                bind_mounts: list[dict[str, Any]] = []
+                authorized_hosts = derive_authorized_target_hosts(targets)
+                environment = manifest.environment.value
+            else:
+                entries, bind_mounts, staged_dirs, extra_path_grants = build_session_entries(
+                    local_sources, source_snapshots=source_snapshots
+                )
+
+                authorized_hosts = derive_authorized_target_hosts(targets)
+                policy_mount, policy_host_dir = write_egress_policy(scan_id, authorized_hosts)
+                bind_mounts.append(policy_mount)
+
+                # Attachments stage into a dedicated read-only mount; staging
+                # failures (e.g. a checksum drift between validation and copy)
+                # raise inside the ownership scope and the staging dir is
+                # removed by the except block below.
+                if attachments:
+                    attachment_mount, attachments_dir = stage_attachments(scan_id, attachments)
+                    bind_mounts.append(attachment_mount)
+
+                # Caido runs as an in-container sidecar; HTTP(S) traffic from any
+                # process started via ``session.exec`` (the SDK's Shell tool, etc.)
+                # picks up these env vars automatically. ``NO_PROXY`` keeps the
+                # agent-browser CDP daemon's localhost traffic from looping back
+                # through Caido. These variables steer clients toward the proxy;
+                # the enforced egress controls are the network policy admission
+                # check and the replay guard's policy file.
+                environment = build_sandbox_environment(container_caido_url)
+                if environment.get("STRIX_TARGET_RELAY"):
+                    relay_mount, relay_dir = write_relay_upstream(relay_proxy or "")
+                    bind_mounts.append(relay_mount)
+                environment["LYRASHIELD_EGRESS_POLICY"] = _EGRESS_POLICY_TARGET
+                environment["STRIX_RUN_ID"] = scan_id
+                manifest = Manifest(
+                    entries=entries,
+                    environment=Environment(value=environment),
+                    extra_path_grants=extra_path_grants,
+                )
+
             backend = get_backend(backend_name)
 
             logger.info(
@@ -674,6 +690,11 @@ async def create_or_reuse(  # noqa: PLR0912, PLR0915
                     scan_id,
                     authorized_hosts,
                     relay_required=bool(environment.get("STRIX_TARGET_RELAY")),
+                )
+                # The authenticated root grant describes the already installed
+                # source inode tree. No independently staged LocalDir exists.
+                source_snapshots = controller_source_snapshots(
+                    getattr(session, "installed_grant", None), source_required=bool(local_sources)
                 )
             # ``session`` is now a live sandbox handle; every later startup
             # await is covered by the owned delete in the except block.
