@@ -63,6 +63,29 @@ def test_copied_source_snapshot_is_frozen_and_hashes_uploaded_bytes(tmp_path: Pa
             shutil.rmtree(staged)
 
 
+def test_copied_source_rejects_a_link_inserted_into_the_frozen_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "source.py").write_text("source\n")
+    outside = tmp_path / "outside"
+    outside.write_text("outside\n")
+    original_stage = session_manager.stage_frozen_dir
+    staged_path: Path | None = None
+
+    def insert_link(path: Path) -> Path:
+        nonlocal staged_path
+        staged_path = original_stage(path)
+        (staged_path / "unexpected-link").symlink_to(outside)
+        return staged_path
+
+    monkeypatch.setattr(session_manager, "stage_frozen_dir", insert_link)
+    with pytest.raises(OSError):
+        build_session_entries([_source("repo", str(source))], source_snapshots=[])
+    assert staged_path is not None and not staged_path.exists()
+
+
 def test_host_gateway_is_not_advertised_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STRIX_SANDBOX_ALLOW_HOST_GATEWAY", raising=False)
 

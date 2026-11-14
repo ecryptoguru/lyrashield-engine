@@ -33,6 +33,11 @@ import shutil
 import stat
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from _hashlib import HASH
 
 
 logger = logging.getLogger(__name__)
@@ -249,23 +254,81 @@ def stage_frozen_dir(src_root: Path) -> Path:
 def staged_tree_digest(root: Path) -> str:
     """Hash exactly the regular paths and bytes staged for LocalDir upload."""
     digest = hashlib.sha256()
-    for base, dirs, files in os.walk(root, followlinks=False):
-        dirs.sort()
-        for name in dirs:
-            relative = (
-                (Path(base) / name).relative_to(root).as_posix().encode("utf-8", "surrogateescape")
-            )
-            digest.update(b"D")
-            digest.update(len(relative).to_bytes(8, "big"))
-            digest.update(relative)
-        for name in sorted(files):
-            path = Path(base) / name
-            relative = path.relative_to(root).as_posix().encode("utf-8", "surrogateescape")
-            digest.update(b"F")
-            digest.update(len(relative).to_bytes(8, "big"))
-            digest.update(relative)
-            with path.open("rb") as source:
-                digest.update(os.fstat(source.fileno()).st_size.to_bytes(8, "big"))
-                while chunk := source.read(1024 * 1024):
-                    digest.update(chunk)
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        _digest_staged_directory(root_fd, "", digest, os.fstat(root_fd).st_dev)
+    finally:
+        os.close(root_fd)
     return f"sha256:{digest.hexdigest()}"
+
+
+def _staged_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_uid,
+        info.st_gid,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _digest_staged_directory(directory_fd: int, prefix: str, digest: HASH, device: int) -> None:
+    before = os.fstat(directory_fd)
+    directories: list[tuple[str, os.stat_result]] = []
+    files: list[tuple[str, os.stat_result]] = []
+    for name in sorted(os.listdir(directory_fd)):
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if info.st_dev != device:
+            raise OSError("Staged source crosses a filesystem boundary")
+        if stat.S_ISDIR(info.st_mode):
+            directories.append((name, info))
+        elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+            files.append((name, info))
+        else:
+            raise OSError("Staged source contains a link or non-regular entry")
+    for marker, entries in ((b"D", directories), (b"F", files)):
+        for name, expected in entries:
+            relative = f"{prefix}{name}".encode("utf-8", "surrogateescape")
+            digest.update(marker)
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            if marker == b"D":
+                continue
+            _digest_staged_file(directory_fd, name, expected, digest)
+    for name, expected in directories:
+        child_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        try:
+            if _staged_identity(os.fstat(child_fd)) != _staged_identity(expected):
+                raise OSError("Staged source directory changed before read")
+            _digest_staged_directory(child_fd, f"{prefix}{name}/", digest, device)
+        finally:
+            os.close(child_fd)
+    if _staged_identity(os.fstat(directory_fd)) != _staged_identity(before):
+        raise OSError("Staged source directory changed during read")
+
+
+def _digest_staged_file(
+    directory_fd: int, name: str, expected: os.stat_result, digest: HASH
+) -> None:
+    source_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+    try:
+        if _staged_identity(os.fstat(source_fd)) != _staged_identity(expected):
+            raise OSError("Staged source changed before read")
+        digest.update(expected.st_size.to_bytes(8, "big"))
+        remaining = expected.st_size
+        while remaining:
+            chunk = os.read(source_fd, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise OSError("Staged source was truncated during read")
+            remaining -= len(chunk)
+            digest.update(chunk)
+        if os.read(source_fd, 1) or _staged_identity(os.fstat(source_fd)) != _staged_identity(
+            expected
+        ):
+            raise OSError("Staged source changed during read")
+    finally:
+        os.close(source_fd)
