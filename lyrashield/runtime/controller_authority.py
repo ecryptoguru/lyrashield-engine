@@ -301,6 +301,27 @@ def verify_runtime_authority(  # noqa: PLR0912
     return authority
 
 
+def _verify_installed_source(source: Any) -> None:
+    if source is not None:
+        if (
+            not isinstance(source, dict)
+            or set(source) != {"grantId", "root", "revision", "stagedTreeDigest", "readOnly"}
+            or source["root"] != "/workspace/source"
+            or source["readOnly"] is not True
+        ):
+            _reject()
+        _text(source["grantId"])
+        revision = _text(source["revision"])
+        tree_digest = _text(source["stagedTreeDigest"])
+        if (
+            len(revision) not in {40, 64}
+            or any(c not in "0123456789abcdef" for c in revision)
+            or len(tree_digest) != 64
+            or any(c not in "0123456789abcdef" for c in tree_digest)
+        ):
+            _reject()
+
+
 def verify_installed_grant(  # noqa: PLR0912
     envelope: Any,
     connection: AuthorityConnection,
@@ -342,6 +363,7 @@ def verify_installed_grant(  # noqa: PLR0912
         or any(c not in "0123456789abcdef" for c in image[7:])
     ):
         _reject()
+    _verify_installed_source(grant.get("source"))
     root = _text(grant.get("workspaceRoot"))
     if not root.startswith("/") or ".." in PurePosixPath(root).parts:
         _reject()

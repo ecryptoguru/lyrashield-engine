@@ -858,3 +858,41 @@ def test_production_connection_rejects_insecure_origin_and_secret_is_redacted(
     )
     connection = controller.ControllerConnection.from_environment()
     assert "token='test'" not in repr(connection)
+
+
+def test_signed_source_provenance_is_exact_and_fixture_grants_are_rejected(
+    runtime: dict[str, Any],
+) -> None:
+    source = {
+        "grantId": "fixture-source",
+        "root": "/workspace/source",
+        "revision": "a" * 40,
+        "stagedTreeDigest": "b" * 64,
+        "readOnly": True,
+    }
+    valid = {**runtime["grant"], "source": source}
+    verified = controller.verify_installed_grant(
+        runtime["sign"](valid), runtime["connection"], runtime["runtimeAuthority"]
+    )
+    assert verified["source"] == source
+    for bad in [
+        {**source, "readOnly": False},
+        {**source, "root": "/private"},
+        {**source, "stagedTreeDigest": "bad"},
+        {**source, "revision": "main"},
+    ]:
+        with pytest.raises(controller.ControllerUnavailableError):
+            controller.verify_installed_grant(
+                runtime["sign"]({**valid, "source": bad}),
+                runtime["connection"],
+                runtime["runtimeAuthority"],
+            )
+    disposable = {
+        **runtime["grant"],
+        "schema": "lyrashield-disposable-sandbox-grant/1",
+        "installed": False,
+    }
+    with pytest.raises(controller.ControllerUnavailableError):
+        controller.verify_installed_grant(
+            runtime["sign"](disposable), runtime["connection"], runtime["runtimeAuthority"]
+        )
