@@ -1,0 +1,63 @@
+name: Promote independently verified sandbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      publication_selector:
+        description: "Exact held publication, independent inventory run and immutable artifact hashes"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: sandbox-qualified-reference-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: >-
+      github.repository_id == '1297157605' &&
+      github.repository_owner_id == '116722580' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install checksum-pinned protected verification tools
+        run: bash scripts/prepare_independent_inventory_tools.sh
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Verify exact independent evidence and acknowledge qualified revision reference
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SANDBOX_PROMOTION_SELECTOR: ${{ inputs.publication_selector }}
+        run: >-
+          python3 -m scripts.qualify_sandbox_promotion --promote
+          --output "$RUNNER_TEMP/sandbox-promotion-receipt.json"
+      - name: Retain immutable promotion and partial-failure receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sandbox-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/sandbox-promotion-receipt.json
+            ${{ runner.temp }}/sandbox-promotion-receipt.json.pending.json
+            ${{ runner.temp }}/sandbox-promotion-receipt.json.unconfirmed.json
+          if-no-files-found: ignore
+          retention-days: 30
