@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from types import SimpleNamespace
@@ -123,3 +124,106 @@ async def test_container_creation_never_uses_synchronous_image_fallback(
     assert container.short_id == "verified"
     image_exists.assert_not_called()
     transport.images.pull.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_session_start_deletes_container_and_transport(
+    monkeypatch,
+) -> None:
+    transport = SimpleNamespace(close=Mock())
+    start_error = RuntimeError("start refused")
+    session = SimpleNamespace(start=AsyncMock(side_effect=start_error))
+    delete = AsyncMock()
+
+    monkeypatch.setattr("lyrashield.runtime.docker_connection.connect_docker", lambda: transport)
+    monkeypatch.setattr(StrixDockerSandboxClient, "create", AsyncMock(return_value=session))
+    monkeypatch.setattr(StrixDockerSandboxClient, "delete", delete)
+
+    with pytest.raises(RuntimeError, match="start refused"):
+        await backends.docker_backend(image="fixture", manifest=Manifest(), exposed_ports=())
+
+    delete.assert_awaited_once_with(session)
+    transport.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_session_start_deletes_container_and_transport(
+    monkeypatch,
+) -> None:
+    transport = SimpleNamespace(close=Mock())
+    start_called = asyncio.Event()
+
+    async def never_starts() -> None:
+        start_called.set()
+        await asyncio.Event().wait()
+
+    session = SimpleNamespace(start=never_starts)
+    delete = AsyncMock()
+
+    monkeypatch.setattr("lyrashield.runtime.docker_connection.connect_docker", lambda: transport)
+    monkeypatch.setattr(StrixDockerSandboxClient, "create", AsyncMock(return_value=session))
+    monkeypatch.setattr(StrixDockerSandboxClient, "delete", delete)
+
+    task = asyncio.create_task(
+        backends.docker_backend(image="fixture", manifest=Manifest(), exposed_ports=())
+    )
+    assert await asyncio.wait_for(start_called.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    delete.assert_awaited_once_with(session)
+    transport.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_session_start_preserves_original_error_when_cleanup_fails(
+    monkeypatch,
+) -> None:
+    transport = SimpleNamespace(close=Mock(side_effect=RuntimeError("close refused")))
+    start_error = RuntimeError("start refused")
+    session = SimpleNamespace(start=AsyncMock(side_effect=start_error))
+    delete = AsyncMock(side_effect=RuntimeError("delete refused"))
+
+    monkeypatch.setattr("lyrashield.runtime.docker_connection.connect_docker", lambda: transport)
+    monkeypatch.setattr(StrixDockerSandboxClient, "create", AsyncMock(return_value=session))
+    monkeypatch.setattr(StrixDockerSandboxClient, "delete", delete)
+
+    with pytest.raises(RuntimeError, match="start refused"):
+        await backends.docker_backend(image="fixture", manifest=Manifest(), exposed_ports=())
+
+    delete.assert_awaited_once_with(session)
+    transport.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_late_deletion_failure_is_retained_and_observed(monkeypatch, caplog) -> None:
+    """A deletion that fails after the cleanup bound is logged, not lost."""
+    monkeypatch.setattr(backends, "_STARTUP_CLEANUP_TIMEOUT", 0.01)
+    started = asyncio.Event()
+
+    async def slow_failing_delete(_session) -> None:
+        started.set()
+        await asyncio.sleep(0.1)
+        raise RuntimeError("late delete refused")
+
+    transport = SimpleNamespace(close=Mock())
+    client = SimpleNamespace(delete=slow_failing_delete)
+    session = SimpleNamespace()
+
+    with caplog.at_level(logging.WARNING, logger="lyrashield.runtime.backends"):
+        await backends._cleanup_unstarted_sandbox(client, session, transport)
+        assert started.is_set()
+        assert len(backends._pending_cleanup_deletions) == 1
+        await asyncio.wait_for(_wait_until(lambda: not backends._pending_cleanup_deletions), 1)
+
+    assert "late delete refused" in caplog.text
+    transport.close.assert_called_once()
+
+
+async def _wait_until(predicate) -> None:
+    for _ in range(200):
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition not met in time")

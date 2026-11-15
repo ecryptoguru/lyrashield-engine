@@ -13,6 +13,58 @@ from strix.runtime.backends import get_backend as get_upstream_backend
 
 logger = logging.getLogger(__name__)
 _pending_transport_closures: set[asyncio.Future[Any]] = set()
+_pending_cleanup_deletions: set[asyncio.Task[Any]] = set()
+# Bound for the startup-failure cleanup await so a hung backend delete or
+# transport close cannot strand a failed or cancelled startup.
+_STARTUP_CLEANUP_TIMEOUT = 30.0
+
+
+def _observe_cleanup_deletion(task: asyncio.Task[Any]) -> None:
+    _pending_cleanup_deletions.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.warning("Sandbox startup cleanup deletion was cancelled")
+    except BaseException as cleanup_error:
+        logger.warning(
+            "Sandbox startup cleanup deletion failed after handoff: %s: %s",
+            type(cleanup_error).__name__,
+            cleanup_error,
+        )
+
+
+async def _cleanup_unstarted_sandbox(client: Any, session: Any, transport: Any) -> None:
+    """Release a created-but-unstarted sandbox and its transport.
+
+    Bounded and best-effort: the original startup failure is always re-raised
+    by the caller, and cleanup failure is logged, never hidden, never raised.
+    """
+    try:
+        # Retain a strong reference until the deletion completes; a timeout or
+        # caller cancellation must not orphan the task nor swallow its error.
+        delete = asyncio.ensure_future(client.delete(session))
+        _pending_cleanup_deletions.add(delete)
+        delete.add_done_callback(_observe_cleanup_deletion)
+        await asyncio.wait_for(asyncio.shield(delete), _STARTUP_CLEANUP_TIMEOUT)
+    except TimeoutError:
+        logger.warning(
+            "Sandbox startup cleanup deletion exceeded %.1fs; it continues in background",
+            _STARTUP_CLEANUP_TIMEOUT,
+        )
+    except BaseException as cleanup_error:
+        logger.warning(
+            "Sandbox startup cleanup could not delete the created sandbox: %s: %s",
+            type(cleanup_error).__name__,
+            cleanup_error,
+        )
+    try:
+        transport.close()
+    except BaseException as cleanup_error:
+        logger.warning(
+            "Sandbox startup cleanup could not close the Docker transport: %s: %s",
+            type(cleanup_error).__name__,
+            cleanup_error,
+        )
 
 
 if TYPE_CHECKING:
@@ -78,12 +130,20 @@ async def docker_backend(
     try:
         session = await client.create(options=options, manifest=manifest)
     except BaseException:
-        # No session handle has reached the startup owner yet. In particular,
-        # unsupported native-host routing fails before a container is created.
+        # No session handle has reached the startup owner yet. Partially
+        # allocated containers are outside the SDK's create() handle
+        # contract; the host-side reaper owns those. Close the transport.
         with contextlib.suppress(Exception):
             transport.close()
         raise
-    await session.start()
+    try:
+        await session.start()
+    except BaseException:
+        # Startup did not complete, so no handle reaches the runtime owner:
+        # this backend still owns the created container and the transport and
+        # must release them here.
+        await _cleanup_unstarted_sandbox(client, session, transport)
+        raise
     return client, session
 
 
