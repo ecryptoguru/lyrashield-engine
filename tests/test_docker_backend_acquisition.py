@@ -193,3 +193,38 @@ async def test_failed_session_start_preserves_original_error_when_cleanup_fails(
 
     delete.assert_awaited_once_with(session)
     transport.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_late_deletion_failure_is_retained_and_observed(monkeypatch, caplog) -> None:
+    """A deletion that fails after the cleanup bound is logged, not lost."""
+    import logging
+
+    monkeypatch.setattr(backends, "_STARTUP_CLEANUP_TIMEOUT", 0.01)
+    started = asyncio.Event()
+
+    async def slow_failing_delete(_session) -> None:
+        started.set()
+        await asyncio.sleep(0.1)
+        raise RuntimeError("late delete refused")
+
+    transport = SimpleNamespace(close=Mock())
+    client = SimpleNamespace(delete=slow_failing_delete)
+    session = SimpleNamespace()
+
+    with caplog.at_level(logging.WARNING, logger="lyrashield.runtime.backends"):
+        await backends._cleanup_unstarted_sandbox(client, session, transport)
+        assert started.is_set()
+        assert len(backends._pending_cleanup_deletions) == 1
+        await asyncio.wait_for(_wait_until(lambda: not backends._pending_cleanup_deletions), 1)
+
+    assert "late delete refused" in caplog.text
+    transport.close.assert_called_once()
+
+
+async def _wait_until(predicate) -> None:
+    for _ in range(200):
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition not met in time")

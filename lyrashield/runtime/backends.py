@@ -13,9 +13,24 @@ from strix.runtime.backends import get_backend as get_upstream_backend
 
 logger = logging.getLogger(__name__)
 _pending_transport_closures: set[asyncio.Future[Any]] = set()
+_pending_cleanup_deletions: set[asyncio.Task[Any]] = set()
 # Bound for the startup-failure cleanup await so a hung backend delete or
 # transport close cannot strand a failed or cancelled startup.
 _STARTUP_CLEANUP_TIMEOUT = 30.0
+
+
+def _observe_cleanup_deletion(task: "asyncio.Task[Any]") -> None:
+    _pending_cleanup_deletions.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.warning("Sandbox startup cleanup deletion was cancelled")
+    except BaseException as cleanup_error:
+        logger.warning(
+            "Sandbox startup cleanup deletion failed after handoff: %s: %s",
+            type(cleanup_error).__name__,
+            cleanup_error,
+        )
 
 
 async def _cleanup_unstarted_sandbox(client: Any, session: Any, transport: Any) -> None:
@@ -25,8 +40,17 @@ async def _cleanup_unstarted_sandbox(client: Any, session: Any, transport: Any) 
     by the caller, and cleanup failure is logged, never hidden, never raised.
     """
     try:
+        # Retain a strong reference until the deletion completes; a timeout or
+        # caller cancellation must not orphan the task nor swallow its error.
         delete = asyncio.ensure_future(client.delete(session))
+        _pending_cleanup_deletions.add(delete)
+        delete.add_done_callback(_observe_cleanup_deletion)
         await asyncio.wait_for(asyncio.shield(delete), _STARTUP_CLEANUP_TIMEOUT)
+    except TimeoutError:
+        logger.warning(
+            "Sandbox startup cleanup deletion did not finish within %.1fs; it continues in the background",
+            _STARTUP_CLEANUP_TIMEOUT,
+        )
     except BaseException as cleanup_error:
         logger.warning(
             "Sandbox startup cleanup could not delete the created sandbox: %s: %s",
