@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from types import SimpleNamespace
@@ -198,8 +199,6 @@ async def test_failed_session_start_preserves_original_error_when_cleanup_fails(
 @pytest.mark.asyncio
 async def test_late_deletion_failure_is_retained_and_observed(monkeypatch, caplog) -> None:
     """A deletion that fails after the cleanup bound is logged, not lost."""
-    import logging
-
     monkeypatch.setattr(backends, "_STARTUP_CLEANUP_TIMEOUT", 0.01)
     started = asyncio.Event()
 

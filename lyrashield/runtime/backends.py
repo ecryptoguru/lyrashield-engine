@@ -19,7 +19,7 @@ _pending_cleanup_deletions: set[asyncio.Task[Any]] = set()
 _STARTUP_CLEANUP_TIMEOUT = 30.0
 
 
-def _observe_cleanup_deletion(task: "asyncio.Task[Any]") -> None:
+def _observe_cleanup_deletion(task: asyncio.Task[Any]) -> None:
     _pending_cleanup_deletions.discard(task)
     try:
         task.result()
@@ -48,7 +48,7 @@ async def _cleanup_unstarted_sandbox(client: Any, session: Any, transport: Any) 
         await asyncio.wait_for(asyncio.shield(delete), _STARTUP_CLEANUP_TIMEOUT)
     except TimeoutError:
         logger.warning(
-            "Sandbox startup cleanup deletion did not finish within %.1fs; it continues in the background",
+            "Sandbox startup cleanup deletion exceeded %.1fs; it continues in background",
             _STARTUP_CLEANUP_TIMEOUT,
         )
     except BaseException as cleanup_error:
