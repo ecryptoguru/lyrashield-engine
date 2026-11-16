@@ -115,31 +115,10 @@ export async function fetchTranscript(runName?: string | null, signal?: AbortSig
   };
 }
 
-/** One-shot fetch of every endpoint (used on mount and on final settle). */
-export async function fetchAll(runName?: string | null): Promise<LoadedRun> {
-  const { summary, raw, finished } = await fetchRunSummary(runName);
-  const [vulnerabilities, reportResult, transcript] = await Promise.all([
-    fetchVulnerabilities(summary.runId, runName),
-    fetchReportMarkdown(runName)
-      .then((markdown) => ({ markdown, error: null }))
-      .catch(() => ({ markdown: null, error: "The report could not be loaded." })),
-    fetchTranscript(runName).catch(() => ({ agents: [], events: [] }) as Transcript),
-  ]);
-  return {
-    summary,
-    raw,
-    finished,
-    vulnerabilities,
-    reportMarkdown: reportResult.markdown,
-    reportError: reportResult.error,
-    transcript,
-  };
-}
-
 // ---------------------------------------------------------------------------
-// Run history + email auth + report send
+// Run history + email auth
 //
-// These endpoints back the "Your runs" sidebar section. Auth and report-send
+// These endpoints back the "Your runs" sidebar section. Auth
 // responses carry a meaningful JSON body on non-2xx statuses (an ``error``
 // code), so they read the body regardless of status rather than throwing.
 // ---------------------------------------------------------------------------
@@ -173,14 +152,6 @@ export interface AuthStatus {
   verified: boolean;
   email: string | null;
 }
-
-export type OtpStartResult = { ok: true } | { ok: false; error: string };
-export type OtpVerifyResult =
-  | { verified: true; email: string }
-  | { verified: false; error: string };
-export type SendReportResult =
-  | { ok: true; password: string; filename: string }
-  | { ok: false; error: string };
 
 async function postJson(
   path: string,
@@ -280,53 +251,12 @@ export async function checkOperatorReceipt(body: Record<string, unknown>): Promi
   return submitOperatorAction("/api/receipts/check", body);
 }
 
-export type SubmitFeedbackResult = { ok: true } | { ok: false; error: string };
-
-/**
- * POST /api/feedback. Sends a feedback message plus a work email (no
- * verification) to the local server, which handles it.
- */
-export async function submitFeedback(
-  message: string,
-  email: string
-): Promise<SubmitFeedbackResult> {
-  const { ok, data } = await postJson("/api/feedback", { message, email });
-  if (ok && data.ok === true) return { ok: true };
-  return { ok: false, error: String(data.error ?? "unavailable") };
-}
-
 export async function fetchAuthStatus(signal?: AbortSignal): Promise<AuthStatus> {
   const obj = (await getJson("/api/auth/status", signal)) as Partial<AuthStatus>;
   return { verified: obj?.verified === true, email: obj?.email ?? null };
 }
 
-export async function otpStart(email: string): Promise<OtpStartResult> {
-  const { ok, data } = await postJson("/api/auth/otp/start", { email });
-  if (ok && data.ok === true) return { ok: true };
-  return { ok: false, error: String(data.error ?? "unavailable") };
-}
-
-export async function otpVerify(email: string, code: string): Promise<OtpVerifyResult> {
-  const { ok, data } = await postJson("/api/auth/otp/verify", { email, code });
-  if (ok && data.verified === true) {
-    return { verified: true, email: String(data.email ?? email) };
-  }
-  return { verified: false, error: String(data.error ?? "invalid_code") };
-}
-
 export async function forgetAuth(): Promise<void> {
   const { ok, data } = await postJson("/api/auth/forget", {});
   if (!ok || data.ok !== true) throw new Error(String(data.error ?? "Could not forget this email."));
-}
-
-export async function sendReport(runName?: string | null): Promise<SendReportResult> {
-  const { ok, data } = await postJson("/api/report/send", runName ? { run: runName } : {});
-  if (ok && data.ok === true) {
-    return {
-      ok: true,
-      password: String(data.password ?? ""),
-      filename: String(data.filename ?? "lyrashield-report.pdf"),
-    };
-  }
-  return { ok: false, error: String(data.error ?? "unavailable") };
 }
