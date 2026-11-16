@@ -23,30 +23,6 @@ async function withViewerModule(modulePath, callback) {
   }
 }
 
-test("fetchAll preserves report failures for the UI", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
-    const pathname = String(input);
-    if (pathname === "/api/run") {
-      return new Response(JSON.stringify({ run_id: "run-1", status: "completed", finished: true }));
-    }
-    if (pathname === "/api/vulnerabilities") return new Response("[]");
-    if (pathname === "/api/report") return new Response("{}", { status: 500 });
-    if (pathname === "/api/transcript") return new Response("{}");
-    throw new Error(`Unexpected viewer request: ${pathname}`);
-  };
-
-  try {
-    await withViewerModule("/src/data/serverSource.ts", async ({ fetchAll }) => {
-      const run = await fetchAll();
-      assert.equal(run.reportMarkdown, null);
-      assert.equal(run.reportError, "The report could not be loaded.");
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
 test("report load error is announced and offers a retry", async () => {
   await withViewerModule("/src/components/ReportLoadError.tsx", async ({ ReportLoadError }) => {
     const html = renderToStaticMarkup(

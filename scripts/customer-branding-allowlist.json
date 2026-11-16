@@ -149,9 +149,6 @@
     "lyrashield/interface/viewer/__init__.py": [
       "\"\"\"Local web viewer for Strix runs."
     ],
-    "lyrashield/interface/viewer/frontend/src/stores/auth.ts": [
-      "// Local stub of the strix-app auth store. The local viewer has no accounts:"
-    ],
     "lyrashield/interface/tui/app.py": [
       "# Modifications \u00a9 2026 LyraShield; based on upstream Strix (Apache-2.0)",
       "from lyrashield.lifecycle.runner import run_strix_scan",
@@ -213,9 +210,6 @@
     "lyrashield/interface/viewer/frontend/src/lib/local-run-parser.ts": [
       " * Pure, dependency-free parsers that turn a Strix CLI local run",
       " * (`strix_runs/<run>/{run.json,vulnerabilities.json}`) into the app's own"
-    ],
-    "lyrashield/interface/viewer/frontend/src/components/FeedbackView.tsx": [
-      " * verification \u2014 the email is taken as-is) and relays it to Strix via the local"
     ],
     "lyrashield/interface/viewer/frontend/src/components/live/tool-renderers/TerminalRenderer.tsx": [
       "// TUI strips them in strix/interface/tui/renderers/shell_renderer.py). Only a",
