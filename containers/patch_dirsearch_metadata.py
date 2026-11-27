@@ -38,6 +38,7 @@ PATCHES = {
 
 
 SEMGREP_RUNTIME_PATCHES = (
+    (b"Requires-Dist: wcmatch~=8.3", b"Requires-Dist: wcmatch==11.2"),
     (b"Requires-Dist: mcp==1.29.0", b"Requires-Dist: mcp==1.30.0"),
     (b"Requires-Dist: opentelemetry-api~=1.37.0", b"Requires-Dist: opentelemetry-api==1.45.2"),
     (b"Requires-Dist: opentelemetry-sdk~=1.37.0", b"Requires-Dist: opentelemetry-sdk==1.45.2"),

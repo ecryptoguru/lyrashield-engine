@@ -16,6 +16,11 @@ write, then updates RECORD to describe the changed bytes.
   issues. OpenTelemetry API/SDK/exporter 1.45.2 and matching instrumentation
   0.66b2 fix the vulnerable API line. These exact resolver overrides correspond
   to exact METADATA substitutions, validated together before writes.
+- Semgrep 1.178.0 path filters: use wcmatch 11.2 (CVE-2026-132276) with
+  bracex 3.2.4. The original wheel still declares `wcmatch~=8.3`; the reviewed
+  metadata change admits only 11.2. The image smoke test runs Semgrep's own
+  matcher on root, nested, hidden and excluded paths. Drop this exception when
+  the pinned upstream wheel accepts the fixed version and passes the same test.
 - Independent security refresh: aiohttp 3.14.5, graphql-core 3.3.1, certifi
   2026.10.19, and setuptools 84.1.0. The graph is hash-pinned for both CPUs.
 

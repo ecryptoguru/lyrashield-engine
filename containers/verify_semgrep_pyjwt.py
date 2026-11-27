@@ -1,4 +1,4 @@
-"""Offline, real Semgrep JWT/CLI compatibility checks for the reviewed PyJWT patch.
+"""Offline compatibility checks for the pinned Semgrep sandbox dependencies.
 
 Run with /app/.venv/bin/python in the built sandbox on an internal network.
 All JWT keys are ephemeral and JWKS traffic remains on the loopback fixture.
@@ -30,6 +30,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from semgrep.mcp.utilities.token_verifier import IntrospectionTokenVerifier
+from semgrep.target_manager import TargetManager
 
 
 def main() -> None:
@@ -95,10 +96,11 @@ def main() -> None:
         thread.join(timeout=5)
 
     verify_telemetry()
+    verify_path_filters()
     verify_cli()
     print(  # noqa: T201 - explicit offline compatibility receipt
         "Semgrep/PyJWT: RS256 accepted; forged/expired denied; "
-        "JWKS redirect denied; telemetry context/export passed; CLI finding passed"
+        "JWKS redirect denied; telemetry context/export passed; path filters and CLI finding passed"
     )
 
 
@@ -169,6 +171,16 @@ def verify_telemetry() -> None:
         origin.shutdown()
         origin.server_close()
         server_thread.join(timeout=5)
+
+
+def verify_path_filters() -> None:
+    """Exercise the installed Semgrep matcher, including dotfiles and nested excludes."""
+    assert version("wcmatch") == "11.2"
+    paths = {"app/main.py", "app/.ci/check.py", "app/vendor/lib.py", "app/notes.txt", "other/a.py"}
+    included = {p for p in paths if TargetManager._globmatch(p, "app/**/*.py")}
+    assert included == {"app/main.py", "app/.ci/check.py", "app/vendor/lib.py"}, included
+    selected = {p for p in included if not TargetManager._globmatch(p, "**/vendor/**")}
+    assert selected == {"app/main.py", "app/.ci/check.py"}, selected
 
 
 def verify_cli() -> None:

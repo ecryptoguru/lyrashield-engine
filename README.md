@@ -1,17 +1,21 @@
 # LyraShield Engine
 
-LyraShield Engine is the sandboxed repository-analysis process used by the LyraShield AI worker. It is a controlled derivative of [Strix](https://github.com/usestrix/strix) at the exact upstream commit `200a501f15a24a4152f92897a6b72af238ee69ef` and modified under Apache-2.0. LyraShield owns product-critical policy in `lyrashield/**`; the retained Strix tree differs only through an exact, review-gated compatibility patch described in [UPGRADES.md](UPGRADES.md).
+The engine behind [LyraShield AI](https://github.com/ecryptoguru/lyrashield-ai) produces **candidates for review**. Its two main output files answer different questions. Neither establishes that a release is safe to ship.
 
-See [NOTICE](NOTICE) for attribution and [UPGRADES.md](UPGRADES.md) for the ownership and upstream-import ledger.
+| If you want to know… | Read… |
+| --- | --- |
+| What ran, under which limits, and how it ended | `run.json` — the lifecycle and usage record |
+| Which findings need review and what evidence was recorded | `vulnerabilities.json` — structured candidates and their evidence metadata |
+
+The product worker treats both files as untrusted input. It checks their structure before using them; a model’s confidence or an empty result does not establish that a fix worked.
+
+[Artifact contract](#worker-artifact-contract) · [Contributor guide](CONTRIBUTING.md) · [Release-assurance methodology](https://lyrashieldai.com/methodology)
 
 ## Project map
 
-- [LyraShield AI public site](https://lyrashieldai.com) · [public Lite Check](https://lyrashieldai.com/scan) · [methodology](https://lyrashieldai.com/methodology).
-- [LyraShield AI application repository](https://github.com/ecryptoguru/lyrashield-ai): public Lite Check, authenticated evidence console, worker integration, and release-assurance product; see its [Build Week judge path](https://github.com/ecryptoguru/lyrashield-ai#openai-build-week-judge-path).
-- [Ownership boundary](#ownership-boundary): which execution behavior LyraShield owns versus the retained Strix substrate.
-- [Worker artifact contract](#worker-artifact-contract): compatibility-sensitive `run.json` and `vulnerabilities.json` boundary.
-- [Verification](#verification): the implementation gate, not an accuracy claim.
-- [UPGRADES.md](UPGRADES.md): retained compatibility patches and ownership ledger.
+This repository owns the sandboxed repository-analysis process. The [application repository](https://github.com/ecryptoguru/lyrashield-ai) owns the evidence console, retest workflow and release report. The [product case study](https://www.ankitdas.site/work/lyrashield) shows how those records look to a reviewer.
+
+The engine is a controlled derivative of [Strix](https://github.com/usestrix/strix) at upstream commit `200a501f15a24a4152f92897a6b72af238ee69ef`, modified under Apache-2.0. LyraShield owns the policy in `lyrashield/**`. See the [ownership boundary](#ownership-boundary), [upstream import ledger](UPGRADES.md) and [attribution notice](NOTICE).
 
 ## Build Week provenance
 
